@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { getClaudeDir, resolveClaudePath } from '../utils/claudeDir'
 import { DEFAULT_OUTPUT_STYLES } from '../utils/defaultOutputStyles'
 import { parseFrontmatter } from '../utils/frontmatter'
+import { resolveAllowedTools, resolveMaxTurns } from '../utils/agentToolPolicy'
+import type { AgentFrontmatter } from '~/types'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -100,12 +102,15 @@ export default defineEventHandler(async (event) => {
   // Build system prompt depending on whether an agent is active
   let systemAppend: string
 
+  let agentFrontmatter: AgentFrontmatter | undefined
+
   if (body.agentSlug) {
     const agentPath = resolveClaudePath('agents', `${body.agentSlug}.md`)
     if (existsSync(agentPath)) {
       const { parseFrontmatter } = await import('../utils/frontmatter')
       const raw = await readFile(agentPath, 'utf-8')
-      const { frontmatter, body: agentBody } = parseFrontmatter<{ name?: string }>(raw)
+      const { frontmatter, body: agentBody } = parseFrontmatter<AgentFrontmatter>(raw)
+      agentFrontmatter = frontmatter
       const agentName = frontmatter.name || body.agentSlug
       systemAppend = `You are "${agentName}", a specialized agent. Follow these instructions precisely:\n\n${agentBody}\n\nThe current working directory is: ${claudeDir}`
     } else {
@@ -148,10 +153,10 @@ export default defineEventHandler(async (event) => {
       prompt: lastUserMessage.content,
       options: {
         cwd: body.projectDir && existsSync(body.projectDir) ? body.projectDir : claudeDir,
-        allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
+        allowedTools: resolveAllowedTools(agentFrontmatter),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
-        maxTurns: 10,
+        maxTurns: resolveMaxTurns(agentFrontmatter),
         includePartialMessages: true,
         systemPrompt: {
           type: 'preset',
