@@ -1,0 +1,11 @@
+{
+  "name": "alepo-engineering",
+  "description": "Enforcement pieces for Alepo's agentic SDLC pipeline: the plan gate and test lock hooks, the ticket-to-repo registry and its validator, and the evidence-bundle schema. Installed so a cloned repo carries the pipeline's guardrails by default, not by whoever remembered to configure them.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Ashwani Singh",
+    "email": "ashwani.singh@alepo.com"
+  },
+  "homepage": "https://github.com/alepolab/agent-manager/tree/main/engineering",
+  "repository": "https://github.com/alepolab/agent-manager"
+}

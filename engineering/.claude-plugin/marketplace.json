@@ -1,0 +1,20 @@
+{
+  "name": "alepo-engineering",
+  "description": "Development marketplace for the alepo-engineering plugin — the agentic SDLC pipeline's plan gate, test lock, ticket-to-repo registry, and evidence-bundle schema.",
+  "owner": {
+    "name": "Ashwani Singh",
+    "email": "ashwani.singh@alepo.com"
+  },
+  "plugins": [
+    {
+      "name": "alepo-engineering",
+      "source": "./",
+      "description": "Enforcement pieces for Alepo's agentic SDLC pipeline: the plan gate, the test lock, the ticket-to-repo registry, and the evidence-bundle schema.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Ashwani Singh",
+        "email": "ashwani.singh@alepo.com"
+      }
+    }
+  ]
+}
