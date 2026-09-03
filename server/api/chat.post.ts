@@ -6,6 +6,7 @@ import { getClaudeDir, resolveClaudePath } from '../utils/claudeDir'
 import { DEFAULT_OUTPUT_STYLES } from '../utils/defaultOutputStyles'
 import { parseFrontmatter } from '../utils/frontmatter'
 import { resolveTools, resolveMaxTurns } from '../utils/agentToolPolicy'
+import { buildAgentSystemPrompt } from '../utils/agentSystemPrompt'
 import type { AgentFrontmatter } from '~/types'
 
 interface ChatMessage {
@@ -117,8 +118,13 @@ export default defineEventHandler(async (event) => {
       const raw = await readFile(agentPath, 'utf-8')
       const { frontmatter, body: agentBody } = parseFrontmatter<AgentFrontmatter>(raw)
       agentFrontmatter = frontmatter
-      const agentName = frontmatter.name || body.agentSlug
-      systemAppend = `You are "${agentName}", a specialized agent. Follow these instructions precisely:\n\n${agentBody}\n\nThe current working directory is: ${resolvedCwd}`
+      systemAppend = await buildAgentSystemPrompt({
+        agentSlug: body.agentSlug,
+        agentName: frontmatter.name,
+        agentBody,
+        skills: frontmatter.skills,
+        cwd: resolvedCwd,
+      })
     } else {
       systemAppend = defaultManagerPrompt(claudeDir, resolvedCwd)
     }
