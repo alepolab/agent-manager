@@ -5,7 +5,10 @@ import { renderMarkdown } from '~/utils/markdown'
 const props = defineProps<{
   steps: readonly StepExecution[]
   workflowSteps: WorkflowStep[]
-  currentStepIndex: number
+  /** Nodes in the wave that just ran - one for a linear workflow, several for parallel branches. */
+  currentStepIds: readonly string[]
+  /** Labels of the nodes queued for the next wave. */
+  nextStepLabels: string[]
   isPaused: boolean
   isComplete: boolean
 }>()
@@ -23,11 +26,12 @@ const respondMode = ref(false)
 const editText = ref('')
 const replyText = ref('')
 
-// Auto-expand the current/paused step
-watch(() => props.currentStepIndex, (idx) => {
-  if (idx >= 0 && idx < props.workflowSteps.length) {
-    expandedStep.value = props.workflowSteps[idx].id
-  }
+/** Editing an output or replying to an agent only makes sense when one node just ran. */
+const soleCurrentId = computed(() => (props.currentStepIds.length === 1 ? props.currentStepIds[0] : undefined))
+
+// Auto-expand the first step of the current wave
+watch(() => [...props.currentStepIds], (ids) => {
+  if (ids[0]) expandedStep.value = ids[0]
 })
 
 // Reset modes when pause state changes
@@ -35,8 +39,8 @@ watch(() => props.isPaused, (paused) => {
   if (paused) {
     editMode.value = false
     respondMode.value = false
-    const currentStep = props.steps[props.currentStepIndex]
-    editText.value = currentStep?.output || ''
+    const current = props.steps.find(s => s.stepId === soleCurrentId.value)
+    editText.value = current?.output || ''
     replyText.value = ''
   }
 })
@@ -75,7 +79,7 @@ function onRespond() {
   emit('respond', replyText.value.trim())
 }
 
-const statusConfig: Record<string, { color: string; icon: string; label: string }> = {
+const statusConfig: Record<string, { color: string, icon: string, label: string }> = {
   pending: { color: 'var(--text-disabled)', icon: 'i-lucide-clock', label: 'Pending' },
   running: { color: 'var(--accent)', icon: 'i-lucide-loader-2', label: 'Running' },
   completed: { color: 'var(--success, #22c55e)', icon: 'i-lucide-check-circle', label: 'Completed' },
@@ -83,11 +87,23 @@ const statusConfig: Record<string, { color: string; icon: string; label: string 
   skipped: { color: 'var(--text-disabled)', icon: 'i-lucide-skip-forward', label: 'Skipped' },
 }
 
-const nextStepLabel = computed(() => {
-  if (!props.isPaused) return ''
-  const nextIdx = props.currentStepIndex + 1
-  if (nextIdx >= props.workflowSteps.length) return ''
-  return props.workflowSteps[nextIdx].label
+const verdictColor: Record<string, string> = {
+  CONTINUE: 'var(--success, #22c55e)',
+  RETRY: 'var(--warning, #e5a93e)',
+  ABORT: 'var(--error)',
+}
+
+const continueLabel = computed(() => {
+  if (!props.nextStepLabels.length) return 'Continue'
+  if (props.nextStepLabels.length === 1) return `Continue to ${props.nextStepLabels[0]}`
+  return `Continue to ${props.nextStepLabels.join(' + ')}`
+})
+
+const waveSummary = computed(() => {
+  if (props.currentStepIds.length > 1) {
+    return `${props.currentStepIds.length} steps ran in parallel. Review the outputs, then choose what to do next.`
+  }
+  return 'Step complete. Review the output, then choose what to do next.'
 })
 </script>
 
@@ -125,8 +141,24 @@ const nextStepLabel = computed(() => {
             :class="{ 'animate-spin': exec.status === 'running' }"
             :style="{ color: statusConfig[exec.status]?.color }"
           />
-          <span class="text-[12px] font-medium flex-1" style="color: var(--text-primary);">
+          <span class="text-[12px] font-medium flex-1 truncate" style="color: var(--text-primary);">
             #{{ idx + 1 }} {{ stepLabel(exec.stepId) }}
+          </span>
+          <span
+            v-if="(exec.visits ?? 0) > 1"
+            class="text-[10px] font-mono px-1.5 py-0.5 rounded-full"
+            style="color: var(--accent); background: var(--accent-glow, rgba(255,255,255,0.06));"
+            :title="`Ran ${exec.visits} times`"
+          >
+            ×{{ exec.visits }}
+          </span>
+          <span
+            v-if="exec.monitorVerdict"
+            class="text-[10px] font-mono px-1.5 py-0.5 rounded-full"
+            :style="{ color: verdictColor[exec.monitorVerdict], background: verdictColor[exec.monitorVerdict] + '15' }"
+            title="Monitor verdict"
+          >
+            {{ exec.monitorVerdict }}
           </span>
           <span
             class="text-[10px] font-mono px-1.5 py-0.5 rounded-full"
@@ -169,6 +201,19 @@ const nextStepLabel = computed(() => {
             />
           </div>
 
+          <!-- Monitor review -->
+          <details v-if="exec.monitorNote" class="group/monitor">
+            <summary class="text-[10px] font-mono cursor-pointer select-none" :style="{ color: verdictColor[exec.monitorVerdict ?? 'CONTINUE'] }">
+              Monitor review
+            </summary>
+            <div
+              class="mt-1 rounded-lg p-2.5 text-[11px] leading-relaxed max-h-40 overflow-y-auto"
+              style="background: var(--surface-base); border: 1px solid var(--border-subtle); color: var(--text-secondary);"
+            >
+              <pre class="whitespace-pre-wrap font-sans">{{ exec.monitorNote }}</pre>
+            </div>
+          </details>
+
           <!-- Error -->
           <div
             v-if="exec.error"
@@ -190,16 +235,17 @@ const nextStepLabel = computed(() => {
       <!-- Default: action buttons -->
       <div v-if="!editMode && !respondMode">
         <p class="text-[12px] mb-2" style="color: var(--text-secondary);">
-          Step complete. Review the output, then choose what to do next.
+          {{ waveSummary }}
         </p>
         <div class="flex items-center gap-2 flex-wrap">
           <UButton
-            :label="`Continue to ${nextStepLabel}`"
+            :label="continueLabel"
             icon="i-lucide-arrow-right"
             size="sm"
             @click="onContinue"
           />
           <UButton
+            v-if="soleCurrentId"
             label="Edit output"
             icon="i-lucide-pencil"
             size="sm"
@@ -207,6 +253,7 @@ const nextStepLabel = computed(() => {
             @click="editMode = true"
           />
           <UButton
+            v-if="soleCurrentId"
             label="Reply to agent"
             icon="i-lucide-message-circle"
             size="sm"
