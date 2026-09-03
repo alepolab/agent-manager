@@ -1,7 +1,7 @@
 export default defineNuxtConfig({
   modules: ['@nuxt/ui'],
 
-  devtools: { enabled: true },
+  devtools: { enabled: false },
 
   future: { compatibilityVersion: 4 },
 
