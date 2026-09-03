@@ -10,6 +10,8 @@ export interface AgentFrontmatter {
   memory?: AgentMemory
   skills?: string[]
   tools?: AgentTool[]
+  /** Tool-call budget for one turn of this agent. Absent means the server default. */
+  maxTurns?: number
 }
 
 export interface Agent {

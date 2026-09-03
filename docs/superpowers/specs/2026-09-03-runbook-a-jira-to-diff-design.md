@@ -74,14 +74,35 @@ No new page, no new data model. Runbook A ships as:
 All three are in `server/api/chat.post.ts`, the endpoint every workflow
 step (and Agent Studio chat) executes through.
 
-**E1 — Wire `AgentFrontmatter.tools` into `allowedTools`.**
-Today: `allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep']` is
-hardcoded; the `tools` field already defined on `AgentFrontmatter`
-(`app/types/index.ts:12`, includes `'Bash'`) is read nowhere. No workflow
-step can run a shell command, full stop.
-Fix: read `frontmatter.tools` for the active agent; fall back to today's
-five-tool list when the field is absent. Every existing agent/template
-(none of which set `tools`) is byte-for-byte unaffected.
+**E1 — Make `AgentFrontmatter.tools` actually bind.**
+
+> **CORRECTION (added after the whole-branch review).** This section as
+> originally written was factually wrong, and the error mattered. It claimed
+> `allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep']` restricted agents
+> and that "no workflow step can run a shell command, full stop." Neither is
+> true. Per the SDK's own typings, `allowedTools` means *auto-allowed without
+> prompting*; restricting the available set requires the separate `tools`
+> option. This app also sets `permissionMode: 'bypassPermissions'` with
+> `allowDangerouslySkipPermissions: true`, so the permission flow returns
+> `allow` before allow-rules are consulted. **Every agent in this app,
+> Agent Studio included, already had the full default toolset — Bash, Write,
+> Edit, WebFetch, Task — before this branch.**
+>
+> Consequences to carry forward:
+> - This branch granted no new capability. It added the *appearance* of
+>   per-agent least privilege while enforcing none, which is worse than the
+>   honest prior state.
+> - An agent's displayed `tools` list is not a blast-radius bound unless and
+>   until enforcement lands.
+
+Today: the `tools` field defined on `AgentFrontmatter` (`app/types/index.ts:12`)
+is read nowhere, and the hardcoded `allowedTools` restricts nothing.
+Fix: bind the declared set through the SDK option that genuinely restricts
+(`tools` / `disallowedTools`, verified empirically against the installed SDK,
+not from typings). An agent declaring no `tools` must keep today's effective
+behaviour, so existing agents and templates are unaffected; an agent declaring
+an empty set must get nothing, which needs explicit handling because the SDK
+ignores an empty list.
 
 **E2 — Configurable `maxTurns`.**
 Today: hardcoded to `10` for every call. Standing up a compose stack alone
@@ -220,3 +241,37 @@ Per the request to seed these into the pipeline:
 - A structured evidence-bundle UI component instead of a markdown PR body.
 - Wiring this template into Jira-triggered dispatch (the brief's B5) —
   v1 is started by a human clicking "Run" in this app.
+
+## Post-implementation status (added after the whole-branch review)
+
+The branch was built and reviewed. The whole-branch review returned
+**"merge after fixes"** with two Critical findings. Two of them are design
+gaps, not implementation slips, and they bound what this template may
+honestly be used for:
+
+**Runbook A is NOT a working unattended pipeline, and must not be described
+as one.**
+
+1. **The evidence bundle cannot be assembled** (Critical). Steps receive only
+   their *immediate* graph predecessors' output, so the final PR step never
+   sees the context packet, the root cause, or the verbatim pre-fix FAIL run.
+   The FAIL output is unrecoverable once the fix is applied — it existed only
+   in an earlier step's output. The step will report "not captured" or
+   fabricate it, and open a PR carrying that. Assembling the bundle belongs in
+   CI (action R1 of the implementation plan), not in the chat engine.
+2. **No step can stop the run** (Important). `WorkflowStep.monitorSlug` exists
+   but Runbook A ships no monitors, and a step only halts the run by throwing.
+   An agent that correctly reports "I could not bring the stack up; stopping"
+   still completes its step and the run advances — through to the PR step.
+   Every "stop and report" instruction in the prompts is therefore advisory.
+   Real enforcement is the plan's `PreToolUse` hooks (B2 plan gate, B3 test
+   lock), which are plugin work, not a patch to this branch.
+3. **`frontmatter.skills` never reaches the model.** `server/utils/resolveSkill.ts`
+   has zero importers and nothing in the request path references an agent's
+   skills. All four skill references in the presets — including the
+   `agent-browser` skill written for the trace step — are inert. This is a
+   missing capability in the app, not a defect introduced here.
+
+Until 1 and 2 are addressed: run this template step-by-step with the auto-run
+box **unticked**, and treat its final PR step's output as a draft for a human
+to complete, not as an evidence bundle.

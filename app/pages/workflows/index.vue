@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { workflowTemplates } from '~/utils/workflowTemplates'
+import { workflowTemplates, materializeTemplateSteps } from '~/utils/workflowTemplates'
 import { agentTemplates } from '~/utils/templates'
 
 const { workflows, loading, error, create, fetchAll } = useWorkflows()
@@ -27,17 +27,21 @@ async function useWorkflowTemplate(templateId: string) {
   if (!template) return
   creatingTemplate.value = templateId
   try {
-    const steps = []
+    const agentSlugByTemplateId: Record<string, string> = {}
+    const resolvedSteps = []
+
     for (const step of template.steps) {
       const agentTemplate = agentTemplates.find(t => t.id === step.agentTemplateId)
       if (!agentTemplate) continue
-      // Check if agent exists
       let agent = agents.value.find(a => a.slug === agentTemplate.frontmatter.name)
       if (!agent) {
         agent = await createAgent({ frontmatter: { ...agentTemplate.frontmatter }, body: agentTemplate.body })
       }
-      steps.push({ id: crypto.randomUUID(), agentSlug: agent.slug, label: step.label })
+      agentSlugByTemplateId[step.agentTemplateId] = agent.slug
+      resolvedSteps.push(step)
     }
+
+    const steps = materializeTemplateSteps({ ...template, steps: resolvedSteps }, agentSlugByTemplateId)
     const workflow = await create({ name: template.name, description: template.description, steps })
     router.push(`/workflows/${workflow.slug}`)
   } catch (e: any) {

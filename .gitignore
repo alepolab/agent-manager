@@ -21,3 +21,8 @@ logs
 # Local env files
 .env
 .claude
+
+# Subagent-driven-development scratch (per-plan ledgers, briefs, review packages)
+.superpowers/
+tsconfig.tsbuildinfo
+.worktrees/

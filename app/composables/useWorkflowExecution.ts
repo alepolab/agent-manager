@@ -39,6 +39,8 @@ export function useWorkflowExecution() {
   let _initialPrompt = ''
   let _graph: WorkflowGraph | null = null
   let _state: RunState | null = null
+  /** When true, each finished wave rolls straight into the next instead of pausing. */
+  let _autoRun = false
 
   const outputs: Record<string, string> = {}
   const lastInputs: Record<string, string> = {}
@@ -259,16 +261,25 @@ export function useWorkflowExecution() {
     }
 
     nextStepIds.value = readyNodes(_graph, _state).slice(0, MAX_CONCURRENCY)
+
+    // Failures and ABORT verdicts have already returned above, so reaching here means
+    // the run is healthy and a human gate is the only thing that would stop it.
+    if (_autoRun) {
+      await runWave()
+      return
+    }
+
     isPaused.value = true
   }
 
-  async function run(workflow: Workflow, initialPrompt: string, projectDir?: string) {
+  async function run(workflow: Workflow, initialPrompt: string, projectDir?: string, autoRun = false) {
     if (isRunning.value || !workflow.steps.length) return
 
     const { workingDir } = useWorkingDir()
     _workflow = workflow
     _projectDir = projectDir || workingDir.value || undefined
     _initialPrompt = initialPrompt
+    _autoRun = autoRun
     _graph = buildGraph(workflow.steps)
     _state = initRunState(_graph)
     abortController = new AbortController()
