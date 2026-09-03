@@ -18,6 +18,7 @@ function onStart() {
   emit('start', prompt.value.trim(), projectDir.value.trim() || undefined, autoRun.value)
   prompt.value = ''
   projectDir.value = ''
+  autoRun.value = false
 }
 
 function onCancel() {

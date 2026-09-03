@@ -25,24 +25,49 @@ export interface WorkflowTemplate {
  * `next` has to be translated through the same map.
  *
  * `agentSlugByTemplateId` must have an entry for every step passed in - the caller
- * filters out steps whose agent template could not be resolved before calling.
+ * filters out steps whose agent template could not be resolved before calling. A
+ * `next` naming a template step that got filtered out this way (or that never
+ * existed) has its target dropped rather than surviving as `undefined`/`null`.
  */
 export function materializeTemplateSteps(
   template: WorkflowTemplate,
   agentSlugByTemplateId: Record<string, string>,
 ): WorkflowStep[] {
   // The global crypto, not node:crypto - this module is bundled for the browser too.
-  const stepIdByTemplateId: Record<string, string> = {}
-  for (const step of template.steps) stepIdByTemplateId[step.agentTemplateId] = crypto.randomUUID()
+  //
+  // One id per STEP (by index), not per `agentTemplateId`: a template that uses the
+  // same agent template in two steps must not collapse them onto the same generated
+  // id, or the repeated step becomes unreachable (stepById()/indexOf() only ever
+  // resolve the first match).
+  const stepIds = template.steps.map(() => crypto.randomUUID())
 
-  return template.steps.map((step) => {
+  // Still keyed by `agentTemplateId`, because that's what a `next` entry names.
+  // If an `agentTemplateId` repeats, the last step wins as the translation target -
+  // an inherent ambiguity of naming a step by its agent rather than by index, not
+  // something this function can resolve on the template author's behalf.
+  const stepIdByTemplateId: Record<string, string> = {}
+  template.steps.forEach((step, i) => { stepIdByTemplateId[step.agentTemplateId] = stepIds[i] })
+
+  return template.steps.map((step, i) => {
     const materialized: WorkflowStep = {
-      id: stepIdByTemplateId[step.agentTemplateId]!,
+      id: stepIds[i],
       agentSlug: agentSlugByTemplateId[step.agentTemplateId]!,
       label: step.label,
     }
     if (step.next) {
-      materialized.next = step.next.map(target => stepIdByTemplateId[target]!)
+      const resolved = step.next
+        .map(target => stepIdByTemplateId[target])
+        .filter((id): id is string => id !== undefined)
+
+      // If every declared target was filtered out, this step's `next` becoming `[]`
+      // would silently truncate the workflow here (buildGraph treats an explicit
+      // empty `next` as terminal - it does NOT fall back to array order the way an
+      // absent `next` does). That's not what "all my targets disappeared" means, so
+      // leave `next` unset instead and let it fall back to array order. An
+      // originally-empty `next` (an explicit terminal step) is left as `[]` as-is.
+      if (resolved.length > 0 || step.next.length === 0) {
+        materialized.next = resolved
+      }
     }
     return materialized
   })
