@@ -16,7 +16,7 @@ import {
   MAX_CONCURRENCY,
   type WorkflowGraph,
   type RunState,
-} from '~/utils/workflowGraph'
+} from '~~/shared/utils/workflowGraph'
 
 /**
  * Runs a workflow as a graph rather than a list: several nodes can run in one wave,

@@ -18,7 +18,7 @@ import {
   parseVerdict,
   edgeKey,
   MAX_CONCURRENCY,
-} from '../app/utils/workflowGraph.ts'
+} from '../shared/utils/workflowGraph.ts'
 
 /**
  * Drive a graph to completion, recording one entry per wave. `onComplete` may arm a node

@@ -7,7 +7,7 @@ import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import type { Workflow, WorkflowStep } from '~/types'
 import { getAgentColor } from '~/utils/colors'
-import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~/utils/workflowGraph'
+import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
 
 const route = useRoute()
 const router = useRouter()
