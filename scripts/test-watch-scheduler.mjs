@@ -14,6 +14,18 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'sched-'))
 const sched = await import('../server/utils/watchScheduler.ts')
 const { setTicketSource } = await import('../server/utils/ticketSource.ts')
 const store = await import('../server/utils/watchStateStore.ts')
+const runStore = await import('../server/utils/workflowRunStore.ts')
+
+/** A run record via the real store, its outcome overridden for the test. */
+async function makeRun(overrides = {}) {
+  const run = await runStore.createRun({
+    workflowSlug: 'demo', workflowName: 'Demo', autoRun: false,
+    initialPrompt: 'do the thing', steps: [],
+  })
+  const next = { ...run, ...overrides }
+  await runStore.saveRun(next)
+  return next
+}
 
 const watch = {
   id: 'w1', name: 'W1', workflowSlug: 'demo', intervalSeconds: 60,
@@ -24,10 +36,13 @@ const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
 // ══ THE REQUIREMENT: one poisoned ticket must not cost the others ═════════
 {
   setTicketSource({ fetch: async () => [t('BAD-1'), t('OK-1'), t('OK-2')] })
-  let n = 0
   sched.setRunStarter(async (_w, ticket) => {
     if (ticket.key === 'BAD-1') throw new Error('dispatch exploded')
-    return { runId: `run-${++n}` }
+    // A real run record (still 'running', owned by this alive process) so
+    // the next cycle's start-of-cycle reconcile leaves it dispatched rather
+    // than reading a fabricated id as a missing/lost run record.
+    const run = await makeRun()
+    return { runId: run.id }
   })
 
   const result = await sched.runCycle(watch)
@@ -104,6 +119,76 @@ const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
   setTicketSource({ fetch: async () => { throw new Error('source down') } })
   const result = await sched.runCycle({ ...watch, id: 'w3' })
   assert.deepEqual(result.dispatched, [], 'a broken source yields nothing')
+}
+
+// ══ Reconciliation: dispatched tickets resolved against real run outcomes ══
+// Runs are created through workflowRunStore's real createRun/saveRun so this
+// exercises the actual store — not a mock of "what a run looks like".
+{
+  const rWatch = { ...watch, id: 'w-reconcile' }
+
+  const runDone = await makeRun({ status: 'completed' })
+  await store.recordAttempt(rWatch.id, 'REC-DONE')
+  await store.recordDispatch(rWatch.id, 'REC-DONE', runDone.id)
+
+  const runFailed = await makeRun({ status: 'failed', error: 'boom' })
+  await store.recordAttempt(rWatch.id, 'REC-FAIL')
+  await store.recordDispatch(rWatch.id, 'REC-FAIL', runFailed.id)
+
+  // createRun leaves status 'running' owned by this process's own pid, so it
+  // reads back as genuinely still running (the owning process is alive).
+  const runLive = await makeRun()
+  await store.recordAttempt(rWatch.id, 'REC-LIVE')
+  await store.recordDispatch(rWatch.id, 'REC-LIVE', runLive.id)
+
+  // The run record that would prove REC-GONE's outcome is deleted outright —
+  // simulating a lost/corrupted file, not just an unknown id.
+  const runGone = await makeRun()
+  await store.recordAttempt(rWatch.id, 'REC-GONE')
+  await store.recordDispatch(rWatch.id, 'REC-GONE', runGone.id)
+  rmSync(join(process.env.CLAUDE_DIR, 'workflow-runs', `${runGone.id}.json`), { force: true })
+
+  await sched.reconcile(rWatch)
+
+  const state = await store.getWatchState(rWatch.id)
+  assert.equal(state['REC-DONE'].disposition, 'done', 'a completed run resolves to done')
+
+  assert.equal(state['REC-FAIL'].disposition, 'failed', 'a failed run resolves to failed')
+  assert.equal(state['REC-FAIL'].attempts, 1,
+    'the attempt already counted at dispatch time is preserved, not re-counted by reconcile')
+
+  assert.equal(state['REC-LIVE'].disposition, 'dispatched', 'a still-running run is left alone')
+
+  // Decision: a missing run record is treated as a failed attempt, not left
+  // `dispatched` forever and not thrown. There is no way to tell "still
+  // genuinely running" apart from "evidence destroyed" once the file backing
+  // it is gone, so it goes back through the same failed/escalate path a real
+  // failure would, using the attempt already counted at dispatch time — it
+  // becomes eligible for one more, verifiable attempt next cycle instead of
+  // sitting in limbo indefinitely.
+  assert.equal(state['REC-GONE'].disposition, 'failed',
+    'a missing run record resolves to failed rather than hanging, throwing, or staying dispatched forever')
+  assert.equal(state['REC-GONE'].attempts, 1, 'reconciling a missing record is not itself a new attempt')
+}
+
+// ── reconcile runs at the START of runCycle, in the same cycle it frees a
+//    ticket back up — not just as a standalone function nobody calls ───────
+{
+  const cycleWatch = { ...watch, id: 'w-reconcile-cycle' }
+  const staleRun = await makeRun({ status: 'failed', error: 'died while the app was down' })
+  await store.recordAttempt(cycleWatch.id, 'CYC-1')
+  await store.recordDispatch(cycleWatch.id, 'CYC-1', staleRun.id)
+
+  setTicketSource({ fetch: async () => [t('CYC-1')] })
+  sched.setRunStarter(async () => ({ runId: 'run-cyc-retry' }))
+
+  const result = await sched.runCycle(cycleWatch)
+  assert.deepEqual(result.dispatched, ['CYC-1'],
+    'reconcile freed CYC-1 back to failed before eligibility was computed, so this same cycle re-dispatched it')
+
+  const state = await store.getWatchState(cycleWatch.id)
+  assert.equal(state['CYC-1'].disposition, 'dispatched')
+  assert.equal(state['CYC-1'].attempts, 2, 'the retry is a genuinely new attempt on top of the one already counted')
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })

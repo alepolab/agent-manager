@@ -25,9 +25,75 @@ import {
   recordAttempt,
   recordDispatch,
   recordFailure,
+  recordSuccess,
   MAX_ATTEMPTS,
 } from './watchStateStore.ts'
+import { getRun } from './workflowRunStore.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
+
+/** Run statuses that mean the ticket's attempt did not pan out. */
+const RUN_FAILURE_STATUSES = new Set(['failed', 'stopped', 'interrupted'])
+
+/**
+ * Resolves every `dispatched` ticket against its run's actual outcome.
+ *
+ * State is keyed by ticket ("should I touch this ticket at all") and is
+ * deliberately decoupled from the run record ("what happened in this
+ * attempt") — nothing updates a ticket's disposition as a side effect of the
+ * run finishing. Without this function a ticket that was marked `dispatched`
+ * stays `dispatched` forever once its run settles: the scheduler's dedupe
+ * (`INELIGIBLE` includes `dispatched`) would then skip it on every future
+ * cycle, and a ticket whose run failed would never retry or escalate. That
+ * is the same queue-wedge this whole feature exists to prevent, just at the
+ * far end instead of the dispatch end.
+ *
+ * `recordFailure`/`recordSuccess` are called without a preceding
+ * `recordAttempt` here — the attempt this outcome belongs to was already
+ * counted by `runCycle` at dispatch time (T3's fix). Reconciling a run's
+ * outcome is not itself a new attempt.
+ */
+export async function reconcile(watch: Watch): Promise<void> {
+  const state = await getWatchState(watch.id)
+
+  for (const ticket of Object.values(state)) {
+    if (ticket.disposition !== 'dispatched') continue
+
+    if (!ticket.lastRunId) {
+      // Marked dispatched with no run id to check — cannot have happened
+      // through the normal path (recordDispatch always sets it), but leave
+      // it alone rather than guessing at an outcome for it.
+      continue
+    }
+
+    const run = await getRun(ticket.lastRunId)
+
+    if (!run) {
+      // The run record that would prove this ticket's outcome is gone —
+      // deleted, corrupted past recovery, or lost with the disk. Leaving
+      // the ticket `dispatched` forever would wedge it exactly like an
+      // unnoticed dead run would; there is no way to distinguish "still
+      // genuinely running" from "evidence destroyed" once the file is
+      // gone. Treat it as a failed attempt: it lands back in `failed` (or
+      // `escalated` at the cap) using the attempt already counted at
+      // dispatch time, so it becomes eligible for a fresh, verifiable
+      // attempt next cycle instead of sitting in limbo indefinitely.
+      await recordFailure(watch.id, ticket.key, 'run record missing (lost or deleted)', MAX_ATTEMPTS)
+      continue
+    }
+
+    if (run.status === 'completed') {
+      await recordSuccess(watch.id, ticket.key)
+    } else if (RUN_FAILURE_STATUSES.has(run.status)) {
+      await recordFailure(
+        watch.id,
+        ticket.key,
+        run.error ?? `run ended with status '${run.status}'`,
+        MAX_ATTEMPTS,
+      )
+    }
+    // 'running' or 'paused': the run is still in flight — leave it dispatched.
+  }
+}
 
 export interface CycleResult {
   dispatched: string[]
@@ -65,6 +131,12 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
   if (!watch.enabled) {
     return { dispatched, skipped, failed }
   }
+
+  // Reconcile before fetching anything new: a run that finished (or died)
+  // while the app was down must be accounted for before this cycle decides
+  // what is eligible, or a ticket whose run actually completed hours ago
+  // would still read as `dispatched` and be skipped forever.
+  await reconcile(watch)
 
   let tickets: TicketRef[]
   try {
