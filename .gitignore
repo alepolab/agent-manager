@@ -26,3 +26,6 @@ logs
 .superpowers/
 tsconfig.tsbuildinfo
 .worktrees/
+
+# Staged Claude config payload (rebuilt by scripts/stage-claude-config.sh)
+docker/claude-config/
