@@ -222,6 +222,14 @@ export interface WorkflowStep {
   id: string
   agentSlug: string
   label: string
+  /** Explicit successors. Absent means "the next step in array order" (legacy workflows). */
+  next?: string[]
+  /** Agent that reviews this step's output and returns CONTINUE / RETRY / ABORT. */
+  monitorSlug?: string
+  /** How many times this step may run in one execution. Guards cycles. Default 3. */
+  maxVisits?: number
+  /** Canvas position, persisted so branches and loops keep their layout. */
+  position?: { x: number, y: number }
 }
 
 export interface Workflow {
@@ -248,6 +256,10 @@ export interface StepExecution {
   error?: string
   startedAt?: number
   completedAt?: number
+  /** Times this step has run. Above 1 means a cycle or a monitor retry brought it back. */
+  visits?: number
+  monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
+  monitorNote?: string
 }
 
 // ── Output Styles ─────────────────────────────────────
