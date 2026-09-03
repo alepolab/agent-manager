@@ -1,0 +1,52 @@
+# What the triage loop picks up.
+#
+# The loop is generic. A watch decides what enters it and who owns the answer.
+# Adding a queue is an entry here plus a passing registry check — never new
+# pipeline code.
+#
+# Every new watch starts in `shadow`: it runs end to end and posts nothing.
+# Promote to `live` only after its drafts have been reviewed against real
+# closed tickets.
+#
+# Validated by: node scripts/validate-registry.mjs
+# Schema:       registry/schemas/watches.schema.json
+
+watches:
+  # The first watch. GTAC has already gated these on reproducibility, so the
+  # tickets arrive with the root cause and evidence that make triage worth
+  # running at all.
+  - id: csup-bugs
+    jql: 'project = CSUP AND status = "QualityGate Passed"'
+    work_types: [bug]
+    reporter_group: gtac
+    dispatch_state: Agent
+    # Above this label nothing is dispatched, however green the evidence.
+    # Money and protocol changes stay with a person, indefinitely.
+    max_blast_radius: protocol
+    daily_dispatch_cap: 10
+    mode: shadow
+
+  # Second watch. These three are already escalated to the CTO's queue, so
+  # dispatching them shrinks that queue by the same mechanism that proves the
+  # pipeline: DEVOPS-23, DEVOPS-14, DEVOPS-15.
+  - id: devops-tasks
+    jql: 'project = DEVOPS AND type = Task AND labels = agent-ready'
+    work_types: [infra]
+    reporter_group: devops
+    dispatch_state: Agent
+    max_blast_radius: schema
+    daily_dispatch_cap: 5
+    mode: shadow
+
+  # Third watch, features. Stays in shadow until the spec pipeline exists —
+  # a feature without an approved spec.md has no oracle to fail first.
+  - id: bss-change-requests
+    jql: >-
+      project = SBN AND type in (Story, "Change Request")
+      AND status = "Ready for Agent"
+    work_types: [feature, change_request]
+    requires: [spec]
+    reporter_group: product-owners
+    max_blast_radius: ui_parsing
+    daily_dispatch_cap: 3
+    mode: shadow

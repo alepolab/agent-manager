@@ -1,0 +1,121 @@
+# How a ticket becomes code, an environment and a verdict.
+#
+# A ticket resolves to repos, a branch, a stack profile and test commands from
+# this file alone, with no human looking anything up. Adding an application to
+# the pipeline is an entry here and a passing registry check.
+#
+# Each repo champion owns their product's entry. A failing entry blocks
+# dispatch to that product — not the pipeline.
+#
+# Validated by: node scripts/validate-registry.mjs
+# Schema:       registry/schemas/products.schema.json
+#
+# NEEDS CONFIRMATION (marked CONFIRM below): branch policies, test commands and
+# owner groups are drawn from the repo map and are first drafts. A wrong value
+# fails the registry check loudly rather than corrupting a ticket, which is why
+# they are committed as drafts rather than left blank.
+
+products:
+  aaa:
+    match:
+      components: [AAA, RADIUS]
+    repos: [alepolab/aaa_rhel8]
+    version_source: customer_profile          # CONFIRM: which Jira field carries the deployed version
+    branches:
+      bug: 'release/{version}'                # CONFIRM: aaa_rhel8's default is master
+      feature: master
+      infra: master
+    forward_port: master                      # CONFIRM
+    stack:
+      compose: alepo-dev-team-infra/aaa
+      # Two nodes is the default deliberately: per-process state is not a
+      # correctness mechanism, and a single-node stack cannot fail the
+      # tombstone class of bug that a reviewer caught by hand.
+      topology_default: 2node
+      liquibase: true
+    build: 'make build'                       # CONFIRM
+    tests:
+      unit: 'make test'                       # CONFIRM
+      atdd: 'robot --xunit out.xml tests/aaa' # blocked on V2 (--xunit not yet emitted)
+      regression: atdd-aaa
+    owners:
+      protocol: aaa-tech-leads                # CONFIRM: group names
+      money: billing-owners
+      schema: aaa-tech-leads
+
+  pcrf:
+    match:
+      components: [PCRF, Policy]
+      projects: [PCRFV]
+    repos: [alepolab/pcrf_cpp14, alepolab/pcrf-ems-portal]
+    multi_repo: true
+    branches:
+      bug: development
+      feature: development
+    stack:
+      compose: alepo-dev-team-infra/pcrf
+      topology_default: 2node                 # CONFIRM: PCRF deploys in pairs
+      liquibase: true
+    tests:
+      unit: 'ctest'                           # CONFIRM
+      ui_trace: playwright                    # EMS portal has a UI surface
+    owners:
+      protocol: pcrf-tech-leads               # CONFIRM
+      schema: pcrf-tech-leads
+      ui_parsing: pcrf-ems-owners
+
+  ffm:
+    match:
+      components: [FFM, Fulfilment]
+    repos: [alepolab/ffm]
+    branches:
+      bug: develop
+      feature: develop
+    stack:
+      compose: alepo-dev-team-infra/ffm
+      topology_default: 1node
+      liquibase: false                        # CONFIRM: FFM is Flask + Celery + Mongo
+    tests:
+      unit: 'pytest'                          # CONFIRM
+      ui_trace: playwright                    # Vue 3 front end
+    owners:
+      ui_parsing: ffm-owners                  # CONFIRM
+      schema: ffm-owners
+
+  pms:
+    match:
+      components: [PMS, Partner]
+    repos: [alepolab/pms]
+    multi_repo: false                          # monorepo: Node + Python billing + rating
+    branches:
+      bug: develop
+      feature: develop
+    stack:
+      compose: alepo-dev-team-infra/pms
+      topology_default: 1node
+      liquibase: false                        # CONFIRM
+    tests:
+      unit: 'npm test'                        # CONFIRM: monorepo has three runtimes
+      ui_trace: playwright
+    owners:
+      money: billing-owners                   # PMS carries billing and rating paths
+      ui_parsing: pms-owners
+      schema: pms-owners
+
+  vms:
+    match:
+      components: [VMS, Voucher]
+    repos: [alepolab/voucher-management]
+    branches:
+      bug: main                               # CONFIRM
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/vms
+      topology_default: 1node
+      liquibase: false
+    tests:
+      unit: 'npm test'                        # CONFIRM
+      ui_trace: playwright                    # React 19 front end
+    owners:
+      money: billing-owners                   # vouchers are a money path
+      ui_parsing: vms-owners

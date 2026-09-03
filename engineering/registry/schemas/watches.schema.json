@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alepo.internal/schemas/watches.schema.json",
+  "title": "watches.yaml — what the triage loop picks up",
+  "description": "A watch says what to pick up and who owns it. The loop itself is generic; adding a queue is an entry here, not new pipeline code.",
+  "type": "object",
+  "required": ["watches"],
+  "additionalProperties": false,
+  "properties": {
+    "watches": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/watch" }
+    }
+  },
+  "$defs": {
+    "watch": {
+      "type": "object",
+      "required": ["id", "jql", "work_types", "reporter_group", "mode"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Stable identifier. Appears in every bundle and metrics record, so renaming one breaks history."
+        },
+        "jql": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The query the loop runs. The standard exclusion of the agent:triaged label is added by the runner, not written here."
+        },
+        "work_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/work_type" },
+          "description": "Work types this watch may dispatch. Anything else exits as 'Not for this loop'."
+        },
+        "reporter_group": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Who receives a Needs Info transition. A missing artifact is assigned here, never left unassigned."
+        },
+        "dispatch_state": {
+          "type": "string",
+          "description": "The Jira state whose transition fires the build loop. Absent means this watch triages but never dispatches."
+        },
+        "max_blast_radius": {
+          "$ref": "#/$defs/blast_radius",
+          "description": "Above this label the ticket is never dispatched, however green the evidence."
+        },
+        "daily_dispatch_cap": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Hard ceiling on build-loop dispatches per day for this watch. Absent means the runner default applies."
+        },
+        "requires": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["spec"] },
+          "description": "Extra artifacts required before build. 'spec' means spec.md must exist and be approved at Gate 1."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["shadow", "live"],
+          "description": "New watches start as shadow: everything runs but nothing is posted or dispatched."
+        }
+      },
+      "allOf": [
+        {
+          "description": "A live watch that names no dispatch_state can still triage; a watch that dispatches must say into which state.",
+          "if": {
+            "properties": { "mode": { "const": "live" } },
+            "required": ["mode"]
+          },
+          "then": { "required": ["reporter_group"] }
+        }
+      ]
+    },
+    "work_type": {
+      "type": "string",
+      "enum": ["bug", "feature", "change_request", "infra", "docs", "security"]
+    },
+    "blast_radius": {
+      "type": "string",
+      "enum": ["docs", "ui_parsing", "schema", "protocol", "money"],
+      "description": "Ordered least to most dangerous. money and protocol are always owner-gated and never auto-merge."
+    }
+  }
+}
