@@ -102,4 +102,73 @@ if (typeof source === 'string') {
 }
 console.log('marketplace source resolves to a matching, on-disk plugin.json')
 
+// ── 6. hooks/hooks.json registers the plan gate and the test lock ─────────
+//
+// This is Task 2's registration step. hooks.json is auto-discovered by
+// Claude Code from the plugin's hooks/ directory by convention — no
+// installed plugin under ~/.claude/plugins declares a "hooks" field in
+// plugin.json for this — so plugin.json is deliberately not asserted on
+// here; hooks.json itself is the contract.
+const hooksConfigPath = join(root, 'hooks', 'hooks.json')
+const hooksConfig = readJson(hooksConfigPath)
+console.log('hooks/hooks.json parses as JSON')
+
+assert.ok(hooksConfig.hooks && typeof hooksConfig.hooks === 'object',
+  'hooks/hooks.json must have a top-level "hooks" object')
+const preToolUse = hooksConfig.hooks.PreToolUse
+assert.ok(Array.isArray(preToolUse) && preToolUse.length > 0,
+  'hooks/hooks.json must register at least one PreToolUse entry')
+
+/** Every command hooks.json points at must exist under hooks/. */
+function commandsIn(entry) {
+  return (entry.hooks ?? [])
+    .filter(h => h.type === 'command')
+    .map(h => h.command)
+}
+
+for (const entry of preToolUse) {
+  for (const command of commandsIn(entry)) {
+    const m = command.match(/hooks\/([\w.-]+\.mjs)/)
+    assert.ok(m, `PreToolUse command "${command}" must reference a hooks/*.mjs file`)
+    const hookFile = join(root, 'hooks', m[1])
+    assert.ok(existsSync(hookFile),
+      `PreToolUse command references hooks/${m[1]}, which does not exist at ${hookFile}`)
+  }
+}
+console.log('every hooks.json PreToolUse command references a hook file that exists')
+
+// Find the plan-gate and test-lock registrations specifically.
+const planGateEntry = preToolUse.find(e =>
+  commandsIn(e).some(c => c.includes('plan-gate.mjs')))
+const testLockEntry = preToolUse.find(e =>
+  commandsIn(e).some(c => c.includes('test-lock.mjs')))
+
+assert.ok(planGateEntry, 'hooks.json must register plan-gate.mjs on PreToolUse')
+assert.ok(testLockEntry, 'hooks.json must register test-lock.mjs on PreToolUse')
+
+// ── 7. THE assertion this task exists for ──────────────────────────────────
+//
+// test-lock.mjs exists specifically because an agent with Bash does not need
+// Edit to rewrite a test (`sed -i`, `> file`, `tee`, `cp`, `git checkout --`
+// all work — see the hook's own doc comment). Registering it for `Edit|Write`
+// only silently reinstates exactly the bypass the hook was written to close:
+// a config that looks like it enables the control while disabling it. This
+// must stay a test, not a comment, because it is the one most likely to be
+// silently dropped by a future edit.
+const testLockMatcher = testLockEntry.matcher ?? ''
+const testLockTools = testLockMatcher.split('|').map(t => t.trim())
+assert.ok(testLockTools.includes('Bash'),
+  `test-lock.mjs PreToolUse matcher is "${testLockMatcher}" and must include "Bash" — ` +
+  `an Edit|Write-only matcher reopens the sed -i / tee / git-checkout bypass the hook exists to close`)
+assert.ok(testLockTools.includes('Edit') && testLockTools.includes('Write'),
+  `test-lock.mjs PreToolUse matcher is "${testLockMatcher}" and must also include "Edit" and "Write"`)
+console.log('test-lock.mjs matcher includes Bash (plus Edit|Write): ' + testLockMatcher)
+
+// The plan gate is Edit|Write only by design (plan action B2) — writing a
+// plan or arbitrary shell output is not the thing it guards against.
+const planGateTools = (planGateEntry.matcher ?? '').split('|').map(t => t.trim())
+assert.ok(planGateTools.includes('Edit') && planGateTools.includes('Write'),
+  `plan-gate.mjs PreToolUse matcher is "${planGateEntry.matcher}" and must include "Edit" and "Write"`)
+console.log('plan-gate.mjs matcher includes Edit and Write: ' + planGateEntry.matcher)
+
 console.log('plugin-manifest: all assertions passed')
