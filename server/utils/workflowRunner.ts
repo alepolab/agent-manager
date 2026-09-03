@@ -7,16 +7,28 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun } from './workflowRunStore.ts'
+import { callAgent } from './agentCaller.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 
 export type AgentCaller =
   (agentSlug: string, input: string, projectDir?: string) => Promise<string>
 
-/** Replaced in tests so the loop is exercisable without API calls. */
-let agentCaller: AgentCaller = async () => {
-  throw new Error('no agent caller configured')
-}
+// The real caller is imported and wired here directly, at module scope, in
+// the same file that reads it. Previously this defaulted to a throwing stub
+// and relied on server/utils/agentCaller.ts calling setAgentCaller() as a
+// side effect of being imported *somewhere* on the request path — but that
+// import (a bare `import './agentCaller'` with no bound names) was silently
+// dropped by Nitro's dev bundler, so the throwing stub was all `executeNode`
+// ever saw. Importing the function directly removes the import-order
+// dependency entirely: there is no window where the module is loaded but
+// not yet wired. setAgentCaller() is kept so tests can still substitute a
+// stub without touching the real SDK.
+let agentCaller: AgentCaller = callAgent
 export function setAgentCaller(fn: AgentCaller) { agentCaller = fn }
+/** Exposed for tests: the exact function reference executeNode will call next. */
+export function getAgentCaller() { return agentCaller }
+/** True unless a test has overridden the caller with setAgentCaller(). */
+export function isRealAgentCallerActive() { return agentCaller === callAgent }
 
 interface WorkflowLike {
   slug: string

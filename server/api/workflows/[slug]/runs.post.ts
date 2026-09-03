@@ -1,6 +1,5 @@
 import { startRun } from '../../../utils/workflowRunner'
 import { findActiveRun } from '../../../utils/workflowRunStore'
-import '../../../utils/agentCaller'   // registers the real caller
 
 export default defineEventHandler(async (event) => {
   const slug = getRouterParam(event, 'slug')!

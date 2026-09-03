@@ -1,14 +1,18 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { getClaudeDir, resolveClaudePath } from './claudeDir'
-import { parseFrontmatter } from './frontmatter'
-import { resolveTools, resolveMaxTurns } from './agentToolPolicy'
-import { setAgentCaller } from './workflowRunner'
+import { getClaudeDir, resolveClaudePath } from './claudeDir.ts'
+import { parseFrontmatter } from './frontmatter.ts'
+import { resolveTools, resolveMaxTurns } from './agentToolPolicy.ts'
 import type { AgentFrontmatter } from '~/types'
 
+// Exported and imported directly by workflowRunner.ts (module scope, not a
+// side-effect import) so the real caller is wired the instant that module
+// loads — see the comment on `agentCaller` there. Do NOT import
+// workflowRunner.ts from this file: workflowRunner.ts imports this file, and
+// a back-reference would create a cycle.
 /** One agent turn. Returns its final text. */
-async function callAgent(agentSlug: string, input: string, projectDir?: string): Promise<string> {
+export async function callAgent(agentSlug: string, input: string, projectDir?: string): Promise<string> {
   const claudeDir = getClaudeDir()
   const cwd = projectDir && existsSync(projectDir) ? projectDir : claudeDir
 
@@ -41,5 +45,3 @@ async function callAgent(agentSlug: string, input: string, projectDir?: string):
   }
   return result
 }
-
-setAgentCaller(callAgent)

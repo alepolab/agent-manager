@@ -1,5 +1,4 @@
 import { respondToRun } from '../../../utils/workflowRunner'
-import '../../../utils/agentCaller'
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ reply: string }>(event)
   if (!body?.reply?.trim()) throw createError({ statusCode: 400, message: 'reply is required' })
