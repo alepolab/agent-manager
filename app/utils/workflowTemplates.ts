@@ -79,4 +79,20 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'email-drafter', label: 'Format Email' },
     ],
   },
+  {
+    id: 'runbook-a-jira-to-diff',
+    name: 'Runbook A — Ticket to Evidence-Backed PR',
+    description: 'Paste a support ticket: stands up the stack, writes a failing parameterised test, fixes the cause, verifies, and opens a PR carrying the evidence bundle.',
+    icon: 'i-lucide-git-pull-request-arrow',
+    steps: [
+      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'] },
+      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', next: ['sdlc-test-author'] },
+      { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'] },
+      // Verification and browser evidence are independent of each other - one wave.
+      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture'] },
+      { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression', next: ['sdlc-evidence-and-pr'] },
+      { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'] },
+      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR', next: [] },
+    ],
+  },
 ]
