@@ -33,8 +33,11 @@
  *         "regression":   { "suite": "full" },
  *         "fix": {
  *           "repos": [ { "repo": "org/name", "commits": ["abcdef1"], "pr": "https://..." } ],
- *           "merge_order": null, "files_changed": 3, "lines_changed": 42,
+ *           "files_changed": 3, "lines_changed": 42,
  *           "test_dirs_unlocked": false, "unlock_reason": null
+ *           // merge_order: array of repo names, required only when repos
+ *           // has more than one entry (schema types it as array, not
+ *           // nullable — for a single-repo fix, omit the key entirely).
  *         },
  *         "adversarial": null,
  *         "cost": { "input_tokens": 0, "output_tokens": 0, "attempts": 1, "wall_clock_min": 0 }
