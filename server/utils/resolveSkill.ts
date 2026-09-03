@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { resolveClaudePath } from './claudeDir'
-import { parseFrontmatter } from './frontmatter'
+import { resolveClaudePath } from './claudeDir.ts'
+import { parseFrontmatter } from './frontmatter.ts'
 import type { SkillFrontmatter, CommandFrontmatter } from '~/types'
 
 interface ResolvedSkill {
