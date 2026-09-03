@@ -16,8 +16,9 @@ COPY package.json bun.lockb* ./
 RUN bun install
 
 # Build node-pty from source for ARM64
+RUN bun add -g node-gyp
 RUN cd node_modules/node-pty && \
-    npm run install
+    bun run install
 
 # Copy source files (excluding node_modules via .dockerignore)
 COPY . .
@@ -30,9 +31,10 @@ FROM oven/bun:1.1-slim
 
 WORKDIR /app
 
-# Install runtime dependencies for node-pty
+# Install runtime dependencies for node-pty and the healthcheck
 RUN apt-get update && apt-get install -y \
     python3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built application from build stage

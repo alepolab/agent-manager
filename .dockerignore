@@ -7,7 +7,6 @@ node_modules
 dist
 *.log
 .DS_Store
-bun.lockb
 .claude
 cli-history
 chat-sessions
