@@ -1,4 +1,4 @@
-export type RunStatus =
+export type WorkflowRunStatus =
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
 
 export type RunStepStatus =
@@ -24,7 +24,7 @@ export interface WorkflowRun {
   id: string
   workflowSlug: string
   workflowName: string
-  status: RunStatus
+  status: WorkflowRunStatus
   autoRun: boolean
   initialPrompt: string
   projectDir?: string
