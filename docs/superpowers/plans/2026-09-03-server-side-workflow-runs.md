@@ -14,7 +14,7 @@
 
 - **`bun` is NOT installed.** Use `npm`. `npm run typecheck` is broken pre-existing; typecheck with:
   `node .superpowers/tsc-check/node_modules/vue-tsc/bin/vue-tsc.js -b --noEmit` — create that pinned install if absent with `npm install --no-save typescript@5.9.3 vue-tsc@3.3.11` in a scratch dir. Exactly one pre-existing error is expected and is NOT yours: `scripts/test-workflow-graph.mjs(54,1): error TS1005: '=>' expected.`
-- **Port 3030 is a running production container.** Never use or stop it. Use `PORT=3031 npm run dev` and stop it when done.
+- **Port 3030 is a running production container.** Never use or stop it. Use `npx nuxt dev --port 3031` and stop it when done.
 - **Never write model names as string literals** — use `MODEL` constants from `~/utils/models` (frontend) or `MODEL_ALIAS_KEY` (server).
 - **Persistence root is `CLAUDE_DIR`**, resolved via `server/utils/claudeDir.ts`'s `resolveClaudePath` — never a hardcoded `~/.claude`.
 - Test convention: plain `node:assert/strict` in `scripts/`, no framework, following `scripts/test-workflow-graph.mjs`.
@@ -57,7 +57,7 @@ export default defineEventHandler(() => ({ probe: PROBE }))
 EOF
 ```
 
-Run `PORT=3031 npm run dev` in the background, wait for it to boot, then:
+Run `npx nuxt dev --port 3031` in the background, wait for it to boot, then:
 `curl -s localhost:3031/api/__probe`
 Expected: `{"probe":"shared-import-works"}`
 
@@ -928,7 +928,7 @@ export default defineEventHandler(async (event) => {
 
 - [ ] **Step 4: Verify against a dev server**
 
-Start `PORT=3031 npm run dev`. Then:
+Start `npx nuxt dev --port 3031`. Then:
 
 ```bash
 curl -s localhost:3031/api/workflows | head -c 200          # find a slug
@@ -1004,7 +1004,7 @@ export default defineEventHandler(async (event) => {
 
 - [ ] **Step 2: Verify it streams**
 
-Start `PORT=3031 npm run dev`, start a run against a real workflow via `POST /api/workflows/<slug>/runs`, then in another shell:
+Start `npx nuxt dev --port 3031`, start a run against a real workflow via `POST /api/workflows/<slug>/runs`, then in another shell:
 `curl -N -s localhost:3031/api/runs/<id>/stream | head -5`
 Expected: at least one `data: {"type":"run",...}` line. Report actual output. Stop the dev server.
 
@@ -1236,7 +1236,7 @@ All pass; typecheck shows only the one known pre-existing error.
 
 - [ ] **Step 2: The behaviour this feature exists for**
 
-With `PORT=3031 npm run dev`:
+With `npx nuxt dev --port 3031`:
 1. Start a run on a real workflow from the UI.
 2. **Close the browser tab.**
 3. Reopen `http://localhost:3031/workflows/<slug>`.
