@@ -39,6 +39,9 @@ ALLOW=(
   "plugins"        # installed plugins and their marketplace metadata
   "skills"         # standalone skills
   "agents"         # agent definitions
+  "workflows"      # workflow definitions — without these the agents ship with
+                   # nothing wiring them together, which is how the first build
+                   # went out: 7 agents served, 0 workflows
   "commands"       # slash commands
   "output-styles"  # output styles
   "settings.json"  # statusline, enabled plugins, permission policy
