@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn `~/alepo-engineering` from a directory of good parts into an installable Claude Code plugin, so an engineer who clones a repo and does nothing still gets the plan gate, the test lock and the review policy.
+**Goal:** Turn `agent-manager/engineering/` from a directory of good parts into an installable Claude Code plugin, so an engineer who clones a repo and does nothing still gets the plan gate, the test lock and the review policy.
 
 **Architecture:** A plugin manifest and marketplace entry wrap the hooks and registry that already exist, plus the skills, workflows and templates the implementation plan's F1 names. Installation is the delivery mechanism — that is the whole point of Phase 0's "paved road": policy arrives *with the repo*, not with whoever remembered to configure it.
 
-**Tech Stack:** Claude Code plugin format (`.claude-plugin/plugin.json`, `marketplace.json`), Markdown skills with YAML frontmatter, Node hooks. Repo: `/home/alepo/alepo-engineering` (**not** agent-manager).
+**Tech Stack:** Claude Code plugin format (`.claude-plugin/plugin.json`, `marketplace.json`), Markdown skills with YAML frontmatter, Node hooks. Directory: `engineering/` inside this repo.
 
 **Spec:** the implementation-plan artifact's Phase 0 item **F1**, and its "Hooks shipped in the plugin" table. Companion: `/home/alepo/agent-manager/docs/superpowers/specs/2026-09-03-runbook-a-jira-to-diff-design.md` for what the pipeline agents expect.
 
 ## Global Constraints
 
-- **All work is in `/home/alepo/alepo-engineering`**, a separate git repo. Do not touch `agent-manager`.
-- **`~/alepo-engineering` currently has NO git remote.** It exists only on this machine. Do not assume `git push` works; if the plan needs a remote, stop and report rather than inventing one.
+- **All work is in `engineering/`** inside this repo. There is no separate repo; commit here as normal.
+- This repo has a normal remote (`origin`, `alepolab/agent-manager`). Commit as usual; push only when asked.
 - Existing and not to be broken: `hooks/plan-gate.mjs`, `hooks/test-lock.mjs`, `registry/{watches,products}.yaml` + schemas, `scripts/validate-registry.mjs`, `scripts/test-validate-registry.mjs`, `scripts/test-hooks.mjs`, `schemas/evidence-bundle.v0.1.schema.json`. **Run `node scripts/test-hooks.mjs` and `node scripts/test-validate-registry.mjs` after every task** — they must stay green.
 - Skill slugs are **bare**, never plugin-prefixed.
 - Hooks must **fail open**: a broken hook must never wedge every session in the estate. The existing hooks do this; anything you add must too.
@@ -160,7 +160,7 @@ The per-repo scaffold: what the repo is, its build and test commands, its branch
 - [ ] **Step 6: Run all suites, then verify the plugin actually installs**
 
 ```bash
-claude plugin validate /home/alepo/alepo-engineering
+claude plugin validate /home/alepo/agent-manager/engineering
 ```
 Report the real output. If validation fails, that is a finding — fix the manifest, not the validator.
 
@@ -175,7 +175,7 @@ Report the real output. If validation fails, that is a finding — fix the manif
 - [ ] **Step 1: Install from the local directory**
 
 ```bash
-claude plugin marketplace add /home/alepo/alepo-engineering
+claude plugin marketplace add /home/alepo/agent-manager/engineering
 claude plugin install alepo-engineering@alepo-engineering --scope user
 ```
 Report actual output. If the marketplace command rejects a local path, report exactly what it wanted rather than working around it.

@@ -6,14 +6,14 @@
 
 **Architecture:** A CLI assembles a bundle from run artifacts, a validator enforces the v0.1 schema, and a GitHub Actions workflow posts the result via the Checks API with the one-screen summary as the PR body. The schema already exists; this makes it load-bearing.
 
-**Tech Stack:** Node 24 (no dependencies), GitHub Actions, GitHub Checks API. Repo: `/home/alepo/alepo-engineering`.
+**Tech Stack:** Node 24 (no dependencies), GitHub Actions, GitHub Checks API. Directory: `engineering/` inside the agent-manager repo.
 
-**Spec:** the implementation-plan artifact's **R1** ("bundle standard, v0.1" and "R1 enforced as a check") and its bundle schema, already implemented at `schemas/evidence-bundle.v0.1.schema.json`.
+**Spec:** the implementation-plan artifact's **R1** ("bundle standard, v0.1" and "R1 enforced as a check") and its bundle schema, already implemented at `engineering/schemas/evidence-bundle.v0.1.schema.json`.
 
 ## Global Constraints
 
-- **All work is in `/home/alepo/alepo-engineering`.** Do not touch `agent-manager`.
-- **`~/alepo-engineering` has NO git remote.** A GitHub Actions workflow cannot be exercised without one. Build and test everything runnable locally; where a step genuinely requires GitHub, **write it, verify what can be verified locally, and say plainly in your report that it is unverified against a real PR** rather than claiming it works.
+- **All work is in `engineering/`** inside this repo. Paths in this plan are relative to `engineering/` unless stated otherwise.
+- The CI workflow targets this repo (`alepolab/agent-manager`). Verify locally what can be verified; a step needing a live PR should be written and reported as **unverified**, never claimed working.
 - No Node dependencies — the schema validator is hand-written for the same reason the registry validator is: this is the trusted root of the pipeline.
 - Existing suites must stay green: `node scripts/test-hooks.mjs`, `node scripts/test-validate-registry.mjs`.
 - **This is not a gate until the agent identities exist.** A check the authoring identity can approve is not a control. Actions F4 (three agent accounts) and R5 (branch protection, authoring identity blocked from approving) are prerequisites and are **not** in this plan — they need org admin. State this in the README you write.
