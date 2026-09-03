@@ -187,7 +187,7 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
 /**
  * Runs the monitor agent in its own try/catch, isolated from the main agent call's.
  * A broken monitor must not take the workflow down with it (C1): it defaults to
- * CONTINUE with a note, exactly like useWorkflowExecution.ts's runMonitor, rather than
+ * CONTINUE with a note (matching the client engine this was ported from), rather than
  * propagating into executeNode's catch and overwriting an already-successful step.
  */
 async function runMonitor(
@@ -288,8 +288,8 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   run.nextStepIds = []
   await publish(run)
 
-  // Genuine concurrency (C4), matching useWorkflowExecution.ts's Promise.all. Each
-  // executeNode call publish()es independently as it progresses; publish() (above)
+  // Genuine concurrency (C4), each executeNode call publish()es independently as it
+  // progresses (mirroring the client engine's parallel step execution). publish() (above)
   // serializes those writes per run id so they can never race on disk.
   const results = await Promise.all(wave.map(id => executeNode(l, run, id)))
 
@@ -366,7 +366,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  */
 export async function continueRun(runId: string): Promise<WorkflowRun | null> {
   const l = live.get(runId)
-  // Re-entrancy guard (C6), matching useWorkflowExecution.ts's isRunning check. This has
+  // Re-entrancy guard (C6), matching the client engine's isRunning check pattern. This has
   // to be set synchronously, before the first await below - otherwise two calls that both
   // arrive while a run is paused would each see the guard still clear and both go on to
   // drive the same run's wave loop concurrently.
@@ -425,8 +425,8 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
         return
       }
       // C3: a reply that completes the final step must settle the run as completed,
-      // not leave it paused - matching useWorkflowExecution.ts's respondToStep, which
-      // calls finish() here instead of unconditionally re-pausing.
+      // not leave it paused - matching the client engine's step response handler behavior,
+      // which calls finish() here instead of unconditionally re-pausing.
       if (isFinished(l.graph, l.state)) {
         run.status = 'completed'
         run.endedAt = Date.now()
