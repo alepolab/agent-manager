@@ -54,13 +54,22 @@ function getOrInit(all: Record<string, TicketState>, watchId: string, key: strin
   }
 }
 
-export async function recordDispatch(watchId: string, key: string, runId: string): Promise<TicketState> {
+/**
+ * Marks that a dispatch attempt is being made, before the run starter is
+ * invoked — this is the ONLY place `attempts` is incremented. A starter that
+ * throws before a run exists is still an attempt: if it weren't counted
+ * here, a ticket whose dispatch always fails would never reach
+ * `MAX_ATTEMPTS` and would be retried forever, spending tokens on every
+ * cycle with no escalation. `recordDispatch` and `recordFailure` report the
+ * *outcome* of the attempt this call already counted, so they never touch
+ * `attempts` themselves — call this once per attempt, then exactly one of
+ * the other two.
+ */
+export async function recordAttempt(watchId: string, key: string): Promise<TicketState> {
   const all = await getWatchState(watchId)
   const current = getOrInit(all, watchId, key)
   const next: TicketState = {
     ...current,
-    disposition: 'dispatched',
-    lastRunId: runId,
     attempts: current.attempts + 1,
     updatedAt: Date.now(),
   }
@@ -69,6 +78,25 @@ export async function recordDispatch(watchId: string, key: string, runId: string
   return next
 }
 
+/** Records that the attempt already counted by `recordAttempt` produced a
+ *  running dispatch. Does not itself bump `attempts`. */
+export async function recordDispatch(watchId: string, key: string, runId: string): Promise<TicketState> {
+  const all = await getWatchState(watchId)
+  const current = getOrInit(all, watchId, key)
+  const next: TicketState = {
+    ...current,
+    disposition: 'dispatched',
+    lastRunId: runId,
+    updatedAt: Date.now(),
+  }
+  all[key] = next
+  await saveWatchState(watchId, all)
+  return next
+}
+
+/** Records that the attempt already counted by `recordAttempt` failed. Does
+ *  not itself bump `attempts` — escalation is decided from the count that
+ *  call already recorded. */
 export async function recordFailure(
   watchId: string,
   key: string,
