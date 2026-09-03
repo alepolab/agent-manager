@@ -5,16 +5,17 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  start: [prompt: string, projectDir?: string]
+  start: [prompt: string, projectDir: string | undefined, autoRun: boolean]
 }>()
 
 const { workingDir } = useWorkingDir()
 const prompt = ref('')
 const projectDir = ref(workingDir.value)
+const autoRun = ref(false)
 
 function onStart() {
   if (!prompt.value.trim()) return
-  emit('start', prompt.value.trim(), projectDir.value.trim() || undefined)
+  emit('start', prompt.value.trim(), projectDir.value.trim() || undefined, autoRun.value)
   prompt.value = ''
   projectDir.value = ''
 }
@@ -23,6 +24,7 @@ function onCancel() {
   emit('update:open', false)
   prompt.value = ''
   projectDir.value = workingDir.value
+  autoRun.value = false
 }
 
 // Sync project dir from global working dir when modal opens
@@ -62,6 +64,16 @@ watch(() => props.open, (val) => {
               />
               <span class="field-hint">
                 Agents will read and write files in this directory. Defaults to your global working directory, or the Claude config folder if unset.
+              </span>
+            </div>
+            <div class="field-group">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input v-model="autoRun" type="checkbox" class="shrink-0">
+                <span class="field-label mb-0">Run to completion without pausing</span>
+              </label>
+              <span class="field-hint">
+                Each step starts as soon as the one before it finishes. A failed step or an
+                aborting monitor still stops the run.
               </span>
             </div>
           </div>

@@ -265,11 +265,11 @@ async function deleteWorkflow() {
   }
 }
 
-async function startRun(prompt: string, projectDir?: string) {
+async function startRun(prompt: string, projectDir?: string, autoRun = false) {
   showRunModal.value = false
   if (!workflow.value) return
   const w = { ...workflow.value, steps: workflowSteps.value }
-  await run(w, prompt, projectDir)
+  await run(w, prompt, projectDir, autoRun)
   try {
     await update(slug, { lastRunAt: new Date().toISOString() } as any)
   } catch {
