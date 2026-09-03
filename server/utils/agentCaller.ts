@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { getClaudeDir, resolveClaudePath } from './claudeDir.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import { resolveTools, resolveMaxTurns } from './agentToolPolicy.ts'
+import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import type { AgentFrontmatter } from '~/types'
 
 // Exported and imported directly by workflowRunner.ts (module scope, not a
@@ -23,9 +24,13 @@ export async function callAgent(agentSlug: string, input: string, projectDir?: s
   if (existsSync(agentPath)) {
     const parsed = parseFrontmatter<AgentFrontmatter>(await readFile(agentPath, 'utf-8'))
     frontmatter = parsed.frontmatter
-    systemAppend = `You are "${parsed.frontmatter.name || agentSlug}", a specialized agent. `
-      + `Follow these instructions precisely:\n\n${parsed.body}\n\n`
-      + `The current working directory is: ${cwd}`
+    systemAppend = await buildAgentSystemPrompt({
+      agentSlug,
+      agentName: parsed.frontmatter.name,
+      agentBody: parsed.body,
+      skills: parsed.frontmatter.skills,
+      cwd,
+    })
   }
 
   const toolsOption = resolveTools(frontmatter)
