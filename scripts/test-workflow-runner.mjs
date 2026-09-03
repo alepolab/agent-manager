@@ -116,5 +116,104 @@ await runner.waitForSettled(started.id, TIMEOUT)
 unsubscribe()
 assert.ok(seen.length > 0, 'a subscriber is notified as the run advances')
 
+// ── 7. A monitor that throws must not fail an already-successful step (C1) ────
+// Isolated from the wave's success/fail: the step itself completed fine, only the
+// monitor blew up. That must record a note and CONTINUE, never overwrite the step
+// as 'failed' - the outer try/catch around the main agent call must not see it.
+const monitorThrowsWorkflow = {
+  slug: 'monitor-throws', name: 'Monitor Throws',
+  steps: [{ id: 'm', agentSlug: 'agent-m', label: 'M', next: [], monitorSlug: 'monitor-m' }],
+}
+runner.setAgentCaller(async (agentSlug) => {
+  if (agentSlug === 'monitor-m') throw new Error('monitor exploded')
+  return `output of ${agentSlug}`
+})
+let monitorBroke = await runner.startRun({ workflow: monitorThrowsWorkflow, initialPrompt: 'go', autoRun: true })
+monitorBroke = await runner.waitForSettled(monitorBroke.id, TIMEOUT)
+assert.equal(monitorBroke.status, 'completed',
+  'a monitor that throws must not fail an already-successful step (C1)')
+const mStep = monitorBroke.steps.find(s => s.stepId === 'm')
+assert.equal(mStep.status, 'completed', 'the step itself stays completed, not failed')
+assert.equal(mStep.output, 'output of agent-m', 'the real output survives the broken monitor')
+assert.match(mStep.monitorNote, /Monitor failed/, 'the failure is recorded as a note, not an error')
+
+// ── 8. respondToRun on a failing reply skips downstream steps, not pending (C2) ──
+let respondCallCount = 0
+runner.setAgentCaller(async (agentSlug) => {
+  if (agentSlug === 'agent-a') {
+    respondCallCount += 1
+    if (respondCallCount === 2) throw new Error('a exploded on reply')
+    return `output of ${agentSlug}`
+  }
+  return `output of ${agentSlug}`
+})
+let toFail = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+toFail = await runner.waitForSettled(toFail.id, TIMEOUT)
+assert.equal(toFail.status, 'paused')
+assert.deepEqual(toFail.currentStepIds, ['a'])
+toFail = await runner.respondToRun(toFail.id, 'try again')
+toFail = await runner.waitForSettled(toFail.id, TIMEOUT)
+assert.equal(toFail.status, 'failed')
+assert.equal(toFail.steps.find(s => s.stepId === 'a').status, 'failed')
+for (const stepId of ['b', 'c', 'd']) {
+  assert.equal(toFail.steps.find(s => s.stepId === stepId).status, 'skipped',
+    `${stepId} must be skipped, not left pending, after a failing respondToRun (C2)`)
+}
+
+// ── 9. respondToRun completing the final step settles as completed, not paused (C3) ──
+// A RETRY verdict re-arms the same node and (since autoRun is off) pauses on it -
+// currentStepIds and nextStepIds both ['r']. Replying re-runs it; this time the
+// monitor says CONTINUE, there is nothing left downstream, and the graph is done.
+const retryOnceWorkflow = {
+  slug: 'retry-once', name: 'Retry Once',
+  steps: [{ id: 'r', agentSlug: 'agent-r', label: 'R', next: [], monitorSlug: 'monitor-r', maxVisits: 3 }],
+}
+let monitorCall = 0
+runner.setAgentCaller(async (agentSlug) => {
+  if (agentSlug === 'monitor-r') {
+    monitorCall += 1
+    return monitorCall === 1 ? 'Needs work.\nVERDICT: RETRY' : 'Looks good.\nVERDICT: CONTINUE'
+  }
+  return `output of ${agentSlug}`
+})
+let toComplete = await runner.startRun({ workflow: retryOnceWorkflow, initialPrompt: 'go', autoRun: false })
+toComplete = await runner.waitForSettled(toComplete.id, TIMEOUT)
+assert.equal(toComplete.status, 'paused', 'a RETRY verdict re-arms the node and pauses for review')
+assert.deepEqual(toComplete.currentStepIds, ['r'])
+assert.deepEqual(toComplete.nextStepIds, ['r'])
+toComplete = await runner.respondToRun(toComplete.id, 'please redo')
+toComplete = await runner.waitForSettled(toComplete.id, TIMEOUT)
+assert.equal(toComplete.status, 'completed',
+  "respondToRun completing the graph's final step must settle as completed, not paused (C3)")
+
+// ── 10. stopRun on an already-terminal run is a no-op (C5) ────────────────────
+runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
+let alreadyDone = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })
+alreadyDone = await runner.waitForSettled(alreadyDone.id, TIMEOUT)
+assert.equal(alreadyDone.status, 'completed')
+const afterStop = await runner.stopRun(alreadyDone.id)
+assert.equal(afterStop.status, 'completed', 'stopRun on an already-completed run leaves it completed (C5)')
+assert.equal(afterStop.endedAt, alreadyDone.endedAt, 'the real outcome is not overwritten')
+
+// ── 11. A fan-out wave genuinely overlaps, not just runs back-to-back (C4) ────
+const timeline = []
+runner.setAgentCaller(async (agentSlug) => {
+  timeline.push({ agentSlug, event: 'start', t: Date.now() })
+  await new Promise(resolve => setTimeout(resolve, agentSlug === 'agent-b' ? 60 : 10))
+  timeline.push({ agentSlug, event: 'end', t: Date.now() })
+  return `output of ${agentSlug}`
+})
+let concurrent = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+concurrent = await runner.waitForSettled(concurrent.id, TIMEOUT) // wave 1: a alone
+concurrent = await runner.continueRun(concurrent.id)
+concurrent = await runner.waitForSettled(concurrent.id, TIMEOUT) // wave 2: b and c, the fan-out
+assert.deepEqual(concurrent.currentStepIds.sort(), ['b', 'c'],
+  'currentStepIds holds the WHOLE wave once it settles, not just whichever node finished last (C4)')
+const bStart = timeline.find(e => e.agentSlug === 'agent-b' && e.event === 'start').t
+const bEnd = timeline.find(e => e.agentSlug === 'agent-b' && e.event === 'end').t
+const cStart = timeline.find(e => e.agentSlug === 'agent-c' && e.event === 'start').t
+assert.ok(cStart < bEnd,
+  'agent-c started before agent-b finished - the wave ran concurrently, not sequentially (C4)')
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

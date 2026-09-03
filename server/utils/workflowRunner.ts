@@ -41,6 +41,10 @@ interface Live {
   lastInputs: Record<string, string>
   retryFeedback: Record<string, string>
   stopped: boolean
+  /** True while this run's wave loop is actually executing in the background - the
+   *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
+   *  two "concurrent" calls can never both observe it false. */
+  running: boolean
 }
 const live = new Map<string, Live>()
 const subscribers = new Map<string, Set<(run: WorkflowRun) => void>>()
@@ -51,15 +55,28 @@ export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => 
   return () => subscribers.get(runId)?.delete(fn)
 }
 
+/** Serializes saveRun + subscriber notification per run id. A concurrent wave (C4) can
+ *  have several executeNode() calls publish() around the same time; without this a
+ *  second writeFile could start before the first has finished, racing on disk. Chaining
+ *  them keeps every write for a given run strictly ordered, one at a time. */
+const publishChains = new Map<string, Promise<void>>()
+
 async function publish(run: WorkflowRun) {
-  await saveRun(run)
-  for (const fn of subscribers.get(run.id) ?? []) {
-    try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
-  }
+  const prior = publishChains.get(run.id) ?? Promise.resolve()
+  const next = prior.catch(() => {}).then(async () => {
+    await saveRun(run)
+    for (const fn of subscribers.get(run.id) ?? []) {
+      try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
+    }
+  })
+  publishChains.set(run.id, next)
+  await next
 }
 
 const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'completed', 'failed', 'stopped']
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
+/** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
+const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
@@ -119,6 +136,13 @@ async function driveToSettlement(l: Live, run: WorkflowRun): Promise<void> {
   try {
     await runWave(l, run)
   } catch (err) {
+    // Safety net, not the primary mechanism: runWave clears l.running itself, right
+    // before each of its own terminal publishes (see C6 notes there). This only
+    // matters for the rare case where runWave threw before ever reaching one of
+    // those - e.g. a bug in readyNodes/computeInput - which would otherwise leave
+    // the guard stuck true. A failed run's status is no longer 'paused' regardless,
+    // so clearing it late here can never wrongly swallow a legitimate call.
+    l.running = false
     try {
       await failRun(run, err)
     } catch {
@@ -148,6 +172,36 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
   return joinInputs(preds.map(p => ({ label: recOf(run, p).label, text: l.outputs[p] ?? '' })))
 }
 
+/**
+ * Runs the monitor agent in its own try/catch, isolated from the main agent call's.
+ * A broken monitor must not take the workflow down with it (C1): it defaults to
+ * CONTINUE with a note, exactly like useWorkflowExecution.ts's runMonitor, rather than
+ * propagating into executeNode's catch and overwriting an already-successful step.
+ */
+async function runMonitor(
+  step: { monitorSlug?: string, agentSlug: string, label: string },
+  rec: RunStep,
+  input: string,
+  output: string,
+  projectDir: string | undefined,
+): Promise<{ verdict: 'CONTINUE' | 'RETRY' | 'ABORT', review: string }> {
+  if (!step.monitorSlug) return { verdict: 'CONTINUE', review: '' }
+  try {
+    const review = await agentCaller(
+      step.monitorSlug,
+      monitorPrompt({ label: step.label, agentSlug: step.agentSlug, input, output }),
+      projectDir,
+    )
+    const verdict = parseVerdict(review)
+    Object.assign(rec, { monitorVerdict: verdict, monitorNote: review })
+    return { verdict, review }
+  } catch (err) {
+    const monitorNote = `Monitor failed: ${err instanceof Error ? err.message : 'unknown error'}`
+    Object.assign(rec, { monitorVerdict: 'CONTINUE', monitorNote })
+    return { verdict: 'CONTINUE', review: monitorNote }
+  }
+}
+
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
   const step = stepOf(l, id)
   const rec = recOf(run, id)
@@ -161,7 +215,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
     startedAt: Date.now(), visits: l.state.visits[id],
   })
-  run.currentStepIds = [id]
+  // currentStepIds is NOT touched here. For a wave, it already holds every node in the
+  // wave (set once by runWave before any of them start) - see the C4 note there for why
+  // narrowing it to this one node would corrupt that during concurrent execution. For a
+  // single-step respondToRun call it already holds [id] from the prior pause.
   await publish(run)
 
   try {
@@ -170,10 +227,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     Object.assign(rec, { status: 'completed', output, completedAt: Date.now() })
 
     if (step.monitorSlug) {
-      const review = await agentCaller(step.monitorSlug,
-        monitorPrompt({ label: step.label, agentSlug: step.agentSlug, input, output }), run.projectDir)
-      const verdict = parseVerdict(review)
-      Object.assign(rec, { monitorVerdict: verdict, monitorNote: review })
+      const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir)
       if (verdict === 'ABORT') {
         markFailed(l.state, id)
         Object.assign(rec, { status: 'failed', error: 'Monitor aborted the workflow' })
@@ -201,7 +255,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 }
 
 async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
-  if (l.stopped) return run
+  if (l.stopped) { l.running = false; return run }
 
   const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (!wave.length) {
@@ -209,17 +263,23 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.endedAt = Date.now()
     run.currentStepIds = []
     run.nextStepIds = []
+    l.running = false
     await publish(run)
     return run
   }
 
   run.status = 'running'
+  // currentStepIds is the whole wave, set once before anything in it runs. executeNode
+  // deliberately never reassigns it (C4) - if it did, concurrent execution would leave
+  // it reflecting only whichever node happened to reach that line last, not the wave.
   run.currentStepIds = wave
   run.nextStepIds = []
   await publish(run)
 
-  const results: boolean[] = []
-  for (const id of wave) results.push(await executeNode(l, run, id))
+  // Genuine concurrency (C4), matching useWorkflowExecution.ts's Promise.all. Each
+  // executeNode call publish()es independently as it progresses; publish() (above)
+  // serializes those writes per run id so they can never race on disk.
+  const results = await Promise.all(wave.map(id => executeNode(l, run, id)))
 
   if (results.some(ok => !ok)) {
     skipPending(l.state)
@@ -228,6 +288,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.endedAt = Date.now()
     run.currentStepIds = []
     run.nextStepIds = []
+    l.running = false
     await publish(run)
     return run
   }
@@ -237,6 +298,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.endedAt = Date.now()
     run.currentStepIds = []
     run.nextStepIds = []
+    l.running = false
     await publish(run)
     return run
   }
@@ -244,7 +306,13 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   run.nextStepIds = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (run.autoRun && !l.stopped) return runWave(l, run)
 
+  // C6: cleared BEFORE this publish, not after driveToSettlement's whole promise chain
+  // settles. waitForSettled's subscriber fires from inside publish() below, ahead of
+  // this function's own return - a caller chained off that (the normal "continue,
+  // await settlement, continue again" flow) must see the guard already clear, or a
+  // perfectly legitimate next continueRun call gets silently swallowed.
   run.status = 'paused'
+  l.running = false
   await publish(run)
   return run
 }
@@ -270,7 +338,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false,
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false,
   }
   live.set(run.id, l)
   void driveToSettlement(l, run)
@@ -285,9 +353,21 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * the whole run. Callers await waitForSettled(runId) for the outcome.
  */
 export async function continueRun(runId: string): Promise<WorkflowRun | null> {
-  const run = await getRun(runId)
   const l = live.get(runId)
-  if (!run || !l || run.status !== 'paused') return run
+  // Re-entrancy guard (C6), matching useWorkflowExecution.ts's isRunning check. This has
+  // to be set synchronously, before the first await below - otherwise two calls that both
+  // arrive while a run is paused would each see the guard still clear and both go on to
+  // drive the same run's wave loop concurrently.
+  if (!l || l.running) return getRun(runId)
+  l.running = true
+  const run = await getRun(runId)
+  if (!run || run.status !== 'paused') {
+    l.running = false
+    return run
+  }
+  // driveToSettlement (via runWave) clears l.running itself once the run is genuinely
+  // settled again - see the C6 notes on runWave's pause branch for why that has to
+  // happen there and not via a .finally() tacked on here.
   void driveToSettlement(l, run)
   return run
 }
@@ -296,7 +376,10 @@ export async function continueRun(runId: string): Promise<WorkflowRun | null> {
  * Re-runs the current step with the user's reply in the background and returns
  * promptly — one more agent call that can run long, on the same UI flow (POST, then
  * watch SSE) as continueRun. Any throw from the loop below is caught the same way
- * driveToSettlement catches runWave's: never as an unhandled rejection.
+ * driveToSettlement catches runWave's: never as an unhandled rejection. Awaits one
+ * publish (marking the run 'running') before returning, the same trade as startRun
+ * awaiting the run's creation — not the reply itself, just the durable record that
+ * one is in flight.
  */
 export async function respondToRun(runId: string, reply: string): Promise<WorkflowRun | null> {
   const run = await getRun(runId)
@@ -305,13 +388,38 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   const id = run.currentStepIds[0]
   if (!id) return run
   const combined = `Previous agent output:\n${l.outputs[id] ?? ''}\n\nUser response:\n${reply}`
+  // Flip away from 'paused' before doing any work, matching runWave and the client's
+  // isRunning flip ahead of its own executeNode call in respondToStep. Without this,
+  // run.status reads 'paused' for the whole duration of the reply - indistinguishable
+  // from "still waiting for a reply" - and a waitForSettled call issued right after
+  // this returns would resolve immediately on that stale status instead of waiting
+  // for the reply to actually finish.
+  run.status = 'running'
+  await publish(run)
   void (async () => {
     try {
       const ok = await executeNode(l, run, id, combined)
       if (!ok) {
+        // C2: mark the rest of the graph skipped, not just the run state - same pattern
+        // as runWave's and stopRun's failure branches. Without this a downstream step
+        // reads back 'pending' in a dead run, indistinguishable from "about to start".
         skipPending(l.state)
+        for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
         run.status = 'failed'
         run.endedAt = Date.now()
+        run.currentStepIds = []
+        run.nextStepIds = []
+        await publish(run)
+        return
+      }
+      // C3: a reply that completes the final step must settle the run as completed,
+      // not leave it paused - matching useWorkflowExecution.ts's respondToStep, which
+      // calls finish() here instead of unconditionally re-pausing.
+      if (isFinished(l.graph, l.state)) {
+        run.status = 'completed'
+        run.endedAt = Date.now()
+        run.currentStepIds = []
+        run.nextStepIds = []
         await publish(run)
         return
       }
@@ -332,8 +440,10 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
 
 export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   const run = await getRun(runId)
-  const l = live.get(runId)
   if (!run) return null
+  // C5: a run that already reached a real outcome is not "stopped" by stopping it again.
+  if (TERMINAL_STATUSES.includes(run.status)) return run
+  const l = live.get(runId)
   if (l) { l.stopped = true; skipPending(l.state) }
   for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
   run.status = 'stopped'
