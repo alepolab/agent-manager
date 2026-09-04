@@ -290,5 +290,24 @@ assert.ok(cStart < bEnd,
   assert.ok(input.includes('MARKER-big-2'), 'the near ancestor is still present')
 }
 
+// The runner writes its own record of every run.
+{
+  const { existsSync, readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  assert.ok(existsSync(join(dir, 'meta.json')), 'meta.json exists after a run')
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.equal(meta.identity, 'demo', 'meta.json names the workflow that ran')
+  assert.ok(existsSync(join(dir, 'steps', 'step-01-agent-a.json')), 'per-step record exists')
+  const first = JSON.parse(readFileSync(join(dir, 'steps', 'step-01-agent-a.json'), 'utf8'))
+  assert.equal(first.output, 'output of agent-a', 'the step record holds the real output')
+  // And the agent was told where to write.
+  assert.ok(r.steps.find(s => s.stepId === 'a').input.includes(dir),
+    'every step input names the artifacts directory')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

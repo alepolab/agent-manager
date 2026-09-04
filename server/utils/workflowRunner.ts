@@ -8,6 +8,9 @@ import {
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun } from './workflowRunStore.ts'
 import { callAgent } from './agentCaller.ts'
+import {
+  runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
+} from './runArtifacts.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 
 export type AgentCaller =
@@ -260,8 +263,15 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const rec = recOf(run, id)
   if (!step || !rec) return false
 
-  const input = override ?? computeInput(l, run, id, run.initialPrompt)
-  l.lastInputs[id] = input
+  // The header is prepended exactly once here, never inside computeInput: that
+  // function's retry-feedback branch rebuilds its input from l.lastInputs[id],
+  // so headering there would compound the header once per retry visit. Storing
+  // lastInputs WITHOUT the header keeps that branch's reconstruction clean; rec
+  // and the agent call both use `input`, so the run's own record matches
+  // exactly what the agent saw.
+  const body = override ?? computeInput(l, run, id, run.initialPrompt)
+  l.lastInputs[id] = body
+  const input = artifactHeader(runArtifactsDir(run.id)) + body
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined,
@@ -284,6 +294,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       if (verdict === 'ABORT') {
         markFailed(l.state, id)
         Object.assign(rec, { status: 'failed', error: 'Monitor aborted the workflow' })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
         return false
       }
       if (verdict === 'RETRY' && canRevisit(l.graph, l.state, id)) {
@@ -295,6 +306,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     }
 
     markCompleted(l.graph, l.state, id)
+    try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
     markFailed(l.state, id)
@@ -303,6 +315,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       error: err instanceof Error ? err.message : 'Unknown error',
       completedAt: Date.now(),
     })
+    try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return false
   }
 }
@@ -317,6 +330,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
+    try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
     await publish(run)
     return run
   }
@@ -342,6 +356,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
+    try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
     await publish(run)
     return run
   }
@@ -352,6 +367,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
+    try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
     await publish(run)
     return run
   }
@@ -394,6 +410,10 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false,
   }
   live.set(run.id, l)
+  // Best-effort: a filesystem problem here must not stop the run. The run
+  // still executes; what it loses is its evidence, and the assembler will
+  // say so plainly rather than the run failing for an unrelated reason.
+  try { await initRunArtifacts(run, opts.workflow.name) } catch { /* absence is the signal */ }
   void driveToSettlement(l, run)
   return run
 }
