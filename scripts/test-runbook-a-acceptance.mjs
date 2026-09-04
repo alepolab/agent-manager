@@ -19,13 +19,37 @@
  *   node scripts/test-runbook-a-acceptance.mjs
  */
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'acceptance-'))
+process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'acceptance-artifacts-'))
 const runner = await import('../server/utils/workflowRunner.ts')
 const { assembleBundle } = await import('../engineering/scripts/assemble-bundle.mjs')
+
+// fix.repos/files_changed/lines_changed are now COMPUTED from git at finalize
+// time (server/utils/gitFacts.ts), not trusted from the agent's self-report —
+// see runArtifacts.ts's reconcileFix. Every scenario below needs a run with a
+// real projectDir so `fix` is even present in the assembled bundle; one repo,
+// shared across scenarios, is enough since none of them assert on the exact
+// repo/commit content, only that the bundle validates.
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+}
+const projectDir = mkdtempSync(join(tmpdir(), 'acceptance-project-'))
+git(projectDir, ['init', '-q', '-b', 'main'])
+git(projectDir, ['config', 'user.email', 'test@example.invalid'])
+git(projectDir, ['config', 'user.name', 'Test'])
+writeFileSync(join(projectDir, 'avp_parser.c'), 'int parse(void) { return 0; }\n')
+git(projectDir, ['add', '.'])
+git(projectDir, ['commit', '-q', '-m', 'initial'])
+git(projectDir, ['remote', 'add', 'origin', 'git@github.com:alepolab/ocs_cpp14.git'])
+git(projectDir, ['checkout', '-q', '-b', 'fix/SA-1203'])
+writeFileSync(join(projectDir, 'avp_parser.c'), 'int parse(void) { return 1; /* fixed */ }\n')
+git(projectDir, ['add', '.'])
+git(projectDir, ['commit', '-q', '-m', 'fix the AVP loop bound'])
 
 const xunit = failures => `<testsuite tests="4" failures="${failures}" errors="0" skipped="0"/>`
 
@@ -110,11 +134,11 @@ async function runScenario(writers) {
   })
 
   const run = await runner.waitForSettled(
-    (await runner.startRun({ workflow, initialPrompt: 'Fix SA-1203', autoRun: true })).id, 15000)
+    (await runner.startRun({ workflow, initialPrompt: 'Fix SA-1203', autoRun: true, projectDir })).id, 15000)
   assert.equal(run.status, 'completed',
     `run finished: ${JSON.stringify(run.steps.map(s => [s.stepId, s.status, s.error]))}`)
 
-  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', run.id, 'artifacts')
+  const dir = join(process.env.AGENT_RUNS_DIR, run.id, 'artifacts')
   const { bundle, problems } = await assembleBundle(dir)
   return { run, bundle, problems }
 }
@@ -191,4 +215,6 @@ async function runScenario(writers) {
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
+rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
+rmSync(projectDir, { recursive: true, force: true })
 console.log('runbook A acceptance: all checks passed')

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'runner-'))
+process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'runner-artifacts-'))
 
 const runner = await import('../server/utils/workflowRunner.ts')
 const store = await import('../server/utils/workflowRunStore.ts')
@@ -324,7 +325,7 @@ assert.ok(cStart < bEnd,
   })
   const r = await runner.waitForSettled(
     (await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
-  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
   assert.ok(existsSync(join(dir, 'meta.json')), 'meta.json exists after a run')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
   assert.equal(meta.identity, 'demo', 'finalize re-asserts the runner identity over the agent claim')
@@ -368,7 +369,7 @@ assert.ok(cStart < bEnd,
   r = await runner.respondToRun(r.id, 'please redo')
   r = await runner.waitForSettled(r.id, TIMEOUT)
   assert.equal(r.status, 'completed', 'a single-step run settles via respondToRun alone')
-  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
   assert.equal(meta.identity, 'respond-settle',
     'finalize re-asserts the runner identity over the agent claim, with no call site in respondToRun itself')
@@ -388,7 +389,7 @@ assert.ok(cStart < bEnd,
   assert.equal(r.status, 'paused')
   r = await runner.stopRun(r.id)
   assert.equal(r.status, 'stopped', 'stopRun actually stops a paused run')
-  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
   assert.equal(meta.identity, 'demo', 'finalize re-asserts the runner identity over the agent claim')
   assert.equal(meta.cost.input_tokens, 0, 'a self-reported token count is overwritten, not trusted')
@@ -414,7 +415,7 @@ assert.ok(cStart < bEnd,
     (await runner.startRun({ workflow: singleModelWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
   const step = r.steps.find(s => s.stepId === 'only')
   assert.equal(step.model, 'opus', 'the reported model is recorded on the step')
-  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
   assert.equal(meta.model, 'opus', 'a single-model run records that model, not a constant default')
   const stepFile = JSON.parse(
@@ -436,7 +437,7 @@ assert.ok(cStart < bEnd,
   })
   const r = await runner.waitForSettled(
     (await runner.startRun({ workflow: mixedModelWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
-  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
   assert.equal(meta.model, 'opus+haiku', 'a mixed-model run joins the distinct values, not a single pick')
 }
@@ -463,5 +464,51 @@ assert.ok(cStart < bEnd,
     'downstream steps are skipped, not left pending in a dead run')
 }
 
+// Real token usage flows end to end: agentCaller.ts's { output, model, usage }
+// shape all the way through executeNode -> RunStep.usage -> runArtifacts.ts's
+// summed cost.input_tokens/output_tokens in meta.json. Two steps, two
+// distinct usage figures, so a bug that reported only the LAST step's usage
+// (instead of summing) would still be caught.
+{
+  const usageWorkflow = {
+    slug: 'usage-sum', name: 'Usage Sum',
+    steps: [
+      { id: 'x', agentSlug: 'agent-x', label: 'X', next: ['y'] },
+      { id: 'y', agentSlug: 'agent-y', label: 'Y', next: [] },
+    ],
+  }
+  runner.setAgentCaller(async (agentSlug) => {
+    const usage = agentSlug === 'agent-x'
+      ? { input_tokens: 100, output_tokens: 10 }
+      : { input_tokens: 250, output_tokens: 40 }
+    return { output: `output of ${agentSlug}`, model: 'sonnet', usage }
+  })
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow: usageWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const stepX = r.steps.find(s => s.stepId === 'x')
+  assert.deepEqual(stepX.usage, { input_tokens: 100, output_tokens: 10 },
+    'the real caller\'s usage is recorded on the step that reported it')
+  const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.equal(meta.cost.input_tokens, 350, 'cost.input_tokens sums real usage across every step, not just the last one')
+  assert.equal(meta.cost.output_tokens, 50, 'cost.output_tokens sums the same way')
+}
+
+// runWave's empty-wave branch: a workflow with no steps at all has nothing
+// ready on the very first call, so runWave must complete the run through
+// its OWN "no wave" branch, not the isFinished() branch reached after a wave
+// actually runs. No prior test in this suite (old or new) exercises this -
+// every other run has at least one step, so readyNodes() is never empty on
+// entry.
+{
+  const emptyWorkflow = { slug: 'empty', name: 'Empty', steps: [] }
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow: emptyWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  assert.equal(r.status, 'completed', 'a workflow with no steps completes via the empty-wave branch')
+  assert.deepEqual(r.currentStepIds, [], 'no step ever ran')
+  assert.ok(r.endedAt, 'the empty-wave branch still records when the run ended')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
+rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

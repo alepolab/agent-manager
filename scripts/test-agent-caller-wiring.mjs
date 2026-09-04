@@ -63,5 +63,29 @@ assert.equal(
 runner.setAgentCaller(async () => 'stub')
 assert.equal(runner.isRealAgentCallerActive(), false, 'overriding the caller must flip the flag')
 
+// ── 4. subtype:'success' with is_error:true must throw, not return output ──
+// SDKResultSuccess (sdk.d.ts) carries `is_error`, and a live probe against a
+// bad model id returned exactly `{ subtype: 'success', is_error: true }` -
+// a result whose `.result` text is an error description, not agent output.
+// is_error:true cannot be provoked on demand from a live call, so this drives
+// interpretResultMessage(), the seam callAgent()'s loop calls per message,
+// with a synthetic message of that exact shape.
+const { interpretResultMessage } = await import('../server/utils/agentCaller.ts')
+assert.throws(
+  () => interpretResultMessage({
+    subtype: 'success', is_error: true, result: 'looks like output but is not',
+    errors: ['model not found'],
+  }),
+  /is_error/,
+  'subtype: success with is_error: true must throw, not be treated as a successful turn',
+)
+assert.throws(
+  () => interpretResultMessage({ subtype: 'error_during_execution', errors: ['boom'] }),
+  /error_during_execution/,
+  'a genuine SDKResultError still throws, naming its subtype',
+)
+const ok = interpretResultMessage({ subtype: 'success', is_error: false, result: 'real output', usage: undefined })
+assert.equal(ok.output, 'real output', 'subtype: success with is_error: false still returns the real output')
+
 console.log('OK: the real agent caller (server/utils/agentCaller.ts#callAgent) is wired')
 console.log('    into workflowRunner.ts at module-load time, with no import-order dependency.')

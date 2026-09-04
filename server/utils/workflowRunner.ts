@@ -7,7 +7,7 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun } from './workflowRunStore.ts'
-import { callAgent } from './agentCaller.ts'
+import { callAgent, type AgentUsage } from './agentCaller.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
 } from './runArtifacts.ts'
@@ -16,11 +16,11 @@ import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 // Widened to a union rather than requiring every caller to return the
 // richer shape: dozens of test stubs across this file's own test suite
 // return a plain string via setAgentCaller(), and the real callAgent() (see
-// agentCaller.ts) now returns { output, model } so the runner can record
-// which model actually ran instead of asserting a constant. Both are valid
-// AgentCaller results; normalizeAgentResult() below is the one place that
-// tells them apart.
-export type AgentCallOutput = string | { output: string, model: string | null }
+// agentCaller.ts) now returns { output, model, usage } so the runner can
+// record which model actually ran, and how many tokens it actually used,
+// instead of asserting constants. Both are valid AgentCaller results;
+// normalizeAgentResult() below is the one place that tells them apart.
+export type AgentCallOutput = string | { output: string, model: string | null, usage?: AgentUsage | null }
 export type AgentCaller =
   (agentSlug: string, input: string, projectDir?: string) => Promise<AgentCallOutput>
 
@@ -249,9 +249,11 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
 }
 
 /** The one place that tells apart a plain-string test stub's result from
- *  the real caller's { output, model } shape. A stub that doesn't report a
- *  model yields `model: undefined` here — never guessed. */
-function normalizeAgentResult(r: AgentCallOutput): { output: string, model?: string | null } {
+ *  the real caller's { output, model, usage } shape. A stub that doesn't
+ *  report a model or usage yields them `undefined` here — never guessed. */
+function normalizeAgentResult(
+  r: AgentCallOutput,
+): { output: string, model?: string | null, usage?: AgentUsage | null } {
   return typeof r === 'string' ? { output: r } : r
 }
 
@@ -302,7 +304,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const input = artifactHeader(runArtifactsDir(run.id)) + body
   markRunning(l.state, id)
   Object.assign(rec, {
-    status: 'running', input, output: '', error: undefined, model: undefined,
+    status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
     startedAt: Date.now(), visits: l.state.visits[id],
   })
@@ -314,24 +316,27 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
   try {
     const raw = await agentCaller(step.agentSlug, input, run.projectDir)
-    const { output, model } = normalizeAgentResult(raw)
+    const { output, model, usage } = normalizeAgentResult(raw)
 
     // A halt is a failure the agent raised deliberately. Checked before the
     // monitor and before the output is published downstream: a step that says
     // it could not proceed has produced no result worth propagating, and
     // running a monitor over a halt would only invite it to vote CONTINUE.
+    // usage is recorded even on a halt: the call actually happened and spent
+    // real tokens, unlike the catch(err) branch below where no result — and
+    // so no usage — ever came back at all.
     const halt = parseHalt(output)
     if (halt) {
       markFailed(l.state, id)
       Object.assign(rec, {
-        status: 'failed', output, model, error: `Step halted: ${halt}`, completedAt: Date.now(),
+        status: 'failed', output, model, usage, error: `Step halted: ${halt}`, completedAt: Date.now(),
       })
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
       return false
     }
 
     l.outputs[id] = output
-    Object.assign(rec, { status: 'completed', output, model, completedAt: Date.now() })
+    Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
 
     if (step.monitorSlug) {
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir)
