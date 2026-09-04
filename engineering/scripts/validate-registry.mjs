@@ -7,10 +7,16 @@
  * entry must fail here — loudly, in CI — rather than silently mis-resolving a
  * real ticket later.
  *
- *   node scripts/validate-registry.mjs            # schema + semantic checks
- *   node scripts/validate-registry.mjs --repos    # also clone-check every repo
+ *   node scripts/validate-registry.mjs                  # schema + semantic checks
+ *   node scripts/validate-registry.mjs --repos          # also clone-check every repo
+ *   node scripts/validate-registry.mjs --verify-remote  # also confirm repos/images
+ *                                                        # exist on GitHub/GHCR (network + gh auth)
  *
  * Exit 0 = every entry is dispatchable. Exit 1 = at least one is not.
+ *
+ * --verify-remote is opt-in and separate on purpose: the default run needs no
+ * network and no credentials, because it runs in CI and as a hook, and a
+ * validator that needs credentials to pass is a validator that gets skipped.
  *
  * No dependencies: the YAML subset used by the registry is parsed here rather
  * than pulling a package into a repo whose whole point is being the trusted
@@ -291,6 +297,24 @@ for (const [name, p] of Object.entries(products)) {
   for (const r of p.repos ?? []) {
     if (/[<>]/.test(r)) fail(where, `repo "${r}" is still a placeholder`)
   }
+
+  // A version strategy other than "none" claims a resolvable image, but with
+  // nothing in images: there is nothing to check a tag against — the pipeline
+  // would silently fall back to a branch, exactly the DEVOPS-23 failure mode.
+  const strategy = p.version?.strategy
+  if (strategy && strategy !== 'none' && (p.images?.length ?? 0) === 0) {
+    fail(where, `version.strategy is "${strategy}" but images is empty — nothing to resolve a tag against`)
+  }
+  // "none" is a deliberate halt, not an unfinished entry — say why, or the
+  // next person re-derives the same investigation from scratch.
+  if (strategy === 'none' && !p.version?.hint) {
+    note(where, 'version.strategy is none with no hint explaining why — worth recording what was checked')
+  }
+  // images with no version strategy at all would silently be treated as
+  // unversioned by any caller that only checks images.length.
+  if ((p.images?.length ?? 0) > 0 && !strategy) {
+    fail(where, 'lists images but declares no version.strategy')
+  }
 }
 
 // Every watch must be able to reach at least one product, or it triages into a void.
@@ -335,6 +359,45 @@ if (process.argv.includes('--repos')) {
         note(`products.${name}`, `${repo} checked out on ${branch}`)
       } catch {
         fail(`products.${name}`, `${repo} at ${local} is not a git repository`)
+      }
+    }
+  }
+}
+
+// ── Optional, separate, network+credentials: does it exist on GitHub/GHCR? ──
+// Everything above this line runs with no network and no `gh` — that is what
+// lets it run in CI and as a pre-commit hook. This block is the only part of
+// the file that shells out to `gh`, is read-only (GET requests only, never
+// creates/modifies/deletes anything), and only runs when explicitly asked
+// for. A validator that needs credentials to pass is a validator that gets
+// skipped, so the offline checks above must never depend on this block.
+if (process.argv.includes('--verify-remote')) {
+  const ghJson = (args) => {
+    try {
+      const out = execFileSync('gh', ['api', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      return { ok: true, data: JSON.parse(out) }
+    } catch (e) {
+      return { ok: false, error: (e.stderr ?? e.message ?? String(e)).toString().split('\n')[0] }
+    }
+  }
+
+  for (const [name, p] of Object.entries(products)) {
+    const where = `products.${name}`
+
+    for (const repo of p.repos ?? []) {
+      const r = ghJson([`/repos/${repo}`])
+      if (!r.ok) { fail(where, `repo ${repo} does not resolve on GitHub — ${r.error}`); continue }
+      if (r.data.archived) note(where, `repo ${repo} is archived on GitHub`)
+    }
+
+    const org = (p.repos?.[0] ?? '').split('/')[0] || 'alepolab'
+    for (const image of p.images ?? []) {
+      const encoded = encodeURIComponent(image)
+      const r = ghJson([`/orgs/${org}/packages/container/${encoded}`])
+      if (!r.ok) { fail(where, `image ${image} does not resolve as a container package under ${org} — ${r.error}`); continue }
+      const linked = r.data.repository?.full_name
+      if (linked && p.repos?.length && !p.repos.includes(linked)) {
+        note(where, `image ${image} is published from ${linked}, which is not in this product's repos: list`)
       }
     }
   }

@@ -102,4 +102,49 @@ const baseProducts = readFileSync(join(root, 'registry/products.yaml'), 'utf8')
   assert.match(r.out, /requires a spec/, r.out)
 }
 
+// ── 9. version.strategy must be one of the allowed shapes ─────────────────
+{
+  const r = runWith({ products: baseProducts.replace('strategy: none', 'strategy: guess') })
+  assert.equal(r.code, 1, 'an unknown version.strategy must fail')
+  assert.match(r.out, /is not one of/, r.out)
+}
+
+// ── 10. images must be non-empty when version.strategy resolves a version ──
+{
+  const r = runWith({ products: baseProducts.replace('images: [voucher-management]', 'images: []') })
+  assert.equal(r.code, 1, 'a resolvable strategy with no images to check must fail')
+  assert.match(r.out, /images is empty/, r.out)
+}
+
+// ── 11. images with no version.strategy at all must fail, not pass silently ─
+{
+  const vmsVersionBlock = [
+    '    version:',
+    '      strategy: semver_tag',
+    '      hint: >-',
+    '        Release tags are v<major>.<minor>.<patch> (and vX.Y.Z-rc.N',
+    '        pre-releases), e.g. v14.0.1, v14.0.0-rc.2. The same package also',
+    '        publishes develop-YYYYMMDD-sha / ci-release-YYYYMMDD-sha and a',
+    '        floating latest for continuous deploy of pre-release code — ignore',
+    '        those when resolving a customer-reported release version.',
+    ''
+  ].join('\n')
+  assert.ok(baseProducts.includes(vmsVersionBlock), 'fixture text must match products.yaml verbatim, or this test is not testing what it says')
+  const r = runWith({ products: baseProducts.replace(vmsVersionBlock, '') })
+  assert.equal(r.code, 1, 'images without a version.strategy must fail')
+  assert.match(r.out, /(missing required key "version"|declares no version\.strategy)/, r.out)
+}
+
+// ── 12. upgrade_policy must be one of the allowed values ──────────────────
+{
+  const r = runWith({
+    products: baseProducts.replace(
+      'upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence; vouchers are a money path (see owners.money)',
+      'upgrade_policy: maybe'
+    )
+  })
+  assert.equal(r.code, 1, 'an unknown upgrade_policy must fail')
+  assert.match(r.out, /is not one of/, r.out)
+}
+
 console.log('validate-registry: all assertions passed')

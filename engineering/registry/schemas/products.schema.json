@@ -17,7 +17,7 @@
   "$defs": {
     "product": {
       "type": "object",
-      "required": ["match", "repos", "branches", "stack", "tests", "owners"],
+      "required": ["match", "repos", "branches", "stack", "tests", "owners", "images", "version", "upgrade_policy"],
       "additionalProperties": false,
       "properties": {
         "match": {
@@ -97,6 +97,37 @@
             "ui_parsing": { "type": "string" },
             "docs": { "type": "string" }
           }
+        },
+        "images": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)?$"
+          },
+          "description": "GHCR container package names (org alepolab) this product actually publishes, confirmed against `gh api /orgs/alepolab/packages?package_type=container` and the package's own repository link — not assumed from the repo name. Repo name is not image name (lum-selfcare-v1 -> lum-selfcare), and one repo commonly publishes several images (pms -> pms-billing, pms-partner-management, pms-ratingengine). May be empty only when version.strategy is \"none\" and no image has been catalogued yet; the registry check fails a non-empty-required case, see validate-registry.mjs."
+        },
+        "version": {
+          "type": "object",
+          "required": ["strategy"],
+          "additionalProperties": false,
+          "description": "How a version named in a ticket (read from the whole issue: fields, description, comments) maps to a resolvable ref for this product's images.",
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": ["semver_tag", "branch_date_sha", "versioned_image_name", "none"],
+              "description": "semver_tag: a vMAJOR.MINOR.PATCH (optionally -rc.N/-debug/-beta.N) tag identifies a release. branch_date_sha: tags are <branch>-<yyyymmdd>-<shortsha>; there is no release-number tag, so a ticket version must be resolved to a date/sha from the ticket's own evidence, not guessed. versioned_image_name: the version is baked into the GHCR *package name* itself (one package per release, e.g. aaa-server-14.0.3-oel9-mysql) rather than into a tag on a shared package. none: no image published by this product carries anything version-shaped, at any evidence level found — the pipeline MUST halt and escalate rather than default to a branch."
+            },
+            "hint": {
+              "type": "string",
+              "description": "Optional. The concrete tag/package shape actually observed for this product (with an example), and what to disregard (nightly/CI tags that are not a release version). Disambiguates which image and which token in a ticket is 'the version' for this product specifically."
+            }
+          }
+        },
+        "upgrade_policy": {
+          "type": "string",
+          "enum": ["can_upgrade", "pinned", "both"],
+          "description": "can_upgrade: if the reported bug is already fixed on a later version than the customer runs, halt the run and recommend the upgrade instead of backporting. pinned: this product's customers cannot generally take an upgrade on demand, so always continue to a backport even when the fix already shipped later. both: depends on the specific ticket/customer — the agent must read the issue for a signal rather than assume either path."
         }
       }
     }

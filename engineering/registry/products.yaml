@@ -14,6 +14,18 @@
 # owner groups are drawn from the repo map and are first drafts. A wrong value
 # fails the registry check loudly rather than corrupting a ticket, which is why
 # they are committed as drafts rather than left blank.
+#
+# images / version.strategy / version.hint were measured, not guessed: every
+# entry below was checked against `gh api /orgs/alepolab/packages?package_type=container`
+# and the package's own `repository.full_name` link (not assumed from the repo
+# name), on 2026-09-03/04. See engineering/docs/product-registry.md for the raw
+# evidence and for the products this could not resolve.
+#
+# upgrade_policy has no such evidence source — GHCR shows tags, not customer
+# support terms. Every upgrade_policy below is `pinned` and marked CONFIRM: a
+# fail-safe default, because a wrong `can_upgrade` tells a customer who cannot
+# upgrade to go upgrade, while a wrong `pinned` only costs an unnecessary
+# backport. Confirm per product before this drives a real ticket.
 
 products:
   aaa:
@@ -42,6 +54,23 @@ products:
       protocol: aaa-tech-leads                # CONFIRM: group names
       money: billing-owners
       schema: aaa-tech-leads
+    # Evidence: gh api /orgs/alepolab/packages/container/<pkg> .repository.full_name
+    # aaa-server-oel9-mysql, aaa-server-release-mysql, aaa-builder-oel{8,9} all
+    # link to alepolab/aaa_rhel8. Excluded: a whole family of packages named
+    # aaa-server-<major.minor.patch>-oel{8,9}-mysql (e.g. aaa-server-14.0.3-oel9-mysql)
+    # also link to this repo — one GHCR package per release, not a tag. Their
+    # own tags are build timestamps only (2026-03-09-07-53-58), never a version.
+    images: [aaa-server-oel9-mysql, aaa-server-release-mysql, aaa-builder-oel8, aaa-builder-oel9]
+    version:
+      strategy: versioned_image_name
+      hint: >-
+        The version is the GHCR package name, not a tag: look for
+        aaa-server-<major.minor.patch>-oel{8,9}-mysql (e.g. aaa-server-14.0.3-oel9-mysql).
+        aaa-server-oel9-mysql and aaa-server-release-mysql are the unversioned
+        rolling/RC packages; their tags are a build timestamp
+        (2026-03-09-07-53-58) or an RC suffix (14.0.3-rc) and do not name a
+        release on their own.
+    upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence
 
   pcrf:
     match:
@@ -63,6 +92,23 @@ products:
       protocol: pcrf-tech-leads               # CONFIRM
       schema: pcrf-tech-leads
       ui_parsing: pcrf-ems-owners
+    # Evidence: alepopcrf-14 links to alepolab/pcrf_cpp14; pcrf-ems-portal and
+    # pcrf-ems-portal-agent both link to alepolab/pcrf-ems-portal.
+    images: [alepopcrf-14, pcrf-ems-portal, pcrf-ems-portal-agent]
+    version:
+      strategy: semver_tag
+      hint: >-
+        The customer-facing PCRF version is on alepopcrf-14 (repo pcrf_cpp14):
+        vMAJOR.MINOR.PATCH, also emitted with a -debug or -rc.N suffix (e.g.
+        v14.0.2, v14.0.2-debug, v14.0.0-rc.3). That package also carries
+        YYYYMMDD nightly tags (20260824) with no version in them — ignore
+        those. pcrf-ems-portal and pcrf-ems-portal-agent (the EMS UI, a
+        separate repo) are tagged develop-YYYYMMDD-sha / ci-release-YYYYMMDD-sha
+        instead, with no matching semver — this multi_repo product does NOT
+        share one version scheme across its repos; resolving the EMS portal's
+        matching build is a date-proximity lookup around the engine release,
+        not a tag match, and is out of scope for this field.
+    upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence
 
   ffm:
     match:
@@ -81,6 +127,20 @@ products:
     owners:
       ui_parsing: ffm-owners                  # CONFIRM
       schema: ffm-owners
+    # Evidence: ffm-api and ffm-worker both link to alepolab/ffm. Excluded:
+    # pycore/ffm-pycore, pycore/ffm-pycore-celery, pycore/ffm-pycore-gunicorn
+    # link to alepolab/pycore, a separate shared-library repo, not this one.
+    images: [ffm-api, ffm-worker]
+    version:
+      strategy: branch_date_sha
+      hint: >-
+        Tags are develop-YYYYMMDD-<shortsha> or ci-release-YYYYMMDD-<shortsha>,
+        occasionally with a customer suffix (ci-release-20260827-df9eef1-eswatini).
+        No semver tag exists on either image. A ticket that names a release
+        number for FFM (e.g. "1.23.0") cannot be matched to an image tag
+        directly — resolve from a date or sha found in the ticket's own
+        evidence (deployment date, customer profile, comments), not by guessing.
+    upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence
 
   pms:
     match:
@@ -101,6 +161,22 @@ products:
       money: billing-owners                   # PMS carries billing and rating paths
       ui_parsing: pms-owners
       schema: pms-owners
+    # Evidence: pms-billing, pms-partner-management and pms-ratingengine all
+    # link to alepolab/pms — one repo, three GHCR packages, exactly the split
+    # described in the task brief. Confirmed by sampling ~15 versions on each
+    # package: every tag observed was sha-<shortsha>, latest, main, develop or
+    # ci-release. None is version-shaped, on any of the three.
+    images: [pms-billing, pms-partner-management, pms-ratingengine]
+    version:
+      strategy: none
+      hint: >-
+        No pms-* package publishes a version-shaped tag today (only
+        sha-<shortsha>, latest, main, develop, ci-release were observed on all
+        three). A ticket naming a PMS release like "1.23.0" is UNRESOLVABLE
+        against these images as they stand — halt and escalate rather than
+        substituting develop or guessing a sha. See
+        engineering/docs/product-registry.md.
+    upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence
 
   vms:
     match:
@@ -119,3 +195,15 @@ products:
     owners:
       money: billing-owners                   # vouchers are a money path
       ui_parsing: vms-owners
+    # Evidence: the voucher-management GHCR package links to
+    # alepolab/voucher-management.
+    images: [voucher-management]
+    version:
+      strategy: semver_tag
+      hint: >-
+        Release tags are v<major>.<minor>.<patch> (and vX.Y.Z-rc.N
+        pre-releases), e.g. v14.0.1, v14.0.0-rc.2. The same package also
+        publishes develop-YYYYMMDD-sha / ci-release-YYYYMMDD-sha and a
+        floating latest for continuous deploy of pre-release code — ignore
+        those when resolving a customer-reported release version.
+    upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence; vouchers are a money path (see owners.money)
