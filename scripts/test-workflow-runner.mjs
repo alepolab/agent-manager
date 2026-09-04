@@ -215,5 +215,59 @@ const cStart = timeline.find(e => e.agentSlug === 'agent-c' && e.event === 'star
 assert.ok(cStart < bEnd,
   'agent-c started before agent-b finished - the wave ran concurrently, not sequentially (C4)')
 
+// contextMode 'ancestors' reaches past the immediate predecessors.
+// This is THE regression guard for the defect this change exists to fix: the
+// evidence step could not see the pre-fix FAIL output, because that output
+// belonged to a step three hops upstream.
+{
+  const chain = {
+    slug: 'chain', name: 'Chain',
+    steps: [
+      { id: 's1', agentSlug: 'a1', label: 'One', next: ['s2'] },
+      { id: 's2', agentSlug: 'a2', label: 'Two', next: ['s3'] },
+      { id: 's3', agentSlug: 'a3', label: 'Three', next: ['s4'] },
+      { id: 's4', agentSlug: 'a4', label: 'Four', next: [], contextMode: 'ancestors' },
+    ],
+  }
+  runner.setAgentCaller(async agentSlug => `OUTPUT-OF-${agentSlug}`)
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow: chain, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const s4 = r.steps.find(s => s.stepId === 's4').input
+  assert.ok(s4.includes('OUTPUT-OF-a1'), 'ancestors mode reaches the far ancestor')
+  assert.ok(s4.includes('OUTPUT-OF-a3'), 'ancestors mode still includes the direct predecessor')
+
+  // And the default is unchanged.
+  const plain = { ...chain, slug: 'plain', steps: chain.steps.map(s => ({ ...s, contextMode: undefined })) }
+  const r2 = await runner.waitForSettled(
+    (await runner.startRun({ workflow: plain, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const p4 = r2.steps.find(s => s.stepId === 's4').input
+  assert.ok(!p4.includes('OUTPUT-OF-a1'), 'default mode does NOT reach the far ancestor')
+  assert.ok(p4.includes('OUTPUT-OF-a3'), 'default mode includes the direct predecessor')
+}
+
+// The join is capped, and the cap never drops a whole ancestor.
+{
+  const big = 'X'.repeat(200000)
+  const chain = {
+    slug: 'big', name: 'Big',
+    steps: [
+      { id: 'b1', agentSlug: 'big-1', label: 'One', next: ['b2'] },
+      { id: 'b2', agentSlug: 'big-2', label: 'Two', next: ['b3'] },
+      { id: 'b3', agentSlug: 'big-3', label: 'Three', next: [], contextMode: 'ancestors' },
+    ],
+  }
+  runner.setAgentCaller(async agentSlug => `MARKER-${agentSlug}\n${big}`)
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow: chain, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const input = r.steps.find(s => s.stepId === 'b3').input
+  assert.ok(input.length < 200000, 'joined context is capped')
+  assert.ok(input.includes('[truncated'), 'truncation is marked, never silent')
+  // Every ancestor still contributes. Budget is shared evenly rather than
+  // spent first-come, so a long early step cannot squeeze a later one out —
+  // and the marker text an agent must find is at the START of its output.
+  assert.ok(input.includes('MARKER-big-1'), 'the far ancestor is still present')
+  assert.ok(input.includes('MARKER-big-2'), 'the near ancestor is still present')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

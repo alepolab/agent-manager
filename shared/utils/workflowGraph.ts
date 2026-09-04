@@ -162,6 +162,31 @@ export function buildGraph(nodes: GraphNode[]): WorkflowGraph {
   return { nodes, succ, forwardPreds, backEdges, entries }
 }
 
+/**
+ * Every transitive forward-ancestor of `id`, nearest-first.
+ *
+ * Walks `forwardPreds`, which buildGraph has already stripped of back-edges —
+ * so this terminates on cyclic graphs without needing a depth cap of its own.
+ * The `seen` set additionally stops a diamond from reporting its shared root
+ * once per path.
+ */
+export function ancestorsOf(graph: WorkflowGraph, id: string): string[] {
+  const seen = new Set<string>([id])
+  const out: string[] = []
+  let frontier = [...(graph.forwardPreds[id] ?? [])]
+  while (frontier.length) {
+    const next: string[] = []
+    for (const node of frontier) {
+      if (seen.has(node)) continue
+      seen.add(node)
+      out.push(node)
+      next.push(...(graph.forwardPreds[node] ?? []))
+    }
+    frontier = next
+  }
+  return out
+}
+
 export function initRunState(graph: WorkflowGraph): RunState {
   const state: RunState = { status: {}, visits: {}, armed: {}, triggeredBy: {}, totalRuns: 0 }
   for (const node of graph.nodes) {

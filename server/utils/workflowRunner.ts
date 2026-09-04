@@ -1,7 +1,7 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict,
-  monitorPrompt, MAX_CONCURRENCY,
+  monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
@@ -33,7 +33,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, contextMode?: 'predecessors' | 'ancestors' }[]
 }
 
 export interface StartRunOpts {
@@ -167,6 +167,29 @@ async function driveToSettlement(l: Live, run: WorkflowRun): Promise<void> {
 const stepOf = (l: Live, id: string) => l.workflow.steps.find(s => s.id === id)
 const recOf = (run: WorkflowRun, id: string) => run.steps.find(s => s.stepId === id) as RunStep
 
+/** Total characters of upstream output a single step's input may carry.
+ *  Sized so a seven-step Runbook A run stays well inside a 200k-token
+ *  context after the agent's own system prompt and skills. */
+const MAX_JOINED_CONTEXT = 60000
+
+/**
+ * Joins upstream outputs under a fixed total budget, shared EVENLY across
+ * parts rather than first-come. Even sharing is the point: with a first-come
+ * budget a verbose early step could consume the whole allowance and push the
+ * pre-fix FAIL output out entirely — silently reintroducing the exact defect
+ * `contextMode: 'ancestors'` exists to fix. Truncation is always marked.
+ */
+function joinBudgeted(parts: { label: string, text: string }[]): string {
+  if (!parts.length) return ''
+  const share = Math.floor(MAX_JOINED_CONTEXT / parts.length)
+  const clipped = parts.map((p) => {
+    if (p.text.length <= share) return p
+    const dropped = p.text.length - share
+    return { label: p.label, text: `${p.text.slice(0, share)}\n\n[truncated ${dropped} characters]` }
+  })
+  return joinInputs(clipped)
+}
+
 function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: string): string {
   const feedback = l.retryFeedback[id]
   if (feedback) {
@@ -179,9 +202,14 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
   }
   const trigger = l.state.triggeredBy[id]
   if (trigger) return l.outputs[trigger] ?? ''
-  const preds = l.graph.forwardPreds[id] ?? []
+  const step = stepOf(l, id)
+  // ancestorsOf returns nearest-first; reverse so the join reads
+  // oldest-to-newest, the order a person reads a pipeline in.
+  const preds = step?.contextMode === 'ancestors'
+    ? ancestorsOf(l.graph, id).reverse()
+    : (l.graph.forwardPreds[id] ?? [])
   if (!preds.length) return initialPrompt
-  return joinInputs(preds.map(p => ({ label: recOf(run, p).label, text: l.outputs[p] ?? '' })))
+  return joinBudgeted(preds.map(p => ({ label: recOf(run, p).label, text: l.outputs[p] ?? '' })))
 }
 
 /**

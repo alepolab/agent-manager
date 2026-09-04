@@ -232,6 +232,13 @@ export interface WorkflowStep {
   maxVisits?: number
   /** Canvas position, persisted so branches and loops keep their layout. */
   position?: { x: number, y: number }
+  /**
+   * Which upstream outputs this step receives. `'predecessors'` (the default)
+   * passes only immediate forward predecessors; `'ancestors'` passes the full
+   * transitive ancestry, budgeted and truncation-marked. Use `'ancestors'`
+   * for a step that must see evidence produced several hops upstream.
+   */
+  contextMode?: 'predecessors' | 'ancestors'
 }
 
 export interface Workflow {

@@ -18,6 +18,7 @@ import {
   parseVerdict,
   edgeKey,
   MAX_CONCURRENCY,
+  ancestorsOf,
 } from '../shared/utils/workflowGraph.ts'
 
 /**
@@ -202,5 +203,38 @@ assert.equal(parseVerdict(''), 'CONTINUE')
 assert.equal(joinInputs([{ label: 'A', text: 'one' }]), 'one', 'a single input is passed through bare')
 assert.match(joinInputs([{ label: 'A', text: 'one' }, { label: 'B', text: 'two' }]), /## Output from A[\s\S]*## Output from B/)
 assert.equal(joinInputs([]), '')
+
+// ancestorsOf: the full transitive forward ancestry
+{
+  const g = buildGraph([
+    { id: 'a', agentSlug: 'x', label: 'A', next: ['b'] },
+    { id: 'b', agentSlug: 'x', label: 'B', next: ['c'] },
+    { id: 'c', agentSlug: 'x', label: 'C', next: ['d'] },
+    { id: 'd', agentSlug: 'x', label: 'D', next: [] },
+  ])
+  assert.deepEqual(ancestorsOf(g, 'd'), ['c', 'b', 'a'],
+    'nearest-first: d sees c, then b, then a')
+  assert.deepEqual(ancestorsOf(g, 'a'), [], 'an entry node has no ancestors')
+
+  // A diamond must not report the shared root twice.
+  const diamond = buildGraph([
+    { id: 'r', agentSlug: 'x', label: 'R', next: ['l', 'm'] },
+    { id: 'l', agentSlug: 'x', label: 'L', next: ['j'] },
+    { id: 'm', agentSlug: 'x', label: 'M', next: ['j'] },
+    { id: 'j', agentSlug: 'x', label: 'J', next: [] },
+  ])
+  const anc = ancestorsOf(diamond, 'j')
+  assert.equal(anc.filter(i => i === 'r').length, 1, 'diamond root appears once')
+  assert.deepEqual([...anc].sort(), ['l', 'm', 'r'])
+
+  // A cycle must terminate. buildGraph classifies the closing edge as a
+  // back-edge and keeps it out of forwardPreds, so this is really a check
+  // that ancestorsOf relies on forwardPreds and nothing else.
+  const cyclic = buildGraph([
+    { id: 'p', agentSlug: 'x', label: 'P', next: ['q'] },
+    { id: 'q', agentSlug: 'x', label: 'Q', next: ['p'] },
+  ])
+  assert.deepEqual(ancestorsOf(cyclic, 'q'), ['p'], 'cycle terminates')
+}
 
 console.log('workflowGraph: all checks passed')
