@@ -23,27 +23,22 @@
  * reason then ride in the evidence bundle, so a reviewer always sees that the
  * oracle was touched and why.
  *
+ * This file only ever DENIES; it never arms itself. .agent/source-edited is
+ * written by test-lock-arm.mjs, the companion PostToolUse hook, after a real
+ * source edit actually lands. Before that hook existed, hooks.json registered
+ * PreToolUse only and nothing in a real session ever created the marker — the
+ * lock enforced nothing outside its own tests, which armed it by hand. See
+ * test-lock-arm.mjs for why arming belongs in PostToolUse, not here.
+ *
  * Contract: tool call as JSON on stdin; exit 0 allows; exit 2 with a printed
  * reason denies. Internal errors allow — a broken hook must not wedge the estate.
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { looksLikeOracle } from './oracle-paths.mjs'
 
 const STATE = '.agent/source-edited'
 const UNLOCK = '.agent/test-unlock.json'
-
-/** Paths whose contents decide what the oracle asserts. */
-const TEST_PATH = /(^|\/)(tests?|spec|specs|__tests__|e2e|itest|robot)(\/|$)/i
-const TEST_FILE = /(\.test\.|\.spec\.|_test\.|test_[^/]*\.py$|\.robot$|\.feature$)/i
-const ORACLE_CONFIG = new RegExp(
-  '(^|/)(' +
-  'conftest\\.py|pytest\\.ini|tox\\.ini|' +
-  'jest\\.config\\.[jt]s|jest\\.setup\\.[jt]s|vitest\\.config\\.[jt]s|setup-tests?\\.[jt]s|' +
-  'playwright\\.config\\.[jt]s|karma\\.conf\\.js|' +
-  '__mocks__|fixtures?|testdata' +
-  ')(/|$)', 'i')
-
-const looksLikeOracle = (p) => !!p && (TEST_PATH.test(p) || TEST_FILE.test(p) || ORACLE_CONFIG.test(p))
 
 /**
  * Bash forms that write to a path without going through Edit/Write.

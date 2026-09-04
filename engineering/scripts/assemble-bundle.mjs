@@ -86,15 +86,21 @@
  *     optionally wrapped in `<testsuites>`) output. Hand-parsed with a
  *     regex — no XML library, no dependency — summing attributes across
  *     every `<testsuite>` element found. Failures + errors > 0 => FAIL,
- *     else PASS. (This assembler does not derive FLAKY: it consumes one
- *     representative xunit file per phase, not the N individual runs
+ *     else PASS — UNLESS the suite executed nothing (`tests - skipped <= 0`:
+ *     zero declared tests, or every declared test skipped), in which case
+ *     neither PASS nor FAIL is written at all; see `buildOracleRun` for why
+ *     that is an assembly problem rather than a manufactured third verdict.
+ *     A `-k` filter matching nothing, a collection error that still emits a
+ *     well-formed empty `<testsuite>`, and a fully-skipped suite all hit
+ *     this the same way. (This assembler does not derive FLAKY: it consumes
+ *     one representative xunit file per phase, not the N individual runs
  *     backing `oracle.runs` — a CI job that observes disagreement across
  *     its determinism runs should not hand this assembler a "done" run at
  *     all.) `oracle.kind` / `path` / `runs` / `rows` come from meta.json
  *     (declared test metadata); `verdict` comes only from parsing the xunit
- *     file, and is entirely ABSENT — not defaulted — if the file is missing.
- *     Same for `regression.passed` / `regression.failed`; `regression.suite`
- *     comes from meta.json.
+ *     file, and is entirely ABSENT — not defaulted — if the file is missing
+ *     or ran nothing. Same for `regression.passed` / `regression.failed`;
+ *     `regression.suite` comes from meta.json.
  *
  * Optional files:
  *
@@ -132,9 +138,28 @@ import { validateBundle } from './validate-bundle.mjs'
 // ── Small file helpers — every one of these is the "did the evidence exist"
 // boundary. Nothing downstream may substitute a default for a missing read. ─
 
-function readJsonIfExists(path) {
+// `problems` is optional so existing callers keep working, but the assembler
+// always passes its own accumulator: a truncated/malformed meta.json must
+// become a reported problem, not a thrown SyntaxError. Before this fix,
+// JSON.parse threw straight out of assembleBundle — contradicting this
+// header's own "never throws on missing evidence" promise, and handing
+// whatever calls this a raw stack trace instead of the missing-evidence
+// report the rest of the file is built around.
+function readJsonIfExists(path, problems) {
   if (!existsSync(path)) return undefined
-  return JSON.parse(readFileSync(path, 'utf8'))
+  let text
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (e) {
+    problems?.push(`${path}: exists but could not be read (${e.message}) — treated as missing evidence`)
+    return undefined
+  }
+  try {
+    return JSON.parse(text)
+  } catch (e) {
+    problems?.push(`${path}: exists but is not valid JSON (${e.message}) — treated as missing evidence, not fabricated`)
+    return undefined
+  }
 }
 
 function readTextIfExists(path) {
@@ -191,15 +216,50 @@ function setIfDefined(obj, key, value) {
 }
 
 /**
+ * True when a parsed xunit result proves nothing: either the suite declared
+ * zero tests, or every declared test was skipped. `failed = failures +
+ * errors` alone reads `tests="0" failures="0" errors="0"` as PASS — that is
+ * the defect this guards against. A `-k` filter matching nothing, a
+ * collection error that still emits a well-formed empty `<testsuite>`, or a
+ * fully-skipped suite must not be able to certify "the oracle passed" or
+ * "the oracle failed"; both are claims about tests that ran.
+ */
+function ranNothing(parsed) {
+  return parsed.tests - parsed.skipped <= 0
+}
+
+function emptySuiteReason(parsed) {
+  return parsed.tests === 0
+    ? 'declared 0 tests'
+    : `all ${parsed.skipped} declared test(s) were skipped`
+}
+
+/**
  * Build one `oracle_run` object (schema $defs/oracle_run) from meta.json's
  * declared metadata plus a parsed xunit result. `kind` / `path` / `runs` /
  * `rows` come from `metaOracle` (declared, not computed); `verdict` and
  * `xunit` come only from the parsed file and are omitted — not defaulted —
- * when the file is missing or unparsable. `metaOracle` itself may be
- * undefined (meta.json didn't declare this phase at all), in which case the
- * whole oracle_run is undefined and the caller omits the key entirely.
+ * when the file is missing, unparsable, OR ran nothing (see `ranNothing`).
+ * `metaOracle` itself may be undefined (meta.json didn't declare this phase
+ * at all), in which case the whole oracle_run is undefined and the caller
+ * omits the key entirely.
+ *
+ * Withholding `verdict` on a zero-execution run is a deliberate choice, not
+ * the only one available: the schema's oracle_run.verdict enum (FAIL / PASS
+ * / FLAKY) has no fourth value honestly describing "nothing ran", and
+ * inventing one would mean widening the schema for a case this file can
+ * reject outright instead. Withholding the field gives the *same* treatment
+ * as a missing xunit file — `verdict` is `required` in the schema, so
+ * `oracle`/`oracle_after` with no verdict already fails validateBundle's
+ * schema pass — plus a `problems` entry pushed here, naming exactly which
+ * bundle field, file, and reason, instead of leaving a reviewer with only
+ * the schema's generic "missing required key verdict".
+ *
+ * `label` is the bundle field this run becomes (`oracle` or `oracle_after`),
+ * used only to phrase the pushed problem the same way the rest of this
+ * file's problem strings are phrased (`bundle.<field>: ...`).
  */
-function buildOracleRun(metaOracle, xunitText, xunitFilename) {
+function buildOracleRun(metaOracle, xunitText, xunitFilename, label, problems) {
   if (metaOracle === undefined) return undefined
   const run = {}
   setIfDefined(run, 'kind', metaOracle.kind)
@@ -208,8 +268,12 @@ function buildOracleRun(metaOracle, xunitText, xunitFilename) {
   setIfDefined(run, 'rows', metaOracle.rows ?? null)
   const parsed = xunitText === undefined ? null : parseXunit(xunitText)
   if (parsed) {
-    run.verdict = parsed.failed > 0 ? 'FAIL' : 'PASS'
-    run.xunit = xunitFilename
+    if (ranNothing(parsed)) {
+      problems.push(`bundle.${label}: ${xunitFilename} ${emptySuiteReason(parsed)} — a suite that executed nothing is not evidence of a verdict`)
+    } else {
+      run.verdict = parsed.failed > 0 ? 'FAIL' : 'PASS'
+      run.xunit = xunitFilename
+    }
   }
   return run
 }
@@ -223,7 +287,15 @@ function buildOracleRun(metaOracle, xunitText, xunitFilename) {
 export async function assembleBundle(runDir) {
   const p = (name) => join(runDir, name)
 
-  const meta = readJsonIfExists(p('meta.json')) ?? {}
+  // Collected here, alongside Task 1's validateBundle() problems, at the end.
+  // Two sources feed it: readJsonIfExists (a corrupt meta.json) and
+  // buildOracleRun/the regression block (a suite that executed nothing).
+  // Both are cases where an artifact exists but cannot stand as evidence —
+  // the same "missing evidence, not fabricated" treatment the rest of this
+  // file already gives an absent file, just reached from a different door.
+  const assemblyProblems = []
+
+  const meta = readJsonIfExists(p('meta.json'), assemblyProblems) ?? {}
 
   const contextPacketText = readTextIfExists(p('context-packet.json'))
   const intentText = readTextIfExists(p('intent.md'))
@@ -256,20 +328,32 @@ export async function assembleBundle(runDir) {
   setIfDefined(bundle, 'plugin_version', meta.plugin_version)
   setIfDefined(bundle, 'stack', meta.stack)
 
-  setIfDefined(bundle, 'oracle', buildOracleRun(meta.oracle, oracleBeforeText, 'oracle-before.xml'))
+  setIfDefined(bundle, 'oracle', buildOracleRun(meta.oracle, oracleBeforeText, 'oracle-before.xml', 'oracle', assemblyProblems))
 
   setIfDefined(bundle, 'fix', meta.fix)
 
-  setIfDefined(bundle, 'oracle_after', buildOracleRun(meta.oracle_after, oracleAfterText, 'oracle-after.xml'))
+  setIfDefined(bundle, 'oracle_after', buildOracleRun(meta.oracle_after, oracleAfterText, 'oracle-after.xml', 'oracle_after', assemblyProblems))
 
   if (meta.regression !== undefined) {
     const regression = {}
     setIfDefined(regression, 'suite', meta.regression.suite)
     const parsed = regressionText === undefined ? null : parseXunit(regressionText)
     if (parsed) {
-      regression.passed = parsed.passed
-      regression.failed = parsed.failed
-      regression.xunit = 'regression.xml'
+      // Same treatment as the oracle runs above: a regression suite that
+      // executed nothing (0 declared tests, or every declared test skipped)
+      // is not evidence of "0 failed" — that reading is exactly the live
+      // defect (`oracle-after.xml: tests="0" ... → regression = {passed: 0,
+      // failed: 0}` certifying as PASS). `passed`/`failed` are `required` in
+      // the schema's regression def, so withholding them here already fails
+      // validateBundle; the pushed problem below names the empty suite
+      // instead of leaving only a generic "missing required key" message.
+      if (ranNothing(parsed)) {
+        assemblyProblems.push(`bundle.regression: regression.xml ${emptySuiteReason(parsed)} — a suite that executed nothing is not evidence of a passing regression run`)
+      } else {
+        regression.passed = parsed.passed
+        regression.failed = parsed.failed
+        regression.xunit = 'regression.xml'
+      }
     }
     bundle.regression = regression
   }
@@ -280,7 +364,7 @@ export async function assembleBundle(runDir) {
   setIfDefined(bundle, 'cost', meta.cost)
   setIfDefined(bundle, 'summary_md', summaryText)
 
-  const problems = validateBundle(bundle)
+  const problems = [...assemblyProblems, ...validateBundle(bundle)]
   return { bundle, problems }
 }
 

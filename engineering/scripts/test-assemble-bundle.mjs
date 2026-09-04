@@ -288,4 +288,120 @@ await check('the CLI writes the bundle and exits 0 for a complete run dir, 1 for
     }
   })
 
+// ── 8-13. THE ZERO-TEST-ORACLE DEFECT ─────────────────────────────────────
+// `failed = failures + errors`, and PASS is whatever isn't FAIL — a suite
+// that executed nothing (0 declared tests, or every declared test skipped)
+// reads `failures="0" errors="0"` as a clean PASS with today's arithmetic.
+// This is the exact case verified live: oracle-after.xml with
+// tests="0" failures="0" errors="0" skipped="0" assembled into
+// oracle_after.verdict = "PASS" and regression = {passed: 0, failed: 0},
+// both exit 0. Three shapes per the brief: zero tests, all skipped, tests
+// present and passing (that last one is already case 0 above, for both
+// oracle_after and regression — restated here as an explicit guard so a
+// future change to the zero-test logic can't accidentally start rejecting
+// ordinary passing suites too).
+
+const XUNIT_ZERO_TESTS = '<testsuite name="oracle" tests="0" failures="0" errors="0" skipped="0"></testsuite>'
+const XUNIT_ALL_SKIPPED = '<testsuite name="oracle" tests="4" failures="0" errors="0" skipped="4"></testsuite>'
+
+await check('THE LIVE DEFECT: a post-fix oracle that executed 0 tests must not read as PASS', async () => {
+    const dir = runDir(({ files }) => { files['oracle-after.xml'] = XUNIT_ZERO_TESTS })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.equal('verdict' in bundle.oracle_after, false, 'a zero-execution run must not carry a verdict — PASS or otherwise')
+      assert.equal('xunit' in bundle.oracle_after, false)
+      assert.ok(problems.some(p => /bundle\.oracle_after/.test(p) && /0 tests/.test(p)),
+        `expected a problem naming the empty oracle-after.xml suite, got:\n${problems.join('\n')}`)
+      // And it must actually be REJECTED end to end by Task 1's own validator
+      // too, the same way the missing-file case is (case 2 above) — this is
+      // an assembly failure, not a bundle that merely lacks a nice-to-have.
+      assert.ok(validateBundle(bundle).length > 0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+await check('a post-fix oracle where every declared test was skipped must not read as PASS', async () => {
+    const dir = runDir(({ files }) => { files['oracle-after.xml'] = XUNIT_ALL_SKIPPED })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.equal('verdict' in bundle.oracle_after, false)
+      assert.ok(problems.some(p => /bundle\.oracle_after/.test(p) && /skipped/.test(p)),
+        `expected a problem naming the all-skipped oracle-after.xml suite, got:\n${problems.join('\n')}`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+await check('THE FIX must not weaken the existing rule: a zero-test PRE-fix oracle is also rejected, and a real FAIL still reads as FAIL', async () => {
+    const dir = runDir(({ files }) => { files['oracle-before.xml'] = XUNIT_ZERO_TESTS })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.equal('verdict' in bundle.oracle, false, 'a zero-execution pre-fix run must not be treated as FAIL either')
+      assert.ok(problems.some(p => /bundle\.oracle\b/.test(p) && /0 tests/.test(p)))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+await check('the ordinary case is unaffected: a real FAIL before and a real PASS after still assemble cleanly', async () => {
+    // This is case 0 restated as an explicit guard against the zero-test
+    // check above becoming too broad and starting to reject real verdicts.
+    const dir = runDir()
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.deepEqual(problems, [])
+      assert.equal(bundle.oracle.verdict, 'FAIL')
+      assert.equal(bundle.oracle_after.verdict, 'PASS')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+await check('a regression suite that executed 0 tests must not read as "0 failed" (the second half of the live defect)', async () => {
+    const dir = runDir(({ files }) => { files['regression.xml'] = '<testsuites><testsuite name="full" tests="0" failures="0" errors="0" skipped="0"></testsuite></testsuites>' })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.equal('passed' in bundle.regression, false, 'a zero-execution regression run must not carry passed/failed counts')
+      assert.equal('failed' in bundle.regression, false)
+      assert.ok(problems.some(p => /bundle\.regression/.test(p) && /0 tests/.test(p)),
+        `expected a problem naming the empty regression.xml suite, got:\n${problems.join('\n')}`)
+      assert.ok(validateBundle(bundle).length > 0, 'regression.passed/failed are schema-required, so this must fail validation too')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+await check('a regression suite where every declared test was skipped must not read as "0 failed"', async () => {
+    const dir = runDir(({ files }) => { files['regression.xml'] = '<testsuite name="full" tests="120" failures="0" errors="0" skipped="120"></testsuite>' })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.equal('passed' in bundle.regression, false)
+      assert.ok(problems.some(p => /bundle\.regression/.test(p) && /skipped/.test(p)),
+        `expected a problem naming the all-skipped regression.xml suite, got:\n${problems.join('\n')}`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+// ── 14. readJsonIfExists must report a truncated meta.json, not throw ────
+// "Never throws on missing evidence" is the header's own promise. A
+// truncated/corrupt meta.json is present-but-unusable, the same category as
+// a zero-test oracle run above — this must come back as a problem, not a
+// raw JSON.parse SyntaxError crashing the assembler.
+await check('a truncated meta.json is reported as a problem, not thrown', async () => {
+    const dir = runDir()
+    try {
+      writeFileSync(join(dir, 'meta.json'), '{ "ticket": "SA-1204", "watch": ') // truncated
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.ok(problems.some(p => /meta\.json/.test(p) && /not valid JSON/.test(p)),
+        `expected a problem naming meta.json as invalid JSON, got:\n${problems.join('\n')}`)
+      // Falls back to {} for meta, same as a missing meta.json (case 4) —
+      // nothing meta.json would have supplied is fabricated.
+      assert.equal('ticket' in bundle, false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
 console.log(`\n✓ all ${passed} assemble-bundle tests passed\n`)

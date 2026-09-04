@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -125,6 +125,13 @@ Single-node safe; this path holds no per-process state.
 
 // ═══ Test lock ═══════════════════════════════════════════════════════════
 
+// Hand-arms the marker directly, bypassing test-lock-arm.mjs (the
+// PostToolUse hook that arms it for real) entirely. Legitimate ONLY for
+// sections 7-12 below: those test what test-lock.mjs (PreToolUse) does ONCE
+// armed — the DENY side, in isolation from how arming happened — not
+// whether a real session ever arms it. The arm side itself, with NO
+// hand-arming anywhere, is proven end to end in 6b below and again (against
+// the literal hooks.json-registered commands) in test-hooks-registration.mjs.
 const armed = d => writeFileSync(join(d, '.agent/source-edited'), '1')
 
 // 6. Before source is edited the oracle must be writable — the failing test
@@ -133,6 +140,48 @@ const armed = d => writeFileSync(join(d, '.agent/source-edited'), '1')
   const dir = workspace()
   const r = runHook('test-lock.mjs', { cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'tests/parser.test.ts') } })
   assert.equal(r.code, 0, 'writing the failing test before any source edit must be allowed')
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// 6b. THE FIX, driven end to end with NO hand-arming anywhere in this block:
+// a real source edit through test-lock.mjs (PreToolUse, must allow — nothing
+// is armed yet), then the same edit through test-lock-arm.mjs (PostToolUse),
+// which must be what creates .agent/source-edited, then a test edit through
+// test-lock.mjs again, which must now be denied. This is the exact
+// reproduction from the live defect: before test-lock-arm.mjs existed and
+// was registered, nothing but a test's own hand-arming ever created the
+// marker, so this assertion failed against the unfixed code.
+{
+  const dir = workspace()
+  mkdirSync(join(dir, 'src'), { recursive: true })
+  mkdirSync(join(dir, 'tests'), { recursive: true })
+  writeFileSync(join(dir, 'src/parser.ts'), 'export const parse = () => {}\n')
+  writeFileSync(join(dir, 'tests/parser.test.ts'), "test('x', () => {})\n")
+
+  const sourceEdit = { cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'src/parser.ts') } }
+  const preArm = runHook('test-lock.mjs', sourceEdit)
+  assert.equal(preArm.code, 0, 'a source edit must be allowed before the lock is armed')
+  assert.ok(!existsSync(join(dir, '.agent/source-edited')), 'no marker must exist before the PostToolUse arm hook runs')
+
+  const arm = runHook('test-lock-arm.mjs', sourceEdit)
+  assert.equal(arm.code, 0, 'the arm hook only has a side effect and must never deny')
+  assert.ok(existsSync(join(dir, '.agent/source-edited')), 'a real source edit through the PostToolUse arm hook must arm the lock — with no hand-arming')
+
+  const testEdit = { cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'tests/parser.test.ts') } }
+  const denied = runHook('test-lock.mjs', testEdit)
+  assert.equal(denied.code, 2, 'once armed for real by the PostToolUse hook, editing the test must be denied')
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// 6c. Editing a test file arms nothing — only a genuine source edit does.
+// Writing the failing test (the step the lock must not block pre-arm) must
+// never itself trip the arm hook.
+{
+  const dir = workspace()
+  mkdirSync(join(dir, 'tests'), { recursive: true })
+  const r = runHook('test-lock-arm.mjs', { cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'tests/parser.test.ts') } })
+  assert.equal(r.code, 0)
+  assert.ok(!existsSync(join(dir, '.agent/source-edited')), 'writing a test file must not arm the lock')
   rmSync(dir, { recursive: true, force: true })
 }
 
@@ -202,7 +251,7 @@ const armed = d => writeFileSync(join(d, '.agent/source-edited'), '1')
 
 // 13. A malformed call must never wedge a session.
 {
-  for (const hook of ['plan-gate.mjs', 'test-lock.mjs']) {
+  for (const hook of ['plan-gate.mjs', 'test-lock.mjs', 'test-lock-arm.mjs']) {
     const r = runHook(hook, 'not json at all')
     assert.equal(r.code, 0, `${hook} must fail open on malformed input`)
   }

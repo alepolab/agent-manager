@@ -116,6 +116,12 @@ for (const r of registrations) {
 // 3. The test-lock registration covers Bash in its matcher (the whole point
 //    of B3 — an Edit-only lock is theatre) and, run as the literal string in
 //    hooks.json, denies a `sed -i` bypass against an armed oracle.
+//
+//    Hand-arms the marker directly here — legitimate ONLY because this case
+//    tests what the registered PreToolUse command does ONCE armed (the DENY
+//    side, isolated from how arming happened), not whether the registration
+//    arms anything. That question — does the real, registered hook chain
+//    arm the lock with no hand-arming — is case 4 below.
 {
   const testLockReg = registrations.find(r => r.command.includes('test-lock.mjs'))
   assert.ok(testLockReg, 'expected a test-lock.mjs registration')
@@ -135,14 +141,69 @@ for (const r of registrations) {
   rmSync(dir, { recursive: true, force: true })
 }
 
-// 4. Fail-open: malformed stdin through the literal registered command must
-//    still exit 0 for every registration. A broken hook must not wedge a
-//    session — this is the property that makes it safe to register at all.
-for (const r of registrations) {
-  const dir = workspace()
-  const result = runRegisteredCommand(r.command, dir, 'not json at all')
-  assert.equal(result.code, 0, `registered command must fail open on malformed stdin: ${r.command}`)
+// 4. THE FIX: hooks.json must register a PostToolUse hook that arms the lock
+// — the defect this whole file exists to catch was exactly that it didn't.
+// Then drive the full real flow through the *literal registered commands*,
+// with NO hand-arming anywhere in this block: a source edit through the
+// registered PreToolUse test-lock.mjs (must allow, nothing armed yet), the
+// same edit through the registered PostToolUse test-lock-arm.mjs (must be
+// what creates .agent/source-edited), then a test edit through the
+// registered PreToolUse test-lock.mjs again (must now be denied). Before the
+// fix, `config.hooks.PostToolUse` did not exist at all and this whole case
+// failed on the very first assertion below.
+{
+  const preToolUseTestLock = registrations.find(r => r.command.includes('test-lock.mjs'))
+  assert.ok(preToolUseTestLock, 'expected the PreToolUse test-lock.mjs registration')
+
+  const postToolUse = config.hooks?.PostToolUse
+  assert.ok(Array.isArray(postToolUse) && postToolUse.length > 0,
+    'hooks.json must register a PostToolUse hook — nothing else arms the test lock in a real session')
+
+  const postToolUseRegs = postToolUse.flatMap(entry =>
+    (entry.hooks ?? []).map(h => ({ matcher: entry.matcher, command: h.command, type: h.type })))
+  const armReg = postToolUseRegs.find(r => r.command.includes('test-lock-arm.mjs'))
+  assert.ok(armReg, 'expected a PostToolUse registration for test-lock-arm.mjs')
+  assert.equal(armReg.type, 'command')
+  assert.ok(armReg.command.includes('${CLAUDE_PLUGIN_ROOT}'), `command must reference \${CLAUDE_PLUGIN_ROOT}: ${armReg.command}`)
+  assert.match(armReg.matcher, /\bEdit\b/, 'the arm registration must match Edit')
+  assert.match(armReg.matcher, /\bWrite\b/, 'the arm registration must match Write')
+
+  const dir = workspace(d => writeFileSync(join(d, '.agent/plan.md'), PLAN))
+  mkdirSync(join(dir, 'src'), { recursive: true })
+  mkdirSync(join(dir, 'tests'), { recursive: true })
+  writeFileSync(join(dir, 'src/parser.ts'), 'export const parse = () => {}\n')
+  writeFileSync(join(dir, 'tests/parser.test.ts'), "test('x', () => {})\n")
+
+  const editCall = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'src/parser.ts') } })
+
+  const preArm = runRegisteredCommand(preToolUseTestLock.command, dir, editCall)
+  assert.equal(preArm.code, 0, 'the source edit must be allowed — the lock is not armed yet')
+  assert.ok(!existsSync(join(dir, '.agent/source-edited')), 'the marker must not exist before the registered PostToolUse command runs')
+
+  const armed = runRegisteredCommand(armReg.command, dir, editCall)
+  assert.equal(armed.code, 0, `the registered arm command must never deny, got: ${armed.message}`)
+  assert.ok(existsSync(join(dir, '.agent/source-edited')),
+    'the registered PostToolUse command must arm the lock after a real source edit — this is the fix under test, with no hand-arming anywhere in this case')
+
+  const testEditCall = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'tests/parser.test.ts') } })
+  const deniedTestEdit = runRegisteredCommand(preToolUseTestLock.command, dir, testEditCall)
+  assert.equal(deniedTestEdit.code, 2, 'once armed by the real, registered PostToolUse flow, editing the test must be denied')
   rmSync(dir, { recursive: true, force: true })
+}
+
+// 5. Fail-open: malformed stdin through the literal registered command must
+//    still exit 0 for every registration — PreToolUse and PostToolUse alike.
+//    A broken hook must not wedge a session — this is the property that
+//    makes it safe to register at all.
+{
+  const postToolUseRegs = (config.hooks?.PostToolUse ?? []).flatMap(entry =>
+    (entry.hooks ?? []).map(h => ({ matcher: entry.matcher, command: h.command, type: h.type })))
+  for (const r of [...registrations, ...postToolUseRegs]) {
+    const dir = workspace()
+    const result = runRegisteredCommand(r.command, dir, 'not json at all')
+    assert.equal(result.code, 0, `registered command must fail open on malformed stdin: ${r.command}`)
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 console.log('hook registration (hooks/hooks.json, run as the literal registered command): all assertions passed')

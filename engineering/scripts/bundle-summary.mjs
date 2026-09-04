@@ -17,9 +17,14 @@
  * failure mode a reviewer cannot tell apart from a bug by looking at the
  * summary, so it is spelled out instead.
  *
- * This function does not read bundle.summary_md — it *produces* that field.
- * (assemble-bundle.mjs is expected to call renderSummary() and store the
- * result there; reading it back here would be circular.)
+ * This function does not read bundle.summary_md, and assemble-bundle.mjs does
+ * NOT call renderSummary(). The two are independent renderings of different
+ * content: `summary.md` is the agent's own authored one-screen summary, and
+ * the assembler carries it into `bundle.summary_md` verbatim — same as
+ * intent.md/plan.md — precisely so assembly never depends on this script.
+ * renderSummary() here instead builds the Markdown check-body from the
+ * bundle's own structured fields, for whatever posts the PR check (see
+ * docs/evidence-bundle.md).
  *
  *   node scripts/bundle-summary.mjs <bundle.json>   → Markdown on stdout
  *
