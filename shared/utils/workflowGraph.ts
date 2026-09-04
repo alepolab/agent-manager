@@ -45,9 +45,22 @@ export const MAX_CONCURRENCY = 3
 
 export const edgeKey = (from: string, to: string): string => `${from}->${to}`
 
+/**
+ * Hard-capped at DEFAULT_MAX_VISITS, deliberately.
+ *
+ * The evidence bundle's `cost.attempts` is the observed max visits across a
+ * run's steps, and the bundle schema caps it at 3. A workflow declaring
+ * `maxVisits: 5` could therefore produce a truthful attempts count the schema
+ * rejects — and the fix must not be to clamp the reported number, because
+ * misreporting an observed fact to satisfy a schema is exactly the fabrication
+ * this pipeline exists to prevent. So the limit is enforced where it is a real
+ * policy decision (how many times a step may run) rather than where it would be
+ * a lie (what actually happened). A workflow asking for more gets 3.
+ */
 export function maxVisitsOf(node: GraphNode): number {
   const raw = Number(node.maxVisits)
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_VISITS
+  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_MAX_VISITS
+  return Math.min(Math.floor(raw), DEFAULT_MAX_VISITS)
 }
 
 /** Shortest hop count from the nodes nothing feeds into - how deep each node reads on the canvas. */

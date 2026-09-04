@@ -6,6 +6,8 @@
  */
 import assert from 'node:assert/strict'
 import {
+  maxVisitsOf,
+  DEFAULT_MAX_VISITS,
   buildGraph,
   initRunState,
   readyNodes,
@@ -236,6 +238,19 @@ assert.equal(joinInputs([]), '')
     { id: 'q', agentSlug: 'x', label: 'Q', next: ['p'] },
   ])
   assert.deepEqual(ancestorsOf(cyclic, 'q'), ['p'], 'cycle terminates')
+}
+
+// maxVisits is capped at the policy limit, not clamped at report time.
+// cost.attempts in the evidence bundle is the observed visit count and the
+// schema caps it at 3; a workflow declaring more would produce a truthful
+// number the schema rejects. The cap belongs here, where it is a policy
+// decision, not in the reporting, where it would be a falsehood.
+{
+  assert.equal(maxVisitsOf({ id: 'a', agentSlug: 'x', label: 'A', maxVisits: 5 }), DEFAULT_MAX_VISITS,
+    'a workflow asking for more visits than the policy allows gets the policy limit')
+  assert.equal(maxVisitsOf({ id: 'a', agentSlug: 'x', label: 'A', maxVisits: 2 }), 2,
+    'a lower explicit limit is still honoured')
+  assert.equal(maxVisitsOf({ id: 'a', agentSlug: 'x', label: 'A' }), DEFAULT_MAX_VISITS)
 }
 
 // parseHalt: a step's structured way of stopping the run
