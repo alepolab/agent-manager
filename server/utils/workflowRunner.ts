@@ -8,6 +8,7 @@ import {
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun } from './workflowRunStore.ts'
 import { callAgent, type AgentUsage } from './agentCaller.ts'
+import { captureBaseline } from './gitFacts.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable,
@@ -471,6 +472,14 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  // Captured BEFORE createRun, so the baseline is the project directory's
+  // HEAD at the true moment execution begins — before any step, and so any
+  // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
+  // and shared/types/run.ts's WorkflowRun.baseCommit for why this can never
+  // fall back to a guess: an absent baseline means computeFixFacts later
+  // reports nothing, rather than diffing against a branch's shared base and
+  // attributing that branch's whole history to this run.
+  const baseCommit = await captureBaseline(opts.projectDir)
   const run = await createRun({
     workflowSlug: opts.workflow.slug,
     workflowName: opts.workflow.name,
@@ -478,6 +487,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     initialPrompt: opts.initialPrompt,
     watch: opts.watch,
     projectDir: opts.projectDir,
+    baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
   const graph = buildGraph(opts.workflow.steps)

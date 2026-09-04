@@ -30,6 +30,19 @@ assert.equal(run.steps.length, 2)
 assert.equal(run.steps[0].status, 'pending')
 assert.equal(run.steps[0].agentSlug, 'sdlc-ticket-intake', 'the agent is carried on the step')
 assert.equal(run.steps[0].visits, 0)
+assert.equal(run.baseCommit, undefined, 'no baseCommit was supplied, so none is fabricated')
+
+// ── 1b. baseCommit, like projectDir and watch, is carried straight through
+// from the caller (startRun, via gitFacts.ts's captureBaseline) onto the
+// persisted run — createRun does not compute or alter it.
+const gitRun = await store.createRun({
+  workflowSlug: 'demo-baseline', workflowName: 'Demo Baseline', autoRun: false, watch: 'direct-invocation',
+  initialPrompt: 'do the thing', steps: sampleSteps,
+  projectDir: '/some/project', baseCommit: 'abc123def456',
+})
+assert.equal(gitRun.baseCommit, 'abc123def456', 'baseCommit is carried through unmodified')
+const reloadedGitRun = await store.getRun(gitRun.id)
+assert.equal(reloadedGitRun.baseCommit, 'abc123def456', 'baseCommit round-trips through disk')
 
 // ── 2. It round-trips through disk ────────────────────────────────────────
 const loaded = await store.getRun(run.id)
@@ -67,7 +80,7 @@ const other = await store.createRun({
   initialPrompt: 'x', steps: sampleSteps,
 })
 const all = await store.listRuns()
-assert.equal(all.length, 2)
+assert.equal(all.length, 3)
 assert.equal(all[0].id, other.id, 'newest first')
 const onlyDemo = await store.listRuns('demo')
 assert.equal(onlyDemo.length, 1)

@@ -128,13 +128,16 @@ function runnerOwned(run: WorkflowRun) {
  * and a matching repo entry's `pr`, which no git command can produce)
  * survives untouched.
  *
- * `computeFixFacts` can only prove ONE repo — the one at `run.projectDir`.
- * A multi-repo fix's OTHER repos are outside anything git can check from
- * here, so — the same trust boundary already applied to `pr` — they survive
- * as the agent's self-report rather than being dropped (fabrication by
- * omission of a real repo) or fabricated (inventing commits for a repo this
- * function never looked at). Only the ONE entry the runner can verify is
- * ever overwritten; every other entry passes through byte-for-byte.
+ * `computeFixFacts` can only prove ONE repo — the one at `run.projectDir`,
+ * measured against `run.baseCommit` (the sha captured at this run's own
+ * start, never a branch's shared base — see gitFacts.ts's doc comments for
+ * why diffing against `main` was itself a fabrication bug). A multi-repo
+ * fix's OTHER repos are outside anything git can check from here, so — the
+ * same trust boundary already applied to `pr` — they survive as the agent's
+ * self-report rather than being dropped (fabrication by omission of a real
+ * repo) or fabricated (inventing commits for a repo this function never
+ * looked at). Only the ONE entry the runner can verify is ever overwritten;
+ * every other entry passes through byte-for-byte.
  *
  * `merge_order` is kept only when it is still coherent with the resulting
  * `repos`: more than one repo present, and every name it lists among them.
@@ -143,12 +146,19 @@ function runnerOwned(run: WorkflowRun) {
  * bundle internally incoherent while still validating, since the schema's
  * multi-repo rule only fires at `repos.length > 1`.
  *
- * When `computeFixFacts` returns null — not a git repo, no commits, a
- * detached HEAD, see that function's doc comment — the three computed keys
- * are REMOVED, not left as whatever the agent claimed. Passing the agent's
- * self-report through in that case would be exactly the fabrication this
- * whole change exists to close off; the honest outcome is an absent field
- * the bundle validator then rejects.
+ * When `computeFixFacts` returns null — not a git repo, no baseline was
+ * recorded, no commits since the baseline, see that function's doc comment
+ * for the full list — the three computed keys are REMOVED, not left as
+ * whatever the agent claimed. Passing the agent's self-report through in
+ * that case would be exactly the fabrication this whole change exists to
+ * close off; the honest outcome is an absent field the bundle validator
+ * then rejects. This includes the run that made no commits at all: a `fix`
+ * block reporting zero-valued numbers would still assert "this run touched
+ * the repo", which is exactly as misleading as inventing thirty-three
+ * commits a run never made — so a no-commit run gets no computed fix keys
+ * either, same as any other "cannot compute" outcome. If the agent wrote no
+ * `fix` at all in that case, the whole block stays absent (see the fallback
+ * below) rather than a block reduced to placeholder zeros.
  */
 async function reconcileFix(
   existing: Record<string, unknown>,
@@ -159,7 +169,7 @@ async function reconcileFix(
     : undefined
   const { repos: _repos, files_changed: _fc, lines_changed: _lc, merge_order: _mo, ...restFix } = existingFix ?? {}
 
-  const computed = await computeFixFacts(run.projectDir).catch(() => null)
+  const computed = await computeFixFacts(run.projectDir, run.baseCommit).catch(() => null)
 
   if (computed) {
     const priorRepos = Array.isArray(existingFix?.repos) ? existingFix!.repos as Array<Record<string, unknown>> : []

@@ -43,6 +43,18 @@ export interface WorkflowRun {
    *  nothing did. */
   watch: string
   projectDir?: string
+  /** `projectDir`'s HEAD sha, captured by the runner (startRun, via
+   *  gitFacts.ts's captureBaseline) the instant this run started, before any
+   *  step ran. gitFacts.ts's computeFixFacts diffs the CURRENT HEAD against
+   *  THIS sha — never against a branch's default base (`main`) — to compute
+   *  what this run actually committed. Runner-owned provenance, exactly
+   *  like `watch` and `identity`: set once at creation, never inferred from
+   *  or trusted from an agent's self-report. Absent when `projectDir` was
+   *  missing, not a git repo, or had no commits yet (an unborn HEAD) at
+   *  start — computeFixFacts then computes nothing rather than falling back
+   *  to a guessed base, since that fallback is exactly the fabrication this
+   *  field exists to prevent. */
+  baseCommit?: string
   steps: RunStep[]
   currentStepIds: string[]
   nextStepIds: string[]
@@ -62,5 +74,9 @@ export interface NewRunInput {
    *  straight onto the persisted run, unmodified. */
   watch: string
   projectDir?: string
+  /** See WorkflowRun.baseCommit — startRun captures it via
+   *  gitFacts.ts's captureBaseline and passes it straight through; createRun
+   *  carries it onto the persisted run, unmodified. */
+  baseCommit?: string
   steps: { stepId: string, label: string, agentSlug: string }[]
 }

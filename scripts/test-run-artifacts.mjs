@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -19,7 +19,10 @@ function git(cwd, args) {
 
 /** A real git repo, on a feature branch with real commits, so tests can
  *  prove the finalize step's computed fix facts against a real projectDir
- *  rather than a stub. */
+ *  rather than a stub. Returns the repo dir AND the baseline sha a run
+ *  starting right before the fix commit would have captured — the caller
+ *  attaches that to `run.baseCommit`, exactly as workflowRunner.ts's
+ *  startRun does via gitFacts.ts's captureBaseline. */
 function makeProjectRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'artifacts-project-'))
   git(dir, ['init', '-q', '-b', 'main'])
@@ -30,10 +33,11 @@ function makeProjectRepo() {
   git(dir, ['commit', '-q', '-m', 'initial'])
   git(dir, ['remote', 'add', 'origin', 'git@github.com:alepolab/ocs_cpp14.git'])
   git(dir, ['checkout', '-q', '-b', 'feature/SA-1203'])
+  const baseCommit = git(dir, ['rev-parse', 'HEAD'])
   writeFileSync(join(dir, 'a.txt'), 'line1\nline2-changed\nline3\n')
   git(dir, ['add', '.'])
   git(dir, ['commit', '-q', '-m', 'fix it'])
-  return dir
+  return { dir, baseCommit }
 }
 
 const run = {
@@ -159,9 +163,9 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
 // 7. fix.{repos,files_changed,lines_changed} are computed from git, and win
 // over an agent's self-report, in a REAL project directory with real commits.
 {
-  const projectDir = makeProjectRepo()
+  const { dir: projectDir, baseCommit } = makeProjectRepo()
   const gitRun = {
-    id: 'run-git', workflowSlug: 'runbook-a', status: 'running', projectDir,
+    id: 'run-git', workflowSlug: 'runbook-a', status: 'running', projectDir, baseCommit,
     initialPrompt: 'fix SA-1', startedAt: Date.now(), endedAt: Date.now() + 1000,
     currentStepIds: [], nextStepIds: [],
     steps: [{ stepId: 's1', agentSlug: 'sdlc-fix-implementer', label: 'Fix', status: 'completed' }],
@@ -189,7 +193,7 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   assert.equal(gitMeta.fix.repos[0].pr, 'https://example.invalid/pr/9',
     'a pr link the agent reported for the SAME repo survives — git cannot prove a PR URL')
   assert.equal(gitMeta.fix.test_dirs_unlocked, false, 'other agent-owned fix.* keys are untouched')
-  const numstat = execFileSync('git', ['diff', '--numstat', 'main..HEAD'], { cwd: projectDir, encoding: 'utf8' })
+  const numstat = execFileSync('git', ['diff', '--numstat', `${baseCommit}..HEAD`], { cwd: projectDir, encoding: 'utf8' })
     .trim().split('\n').filter(Boolean)
   let expectedLines = 0
   for (const line of numstat) {
@@ -231,9 +235,9 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
 // git-verified, and merge_order must stay coherent with the result —
 // dropped once it no longer names every repo actually present.
 {
-  const projectDir = makeProjectRepo()
+  const { dir: projectDir, baseCommit } = makeProjectRepo()
   const multiRun = {
-    id: 'run-multi', workflowSlug: 'runbook-a', status: 'running', projectDir,
+    id: 'run-multi', workflowSlug: 'runbook-a', status: 'running', projectDir, baseCommit,
     initialPrompt: 'fix SA-1', startedAt: Date.now(), endedAt: Date.now() + 1000,
     currentStepIds: [], nextStepIds: [],
     steps: [{ stepId: 's1', agentSlug: 'sdlc-fix-implementer', label: 'Fix', status: 'completed' }],
@@ -283,7 +287,137 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   rmSync(projectDir, { recursive: true, force: true })
 }
 
-// 9. when finalize itself cannot be trusted (a bug, a filesystem error), the
+// 9. THE regression this whole change exists for (DEVOPS-15): a run against
+// a real repo, on a long-lived branch that ALREADY has real commits ahead of
+// main before the run even starts — and the run itself creates no commits
+// and leaves the tree clean. finalizeRunArtifacts must not attribute the
+// branch's pre-existing history to this run.
+{
+  const projectDir = mkdtempSync(join(tmpdir(), 'artifacts-project-develop-'))
+  git(projectDir, ['init', '-q', '-b', 'main'])
+  git(projectDir, ['config', 'user.email', 'test@example.invalid'])
+  git(projectDir, ['config', 'user.name', 'Test'])
+  writeFileSync(join(projectDir, 'a.txt'), 'line1\n')
+  git(projectDir, ['add', '.'])
+  git(projectDir, ['commit', '-q', '-m', 'initial'])
+  git(projectDir, ['remote', 'add', 'origin', 'git@github.com:alepolab/alepo-dev-team-infra.git'])
+  git(projectDir, ['checkout', '-q', '-b', 'develop'])
+  // Real pre-existing history on develop, well ahead of main — the exact
+  // shape gitFacts.ts used to misreport wholesale as "this run's work"
+  // when it diffed against main instead of the run's own starting point.
+  for (let i = 0; i < 33; i += 1) {
+    appendFileSync(join(projectDir, 'a.txt'), `pre-existing line ${i}\n`)
+    git(projectDir, ['add', '.'])
+    git(projectDir, ['commit', '-q', '-m', `pre-existing develop commit ${i}`])
+  }
+  const aheadOfMain = execFileSync('git', ['rev-list', 'main..HEAD'], { cwd: projectDir, encoding: 'utf8' })
+    .trim().split('\n').filter(Boolean)
+  assert.equal(aheadOfMain.length, 33, 'sanity: develop really is 33 commits ahead of main before the run starts')
+
+  // The run starts NOW — its baseline is the branch tip at this instant,
+  // exactly what workflowRunner.ts's startRun captures via
+  // gitFacts.ts's captureBaseline before any step runs.
+  const baseCommit = git(projectDir, ['rev-parse', 'HEAD'])
+
+  // 9a. The run halts at step 1: no commits made, tree clean. An agent
+  // nonetheless self-reports a fabricated fix — the exact shape observed on
+  // the real DEVOPS-15 run (33 commits, 17 files, 1083 lines).
+  {
+    const haltedRun = {
+      id: 'run-devops-15-halt', workflowSlug: 'runbook-a', status: 'failed', projectDir, baseCommit,
+      initialPrompt: 'fix DEVOPS-15', startedAt: Date.now(), endedAt: Date.now() + 1000,
+      currentStepIds: [], nextStepIds: [],
+      steps: [{ stepId: 's1', agentSlug: 'sdlc-ticket-intake', label: 'Intake', status: 'failed' }],
+    }
+    const haltedDir = A.runArtifactsDir(haltedRun.id)
+    await A.initRunArtifacts(haltedRun, 'Runbook A')
+    writeFileSync(join(haltedDir, 'meta.json'), JSON.stringify({
+      ...JSON.parse(readFileSync(join(haltedDir, 'meta.json'), 'utf8')),
+      fix: {
+        repos: [{ repo: 'alepolab/alepo-dev-team-infra', commits: aheadOfMain, pr: null }],
+        files_changed: 17, lines_changed: 1083, test_dirs_unlocked: false, unlock_reason: null,
+      },
+    }))
+    await A.finalizeRunArtifacts(haltedRun)
+    const haltedMeta = JSON.parse(readFileSync(join(haltedDir, 'meta.json'), 'utf8'))
+    assert.ok(!('repos' in haltedMeta.fix),
+      'fix.repos is absent for a run that made no commits, even though the branch is 33 commits ahead of main')
+    assert.ok(!('files_changed' in haltedMeta.fix), 'files_changed is absent, not the agent-fabricated 17')
+    assert.ok(!('lines_changed' in haltedMeta.fix), 'lines_changed is absent, not the agent-fabricated 1083')
+  }
+
+  // 9b. Same repo, same branch, but this run genuinely makes ONE commit.
+  // Only that commit is attributable — never the 33 pre-existing ones.
+  {
+    writeFileSync(join(projectDir, 'b.txt'), 'the one real change this run made\n')
+    git(projectDir, ['add', '.'])
+    git(projectDir, ['commit', '-q', '-m', 'the only commit this run actually made'])
+
+    const realRun = {
+      id: 'run-devops-15-real', workflowSlug: 'runbook-a', status: 'completed', projectDir, baseCommit,
+      initialPrompt: 'fix DEVOPS-15', startedAt: Date.now(), endedAt: Date.now() + 1000,
+      currentStepIds: [], nextStepIds: [],
+      steps: [{ stepId: 's1', agentSlug: 'sdlc-fix-implementer', label: 'Fix', status: 'completed' }],
+    }
+    const realDir = A.runArtifactsDir(realRun.id)
+    await A.initRunArtifacts(realRun, 'Runbook A')
+    await A.finalizeRunArtifacts(realRun)
+    const realMeta = JSON.parse(readFileSync(join(realDir, 'meta.json'), 'utf8'))
+    assert.equal(realMeta.fix.repos.length, 1)
+    assert.equal(realMeta.fix.repos[0].commits.length, 1,
+      'exactly the one commit this run made is attributed — not the 33 pre-existing ones')
+    assert.equal(realMeta.fix.files_changed, 1, 'only the file this run touched is counted')
+  }
+
+  rmSync(projectDir, { recursive: true, force: true })
+}
+
+// 9c. An OLDER run — no baseCommit recorded at all (the field didn't exist
+// yet, or projectDir wasn't a git repo when the run started) — must emit
+// nothing either, never fall back to main. Reusing the exact develop-style
+// repo shape (many commits ahead of main) so a fallback-to-main regression
+// would be caught here too.
+{
+  const projectDir = mkdtempSync(join(tmpdir(), 'artifacts-project-nobaseline-'))
+  git(projectDir, ['init', '-q', '-b', 'main'])
+  git(projectDir, ['config', 'user.email', 'test@example.invalid'])
+  git(projectDir, ['config', 'user.name', 'Test'])
+  writeFileSync(join(projectDir, 'a.txt'), 'line1\n')
+  git(projectDir, ['add', '.'])
+  git(projectDir, ['commit', '-q', '-m', 'initial'])
+  git(projectDir, ['remote', 'add', 'origin', 'git@github.com:alepolab/alepo-dev-team-infra.git'])
+  git(projectDir, ['checkout', '-q', '-b', 'develop'])
+  appendFileSync(join(projectDir, 'a.txt'), 'a commit ahead of main, but no baseline was ever recorded\n')
+  git(projectDir, ['add', '.'])
+  git(projectDir, ['commit', '-q', '-m', 'ahead of main, no baseline'])
+
+  const noBaselineRun = {
+    id: 'run-no-baseline', workflowSlug: 'runbook-a', status: 'completed', projectDir,
+    // baseCommit deliberately omitted
+    initialPrompt: 'fix DEVOPS-15', startedAt: Date.now(), endedAt: Date.now() + 1000,
+    currentStepIds: [], nextStepIds: [],
+    steps: [{ stepId: 's1', agentSlug: 'sdlc-fix-implementer', label: 'Fix', status: 'completed' }],
+  }
+  const noBaselineDir = A.runArtifactsDir(noBaselineRun.id)
+  await A.initRunArtifacts(noBaselineRun, 'Runbook A')
+  writeFileSync(join(noBaselineDir, 'meta.json'), JSON.stringify({
+    ...JSON.parse(readFileSync(join(noBaselineDir, 'meta.json'), 'utf8')),
+    fix: {
+      repos: [{ repo: 'alepolab/alepo-dev-team-infra', commits: ['1111111'], pr: null }],
+      files_changed: 3, lines_changed: 9, test_dirs_unlocked: false, unlock_reason: null,
+    },
+  }))
+  await A.finalizeRunArtifacts(noBaselineRun)
+  const noBaselineMeta = JSON.parse(readFileSync(join(noBaselineDir, 'meta.json'), 'utf8'))
+  assert.ok(!('repos' in noBaselineMeta.fix),
+    'with no baseCommit recorded at all, fix.repos is absent — never a fallback to main')
+  assert.ok(!('files_changed' in noBaselineMeta.fix), 'files_changed is absent with no baseline recorded')
+  assert.ok(!('lines_changed' in noBaselineMeta.fix), 'lines_changed is absent with no baseline recorded')
+
+  rmSync(projectDir, { recursive: true, force: true })
+}
+
+// 10. when finalize itself cannot be trusted (a bug, a filesystem error), the
 // caller (workflowRunner.ts) marks the artifacts unusable rather than
 // leaving an agent's unreconciled self-report sitting in meta.json looking
 // like ordinary evidence. markArtifactsUnusable is the mechanism: it must

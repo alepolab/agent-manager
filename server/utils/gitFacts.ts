@@ -38,46 +38,76 @@ function parseOwnerRepo(remoteUrl: string): string | null {
 }
 
 /**
- * The ref this branch is diffed against — "the branch point" the brief asks
- * for. Prefers the remote's recorded default branch (`origin/HEAD`, when a
- * local clone has it set up); falls back to the first of the usual default
- * branch names that actually resolves. Returns null when none of them do —
- * there is then no branch point to diff against, and the caller must treat
- * that the same as "cannot compute", not guess at one.
+ * Captures `projectDir`'s HEAD sha at the instant a run starts — the ONLY
+ * honest definition of "what this run's own work looks like" on a
+ * long-lived branch. Called once, by `startRun` (workflowRunner.ts), before
+ * any step has run; the resulting sha is persisted on the run itself
+ * (`WorkflowRun.baseCommit`) as runner-owned provenance, exactly like
+ * `watch` and `identity` — an agent has no channel to influence it.
+ *
+ * Returns `undefined` — never a guess — when there is nothing to capture:
+ * `projectDir` absent, not inside a git working tree, or an unborn HEAD (a
+ * freshly initialised repo with no commits yet, where `rev-parse HEAD`
+ * itself fails). `computeFixFacts` treats an undefined baseline the same
+ * way it treats every other "cannot compute" precondition: emit nothing,
+ * never fall back to a branch's default base.
  */
-async function resolveBaseRef(cwd: string): Promise<string | null> {
+export async function captureBaseline(projectDir: string | undefined): Promise<string | undefined> {
+  if (!projectDir) return undefined
   try {
-    const ref = await git(cwd, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'])
-    if (ref) return ref
-  } catch { /* origin/HEAD isn't recorded locally - common on a fresh or shallow clone */ }
-  for (const candidate of ['origin/main', 'origin/master', 'main', 'master']) {
-    try {
-      await git(cwd, ['rev-parse', '--verify', '--quiet', candidate])
-      return candidate
-    } catch { /* try the next candidate */ }
+    const inside = await git(projectDir, ['rev-parse', '--is-inside-work-tree'])
+    if (inside !== 'true') return undefined
+  } catch {
+    return undefined // not a git repository
   }
-  return null
+  try {
+    return await git(projectDir, ['rev-parse', 'HEAD'])
+  } catch {
+    return undefined // unborn HEAD: no commits exist yet to capture
+  }
 }
 
 /**
  * Computes the facts an agent's self-report of `fix.repos` / `files_changed`
  * / `lines_changed` cannot be trusted for, straight from git, in
- * `projectDir`. Returns `null` — never a guess, never a partial result —
- * when any precondition isn't met:
+ * `projectDir` — measured against `baseCommit`, the sha `captureBaseline`
+ * recorded when THIS run started, never against a branch's default base
+ * (`main`/`origin/HEAD`). Diffing against `main` was the defect this
+ * function used to have: on any long-lived branch, every commit the branch
+ * ever made — not just this run's — reads as "ahead of main", so a run that
+ * made zero commits could still attest to someone else's entire history.
+ * Diffing against the run's own recorded starting point cannot make that
+ * mistake, because the baseline moves with the run instead of sitting fixed
+ * at a distant, shared ancestor.
+ *
+ * Returns `null` — never a guess, never a partial result — when any
+ * precondition isn't met:
  *   - `projectDir` absent, or not inside a git working tree at all
- *   - HEAD is detached (no branch name, so no branch point to diff against)
- *   - no base ref resolves (no origin/HEAD, no main/master anywhere)
- *   - HEAD and the base ref share no merge base
- *   - the branch has produced no commits ahead of its base (the run made no
- *     commits — a real and legitimate outcome, not an error)
+ *   - `baseCommit` absent (see `captureBaseline`'s doc comment for why: an
+ *     older run with no recorded baseline, a project dir that was not a git
+ *     repo at start, an unborn HEAD at start) — this is the one precondition
+ *     with NO fallback. Falling back to `main` here would silently
+ *     reintroduce the exact fabrication this function exists to prevent.
+ *   - `baseCommit` no longer resolves to a real commit in this repo (e.g. a
+ *     shallow clone, or history rewritten out from under it)
+ *   - `baseCommit` is not an ancestor of the current `HEAD` (e.g. the
+ *     project directory was rebased, or switched to an unrelated branch,
+ *     between run start and now) — diffing across unrelated history would
+ *     attribute someone else's commits to this run, the same class of
+ *     mistake diffing against `main` made
+ *   - the branch has produced no commits since `baseCommit` (the run made
+ *     no commits — a real and legitimate outcome, not an error)
  *   - `origin` has no remote URL to name the repo from
  * The caller (runArtifacts.ts's finalizeRunArtifacts) treats `null` the same
  * way it already treats a missing artifact file: the field stays absent and
  * validation rejects the bundle, rather than falling back to what an agent
  * wrote into meta.json.
  */
-export async function computeFixFacts(projectDir: string | undefined): Promise<ComputedFix | null> {
-  if (!projectDir) return null
+export async function computeFixFacts(
+  projectDir: string | undefined,
+  baseCommit: string | undefined,
+): Promise<ComputedFix | null> {
+  if (!projectDir || !baseCommit) return null
 
   try {
     const inside = await git(projectDir, ['rev-parse', '--is-inside-work-tree'])
@@ -86,29 +116,23 @@ export async function computeFixFacts(projectDir: string | undefined): Promise<C
     return null // not a git repository
   }
 
-  let branch: string
   try {
-    branch = await git(projectDir, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    await git(projectDir, ['cat-file', '-e', `${baseCommit}^{commit}`])
   } catch {
-    return null
+    return null // the recorded baseline no longer resolves in this repo
   }
-  if (!branch || branch === 'HEAD') return null // detached HEAD: no branch to diff against
 
-  const baseRef = await resolveBaseRef(projectDir)
-  if (!baseRef) return null
-
-  let mergeBase: string
   try {
-    mergeBase = await git(projectDir, ['merge-base', 'HEAD', baseRef])
+    await git(projectDir, ['merge-base', '--is-ancestor', baseCommit, 'HEAD'])
   } catch {
-    return null // HEAD and baseRef share no common history
+    return null // baseline is not an ancestor of HEAD: unrelated history, don't guess
   }
 
   let commitsRaw: string
   try {
     commitsRaw = await git(
       projectDir,
-      ['rev-list', '--reverse', '--abbrev-commit', '--abbrev=12', `${mergeBase}..HEAD`],
+      ['rev-list', '--reverse', '--abbrev-commit', '--abbrev=12', `${baseCommit}..HEAD`],
     )
   } catch {
     return null
@@ -127,7 +151,7 @@ export async function computeFixFacts(projectDir: string | undefined): Promise<C
 
   let numstat: string
   try {
-    numstat = await git(projectDir, ['diff', '--numstat', `${mergeBase}..HEAD`])
+    numstat = await git(projectDir, ['diff', '--numstat', `${baseCommit}..HEAD`])
   } catch {
     return null
   }
