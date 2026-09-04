@@ -34,6 +34,14 @@ export interface WorkflowRun {
   status: WorkflowRunStatus
   autoRun: boolean
   initialPrompt: string
+  /** What triggered this run: the id of the watch (registry/watches.yaml)
+   *  that dispatched it, or the reserved literal 'direct-invocation' for a
+   *  run started manually (the API route, run-ticket.mjs). Set once at
+   *  creation by the runner itself — never inferred from, or left to, an
+   *  agent's self-report. Non-nullable on purpose: "what triggered this?"
+   *  always has an honest answer, and 'direct-invocation' is it when
+   *  nothing did. */
+  watch: string
   projectDir?: string
   steps: RunStep[]
   currentStepIds: string[]
@@ -50,6 +58,9 @@ export interface NewRunInput {
   workflowName: string
   autoRun: boolean
   initialPrompt: string
+  /** See WorkflowRun.watch — the caller states it, createRun carries it
+   *  straight onto the persisted run, unmodified. */
+  watch: string
   projectDir?: string
   steps: { stepId: string, label: string, agentSlug: string }[]
 }

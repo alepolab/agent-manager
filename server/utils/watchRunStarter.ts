@@ -109,6 +109,9 @@ export async function realRunStarter(watch: Watch, ticket: TicketRef): Promise<{
   const run = await startRun({
     workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
     initialPrompt: promptFor(ticket),
+    // The runner's own fact for "what triggered this" — the watch that
+    // dispatched it, never left to the agent to self-report.
+    watch: watch.id,
     autoRun: watch.autoRun,
     projectDir: watch.projectDir,
   })

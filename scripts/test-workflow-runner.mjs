@@ -6,7 +6,7 @@
  *   node scripts/test-workflow-runner.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -63,7 +63,7 @@ runner.setAgentCaller(async (agentSlug) => {
   await gate
   return `output of ${agentSlug}`
 })
-const promptRun = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })
+const promptRun = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 assert.ok(promptRun.id, 'startRun returns a run with an id')
 assert.notEqual(promptRun.status, 'completed',
   'startRun returns before the run has finished, not after')
@@ -80,7 +80,7 @@ runner.setAgentCaller(async (agentSlug, input) => {
 })
 
 // ── 1. A manual run stops after the first wave and persists that ──────────
-let run = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+let run = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
 run = await runner.waitForSettled(run.id, TIMEOUT)
 assert.equal(run.status, 'paused', 'a manual run pauses after its first wave')
 assert.equal(run.steps.find(s => s.stepId === 'a').status, 'completed')
@@ -110,7 +110,7 @@ assert.ok(run.endedAt, 'a finished run records when it ended')
 
 // ── 4. An auto-run goes to completion with no continue calls ──────────────
 calls.length = 0
-let auto = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })
+let auto = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 auto = await runner.waitForSettled(auto.id, TIMEOUT)
 assert.equal(auto.status, 'completed', 'auto-run finishes on its own')
 assert.equal(calls.length, 4, 'every step ran exactly once')
@@ -120,7 +120,7 @@ runner.setAgentCaller(async (agentSlug) => {
   if (agentSlug === 'agent-b') throw new Error('agent-b exploded')
   return `output of ${agentSlug}`
 })
-let failing = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })
+let failing = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 failing = await runner.waitForSettled(failing.id, TIMEOUT)
 assert.equal(failing.status, 'failed')
 assert.equal(failing.steps.find(s => s.stepId === 'b').status, 'failed')
@@ -131,7 +131,7 @@ assert.equal(failing.steps.find(s => s.stepId === 'd').status, 'skipped',
 // ── 6. Subscribers see progress ───────────────────────────────────────────
 runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
 const seen = []
-let started = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+let started = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
 started = await runner.waitForSettled(started.id, TIMEOUT)
 const unsubscribe = runner.subscribe(started.id, r => seen.push(r.status))
 await runner.continueRun(started.id)
@@ -151,7 +151,7 @@ runner.setAgentCaller(async (agentSlug) => {
   if (agentSlug === 'monitor-m') throw new Error('monitor exploded')
   return `output of ${agentSlug}`
 })
-let monitorBroke = await runner.startRun({ workflow: monitorThrowsWorkflow, initialPrompt: 'go', autoRun: true })
+let monitorBroke = await runner.startRun({ workflow: monitorThrowsWorkflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 monitorBroke = await runner.waitForSettled(monitorBroke.id, TIMEOUT)
 assert.equal(monitorBroke.status, 'completed',
   'a monitor that throws must not fail an already-successful step (C1)')
@@ -170,7 +170,7 @@ runner.setAgentCaller(async (agentSlug) => {
   }
   return `output of ${agentSlug}`
 })
-let toFail = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+let toFail = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
 toFail = await runner.waitForSettled(toFail.id, TIMEOUT)
 assert.equal(toFail.status, 'paused')
 assert.deepEqual(toFail.currentStepIds, ['a'])
@@ -199,7 +199,7 @@ runner.setAgentCaller(async (agentSlug) => {
   }
   return `output of ${agentSlug}`
 })
-let toComplete = await runner.startRun({ workflow: retryOnceWorkflow, initialPrompt: 'go', autoRun: false })
+let toComplete = await runner.startRun({ workflow: retryOnceWorkflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
 toComplete = await runner.waitForSettled(toComplete.id, TIMEOUT)
 assert.equal(toComplete.status, 'paused', 'a RETRY verdict re-arms the node and pauses for review')
 assert.deepEqual(toComplete.currentStepIds, ['r'])
@@ -209,9 +209,28 @@ toComplete = await runner.waitForSettled(toComplete.id, TIMEOUT)
 assert.equal(toComplete.status, 'completed',
   "respondToRun completing the graph's final step must settle as completed, not paused (C3)")
 
+// A RETRY verdict must not erase the attempt it retried: the deficient
+// output and the monitor's note that triggered the retry get their own
+// snapshot file, distinct from the step's final artifact - otherwise the
+// eventual completed write (same stepId/agentSlug, same filename) silently
+// overwrites it, and a reviewer sees cost.attempts: 2 with only one file.
+{
+  const stepsDir = join(process.env.AGENT_RUNS_DIR, toComplete.id, 'artifacts', 'steps')
+  const names = readdirSync(stepsDir)
+  const retryFile = names.find(n => n.includes('retry-1'))
+  assert.ok(retryFile, `a retry-1 snapshot file exists alongside the final one: ${names.join(', ')}`)
+  const retrySnapshot = JSON.parse(readFileSync(join(stepsDir, retryFile), 'utf8'))
+  assert.equal(retrySnapshot.monitorVerdict, 'RETRY', 'the snapshot records the RETRY verdict, not the eventual CONTINUE')
+  assert.match(retrySnapshot.monitorNote, /Needs work/, "the monitor's note that triggered the retry is preserved")
+
+  const finalFile = names.find(n => !n.includes('retry'))
+  const finalRecord = JSON.parse(readFileSync(join(stepsDir, finalFile), 'utf8'))
+  assert.equal(finalRecord.monitorVerdict, 'CONTINUE', 'the final artifact reflects the attempt that actually completed')
+}
+
 // ── 10. stopRun on an already-terminal run is a no-op (C5) ────────────────────
 runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
-let alreadyDone = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })
+let alreadyDone = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 alreadyDone = await runner.waitForSettled(alreadyDone.id, TIMEOUT)
 assert.equal(alreadyDone.status, 'completed')
 const afterStop = await runner.stopRun(alreadyDone.id)
@@ -226,7 +245,7 @@ runner.setAgentCaller(async (agentSlug) => {
   timeline.push({ agentSlug, event: 'end', t: Date.now() })
   return `output of ${agentSlug}`
 })
-let concurrent = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+let concurrent = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
 concurrent = await runner.waitForSettled(concurrent.id, TIMEOUT) // wave 1: a alone
 concurrent = await runner.continueRun(concurrent.id)
 concurrent = await runner.waitForSettled(concurrent.id, TIMEOUT) // wave 2: b and c, the fan-out
@@ -254,7 +273,7 @@ assert.ok(cStart < bEnd,
   }
   runner.setAgentCaller(async agentSlug => `OUTPUT-OF-${agentSlug}`)
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow: chain, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: chain, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const s4 = r.steps.find(s => s.stepId === 's4').input
   assert.ok(s4.includes('OUTPUT-OF-a1'), 'ancestors mode reaches the far ancestor')
   assert.ok(s4.includes('OUTPUT-OF-a3'), 'ancestors mode still includes the direct predecessor')
@@ -262,7 +281,7 @@ assert.ok(cStart < bEnd,
   // And the default is unchanged.
   const plain = { ...chain, slug: 'plain', steps: chain.steps.map(s => ({ ...s, contextMode: undefined })) }
   const r2 = await runner.waitForSettled(
-    (await runner.startRun({ workflow: plain, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: plain, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const p4 = r2.steps.find(s => s.stepId === 's4').input
   assert.ok(!p4.includes('OUTPUT-OF-a1'), 'default mode does NOT reach the far ancestor')
   assert.ok(p4.includes('OUTPUT-OF-a3'), 'default mode includes the direct predecessor')
@@ -283,7 +302,7 @@ assert.ok(cStart < bEnd,
   }
   runner.setAgentCaller(async () => huge)
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow: two, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: two, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const input = r.steps.find(s => s.stepId === 'p2').input
   assert.ok(input.includes(huge), 'default mode passes a large upstream output through whole')
   assert.ok(!input.includes('[truncated'), 'default mode never truncates')
@@ -302,7 +321,7 @@ assert.ok(cStart < bEnd,
   }
   runner.setAgentCaller(async agentSlug => `MARKER-${agentSlug}\n${big}`)
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow: chain, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: chain, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const input = r.steps.find(s => s.stepId === 'b3').input
   assert.ok(input.length < 200000, 'joined context is capped')
   assert.ok(input.includes('[truncated'), 'truncation is marked, never silent')
@@ -324,7 +343,7 @@ assert.ok(cStart < bEnd,
     return `output of ${agentSlug}`
   })
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
   assert.ok(existsSync(join(dir, 'meta.json')), 'meta.json exists after a run')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
@@ -363,7 +382,7 @@ assert.ok(cStart < bEnd,
     }
     return `output of ${agentSlug}`
   })
-  let r = await runner.startRun({ workflow: respondWorkflow, initialPrompt: 'go', autoRun: false })
+  let r = await runner.startRun({ workflow: respondWorkflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
   r = await runner.waitForSettled(r.id, TIMEOUT)
   assert.equal(r.status, 'paused', 'a RETRY verdict re-arms the node and pauses for review')
   r = await runner.respondToRun(r.id, 'please redo')
@@ -384,7 +403,7 @@ assert.ok(cStart < bEnd,
     poisonMetaFromInput(input)
     return `output of ${agentSlug}`
   })
-  let r = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+  let r = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
   r = await runner.waitForSettled(r.id, TIMEOUT)
   assert.equal(r.status, 'paused')
   r = await runner.stopRun(r.id)
@@ -412,7 +431,7 @@ assert.ok(cStart < bEnd,
   // normalizeAgentResult() in workflowRunner.ts expects.
   runner.setAgentCaller(async agentSlug => ({ output: `output of ${agentSlug}`, model: 'opus' }))
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow: singleModelWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: singleModelWorkflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const step = r.steps.find(s => s.stepId === 'only')
   assert.equal(step.model, 'opus', 'the reported model is recorded on the step')
   const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
@@ -436,7 +455,7 @@ assert.ok(cStart < bEnd,
     return { output: `output of ${agentSlug}`, model }
   })
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow: mixedModelWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: mixedModelWorkflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
   assert.equal(meta.model, 'opus+haiku', 'a mixed-model run joins the distinct values, not a single pick')
@@ -452,7 +471,7 @@ assert.ok(cStart < bEnd,
     return `output of ${agentSlug}`
   })
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   assert.equal(r.status, 'failed', 'a halted step fails the run')
   const b = r.steps.find(s => s.stepId === 'b')
   assert.equal(b.status, 'failed', 'the halting step is failed, not completed')
@@ -484,7 +503,7 @@ assert.ok(cStart < bEnd,
     return { output: `output of ${agentSlug}`, model: 'sonnet', usage }
   })
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow: usageWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: usageWorkflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   const stepX = r.steps.find(s => s.stepId === 'x')
   assert.deepEqual(stepX.usage, { input_tokens: 100, output_tokens: 10 },
     'the real caller\'s usage is recorded on the step that reported it')
@@ -503,7 +522,7 @@ assert.ok(cStart < bEnd,
 {
   const emptyWorkflow = { slug: 'empty', name: 'Empty', steps: [] }
   const r = await runner.waitForSettled(
-    (await runner.startRun({ workflow: emptyWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+    (await runner.startRun({ workflow: emptyWorkflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   assert.equal(r.status, 'completed', 'a workflow with no steps completes via the empty-wave branch')
   assert.deepEqual(r.currentStepIds, [], 'no step ever ran')
   assert.ok(r.endedAt, 'the empty-wave branch still records when the run ended')

@@ -56,6 +56,10 @@ const projectDir = arg('project-dir', process.env.RUN_PROJECT_DIR)
 const run = await runner.startRun({
   workflow: { slug: workflowSlug, name: wf.name, steps: wf.steps },
   initialPrompt: brief,
+  // This harness invokes the workflow directly, off the CLI - not by a
+  // registered watch. 'direct-invocation' is the reserved literal the
+  // evidence bundle schema requires for exactly that case.
+  watch: 'direct-invocation',
   autoRun: true,
   ...(projectDir ? { projectDir } : {}),
 })

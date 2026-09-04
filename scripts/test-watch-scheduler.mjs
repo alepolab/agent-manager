@@ -20,7 +20,7 @@ const config = await import('../server/utils/watchConfig.ts')
 /** A run record via the real store, its outcome overridden for the test. */
 async function makeRun(overrides = {}) {
   const run = await runStore.createRun({
-    workflowSlug: 'demo', workflowName: 'Demo', autoRun: false,
+    workflowSlug: 'demo', workflowName: 'Demo', autoRun: false, watch: 'direct-invocation',
     initialPrompt: 'do the thing', steps: [],
   })
   const next = { ...run, ...overrides }
@@ -386,6 +386,13 @@ const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
   const state = await store.getWatchState('w-realrunstarter')
   assert.equal(state['GOOD-1'].disposition, 'dispatched')
   assert.equal(state['GOOD-2'].disposition, 'dispatched')
+
+  // realRunStarter must thread the watch's OWN id onto the run it starts —
+  // the runner's fact for "what dispatched this run", never left for the
+  // agent to self-report into meta.json later.
+  const dispatchedRun = await runStore.getRun(state['GOOD-1'].lastRunId)
+  assert.equal(dispatchedRun.watch, 'w-realrunstarter',
+    'a watch-dispatched run records the REAL watch id, not left absent for the agent to fill in')
   // watchStateStore.recordAttempt now refuses a keyless ticket outright
   // (thrown before realRunStarter's own validateTicket ever runs), and
   // recordFailure — reached from runCycle's catch block — does not persist

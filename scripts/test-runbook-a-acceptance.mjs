@@ -32,9 +32,11 @@ const { assembleBundle } = await import('../engineering/scripts/assemble-bundle.
 // fix.repos/files_changed/lines_changed are now COMPUTED from git at finalize
 // time (server/utils/gitFacts.ts), not trusted from the agent's self-report —
 // see runArtifacts.ts's reconcileFix. Every scenario below needs a run with a
-// real projectDir so `fix` is even present in the assembled bundle; one repo,
-// shared across scenarios, is enough since none of them assert on the exact
-// repo/commit content, only that the bundle validates.
+// real projectDir so `fix` is even present in the assembled bundle. Scenario
+// 1 asserts the assembled bundle's fix.* against these SAME facts, computed
+// independently below rather than by re-calling gitFacts.ts, so a broken
+// reconciliation (a swallowed finalizeRunArtifacts failure, a stale
+// self-report surviving) fails this test instead of passing silently.
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 }
@@ -50,6 +52,19 @@ git(projectDir, ['checkout', '-q', '-b', 'fix/SA-1203'])
 writeFileSync(join(projectDir, 'avp_parser.c'), 'int parse(void) { return 1; /* fixed */ }\n')
 git(projectDir, ['add', '.'])
 git(projectDir, ['commit', '-q', '-m', 'fix the AVP loop bound'])
+
+// The ground truth scenario 1 checks the assembled bundle against — computed
+// straight from git, independently of gitFacts.ts / reconcileFix.
+const expectedCommits = git(
+  projectDir, ['rev-list', '--reverse', '--abbrev-commit', '--abbrev=12', 'main..HEAD'],
+).split('\n').map(s => s.trim()).filter(Boolean)
+const expectedNumstat = git(projectDir, ['diff', '--numstat', 'main..HEAD'])
+  .split('\n').map(s => s.trim()).filter(Boolean)
+const expectedFilesChanged = expectedNumstat.length
+const expectedLinesChanged = expectedNumstat.reduce((sum, line) => {
+  const [added, removed] = line.split('\t')
+  return sum + (Number(added) || 0) + (Number(removed) || 0)
+}, 0)
 
 const xunit = failures => `<testsuite tests="4" failures="${failures}" errors="0" skipped="0"/>`
 
@@ -128,13 +143,26 @@ const workflow = {
 
 /** Runs the whole workflow against one writer set and assembles the result. */
 async function runScenario(writers) {
+  // Reports the { output, model, usage } shape callAgent() actually returns
+  // (agentCaller.ts), not a bare string. A bare-string stub never exercises
+  // meta.json's `model` field at all — normalizeAgentResult (workflowRunner.ts)
+  // treats a string as { output: r }, model always undefined, so every
+  // scenario would silently depend on runArtifacts.ts's removed
+  // DEFAULT_MODEL_ALIAS fallback to produce a valid bundle. Reporting a real
+  // model id here is what makes this the acceptance test for the real path.
   runner.setAgentCaller(async (agentSlug, input) => {
     writers[agentSlug](dirFrom(input))
-    return `${agentSlug} done. EVIDENCE-FROM-${agentSlug}`
+    return {
+      output: `${agentSlug} done. EVIDENCE-FROM-${agentSlug}`,
+      model: 'claude-sonnet-4-6',
+      usage: { input_tokens: 100, output_tokens: 40 },
+    }
   })
 
   const run = await runner.waitForSettled(
-    (await runner.startRun({ workflow, initialPrompt: 'Fix SA-1203', autoRun: true, projectDir })).id, 15000)
+    (await runner.startRun({
+      workflow, initialPrompt: 'Fix SA-1203', watch: 'direct-invocation', autoRun: true, projectDir,
+    })).id, 15000)
   assert.equal(run.status, 'completed',
     `run finished: ${JSON.stringify(run.steps.map(s => [s.stepId, s.status, s.error]))}`)
 
@@ -164,6 +192,29 @@ async function runScenario(writers) {
   assert.equal(bundle.oracle_after.verdict, 'PASS', 'the post-fix oracle passed')
   assert.equal(bundle.ticket, 'SA-1203')
   assert.equal(bundle.adversarial, null, 'ui_parsing blast radius carries no adversarial report')
+
+  // model is the value every step actually reported (the stub caller's
+  // object shape), never DEFAULT_MODEL_ALIAS — proves the fallback removal
+  // in runArtifacts.ts didn't just move the fabrication into this test.
+  assert.equal(bundle.model, 'claude-sonnet-4-6',
+    'model is the real value every step reported, not a fallback default')
+  // watch is the runner's own fact for a run this test started directly
+  // (not via a watch), asserted over whatever an agent might have written.
+  assert.equal(bundle.watch, 'direct-invocation',
+    'watch is the runner-owned fact for a directly-invoked run, never left to the agent')
+
+  // The end-to-end assertion: compare the assembled bundle's fix.* against
+  // what git actually reports for this branch, computed independently above.
+  // A finalizeRunArtifacts that silently failed (see workflowRunner.ts's
+  // publish()) would leave the agent's uncomputed self-report in meta.json
+  // instead — this catches that even if the bundle still "validates".
+  assert.equal(bundle.fix.repos.length, 1)
+  assert.deepEqual(bundle.fix.repos[0].commits, expectedCommits,
+    'fix.repos[0].commits is exactly what git reports, not the agent\'s self-report of ["abcdef1"]')
+  assert.equal(bundle.fix.files_changed, expectedFilesChanged,
+    'fix.files_changed matches git, independently computed')
+  assert.equal(bundle.fix.lines_changed, expectedLinesChanged,
+    'fix.lines_changed matches git, independently computed')
   console.log('  ok  scenario 1: ui_parsing happy path validates')
 }
 
@@ -192,6 +243,27 @@ async function runScenario(writers) {
     'the money-path bundle carries an adversarial object')
   assert.deepEqual(bundle.fix.merge_order, ['alepolab/billing_cpp14', 'alepolab/ocs_cpp14'],
     'a two-repo fix carries its declared merge order')
+
+  // The multi-repo path, genuinely exercised: reconcileFix can only compute
+  // git facts for ONE repo (run.projectDir, which resolves to ocs_cpp14
+  // here) — billing_cpp14 is a repo it has no way to check. It must survive
+  // reconciliation as the agent's self-report (same trust boundary already
+  // applied to `pr`, which no git command can produce either), while the ONE
+  // repo the runner CAN verify is overwritten with git's own facts, never
+  // the agent's claim of ['2222222']. Without this, `repos` collapses to the
+  // one computed entry, `merge_order` above would name a repo not present in
+  // `fix.repos`, and this scenario stops testing the multi-repo path its own
+  // comment claims.
+  assert.equal(bundle.fix.repos.length, 2,
+    'both repos survive: the one git computed, and the one only the agent could report')
+  assert.deepEqual(bundle.fix.repos.map(r => r.repo).sort(),
+    ['alepolab/billing_cpp14', 'alepolab/ocs_cpp14'])
+  const billingEntry = bundle.fix.repos.find(r => r.repo === 'alepolab/billing_cpp14')
+  const ocsEntry = bundle.fix.repos.find(r => r.repo === 'alepolab/ocs_cpp14')
+  assert.deepEqual(billingEntry.commits, ['1111111'],
+    'a repo git cannot verify from this run\'s projectDir survives as the agent\'s self-report')
+  assert.deepEqual(ocsEntry.commits, expectedCommits,
+    'the repo git CAN verify is git\'s own commit list, never the agent\'s claim of ["2222222"]')
   console.log('  ok  scenario 2: money path with a real adversarial report validates')
 }
 

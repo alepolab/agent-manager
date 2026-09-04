@@ -39,6 +39,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     status: 'running',
     autoRun: input.autoRun,
     initialPrompt: input.initialPrompt,
+    watch: input.watch,
     projectDir: input.projectDir,
     steps: input.steps.map(s => ({
       stepId: s.stepId, label: s.label, agentSlug: s.agentSlug,

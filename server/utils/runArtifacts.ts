@@ -1,7 +1,6 @@
-import { mkdir, writeFile, readFile } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_MODEL_ALIAS } from './models.ts'
 import { computeFixFacts } from './gitFacts.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
@@ -63,13 +62,22 @@ const safe = (s: string) =>
  * every step that DID report agrees, that's the value; if they differ, the
  * distinct values join with '+' — the bundle schema types `model` as a
  * free-form string, so a joined value is valid, and honest where a single
- * arbitrary pick would not be. Before any step has run (initRunArtifacts's
- * seed), or if none has reported yet, DEFAULT_MODEL_ALIAS stands in;
- * finalize corrects it once real values exist.
+ * arbitrary pick would not be.
+ *
+ * Returns `undefined` — never a fallback default — when NOT ONE step has
+ * reported a model yet: before any step has run (initRunArtifacts's seed),
+ * or when every step that ran either used a stub caller that never returned
+ * one (tests) or threw before returning (executeNode's catch branch records
+ * no model). A fallback here used to invent DEFAULT_MODEL_ALIAS in exactly
+ * that case — a run whose every step threw would still write `model:
+ * "sonnet"` as if it were fact. `runnerOwned`'s callers rely on
+ * JSON.stringify dropping an `undefined`-valued key: the field is genuinely
+ * absent from meta.json, the same way an uncomputable `fix.*` key is,
+ * rather than defaulted.
  */
-function modelsUsed(run: WorkflowRun): string {
+function modelsUsed(run: WorkflowRun): string | undefined {
   const reported = [...new Set(run.steps.map(s => s.model).filter((m): m is string => Boolean(m)))]
-  return reported.length ? reported.join('+') : DEFAULT_MODEL_ALIAS
+  return reported.length ? reported.join('+') : undefined
 }
 
 /**
@@ -99,6 +107,10 @@ function runnerOwned(run: WorkflowRun) {
   const ended = run.endedAt ?? Date.now()
   return {
     identity: run.workflowSlug,
+    // The runner's own fact for what dispatched this run — set once at
+    // startRun and carried on the run record ever since (never inferred
+    // from, or trusted from, an agent's self-report), same as identity.
+    watch: run.watch,
     model: modelsUsed(run),
     cost: {
       ...tokenTotals(run),
@@ -112,9 +124,24 @@ function runnerOwned(run: WorkflowRun) {
  * Re-asserts `fix.repos` / `files_changed` / `lines_changed` from git over
  * whatever an agent merged into meta.json — the same "the runner's facts
  * win" rule `runnerOwned` already applies to identity/model/cost. Every
- * other `fix.*` key an agent owns (`merge_order`, `test_dirs_unlocked`,
- * `unlock_reason`, and a matching repo entry's `pr`, which no git command
- * can produce) survives untouched.
+ * other `fix.*` key an agent owns (`test_dirs_unlocked`, `unlock_reason`,
+ * and a matching repo entry's `pr`, which no git command can produce)
+ * survives untouched.
+ *
+ * `computeFixFacts` can only prove ONE repo — the one at `run.projectDir`.
+ * A multi-repo fix's OTHER repos are outside anything git can check from
+ * here, so — the same trust boundary already applied to `pr` — they survive
+ * as the agent's self-report rather than being dropped (fabrication by
+ * omission of a real repo) or fabricated (inventing commits for a repo this
+ * function never looked at). Only the ONE entry the runner can verify is
+ * ever overwritten; every other entry passes through byte-for-byte.
+ *
+ * `merge_order` is kept only when it is still coherent with the resulting
+ * `repos`: more than one repo present, and every name it lists among them.
+ * Letting it survive unchecked — e.g. after a single-repo collapse, or
+ * naming a repo the agent's own report never listed — would leave the
+ * bundle internally incoherent while still validating, since the schema's
+ * multi-repo rule only fires at `repos.length > 1`.
  *
  * When `computeFixFacts` returns null — not a git repo, no commits, a
  * detached HEAD, see that function's doc comment — the three computed keys
@@ -130,7 +157,7 @@ async function reconcileFix(
   const existingFix = (existing.fix && typeof existing.fix === 'object' && !Array.isArray(existing.fix))
     ? existing.fix as Record<string, unknown>
     : undefined
-  const { repos: _repos, files_changed: _fc, lines_changed: _lc, ...restFix } = existingFix ?? {}
+  const { repos: _repos, files_changed: _fc, lines_changed: _lc, merge_order: _mo, ...restFix } = existingFix ?? {}
 
   const computed = await computeFixFacts(run.projectDir).catch(() => null)
 
@@ -141,7 +168,28 @@ async function reconcileFix(
     // `pr` is not something git can prove; carry it forward only when the
     // agent's self-report names the SAME repo git computed.
     if (priorEntry && typeof priorEntry.pr === 'string') repoEntry.pr = priorEntry.pr
-    return { ...restFix, repos: [repoEntry], files_changed: computed.files_changed, lines_changed: computed.lines_changed }
+
+    // Every OTHER repo the agent reported (not the one git just computed)
+    // is outside what this run's projectDir can verify — kept as-is rather
+    // than discarded, the same way a matching entry's `pr` already is.
+    const otherRepos = priorRepos.filter(r => !(r && r.repo === computed.repo))
+    const repos = [...otherRepos, repoEntry]
+
+    const repoNames = new Set(repos.map(r => r.repo))
+    const priorMergeOrder = Array.isArray(existingFix?.merge_order)
+      ? existingFix!.merge_order as unknown[]
+      : undefined
+    const mergeOrderCoherent = repos.length > 1
+      && priorMergeOrder !== undefined
+      && priorMergeOrder.every(name => typeof name === 'string' && repoNames.has(name))
+
+    return {
+      ...restFix,
+      ...(mergeOrderCoherent ? { merge_order: priorMergeOrder } : {}),
+      repos,
+      files_changed: computed.files_changed,
+      lines_changed: computed.lines_changed,
+    }
   }
 
   // Nothing computable. If the agent wrote nothing at all either, leave
@@ -157,11 +205,22 @@ export async function initRunArtifacts(run: WorkflowRun, workflowName: string): 
     JSON.stringify({ ...runnerOwned(run), workflow: workflowName }, null, 2))
 }
 
-export async function writeStepArtifact(run: WorkflowRun, rec: RunStep, index: number): Promise<void> {
+/**
+ * `suffix` distinguishes a RETRY attempt's own snapshot from the step's
+ * final artifact — both share the same `index`/`agentSlug`, so writing them
+ * to the same filename would let the eventual completed (or failed) write
+ * silently overwrite the retried attempt, losing exactly the deficient
+ * output and the monitor's note a reviewer most needs to see. Omitted for
+ * the step's real, final artifact (unchanged filename, so every existing
+ * caller and the assembler's contract are untouched).
+ */
+export async function writeStepArtifact(
+  run: WorkflowRun, rec: RunStep, index: number, suffix?: string,
+): Promise<void> {
   const dir = join(runArtifactsDir(run.id), 'steps')
   await mkdir(dir, { recursive: true })
   const n = String(index + 1).padStart(2, '0')
-  const name = `step-${n}-${safe(rec.agentSlug.replace(/^sdlc-/, ''))}.json`
+  const name = `step-${n}-${safe(rec.agentSlug.replace(/^sdlc-/, ''))}${suffix ? `-${safe(suffix)}` : ''}.json`
   await writeFile(join(dir, name), JSON.stringify({
     stepId: rec.stepId,
     agentSlug: rec.agentSlug,
@@ -169,6 +228,7 @@ export async function writeStepArtifact(run: WorkflowRun, rec: RunStep, index: n
     status: rec.status,
     error: rec.error ?? null,
     monitorVerdict: rec.monitorVerdict ?? null,
+    monitorNote: rec.monitorNote ?? null,
     startedAt: rec.startedAt ?? null,
     completedAt: rec.completedAt ?? null,
     input: rec.input ?? '',
@@ -201,6 +261,26 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   else merged.fix = fix
 
   await writeFile(path, JSON.stringify(merged, null, 2))
+}
+
+/**
+ * Best-effort last resort for when `finalizeRunArtifacts` itself fails (a
+ * bug in reconciliation, a filesystem error) — called from
+ * workflowRunner.ts's `publish()`, which used to swallow that failure
+ * silently. At that point meta.json still holds whatever the LAST
+ * successful write left there: `initRunArtifacts`'s seed, plus anything an
+ * agent merged in directly during the run — which can include the agent's
+ * raw, unreconciled `fix.repos` / `commits` / `files_changed` /
+ * `lines_changed` self-report. Left in place, that looks like ordinary,
+ * trustworthy meta.json to engineering/scripts/assemble-bundle.mjs, which
+ * has no way to know reconciliation never ran. Removing meta.json makes the
+ * absence explicit: the assembler's `readJsonIfExists` returns `undefined`,
+ * every meta-derived required key is then missing, and the bundle is
+ * rejected loudly instead of assembled from unreconciled, possibly
+ * fabricated data.
+ */
+export async function markArtifactsUnusable(runId: string): Promise<void> {
+  await rm(join(runArtifactsDir(runId), 'meta.json'), { force: true })
 }
 
 /** Prepended to every step's input. The only channel an agent has for

@@ -10,6 +10,7 @@ import { createRun, getRun, saveRun } from './workflowRunStore.ts'
 import { callAgent, type AgentUsage } from './agentCaller.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
+  markArtifactsUnusable,
 } from './runArtifacts.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 
@@ -50,6 +51,11 @@ interface WorkflowLike {
 export interface StartRunOpts {
   workflow: WorkflowLike
   initialPrompt: string
+  /** See WorkflowRun.watch (shared/types/run.ts) — the id of the watch that
+   *  dispatched this run, or 'direct-invocation' for a manually-started
+   *  one. Threaded straight to createRun; no default here, since a silent
+   *  default is exactly the kind of guess this field exists to rule out. */
+  watch: string
   autoRun: boolean
   projectDir?: string
 }
@@ -98,7 +104,20 @@ async function publish(run: WorkflowRun) {
     // Placed AFTER saveRun so a failure to write artifacts can never cost us
     // the run record itself.
     if (TERMINAL_STATUSES.includes(run.status)) {
-      try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
+      try {
+        await finalizeRunArtifacts(run)
+      } catch (err) {
+        // NOT best-effort-and-silent: finalizeRunArtifacts is the only place
+        // the runner's own facts (identity/model/cost/fix) are re-asserted
+        // over whatever an agent merged into meta.json. A swallowed failure
+        // here used to leave the agent's raw, unreconciled self-report in
+        // place, looking exactly like trustworthy evidence to the assembler.
+        // Logged so the failure is visible, and meta.json is removed so the
+        // assembler sees an absent run — required keys missing, loudly
+        // rejected — rather than silently assembling from unreconciled data.
+        console.error(`[workflowRunner] finalizeRunArtifacts failed for run ${run.id}:`, err)
+        try { await markArtifactsUnusable(run.id) } catch { /* nothing further we can do */ }
+      }
     }
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
@@ -347,6 +366,16 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         return false
       }
       if (verdict === 'RETRY' && canRevisit(l.graph, l.state, id)) {
+        // Record the attempt before wiping it: this exact output and
+        // monitorNote are about to be overwritten in-memory by the retry
+        // that's coming (rec is reused across visits, and the eventual
+        // final writeStepArtifact call shares this same step's filename).
+        // Without a snapshot here, a reviewer sees cost.attempts > 1 and
+        // only the LAST attempt's file — the deficient output and the
+        // monitor's note that triggered the retry are simply gone.
+        try {
+          await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`)
+        } catch { /* best effort */ }
         l.retryFeedback[id] = review
         l.state.status[id] = 'completed'
         armNode(l.state, id)
@@ -447,6 +476,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     workflowName: opts.workflow.name,
     autoRun: opts.autoRun,
     initialPrompt: opts.initialPrompt,
+    watch: opts.watch,
     projectDir: opts.projectDir,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })

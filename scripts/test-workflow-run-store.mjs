@@ -20,7 +20,7 @@ const sampleSteps = [
 
 // ── 1. A new run starts pending, owned by this process ────────────────────
 const run = await store.createRun({
-  workflowSlug: 'demo', workflowName: 'Demo', autoRun: false,
+  workflowSlug: 'demo', workflowName: 'Demo', autoRun: false, watch: 'direct-invocation',
   initialPrompt: 'do the thing', steps: sampleSteps,
 })
 assert.ok(run.id, 'run gets an id')
@@ -63,7 +63,7 @@ assert.equal(done.status, 'completed', 'a completed run stays completed regardle
 
 // ── 6. Listing is newest first and filters by workflow ────────────────────
 const other = await store.createRun({
-  workflowSlug: 'other', workflowName: 'Other', autoRun: true,
+  workflowSlug: 'other', workflowName: 'Other', autoRun: true, watch: 'direct-invocation',
   initialPrompt: 'x', steps: sampleSteps,
 })
 const all = await store.listRuns()

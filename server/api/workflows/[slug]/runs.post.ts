@@ -29,6 +29,9 @@ export default defineEventHandler(async (event) => {
   const run = await startRun({
     workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
     initialPrompt: body.initialPrompt,
+    // This route is the manual/API start path, never a watch dispatch — the
+    // reserved literal is the honest answer to "what triggered this?".
+    watch: 'direct-invocation',
     autoRun: body.autoRun === true,
     projectDir: body.projectDir,
   })

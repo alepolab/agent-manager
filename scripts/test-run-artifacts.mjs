@@ -37,7 +37,7 @@ function makeProjectRepo() {
 }
 
 const run = {
-  id: 'run-1', workflowSlug: 'runbook-a', status: 'running',
+  id: 'run-1', workflowSlug: 'runbook-a', status: 'running', watch: 'direct-invocation',
   initialPrompt: 'fix SA-1', startedAt: Date.now(), currentStepIds: [], nextStepIds: [],
   steps: [{ stepId: 's1', agentSlug: 'sdlc-ticket-intake', label: 'Ticket Intake', status: 'pending' }],
 }
@@ -50,7 +50,12 @@ assert.ok(dir.startsWith(process.env.AGENT_RUNS_DIR),
   'the artifacts directory lives under AGENT_RUNS_DIR, not CLAUDE_DIR')
 const seeded = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
 assert.equal(seeded.identity, 'runbook-a')
-assert.ok('model' in seeded, 'model is seeded')
+assert.equal(seeded.watch, 'direct-invocation', 'watch is seeded from the run\'s own record')
+// No step has run yet, so no step has reported a model — the key must be
+// genuinely ABSENT, never a fallback default (the old DEFAULT_MODEL_ALIAS
+// behaviour this whole fix removes). A run whose every step later throws
+// would otherwise write a fabricated model as if it were fact.
+assert.ok(!('model' in seeded), 'model is absent until a step reports one — never a fallback default')
 assert.equal(seeded.cost.input_tokens, 0,
   'token counts start at 0 — no step has reported real usage yet')
 assert.ok(!('ticket' in seeded), 'the runner does not claim agent-owned fields')
@@ -81,6 +86,8 @@ writeFileSync(join(dir, 'meta.json'), JSON.stringify({
   ...JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')),
   ticket: 'SA-1203', product: 'ocs_cpp14',
   identity: 'i-promoted-myself',
+  watch: 'sa-bugs', // an agent claiming a watch dispatched this run at all
+  model: 'agent-picked-a-fancy-model',
   cost: { input_tokens: 999999, output_tokens: 999999, attempts: 1, wall_clock_min: 0 },
 }))
 run.endedAt = run.startedAt + 120000
@@ -88,7 +95,23 @@ await A.finalizeRunArtifacts(run)
 const final = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
 assert.equal(final.ticket, 'SA-1203', 'agent-owned keys survive')
 assert.equal(final.identity, 'runbook-a', 'runner-owned keys are re-asserted over the agent')
+assert.equal(final.watch, 'direct-invocation',
+  'watch is re-asserted from the run\'s own record — the agent cannot promote itself to watcher-dispatched')
+assert.ok(!('model' in final),
+  'model is asserted absent over the agent\'s claim — still no step has actually reported one')
 assert.equal(final.cost.wall_clock_min, 2, 'wall clock comes from the runner clock')
+
+// 3a-model. once a step DOES report a model, it wins — over both the
+// absence above and any poisoned agent self-report.
+run.steps[0].model = 'claude-sonnet-4-6'
+writeFileSync(join(dir, 'meta.json'), JSON.stringify({
+  ...JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')),
+  model: 'agent-still-lying',
+}))
+await A.finalizeRunArtifacts(run)
+const withModel = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+assert.equal(withModel.model, 'claude-sonnet-4-6',
+  'model is the real value a step reported, overriding the agent\'s self-report')
 
 // 3b. cost.input_tokens/output_tokens now come from a REAL sum across steps
 // with reported usage, not a hardcoded 0. run.steps holds only ONE step
@@ -200,6 +223,82 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   assert.equal(npMeta.fix.test_dirs_unlocked, false, 'unrelated agent-owned fix.* keys still survive')
 
   rmSync(projectDir, { recursive: true, force: true })
+}
+
+// 8. a multi-repo fix: computeFixFacts can only prove the ONE repo at
+// run.projectDir. The OTHER repo the agent reported must survive as its
+// self-report (git never looked at it), the computable one must still be
+// git-verified, and merge_order must stay coherent with the result —
+// dropped once it no longer names every repo actually present.
+{
+  const projectDir = makeProjectRepo()
+  const multiRun = {
+    id: 'run-multi', workflowSlug: 'runbook-a', status: 'running', projectDir,
+    initialPrompt: 'fix SA-1', startedAt: Date.now(), endedAt: Date.now() + 1000,
+    currentStepIds: [], nextStepIds: [],
+    steps: [{ stepId: 's1', agentSlug: 'sdlc-fix-implementer', label: 'Fix', status: 'completed' }],
+  }
+  const multiDir = A.runArtifactsDir(multiRun.id)
+  await A.initRunArtifacts(multiRun, 'Runbook A')
+  writeFileSync(join(multiDir, 'meta.json'), JSON.stringify({
+    ...JSON.parse(readFileSync(join(multiDir, 'meta.json'), 'utf8')),
+    fix: {
+      repos: [
+        { repo: 'alepolab/billing_cpp14', commits: ['1111111'], pr: 'https://example.invalid/pr/2' },
+        { repo: 'alepolab/ocs_cpp14', commits: ['0000000'], pr: 'https://example.invalid/pr/9' },
+      ],
+      merge_order: ['alepolab/billing_cpp14', 'alepolab/ocs_cpp14'],
+      files_changed: 1, lines_changed: 1, test_dirs_unlocked: false, unlock_reason: null,
+    },
+  }))
+  await A.finalizeRunArtifacts(multiRun)
+  const multiMeta = JSON.parse(readFileSync(join(multiDir, 'meta.json'), 'utf8'))
+  assert.equal(multiMeta.fix.repos.length, 2, 'both repos survive — none silently dropped')
+  const billing = multiMeta.fix.repos.find(r => r.repo === 'alepolab/billing_cpp14')
+  const ocs = multiMeta.fix.repos.find(r => r.repo === 'alepolab/ocs_cpp14')
+  assert.deepEqual(billing.commits, ['1111111'],
+    'a repo git cannot verify from this projectDir survives as the agent\'s self-report')
+  assert.notDeepEqual(ocs.commits, ['0000000'],
+    'the repo git CAN verify is git-computed, never the agent\'s claim')
+  assert.deepEqual(multiMeta.fix.merge_order, ['alepolab/billing_cpp14', 'alepolab/ocs_cpp14'],
+    'merge_order survives because both names it lists are still present in fix.repos')
+
+  // Now the agent's merge_order names a repo that isn't (and never was) in
+  // its own reported repos — an incoherent claim from the start, not
+  // something reconciliation introduced. It must not survive either.
+  writeFileSync(join(multiDir, 'meta.json'), JSON.stringify({
+    ...JSON.parse(readFileSync(join(multiDir, 'meta.json'), 'utf8')),
+    fix: {
+      repos: [{ repo: 'alepolab/ocs_cpp14', commits: ['0000000'], pr: 'https://example.invalid/pr/9' }],
+      merge_order: ['alepolab/billing_cpp14', 'alepolab/ocs_cpp14'],
+      files_changed: 1, lines_changed: 1, test_dirs_unlocked: false, unlock_reason: null,
+    },
+  }))
+  await A.finalizeRunArtifacts(multiRun)
+  const collapsed = JSON.parse(readFileSync(join(multiDir, 'meta.json'), 'utf8'))
+  assert.equal(collapsed.fix.repos.length, 1, 'only the one computable repo is present')
+  assert.ok(!('merge_order' in collapsed.fix),
+    'merge_order naming a repo absent from fix.repos does not survive — it would make the bundle incoherent')
+
+  rmSync(projectDir, { recursive: true, force: true })
+}
+
+// 9. when finalize itself cannot be trusted (a bug, a filesystem error), the
+// caller (workflowRunner.ts) marks the artifacts unusable rather than
+// leaving an agent's unreconciled self-report sitting in meta.json looking
+// like ordinary evidence. markArtifactsUnusable is the mechanism: it must
+// remove meta.json so the assembler sees an absent run, not a good one.
+{
+  const unusableRun = {
+    id: 'run-unusable', workflowSlug: 'runbook-a', status: 'running', watch: 'direct-invocation',
+    initialPrompt: 'fix SA-1', startedAt: Date.now(), currentStepIds: [], nextStepIds: [], steps: [],
+  }
+  const unusableDir = A.runArtifactsDir(unusableRun.id)
+  await A.initRunArtifacts(unusableRun, 'Runbook A')
+  assert.ok(existsSync(join(unusableDir, 'meta.json')), 'meta.json exists before marking unusable')
+  await A.markArtifactsUnusable(unusableRun.id)
+  assert.ok(!existsSync(join(unusableDir, 'meta.json')),
+    'meta.json is removed — the assembler must see an absent run, not fabricated evidence')
 }
 
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
