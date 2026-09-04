@@ -1,6 +1,6 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
@@ -315,6 +315,21 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   try {
     const raw = await agentCaller(step.agentSlug, input, run.projectDir)
     const { output, model } = normalizeAgentResult(raw)
+
+    // A halt is a failure the agent raised deliberately. Checked before the
+    // monitor and before the output is published downstream: a step that says
+    // it could not proceed has produced no result worth propagating, and
+    // running a monitor over a halt would only invite it to vote CONTINUE.
+    const halt = parseHalt(output)
+    if (halt) {
+      markFailed(l.state, id)
+      Object.assign(rec, {
+        status: 'failed', output, error: `Step halted: ${halt}`, completedAt: Date.now(),
+      })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return false
+    }
+
     l.outputs[id] = output
     Object.assign(rec, { status: 'completed', output, model, completedAt: Date.now() })
 

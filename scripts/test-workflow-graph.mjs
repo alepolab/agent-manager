@@ -16,6 +16,7 @@ import {
   canRevisit,
   joinInputs,
   parseVerdict,
+  parseHalt,
   edgeKey,
   MAX_CONCURRENCY,
   ancestorsOf,
@@ -235,6 +236,20 @@ assert.equal(joinInputs([]), '')
     { id: 'q', agentSlug: 'x', label: 'Q', next: ['p'] },
   ])
   assert.deepEqual(ancestorsOf(cyclic, 'q'), ['p'], 'cycle terminates')
+}
+
+// parseHalt: a step's structured way of stopping the run
+{
+  assert.equal(parseHalt('all good'), null, 'ordinary output does not halt')
+  assert.equal(parseHalt('tried everything\nPIPELINE-HALT: stack would not come up'),
+    'stack would not come up')
+  assert.equal(parseHalt('PIPELINE-HALT: first\nPIPELINE-HALT: second'), 'second',
+    'the last marker wins, matching parseVerdict')
+  assert.equal(parseHalt('the agent may mention PIPELINE-HALT: mid-sentence in prose'), null,
+    'the marker must start its own line — prose about it is not a halt')
+  assert.equal(parseHalt(''), null)
+  assert.equal(parseHalt(undefined), null, 'unreadable output does not halt')
+  assert.equal(parseHalt('PIPELINE-HALT:   '), null, 'a marker with no reason is not a halt')
 }
 
 console.log('workflowGraph: all checks passed')

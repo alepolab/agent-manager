@@ -441,5 +441,22 @@ assert.ok(cStart < bEnd,
   assert.equal(meta.model, 'opus+haiku', 'a mixed-model run joins the distinct values, not a single pick')
 }
 
+// PIPELINE-HALT stops the run exactly as a throw does.
+{
+  runner.setAgentCaller(async (agentSlug) => {
+    if (agentSlug === 'agent-b') return 'could not reach the database\nPIPELINE-HALT: stack unavailable'
+    return `output of ${agentSlug}`
+  })
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  assert.equal(r.status, 'failed', 'a halted step fails the run')
+  const b = r.steps.find(s => s.stepId === 'b')
+  assert.equal(b.status, 'failed', 'the halting step is failed, not completed')
+  assert.match(b.error, /stack unavailable/, 'the reason is preserved in the step error')
+  assert.ok(b.output.includes('PIPELINE-HALT'), 'the output is kept for the record')
+  assert.equal(r.steps.find(s => s.stepId === 'd').status, 'skipped',
+    'downstream steps are skipped, not left pending in a dead run')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

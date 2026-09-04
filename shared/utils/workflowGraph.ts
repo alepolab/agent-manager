@@ -276,6 +276,21 @@ export function parseVerdict(text: string): MonitorVerdict {
   return last ? (last[1]!.toUpperCase() as MonitorVerdict) : 'CONTINUE'
 }
 
+/**
+ * A step's structured way of stopping the run.
+ *
+ * Deliberately anchored to the start of a line (`^`, multiline): an agent
+ * discussing the marker in prose must not halt the pipeline. Deliberately
+ * requires a non-empty reason: "something went wrong" with no reason is a
+ * halt nobody can act on, and the safer reading of a bare marker is that it
+ * was quoted rather than raised. Last match wins, matching parseVerdict.
+ */
+export function parseHalt(text: string | undefined | null): string | null {
+  const matches = [...(text ?? '').matchAll(/^PIPELINE-HALT:[^\S\n]*(\S.*)$/gm)]
+  const last = matches[matches.length - 1]
+  return last ? last[1]!.trim() : null
+}
+
 const CLIP = 4000
 const clip = (text: string): string =>
   text.length > CLIP ? `${text.slice(0, CLIP)}\n...[truncated]` : text
