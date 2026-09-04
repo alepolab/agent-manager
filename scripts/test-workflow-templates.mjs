@@ -5,6 +5,7 @@
  *   node scripts/test-workflow-templates.mjs
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { materializeTemplateSteps, workflowTemplates as WORKFLOW_TEMPLATES } from '../app/utils/workflowTemplates.ts'
 import { agentTemplates as AGENT_TEMPLATES } from '../app/utils/templates.ts'
 
@@ -189,6 +190,42 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
                     'sdlc-evidence-and-pr']) {
     assert.match(body(id), /PIPELINE-HALT/,
       `${id} must know how to stop the run rather than report failure downstream`)
+  }
+}
+
+// ── 9. Every closed enum's allowed values are taught, verbatim, in the
+//    prompt of the agent that writes that field. Values are read from the
+//    schema itself at test time, not copied a second time here — so when
+//    the schema gains or renames a value, this test goes red until the
+//    prompt catches up, instead of the two silently drifting apart. ──────
+{
+  const schemaPath = new URL('../engineering/schemas/evidence-bundle.v0.1.schema.json', import.meta.url)
+  const schema = JSON.parse(readFileSync(schemaPath, 'utf8'))
+  const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
+
+  const enumChecks = [
+    { field: 'work_type', values: schema.properties.work_type.enum, owners: ['sdlc-ticket-intake'] },
+    // class's enum includes `null` (meaning "not a bug") - that is a JSON
+    // value, not a word an agent writes into prose, so it is excluded here.
+    { field: 'class', values: schema.properties.class.enum.filter(v => v !== null), owners: ['sdlc-ticket-intake'] },
+    { field: 'blast_radius', values: schema.properties.blast_radius.enum, owners: ['sdlc-ticket-intake'] },
+    // Both oracle and oracle_after are $defs.oracle_run - the same closed
+    // enum applies to whichever step is filling in `kind` for that phase.
+    { field: 'oracle.kind / oracle_after.kind', values: schema.$defs.oracle_run.properties.kind.enum,
+      owners: ['sdlc-test-author', 'sdlc-verifier'] },
+  ]
+
+  for (const { field, values, owners } of enumChecks) {
+    assert.ok(Array.isArray(values) && values.length > 0,
+      `${field}: expected a non-empty schema enum - this check is meaningless against zero values`)
+    for (const owner of owners) {
+      const text = body(owner)
+      for (const value of values) {
+        assert.ok(text.includes(value),
+          `${owner}'s prompt must name the literal ${field} value "${value}" verbatim - ` +
+          `an agent that has never seen the word can't write it, and the schema rejects anything else`)
+      }
+    }
   }
 }
 

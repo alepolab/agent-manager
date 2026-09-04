@@ -263,7 +263,13 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast_radius\` and \`plugin_version\` into \`meta.json\` in that same directory. \`plugin_version\` is the installed version of the \`alepo-engineering\` plugin in this repository — read it from that plugin's own \`.claude-plugin/plugin.json\`. Report \`unknown\` only if the plugin genuinely is not installed here; never guess a version number. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast_radius\` and \`plugin_version\` into \`meta.json\` in that same directory. Three of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+
+- \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
+- \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
+- \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`.
+
+\`plugin_version\` is the installed version of the \`alepo-engineering\` plugin in this repository — read it from that plugin's own \`.claude-plugin/plugin.json\`. Report \`unknown\` only if the plugin genuinely is not installed here; never guess a version number. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
 
 ## Stopping
 
@@ -313,7 +319,13 @@ State: which profiles you brought up, the exact commands, how you confirmed heal
 
 ## Artifacts
 
-Merge a \`stack\` key into \`meta.json\` in the run artifacts directory named at the top of your input, recording the compose profile, the topology, and the Liquibase tag (or \`null\` if none applied). \`meta.json\` already exists — read it, merge \`stack\` into the object, and write the whole object back. Never overwrite it.
+Merge a \`stack\` key into \`meta.json\` in the run artifacts directory named at the top of your input. \`stack\` is an object with exactly these keys — the schema rejects any other key on it:
+
+- \`profile\` (string, required) — the compose profile you brought up (e.g. \`ocs\`).
+- \`topology\` (string, required) — the shape you stood up (e.g. \`single\`, \`two-node\`).
+- \`liquibase_tag\` (string, or \`null\` if no Liquibase migration applied) — optional, but always include the key, even as \`null\`.
+
+\`meta.json\` already exists — read it, merge \`stack\` into the object, and write the whole object back. Never overwrite it.
 
 ## Stopping
 
@@ -355,7 +367,7 @@ Find the project's existing test framework and follow it exactly — its directo
 
 Run the test against the current, unfixed code and capture the output **verbatim**. That FAIL output is evidence in the final bundle, not a formality — quote it, do not summarise it. If the test passes on unfixed code, you have not reproduced the bug: say so plainly and stop, rather than weakening the test until it goes red.
 
-A single run is not evidence. **Run the oracle three times** and record all three — the bundle is rejected at \`oracle.runs\` if you do not, because one run cannot distinguish a real reproduction from a flake. And this oracle must **FAIL**: a pre-fix oracle that passes means you reproduced nothing, not that the bug is mild.
+A single run is not evidence. **Run the oracle three times** and record all three — the bundle is rejected at \`oracle.runs\` if you do not, because one run cannot distinguish a real reproduction from a flake. And this oracle must **FAIL**: the assembler derives \`oracle.verdict\` from the xunit file itself, and the bundle validator hard-rejects anything but \`oracle.verdict: FAIL\` here — a pre-fix oracle that passes means you reproduced nothing, not that the bug is mild.
 
 ## Report
 
@@ -365,7 +377,7 @@ State: the test file path (later steps must not edit it), the exact run command,
 
 Write the pre-fix run to \`oracle-before.xml\` in the run artifacts directory named at the top of your input, in JUnit xunit format (\`<testsuite tests="" failures="" errors="" skipped="">\`) — the assembler reads exactly this filename and parses it as xunit to derive the FAIL verdict itself; a summary in prose does not substitute for it.
 
-Then merge an \`oracle\` key into \`meta.json\` in that same directory with \`kind\`, \`path\`, \`runs\` (3, from the three runs above) and \`rows\` (how many parameterised cases). \`meta.json\` already exists — read it, merge \`oracle\` into the object, and write the whole object back. Never overwrite it.
+Then merge an \`oracle\` key into \`meta.json\` in that same directory with \`kind\`, \`path\`, \`runs\` (3, from the three runs above) and \`rows\` (how many parameterised cases). Do not set \`verdict\` yourself — the assembler derives it from \`oracle-before.xml\`. \`kind\` is a closed enum; use exactly one of: \`parameterised_test\`, \`acceptance_tests\`, \`verification_check\`, \`doc_build\`, \`reproduction\` (this is almost always \`parameterised_test\`, given the table-driven test this step produces). \`meta.json\` already exists — read it, merge \`oracle\` into the object, and write the whole object back. Never overwrite it.
 
 ## Stopping
 
@@ -420,7 +432,16 @@ State: the root cause in one or two sentences naming the file and line, what you
 
 Write \`plan.md\` into the run artifacts directory named at the top of your input — the diagnosis, the hypotheses eliminated, and the plan you actually followed.
 
-Then merge a \`fix\` key into \`meta.json\` in that same directory, with \`repos\` (an array of \`{ repo, commits, pr }\` — \`pr\` may be \`null\` this early), \`files_changed\`, \`lines_changed\`, \`test_dirs_unlocked\`, and \`unlock_reason\` (only when you unlocked a test directory the fix step is normally barred from). If the fix touches more than one repo, also include \`merge_order\` naming the repos in the order they must land — omit it entirely for a single-repo fix. \`meta.json\` already exists — read it, merge \`fix\` into the object, and write the whole object back. Never overwrite it.
+Then merge a \`fix\` key into \`meta.json\` in that same directory. \`fix\` is an object with exactly these keys — the schema rejects any other key on it:
+
+- \`repos\` (array, required, at least one entry) — one \`{ repo, commits, pr }\` per repository touched. \`repo\` is \`org/name\`. \`commits\` is an array of at least one commit sha (short shas are fine, at least 7 characters). \`pr\` is a **required, non-null string URI** — the schema does not allow \`null\` here, so do not write one. You will not have a real PR link yet at this point in the pipeline: write the exact literal placeholder \`https://example.invalid/pending\` for now. The evidence-and-pr step overwrites it with the real PR URL once it opens the PR, immediately before it assembles the bundle — the bundle that finally gets validated must never carry the placeholder.
+- \`files_changed\` (integer, required) — count of files your fix touched.
+- \`lines_changed\` (integer, required) — total lines changed across those files.
+- \`test_dirs_unlocked\` (boolean, required) — \`true\` only if you unlocked a test directory the fix step is normally barred from.
+- \`unlock_reason\` (string, required and non-empty whenever \`test_dirs_unlocked\` is \`true\`; omit or \`null\` otherwise) — why the unlock was necessary.
+- \`merge_order\` (array of repo names, required only when \`repos\` has more than one entry — omit it entirely for a single-repo fix) — the order the repos must land in.
+
+\`meta.json\` already exists — read it, merge \`fix\` into the object, and write the whole object back. Never overwrite it.
 
 ## Stopping
 
@@ -483,10 +504,15 @@ State, for each of the three runs above: the command, the exit code, the counts,
 
 Write two files into the run artifacts directory named at the top of your input, both in JUnit xunit format:
 
-- \`oracle-after.xml\` — three runs of the parameterised test, and every one must **PASS**. The assembler parses this file itself to derive the verdict; do not report PASS in prose without it.
+- \`oracle-after.xml\` — three runs of the parameterised test, and every one must **PASS**. The assembler derives \`oracle_after.verdict\` from this file itself, and the bundle validator hard-rejects anything but \`oracle_after.verdict: PASS\` here — do not report PASS in prose without the file backing it.
 - \`regression.xml\` — the repo's existing test suite run.
 
-Then merge \`oracle_after\` (\`kind\`, \`path\`, \`runs\`: 3, \`rows\`), \`regression\` (\`suite\`), and \`adversarial\` (the object above, or \`null\`) into \`meta.json\` in that same directory. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
+Then merge \`oracle_after\`, \`regression\`, and \`adversarial\` (the object above, or \`null\`) into \`meta.json\` in that same directory:
+
+- \`oracle_after\` — \`kind\`, \`path\`, \`runs\` (3), \`rows\`. Do not set \`verdict\` yourself — the assembler derives it from \`oracle-after.xml\`. \`kind\` is the same closed enum as the pre-fix oracle: exactly one of \`parameterised_test\`, \`acceptance_tests\`, \`verification_check\`, \`doc_build\`, \`reproduction\` — use whatever the test-authoring step used, since it's the same oracle run again.
+- \`regression\` — \`suite\` (string, required — the name of the suite you ran). Do not set \`passed\`/\`failed\` yourself — the assembler derives them from \`regression.xml\`.
+
+\`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
 
 ## Stopping
 
@@ -619,6 +645,8 @@ State: the branch name, the commit SHA, the PR URL, and confirmation the bundle'
 ## Artifacts
 
 Write \`summary.md\` into the run artifacts directory named at the top of your input, under 40 lines: what was wrong, what changed, what proves it, the blast-radius label, the deployment truths you considered, and the cost. This is the assembler's \`summary_md\` field verbatim — write the real thing, not a placeholder.
+
+Before assembling: read \`meta.json\`'s \`fix.repos\`, and for every entry whose \`pr\` is still the fix-implementer step's \`https://example.invalid/pending\` placeholder, overwrite it with the real PR URL you just opened for that repo, then write \`meta.json\` back. The bundle that gets assembled and validated must never carry that placeholder — it is a required, non-null field, and a placeholder left in place is a PR link the bundle claims exists and does not. If \`gh\` was not authenticated and no PR exists yet, do not assemble the bundle at all: stop per "## Stopping" below instead of validating a bundle that would carry a fake PR link.
 
 Then assemble the bundle and report its real output — do not paraphrase it:
 
