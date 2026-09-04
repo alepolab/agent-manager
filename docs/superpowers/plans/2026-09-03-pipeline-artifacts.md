@@ -29,12 +29,12 @@
   ```
   Plus, for Task 5, `node engineering/scripts/test-assemble-bundle.mjs` and `node engineering/scripts/test-validate-bundle.mjs`.
 - **Do not touch `server/utils/watchConfig.ts`, `server/plugins/watcher.ts`, or `app/pages/watches.vue`** — another change is in flight there.
-- **`npm run typecheck` is broken in this repo** (npx pairs vue-tsc 3.3.11 with typescript 7.0.2, which dropped `./lib/tsc`). Use the pinned copy:
+- **`npm run typecheck` is broken in this repo** — it shells out through `npx`, which resolves `typescript@7.0.2` (that release dropped `./lib/tsc`) instead of the repo's own pin. Use the installed copy directly, which pairs `vue-tsc@3.3.11` with the repo's `typescript@5.9.3`:
   ```bash
-  node .superpowers/sdd/*/tsc-check/node_modules/vue-tsc/bin/vue-tsc.js -b --noEmit
+  node node_modules/vue-tsc/bin/vue-tsc.js -b --noEmit
   ```
   One pre-existing error is the known baseline and is **not** yours to fix:
-  `scripts/test-workflow-graph.mjs(54,1): error TS1005: '=>' expected.`
+  `TS1005: '=>' expected.` in `scripts/test-workflow-graph.mjs` — around line 55, and its line number shifts as imports are added above it.
 - **Never fabricate evidence.** Anywhere this plan says a field or file may be missing, the correct behaviour is to leave it absent and let validation reject the bundle. A default that makes a bundle validate is worse than no bundle.
 - Default behaviour for every existing workflow must be unchanged. `contextMode` defaults to `'predecessors'`; a workflow with no artifacts directory configured still runs.
 
