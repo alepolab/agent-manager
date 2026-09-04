@@ -12,7 +12,8 @@
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "typecheck": "nuxt typecheck",
-    "test:e2e": "node e2e/workflow-run-panel.smoke.mjs"
+    "test:e2e": "node e2e/workflow-run-panel.smoke.mjs",
+    "e2e:libs": "mkdir -p \"$HOME/.cache/agent-manager-browser-libs\" && T=$(mktemp -d) && cd \"$T\" && apt-get download libnspr4 libnss3 libasound2t64 && for f in *.deb; do dpkg -x \"$f\" x; done && cp -r x/usr/lib/x86_64-linux-gnu/* \"$HOME/.cache/agent-manager-browser-libs/\" && rm -rf \"$T\" && echo 'browser libs extracted (no sudo needed)'"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",

@@ -21,13 +21,26 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { tmpdir, homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:net'
 import http from 'node:http'
 import { chromium } from 'playwright'
+
+// Chromium needs libnspr4, libnss3 and libasound, and this box does not have
+// them installed system-wide (installing them needs sudo, which a test must
+// never assume). `npm run e2e:libs` extracts the .deb payloads into this cache
+// directory without root; if that has been done, point the dynamic loader at
+// it. When the libraries ARE installed system-wide this is a no-op, so the
+// test works either way rather than being tied to one machine's setup.
+const LOCAL_BROWSER_LIBS = join(homedir(), '.cache', 'agent-manager-browser-libs')
+if (existsSync(LOCAL_BROWSER_LIBS)) {
+  process.env.LD_LIBRARY_PATH = process.env.LD_LIBRARY_PATH
+    ? `${LOCAL_BROWSER_LIBS}:${process.env.LD_LIBRARY_PATH}`
+    : LOCAL_BROWSER_LIBS
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(__dirname, '..')
