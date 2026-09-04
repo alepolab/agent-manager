@@ -324,7 +324,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     if (halt) {
       markFailed(l.state, id)
       Object.assign(rec, {
-        status: 'failed', output, error: `Step halted: ${halt}`, completedAt: Date.now(),
+        status: 'failed', output, model, error: `Step halted: ${halt}`, completedAt: Date.now(),
       })
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
       return false
@@ -337,7 +337,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir)
       if (verdict === 'ABORT') {
         markFailed(l.state, id)
-        Object.assign(rec, { status: 'failed', error: 'Monitor aborted the workflow' })
+        Object.assign(rec, { status: 'failed', model, error: 'Monitor aborted the workflow' })
         try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
         return false
       }

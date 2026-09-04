@@ -443,8 +443,11 @@ assert.ok(cStart < bEnd,
 
 // PIPELINE-HALT stops the run exactly as a throw does.
 {
+  const haltModel = 'opus'
   runner.setAgentCaller(async (agentSlug) => {
-    if (agentSlug === 'agent-b') return 'could not reach the database\nPIPELINE-HALT: stack unavailable'
+    if (agentSlug === 'agent-b') {
+      return { output: 'could not reach the database\nPIPELINE-HALT: stack unavailable', model: haltModel }
+    }
     return `output of ${agentSlug}`
   })
   const r = await runner.waitForSettled(
@@ -454,6 +457,8 @@ assert.ok(cStart < bEnd,
   assert.equal(b.status, 'failed', 'the halting step is failed, not completed')
   assert.match(b.error, /stack unavailable/, 'the reason is preserved in the step error')
   assert.ok(b.output.includes('PIPELINE-HALT'), 'the output is kept for the record')
+  assert.equal(b.model, haltModel,
+    'the model that actually ran is known and recorded even though the step halted')
   assert.equal(r.steps.find(s => s.stepId === 'd').status, 'skipped',
     'downstream steps are skipped, not left pending in a dead run')
 }
