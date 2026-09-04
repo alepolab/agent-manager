@@ -460,9 +460,24 @@ Capture output **verbatim**: the command, its exit code, and the pass/fail count
 
 If a test was already failing before the fix, say so explicitly and distinguish it from anything the fix broke. A pre-existing failure is context; a new one is a blocker.
 
+## Adversarial verification
+
+Check \`blast_radius\` in \`meta.json\`. If it is \`money\` or \`protocol\`, the bundle cannot validate without an \`adversarial\` report, and producing one is your job — verification is what this step does, and adversarial verification is a verification activity.
+
+Do the adversarial work for real: a two-node rerun to catch state that only breaks under more than one process, a pattern search for other call sites shaped like the one that broke, and — where the repo's tooling supports it — a mutation score. Then merge an \`adversarial\` object into \`meta.json\` with exactly these four keys (the schema's \`additionalProperties: false\` means no others are allowed):
+
+- \`report\` — string, what you did and what it found.
+- \`two_node_rerun\` — boolean, whether the two-node rerun passed.
+- \`pattern_search\` — string, what you searched for and what turned up.
+- \`mutation_score\` — number between 0 and 1, or \`null\` if the repo has no mutation tooling for this language.
+
+**A fabricated adversarial report is worse than an honest failure to produce one.** If you cannot actually perform this verification — no way to run two nodes, no way to search the pattern, whatever the reason — do not invent numbers or prose that looks like it. Stop instead: end your output with \`PIPELINE-HALT:\` and say exactly what you could not do. A money- or protocol-path change with a fake adversarial report is the single worst thing this pipeline could ship, worse than not shipping at all.
+
+For every other \`blast_radius\`, merge \`adversarial: null\` into \`meta.json\` explicitly — do not simply omit the key.
+
 ## Report
 
-State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before.
+State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before. If \`blast_radius\` required adversarial verification, report what you did for that too.
 
 ## Artifacts
 
@@ -471,7 +486,7 @@ Write two files into the run artifacts directory named at the top of your input,
 - \`oracle-after.xml\` — three runs of the parameterised test, and every one must **PASS**. The assembler parses this file itself to derive the verdict; do not report PASS in prose without it.
 - \`regression.xml\` — the repo's existing test suite run.
 
-Then merge \`oracle_after\` (\`kind\`, \`path\`, \`runs\`: 3, \`rows\`) and \`regression\` (\`suite\`) into \`meta.json\` in that same directory. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
+Then merge \`oracle_after\` (\`kind\`, \`path\`, \`runs\`: 3, \`rows\`), \`regression\` (\`suite\`), and \`adversarial\` (the object above, or \`null\`) into \`meta.json\` in that same directory. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
 
 ## Stopping
 
