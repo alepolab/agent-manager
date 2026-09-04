@@ -340,4 +340,18 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
 }
 
+// Every sdlc agent must declare its own turn budget. Omitting it silently
+// inherits DEFAULT_MAX_TURNS (10) — and a real DEVOPS-15 run died with
+// `error_max_turns` because sdlc-ticket-intake, the step that reads the ticket
+// AND explores an unfamiliar repo AND writes three artifacts, had the smallest
+// budget of any step purely by accident of omission. An inherited default is
+// invisible in the template; an explicit number is not.
+{
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-'))) {
+    const mt = a.frontmatter.maxTurns
+    assert.ok(typeof mt === 'number' && Number.isInteger(mt) && mt > 0,
+      `${a.id} must declare maxTurns explicitly rather than inheriting the default`)
+  }
+}
+
 console.log('workflowTemplates: all assertions passed')

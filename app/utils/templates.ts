@@ -241,6 +241,7 @@ Rules:
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Read', 'Grep', 'Glob', 'Write'],
+      maxTurns: 25,
       skills: ['intent-template', 'using-superpowers'],
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
@@ -659,6 +660,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'yellow',
       tools: ['Read'],
+      maxTurns: 10,
     },
     body: `You review one step of an automated fix pipeline. You did not run the step; you see only its input and its output.
 
