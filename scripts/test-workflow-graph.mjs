@@ -6,6 +6,8 @@
  */
 import assert from 'node:assert/strict'
 import {
+  maxVisitsOf,
+  DEFAULT_MAX_VISITS,
   buildGraph,
   initRunState,
   readyNodes,
@@ -16,9 +18,11 @@ import {
   canRevisit,
   joinInputs,
   parseVerdict,
+  parseHalt,
   edgeKey,
   MAX_CONCURRENCY,
-} from '../app/utils/workflowGraph.ts'
+  ancestorsOf,
+} from '../shared/utils/workflowGraph.ts'
 
 /**
  * Drive a graph to completion, recording one entry per wave. `onComplete` may arm a node
@@ -202,5 +206,65 @@ assert.equal(parseVerdict(''), 'CONTINUE')
 assert.equal(joinInputs([{ label: 'A', text: 'one' }]), 'one', 'a single input is passed through bare')
 assert.match(joinInputs([{ label: 'A', text: 'one' }, { label: 'B', text: 'two' }]), /## Output from A[\s\S]*## Output from B/)
 assert.equal(joinInputs([]), '')
+
+// ancestorsOf: the full transitive forward ancestry
+{
+  const g = buildGraph([
+    { id: 'a', agentSlug: 'x', label: 'A', next: ['b'] },
+    { id: 'b', agentSlug: 'x', label: 'B', next: ['c'] },
+    { id: 'c', agentSlug: 'x', label: 'C', next: ['d'] },
+    { id: 'd', agentSlug: 'x', label: 'D', next: [] },
+  ])
+  assert.deepEqual(ancestorsOf(g, 'd'), ['c', 'b', 'a'],
+    'nearest-first: d sees c, then b, then a')
+  assert.deepEqual(ancestorsOf(g, 'a'), [], 'an entry node has no ancestors')
+
+  // A diamond must not report the shared root twice.
+  const diamond = buildGraph([
+    { id: 'r', agentSlug: 'x', label: 'R', next: ['l', 'm'] },
+    { id: 'l', agentSlug: 'x', label: 'L', next: ['j'] },
+    { id: 'm', agentSlug: 'x', label: 'M', next: ['j'] },
+    { id: 'j', agentSlug: 'x', label: 'J', next: [] },
+  ])
+  const anc = ancestorsOf(diamond, 'j')
+  assert.equal(anc.filter(i => i === 'r').length, 1, 'diamond root appears once')
+  assert.deepEqual([...anc].sort(), ['l', 'm', 'r'])
+
+  // A cycle must terminate. buildGraph classifies the closing edge as a
+  // back-edge and keeps it out of forwardPreds, so this is really a check
+  // that ancestorsOf relies on forwardPreds and nothing else.
+  const cyclic = buildGraph([
+    { id: 'p', agentSlug: 'x', label: 'P', next: ['q'] },
+    { id: 'q', agentSlug: 'x', label: 'Q', next: ['p'] },
+  ])
+  assert.deepEqual(ancestorsOf(cyclic, 'q'), ['p'], 'cycle terminates')
+}
+
+// maxVisits is capped at the policy limit, not clamped at report time.
+// cost.attempts in the evidence bundle is the observed visit count and the
+// schema caps it at 3; a workflow declaring more would produce a truthful
+// number the schema rejects. The cap belongs here, where it is a policy
+// decision, not in the reporting, where it would be a falsehood.
+{
+  assert.equal(maxVisitsOf({ id: 'a', agentSlug: 'x', label: 'A', maxVisits: 5 }), DEFAULT_MAX_VISITS,
+    'a workflow asking for more visits than the policy allows gets the policy limit')
+  assert.equal(maxVisitsOf({ id: 'a', agentSlug: 'x', label: 'A', maxVisits: 2 }), 2,
+    'a lower explicit limit is still honoured')
+  assert.equal(maxVisitsOf({ id: 'a', agentSlug: 'x', label: 'A' }), DEFAULT_MAX_VISITS)
+}
+
+// parseHalt: a step's structured way of stopping the run
+{
+  assert.equal(parseHalt('all good'), null, 'ordinary output does not halt')
+  assert.equal(parseHalt('tried everything\nPIPELINE-HALT: stack would not come up'),
+    'stack would not come up')
+  assert.equal(parseHalt('PIPELINE-HALT: first\nPIPELINE-HALT: second'), 'second',
+    'the last marker wins, matching parseVerdict')
+  assert.equal(parseHalt('the agent may mention PIPELINE-HALT: mid-sentence in prose'), null,
+    'the marker must start its own line — prose about it is not a halt')
+  assert.equal(parseHalt(''), null)
+  assert.equal(parseHalt(undefined), null, 'unreadable output does not halt')
+  assert.equal(parseHalt('PIPELINE-HALT:   '), null, 'a marker with no reason is not a halt')
+}
 
 console.log('workflowGraph: all checks passed')

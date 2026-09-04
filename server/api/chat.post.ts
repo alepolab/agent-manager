@@ -5,6 +5,9 @@ import { join } from 'node:path'
 import { getClaudeDir, resolveClaudePath } from '../utils/claudeDir'
 import { DEFAULT_OUTPUT_STYLES } from '../utils/defaultOutputStyles'
 import { parseFrontmatter } from '../utils/frontmatter'
+import { resolveTools, resolveMaxTurns } from '../utils/agentToolPolicy'
+import { buildAgentSystemPrompt } from '../utils/agentSystemPrompt'
+import type { AgentFrontmatter } from '~/types'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -48,10 +51,12 @@ async function getOutputStyleContent(id: string, projectDir?: string): Promise<{
   return null
 }
 
-function defaultManagerPrompt(claudeDir: string): string {
+function defaultManagerPrompt(claudeDir: string, resolvedCwd: string): string {
   return `You are an assistant integrated into the Agent Manager UI. The user is managing their Claude Code agents, commands, skills, and plugins through a web interface.
 
-The current working directory is the user's Claude configuration folder: ${claudeDir}
+The current working directory is: ${resolvedCwd}
+
+Your own configuration (agents, commands, skills, settings) always lives in the Claude configuration folder, independent of the working directory above: ${claudeDir}
 
 ## File structure
 
@@ -97,22 +102,34 @@ export default defineEventHandler(async (event) => {
 
   const claudeDir = getClaudeDir()
 
+  // Resolved once - this MUST match the `cwd` handed to `query()` below, or the
+  // system prompt will tell the model it's somewhere it isn't.
+  const resolvedCwd = body.projectDir && existsSync(body.projectDir) ? body.projectDir : claudeDir
+
   // Build system prompt depending on whether an agent is active
   let systemAppend: string
+
+  let agentFrontmatter: AgentFrontmatter | undefined
 
   if (body.agentSlug) {
     const agentPath = resolveClaudePath('agents', `${body.agentSlug}.md`)
     if (existsSync(agentPath)) {
       const { parseFrontmatter } = await import('../utils/frontmatter')
       const raw = await readFile(agentPath, 'utf-8')
-      const { frontmatter, body: agentBody } = parseFrontmatter<{ name?: string }>(raw)
-      const agentName = frontmatter.name || body.agentSlug
-      systemAppend = `You are "${agentName}", a specialized agent. Follow these instructions precisely:\n\n${agentBody}\n\nThe current working directory is: ${claudeDir}`
+      const { frontmatter, body: agentBody } = parseFrontmatter<AgentFrontmatter>(raw)
+      agentFrontmatter = frontmatter
+      systemAppend = await buildAgentSystemPrompt({
+        agentSlug: body.agentSlug,
+        agentName: frontmatter.name,
+        agentBody,
+        skills: frontmatter.skills,
+        cwd: resolvedCwd,
+      })
     } else {
-      systemAppend = defaultManagerPrompt(claudeDir)
+      systemAppend = defaultManagerPrompt(claudeDir, resolvedCwd)
     }
   } else {
-    systemAppend = defaultManagerPrompt(claudeDir)
+    systemAppend = defaultManagerPrompt(claudeDir, resolvedCwd)
   }
 
   // Handle Output Style
@@ -144,14 +161,20 @@ export default defineEventHandler(async (event) => {
     let sessionId = body.sessionId || null
     let resultText = ''
 
+    const toolsOption = resolveTools(agentFrontmatter)
+
     for await (const message of query({
       prompt: lastUserMessage.content,
       options: {
-        cwd: body.projectDir && existsSync(body.projectDir) ? body.projectDir : claudeDir,
-        allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
+        cwd: resolvedCwd,
+        // `tools` restricts the actual toolset; `allowedTools` only pre-approves a
+        // permission prompt and is a no-op under `bypassPermissions` below. Omitted
+        // entirely when the agent declares no `tools` frontmatter, so the SDK keeps
+        // its full default toolset (today's effective behaviour). See agentToolPolicy.ts.
+        ...(toolsOption ? { tools: toolsOption } : {}),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
-        maxTurns: 10,
+        maxTurns: resolveMaxTurns(agentFrontmatter),
         includePartialMessages: true,
         systemPrompt: {
           type: 'preset',

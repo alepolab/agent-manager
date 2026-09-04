@@ -7,7 +7,7 @@ import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import type { Workflow, WorkflowStep } from '~/types'
 import { getAgentColor } from '~/utils/colors'
-import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~/utils/workflowGraph'
+import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,7 +15,21 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
-const { steps: execSteps, isRunning, isPaused, isComplete, currentStepIds, nextStepIds, run, continueWorkflow, continueWith, respondToStep, stop } = useWorkflowExecution()
+const { run, runs, attach, start, continueRun, stop } = useWorkflowRun(slug)
+
+// The panel and the canvas nodes both read per-step status off the server-owned run.
+// These mirror the shape the old client-side engine exposed, so the rest of the page
+// (node status badges, the complete banner, next-step labels) is unchanged.
+const execSteps = computed(() => run.value?.steps ?? [])
+const isRunning = computed(() => run.value?.status === 'running')
+const isPaused = computed(() => run.value?.status === 'paused')
+const isComplete = computed(() => !!run.value && ['completed', 'failed', 'stopped', 'interrupted'].includes(run.value.status))
+
+/** Clicking a previous (terminal) run in the panel's history list just shows it - no stream needed. */
+function attachRun(id: string) {
+  const found = runs.value.find(r => r.id === id)
+  if (found) run.value = found
+}
 
 const workflow = ref<Workflow | null>(null)
 const workflowSteps = ref<WorkflowStep[]>([])
@@ -41,6 +55,9 @@ onMounted(async () => {
     toast.add({ title: 'Workflow not found', color: 'error' })
     router.push('/workflows')
   }
+  // Attach to whatever the server is already running for this workflow, if anything -
+  // a run outlives this tab, so a reload must not lose it.
+  attach()
 })
 
 const graph = computed(() => buildGraph(workflowSteps.value))
@@ -265,11 +282,10 @@ async function deleteWorkflow() {
   }
 }
 
-async function startRun(prompt: string, projectDir?: string) {
+async function startRun(prompt: string, projectDir?: string, autoRun = false) {
   showRunModal.value = false
   if (!workflow.value) return
-  const w = { ...workflow.value, steps: workflowSteps.value }
-  await run(w, prompt, projectDir)
+  await start(prompt, projectDir, autoRun)
   try {
     await update(slug, { lastRunAt: new Date().toISOString() } as any)
   } catch {
@@ -277,14 +293,13 @@ async function startRun(prompt: string, projectDir?: string) {
   }
 }
 
-const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value)
+const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value)
 const filteredAgents = computed(() => {
   if (!paletteSearch.value) return agents.value
   const q = paletteSearch.value.toLowerCase()
   return agents.value.filter(a => a.frontmatter.name.toLowerCase().includes(q))
 })
 
-const nextStepLabels = computed(() => nextStepIds.value.map(labelOf))
 const parallelHint = computed(() => graph.value.entries.length > 1
   || workflowSteps.value.some(s => (graph.value.succ[s.id] ?? []).length > 1))
 
@@ -334,7 +349,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       />
 
       <UButton
-        v-if="isRunning"
+        v-if="isRunning || isPaused"
         label="Stop"
         icon="i-lucide-square"
         size="sm"
@@ -495,19 +510,14 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           <span class="text-[12px] font-medium" style="color: var(--success, #22c55e);">Workflow complete</span>
         </div>
 
-        <!-- Execution log -->
-        <div v-if="execSteps.length > 0" class="p-4">
-          <WorkflowExecutionLog
-            :steps="execSteps"
-            :workflow-steps="workflowSteps"
-            :current-step-ids="currentStepIds"
-            :next-step-labels="nextStepLabels"
-            :is-paused="isPaused"
-            :is-complete="isComplete"
-            @continue="continueWorkflow"
-            @continue-with="continueWith"
-            @respond="respondToStep"
+        <!-- Run status: live per-agent rows while a run is active, run history otherwise -->
+        <div v-if="run || runs.length" class="p-4">
+          <WorkflowRunPanel
+            :run="run"
+            :runs="runs"
+            @continue="continueRun"
             @stop="stop"
+            @attach="attachRun"
           />
         </div>
       </div>

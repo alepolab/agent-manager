@@ -43,6 +43,21 @@ COPY --from=build /app/.output .output
 # Copy node-pty native bindings to production
 COPY --from=build /app/node_modules/node-pty/build /app/.output/server/node_modules/node-pty/build
 
+# Bake in a curated Claude config so the image is self-contained: plugins,
+# skills, agents and settings travel with it, and a fresh host needs no
+# ~/.claude of its own.
+#
+# The payload is produced by scripts/stage-claude-config.sh, which stages an
+# allowlist and then refuses to proceed if anything credential-shaped or any
+# session transcript made it in. Never COPY ~/.claude directly — it holds OAuth
+# tokens and every transcript this machine has produced.
+#
+# docker-compose mounts a NAMED volume over this path. Docker seeds a new named
+# volume from the image's contents on first creation, so these files become the
+# starting state and anything the app writes afterwards persists in the volume.
+# A bind mount would instead hide all of this.
+COPY docker/claude-config /root/.claude
+
 # Set environment variables
 ENV HOST=0.0.0.0
 ENV PORT=3030

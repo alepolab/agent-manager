@@ -8,7 +8,23 @@ services:
     ports:
       - "3030:3030"
     volumes:
-      - ~/.claude:/root/.claude
+      # A NAMED volume, not a bind mount, and the distinction matters.
+      #
+      # Docker seeds a new named volume from whatever the image has at that path
+      # on first creation, so the curated config baked in by the Dockerfile
+      # becomes the starting state, and anything created through the UI persists
+      # across restarts and image rebuilds.
+      #
+      # The previous `~/.claude:/root/.claude` bind mount did two things we did
+      # not want: it hid the image's own config entirely (a bind mount shadows
+      # image content), and it let the container write directly into the
+      # operator's live Claude configuration.
+      #
+      # To pick up newly baked config after a rebuild, remove the volume:
+      #   docker compose down && docker volume rm agent-manager_claude-config
+      # That discards anything created through the UI, which is why it is not
+      # the default.
+      - claude-config:/root/.claude
     environment:
       - CLAUDE_DIR=/root/.claude
       - HOST=0.0.0.0
@@ -20,3 +36,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+volumes:
+  claude-config:

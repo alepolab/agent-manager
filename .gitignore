@@ -21,3 +21,15 @@ logs
 # Local env files
 .env
 .claude
+
+# Subagent-driven-development scratch (per-plan ledgers, briefs, review packages)
+.superpowers/
+tsconfig.tsbuildinfo
+.worktrees/
+
+# Staged Claude config payload (rebuilt by scripts/stage-claude-config.sh)
+docker/claude-config/
+
+# Playwright browser-test artifacts (e2e/*.smoke.mjs), if ever produced
+test-results/
+playwright-report/

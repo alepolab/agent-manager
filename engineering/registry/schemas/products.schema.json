@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alepo.internal/schemas/products.schema.json",
+  "title": "products.yaml — how a ticket becomes code, an environment and a verdict",
+  "description": "The registry that makes one loop serve every application. A ticket resolves to repos, a branch, a stack profile and test commands from here alone, with no human looking anything up.",
+  "type": "object",
+  "required": ["products"],
+  "additionalProperties": false,
+  "properties": {
+    "products": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+      "additionalProperties": { "$ref": "#/$defs/product" }
+    }
+  },
+  "$defs": {
+    "product": {
+      "type": "object",
+      "required": ["match", "repos", "branches", "stack", "tests", "owners"],
+      "additionalProperties": false,
+      "properties": {
+        "match": {
+          "type": "object",
+          "description": "How a ticket resolves to this product. At least one criterion must be present, or every ticket matches everything.",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "components": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+            "projects": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+            "labels": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+          }
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+          "description": "owner/name. Every repo listed is cloned by the registry check and must carry the plugin, AGENTS.md and REVIEW.md."
+        },
+        "multi_repo": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, plan.md must produce per-repo tasks and a merge order, and nothing merges until every PR in the set is approved."
+        },
+        "version_source": {
+          "type": "string",
+          "description": "Where the resolved version comes from for a bug (e.g. a Jira field or a customer profile key). Absent means the branch policy alone decides."
+        },
+        "branches": {
+          "type": "object",
+          "required": ["bug", "feature"],
+          "additionalProperties": false,
+          "properties": {
+            "bug": { "type": "string", "description": "May contain {version}, substituted from version_source." },
+            "feature": { "type": "string" },
+            "infra": { "type": "string" },
+            "docs": { "type": "string" }
+          }
+        },
+        "forward_port": {
+          "type": "string",
+          "description": "When a bug was fixed on a release branch, cherry-pick onto this branch as a draft PR. Conflicts escalate rather than silently skip."
+        },
+        "stack": {
+          "type": "object",
+          "required": ["compose", "topology_default"],
+          "additionalProperties": false,
+          "properties": {
+            "compose": { "type": "string", "description": "Compose profile path, e.g. alepo-dev-team-infra/aaa." },
+            "topology_default": { "type": "string", "description": "e.g. 2node. Per-process state is not a correctness mechanism above 1node." },
+            "liquibase": { "type": "boolean", "default": false, "description": "Whether the stack supports tag/rollbackToTag between attempts." }
+          }
+        },
+        "build": { "type": "string", "description": "Build command. Absent means the product needs no build step before tests." },
+        "tests": {
+          "type": "object",
+          "required": ["unit"],
+          "additionalProperties": false,
+          "properties": {
+            "unit": { "type": "string" },
+            "atdd": { "type": "string", "description": "Must emit xunit. The build loop parses a verdict, it does not grep logs." },
+            "regression": { "type": "string", "description": "Named suite for the product's full regression." },
+            "ui_trace": { "type": "string", "enum": ["playwright"], "description": "Absent means UI evidence is legitimately n/a for this product." },
+            "compose_test": { "type": "string", "description": "Infra oracle: a check that fails on current state and is idempotent when applied twice." }
+          }
+        },
+        "owners": {
+          "type": "object",
+          "description": "Owner group per blast-radius label. money and protocol must be named for any product that has such paths.",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "money": { "type": "string" },
+            "protocol": { "type": "string" },
+            "schema": { "type": "string" },
+            "ui_parsing": { "type": "string" },
+            "docs": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

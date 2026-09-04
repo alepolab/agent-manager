@@ -45,9 +45,22 @@ export const MAX_CONCURRENCY = 3
 
 export const edgeKey = (from: string, to: string): string => `${from}->${to}`
 
+/**
+ * Hard-capped at DEFAULT_MAX_VISITS, deliberately.
+ *
+ * The evidence bundle's `cost.attempts` is the observed max visits across a
+ * run's steps, and the bundle schema caps it at 3. A workflow declaring
+ * `maxVisits: 5` could therefore produce a truthful attempts count the schema
+ * rejects — and the fix must not be to clamp the reported number, because
+ * misreporting an observed fact to satisfy a schema is exactly the fabrication
+ * this pipeline exists to prevent. So the limit is enforced where it is a real
+ * policy decision (how many times a step may run) rather than where it would be
+ * a lie (what actually happened). A workflow asking for more gets 3.
+ */
 export function maxVisitsOf(node: GraphNode): number {
   const raw = Number(node.maxVisits)
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_MAX_VISITS
+  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_MAX_VISITS
+  return Math.min(Math.floor(raw), DEFAULT_MAX_VISITS)
 }
 
 /** Shortest hop count from the nodes nothing feeds into - how deep each node reads on the canvas. */
@@ -162,6 +175,31 @@ export function buildGraph(nodes: GraphNode[]): WorkflowGraph {
   return { nodes, succ, forwardPreds, backEdges, entries }
 }
 
+/**
+ * Every transitive forward-ancestor of `id`, nearest-first.
+ *
+ * Walks `forwardPreds`, which buildGraph has already stripped of back-edges —
+ * so this terminates on cyclic graphs without needing a depth cap of its own.
+ * The `seen` set additionally stops a diamond from reporting its shared root
+ * once per path.
+ */
+export function ancestorsOf(graph: WorkflowGraph, id: string): string[] {
+  const seen = new Set<string>([id])
+  const out: string[] = []
+  let frontier = [...(graph.forwardPreds[id] ?? [])]
+  while (frontier.length) {
+    const next: string[] = []
+    for (const node of frontier) {
+      if (seen.has(node)) continue
+      seen.add(node)
+      out.push(node)
+      next.push(...(graph.forwardPreds[node] ?? []))
+    }
+    frontier = next
+  }
+  return out
+}
+
 export function initRunState(graph: WorkflowGraph): RunState {
   const state: RunState = { status: {}, visits: {}, armed: {}, triggeredBy: {}, totalRuns: 0 }
   for (const node of graph.nodes) {
@@ -249,6 +287,21 @@ export function parseVerdict(text: string): MonitorVerdict {
   const matches = [...(text ?? '').matchAll(/VERDICT:\s*(CONTINUE|RETRY|ABORT)/gi)]
   const last = matches[matches.length - 1]
   return last ? (last[1]!.toUpperCase() as MonitorVerdict) : 'CONTINUE'
+}
+
+/**
+ * A step's structured way of stopping the run.
+ *
+ * Deliberately anchored to the start of a line (`^`, multiline): an agent
+ * discussing the marker in prose must not halt the pipeline. Deliberately
+ * requires a non-empty reason: "something went wrong" with no reason is a
+ * halt nobody can act on, and the safer reading of a bare marker is that it
+ * was quoted rather than raised. Last match wins, matching parseVerdict.
+ */
+export function parseHalt(text: string | undefined | null): string | null {
+  const matches = [...(text ?? '').matchAll(/^PIPELINE-HALT:[^\S\n]*(\S.*)$/gm)]
+  const last = matches[matches.length - 1]
+  return last ? last[1]!.trim() : null
 }
 
 const CLIP = 4000

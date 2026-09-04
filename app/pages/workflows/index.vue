@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { workflowTemplates } from '~/utils/workflowTemplates'
+import { workflowTemplates, materializeTemplateSteps } from '~/utils/workflowTemplates'
 import { agentTemplates } from '~/utils/templates'
+import { planTemplateResolution } from '~/utils/workflowInstantiation'
 
 const { workflows, loading, error, create, fetchAll } = useWorkflows()
 const { agents, create: createAgent } = useAgents()
@@ -27,17 +28,20 @@ async function useWorkflowTemplate(templateId: string) {
   if (!template) return
   creatingTemplate.value = templateId
   try {
-    const steps = []
-    for (const step of template.steps) {
-      const agentTemplate = agentTemplates.find(t => t.id === step.agentTemplateId)
-      if (!agentTemplate) continue
-      // Check if agent exists
-      let agent = agents.value.find(a => a.slug === agentTemplate.frontmatter.name)
-      if (!agent) {
-        agent = await createAgent({ frontmatter: { ...agentTemplate.frontmatter }, body: agentTemplate.body })
-      }
-      steps.push({ id: crypto.randomUUID(), agentSlug: agent.slug, label: step.label })
+    // Decision logic (which agentTemplateIds - steps' own plus every monitorSlug -
+    // need resolving, and which already have an existing agent to reuse) lives in
+    // planTemplateResolution(); see app/utils/workflowInstantiation.ts for why
+    // monitorSlug needs its own pass. What's left here is I/O: create an agent for
+    // everything the plan says doesn't exist yet.
+    const plan = planTemplateResolution(template, agentTemplates, agents.value)
+    const agentSlugByTemplateId: Record<string, string> = { ...plan.resolved }
+    for (const id of plan.toCreate) {
+      const agentTemplate = agentTemplates.find(t => t.id === id)!
+      const agent = await createAgent({ frontmatter: { ...agentTemplate.frontmatter }, body: agentTemplate.body })
+      agentSlugByTemplateId[id] = agent.slug
     }
+
+    const steps = materializeTemplateSteps({ ...template, steps: plan.steps }, agentSlugByTemplateId)
     const workflow = await create({ name: template.name, description: template.description, steps })
     router.push(`/workflows/${workflow.slug}`)
   } catch (e: any) {
