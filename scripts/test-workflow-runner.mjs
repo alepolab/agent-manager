@@ -309,5 +309,57 @@ assert.ok(cStart < bEnd,
     'every step input names the artifacts directory')
 }
 
+// finalizeRunArtifacts now lives in exactly one place — publish(), gated on a
+// terminal status — rather than at each of the six-plus call sites a run can
+// settle from. A run settled purely through respondToRun (never touching
+// runWave's terminal branches) must still get a finalized meta.json.
+{
+  const { readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  // Same shape as the C3 retry-once workflow above: a RETRY verdict re-arms
+  // the sole node and pauses on it, so the run's eventual 'completed' comes
+  // entirely from respondToRun's own isFinished check — runWave's terminal
+  // branches are never reached at all for this run.
+  const respondWorkflow = {
+    slug: 'respond-settle', name: 'Respond Settle',
+    steps: [{ id: 'only', agentSlug: 'agent-only', label: 'Only', next: [], monitorSlug: 'monitor-only', maxVisits: 3 }],
+  }
+  let monitorCalls = 0
+  runner.setAgentCaller(async (agentSlug) => {
+    if (agentSlug === 'monitor-only') {
+      monitorCalls += 1
+      return monitorCalls === 1 ? 'Needs work.\nVERDICT: RETRY' : 'Looks good.\nVERDICT: CONTINUE'
+    }
+    return `output of ${agentSlug}`
+  })
+  let r = await runner.startRun({ workflow: respondWorkflow, initialPrompt: 'go', autoRun: false })
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(r.status, 'paused', 'a RETRY verdict re-arms the node and pauses for review')
+  r = await runner.respondToRun(r.id, 'please redo')
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(r.status, 'completed', 'a single-step run settles via respondToRun alone')
+  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.equal(meta.identity, 'respond-settle',
+    'a respondToRun-settled run still finalizes meta.json, with no call site in respondToRun itself')
+  assert.equal(typeof meta.cost.wall_clock_min, 'number', 'wall clock is recorded off the wave path too')
+}
+
+// stopRun is a second terminal path with no wave-loop coverage; it must finalize too.
+{
+  const { readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  let r = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(r.status, 'paused')
+  r = await runner.stopRun(r.id)
+  assert.equal(r.status, 'stopped', 'stopRun actually stops a paused run')
+  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.equal(meta.identity, 'demo', 'a stopRun-settled run still finalizes meta.json')
+  assert.equal(typeof meta.cost.wall_clock_min, 'number', 'wall clock is recorded on the stop path too')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

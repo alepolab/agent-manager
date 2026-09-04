@@ -80,6 +80,18 @@ async function publish(run: WorkflowRun) {
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
     await saveRun(run)
+    // Finalizing here rather than at each terminal branch is deliberate. There
+    // are six-plus places a run can reach a terminal status (runWave's three,
+    // respondToRun's two, stopRun, failRun) and every one of them must
+    // re-assert the runner's own facts over whatever the agents merged into
+    // meta.json. A call at each site is a call that gets forgotten when a
+    // seventh is added — this file has already produced that defect twice.
+    // finalizeRunArtifacts is a read-merge-write, so repeating it is harmless.
+    // Placed AFTER saveRun so a failure to write artifacts can never cost us
+    // the run record itself.
+    if (TERMINAL_STATUSES.includes(run.status)) {
+      try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
+    }
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
@@ -330,7 +342,6 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
-    try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
     await publish(run)
     return run
   }
@@ -356,7 +367,6 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
-    try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
     await publish(run)
     return run
   }
@@ -367,7 +377,6 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
-    try { await finalizeRunArtifacts(run) } catch { /* best effort */ }
     await publish(run)
     return run
   }
