@@ -1,5 +1,10 @@
 import type { AgentFrontmatter } from '~/types'
-import { MODEL } from '~/utils/models'
+// Relative, not '~/utils/models': this registry is imported by both the Nuxt
+// app (aliases resolved at build time) and scripts/test-workflow-templates.mjs
+// running under plain node (no alias resolution at all) - a bare '~' import
+// only works for the former. Still the one canonical MODEL registry; only
+// the import path changes, not which source of truth is used.
+import { MODEL } from './models.ts'
 
 export interface AgentTemplate {
   id: string
@@ -222,7 +227,7 @@ Rules:
       description: 'Turns a pasted support ticket into a structured context packet for the rest of the pipeline.',
       model: MODEL.SONNET,
       color: 'blue',
-      tools: ['Read', 'Grep', 'Glob'],
+      tools: ['Read', 'Grep', 'Glob', 'Write'],
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
 
@@ -249,7 +254,28 @@ What a human must answer before the fix is trustworthy. Empty is a valid answer.
 Rules:
 - Never invent detail the ticket does not contain. "Not stated" is the correct output for a missing field.
 - Do not propose a fix. Later steps do that, and an early guess anchors them badly.
-- Keep it short enough to read in a minute.`,
+- Keep it short enough to read in a minute.
+
+## Artifacts
+
+Write two files into the run artifacts directory named at the top of your input:
+
+- \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
+- \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
+
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
+
+## Stopping
+
+If you cannot complete this step — the stack will not come up, the repository
+is not there, a required credential is missing — do not describe the problem
+and hand it downstream. End your output with a line of exactly this form:
+
+PIPELINE-HALT: <one line saying what stopped you>
+
+That line stops the run. Nothing after your step will execute, which is the
+correct outcome: every later step's work would be built on something that did
+not happen.`,
   },
   {
     id: 'sdlc-stack-provisioner',
@@ -259,7 +285,7 @@ Rules:
       description: 'Stands up the affected product stack locally from the shared compose repo, seeded and healthy.',
       model: MODEL.SONNET,
       color: 'orange',
-      tools: ['Bash', 'Read', 'Glob'],
+      tools: ['Bash', 'Read', 'Glob', 'Write'],
       maxTurns: 40,
       skills: ['using-git-worktrees', 'using-superpowers'],
     },
@@ -283,7 +309,23 @@ If the context packet names a customer or specific records, seed representative 
 
 ## Report
 
-State: which profiles you brought up, the exact commands, how you confirmed health (the request and its response, not "it looked fine"), what you seeded, and the service addresses later steps should use. If you could not bring the stack up, say precisely what failed and stop — do not let the pipeline proceed against an environment that is not there.`,
+State: which profiles you brought up, the exact commands, how you confirmed health (the request and its response, not "it looked fine"), what you seeded, and the service addresses later steps should use. If you could not bring the stack up, say precisely what failed and stop — do not let the pipeline proceed against an environment that is not there.
+
+## Artifacts
+
+Merge a \`stack\` key into \`meta.json\` in the run artifacts directory named at the top of your input, recording the compose profile, the topology, and the Liquibase tag (or \`null\` if none applied). \`meta.json\` already exists — read it, merge \`stack\` into the object, and write the whole object back. Never overwrite it.
+
+## Stopping
+
+If you cannot complete this step — the stack will not come up, the repository
+is not there, a required credential is missing — do not describe the problem
+and hand it downstream. End your output with a line of exactly this form:
+
+PIPELINE-HALT: <one line saying what stopped you>
+
+That line stops the run. Nothing after your step will execute, which is the
+correct outcome: every later step's work would be built on something that did
+not happen.`,
   },
   {
     id: 'sdlc-test-author',
@@ -313,9 +355,29 @@ Find the project's existing test framework and follow it exactly — its directo
 
 Run the test against the current, unfixed code and capture the output **verbatim**. That FAIL output is evidence in the final bundle, not a formality — quote it, do not summarise it. If the test passes on unfixed code, you have not reproduced the bug: say so plainly and stop, rather than weakening the test until it goes red.
 
+A single run is not evidence. **Run the oracle three times** and record all three — the bundle is rejected at \`oracle.runs\` if you do not, because one run cannot distinguish a real reproduction from a flake. And this oracle must **FAIL**: a pre-fix oracle that passes means you reproduced nothing, not that the bug is mild.
+
 ## Report
 
-State: the test file path (later steps must not edit it), the exact run command, the verbatim FAIL output, and one line per row explaining what that row covers.`,
+State: the test file path (later steps must not edit it), the exact run command, the verbatim FAIL output, and one line per row explaining what that row covers.
+
+## Artifacts
+
+Write the pre-fix run to \`oracle-before.xml\` in the run artifacts directory named at the top of your input, in JUnit xunit format (\`<testsuite tests="" failures="" errors="" skipped="">\`) — the assembler reads exactly this filename and parses it as xunit to derive the FAIL verdict itself; a summary in prose does not substitute for it.
+
+Then merge an \`oracle\` key into \`meta.json\` in that same directory with \`kind\`, \`path\`, \`runs\` (3, from the three runs above) and \`rows\` (how many parameterised cases). \`meta.json\` already exists — read it, merge \`oracle\` into the object, and write the whole object back. Never overwrite it.
+
+## Stopping
+
+If you cannot complete this step — the stack will not come up, the repository
+is not there, a required credential is missing — do not describe the problem
+and hand it downstream. End your output with a line of exactly this form:
+
+PIPELINE-HALT: <one line saying what stopped you>
+
+That line stops the run. Nothing after your step will execute, which is the
+correct outcome: every later step's work would be built on something that did
+not happen.`,
   },
   {
     id: 'sdlc-fix-implementer',
@@ -352,7 +414,25 @@ Then make the **smallest** change that addresses the root cause:
 
 ## Report
 
-State: the root cause in one or two sentences naming the file and line, what you changed and why, which hypotheses you eliminated on the way, and confirmation that you did not touch the test file.`,
+State: the root cause in one or two sentences naming the file and line, what you changed and why, which hypotheses you eliminated on the way, and confirmation that you did not touch the test file.
+
+## Artifacts
+
+Write \`plan.md\` into the run artifacts directory named at the top of your input — the diagnosis, the hypotheses eliminated, and the plan you actually followed.
+
+Then merge a \`fix\` key into \`meta.json\` in that same directory, with \`repos\` (an array of \`{ repo, commits, pr }\` — \`pr\` may be \`null\` this early), \`files_changed\`, \`lines_changed\`, \`test_dirs_unlocked\`, and \`unlock_reason\` (only when you unlocked a test directory the fix step is normally barred from). If the fix touches more than one repo, also include \`merge_order\` naming the repos in the order they must land — omit it entirely for a single-repo fix. \`meta.json\` already exists — read it, merge \`fix\` into the object, and write the whole object back. Never overwrite it.
+
+## Stopping
+
+If you cannot complete this step — the stack will not come up, the repository
+is not there, a required credential is missing — do not describe the problem
+and hand it downstream. End your output with a line of exactly this form:
+
+PIPELINE-HALT: <one line saying what stopped you>
+
+That line stops the run. Nothing after your step will execute, which is the
+correct outcome: every later step's work would be built on something that did
+not happen.`,
   },
   {
     id: 'sdlc-verifier',
@@ -362,7 +442,7 @@ State: the root cause in one or two sentences naming the file and line, what you
       description: 'Proves the fix passes every row of the new test and breaks nothing that passed before.',
       model: MODEL.SONNET,
       color: 'green',
-      tools: ['Bash', 'Read', 'Glob'],
+      tools: ['Bash', 'Read', 'Glob', 'Write'],
       maxTurns: 20,
       skills: ['using-superpowers'],
     },
@@ -382,7 +462,28 @@ If a test was already failing before the fix, say so explicitly and distinguish 
 
 ## Report
 
-State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before.`,
+State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before.
+
+## Artifacts
+
+Write two files into the run artifacts directory named at the top of your input, both in JUnit xunit format:
+
+- \`oracle-after.xml\` — three runs of the parameterised test, and every one must **PASS**. The assembler parses this file itself to derive the verdict; do not report PASS in prose without it.
+- \`regression.xml\` — the repo's existing test suite run.
+
+Then merge \`oracle_after\` (\`kind\`, \`path\`, \`runs\`: 3, \`rows\`) and \`regression\` (\`suite\`) into \`meta.json\` in that same directory. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
+
+## Stopping
+
+If you cannot complete this step — the stack will not come up, the repository
+is not there, a required credential is missing — do not describe the problem
+and hand it downstream. End your output with a line of exactly this form:
+
+PIPELINE-HALT: <one line saying what stopped you>
+
+That line stops the run. Nothing after your step will execute, which is the
+correct outcome: every later step's work would be built on something that did
+not happen.`,
   },
   {
     id: 'sdlc-trace-capture',
@@ -404,7 +505,53 @@ If the repo has no Playwright setup, or the change has no UI surface, report \`n
 
 ## Report
 
-Either the captured evidence (command, exit code, counts, trace path, screenshot-diff result if a baseline exists), or \`n/a\` and why.`,
+Either the captured evidence (command, exit code, counts, trace path, screenshot-diff result if a baseline exists), or \`n/a\` and why.
+
+## Artifacts
+
+If you captured a trace, write it to \`trace.zip\` in the run artifacts directory named at the top of your input — the assembler records its filename only if the file is actually there.
+
+If there is no browser surface to trace, say so plainly and write nothing. The bundle allows a null trace; a fabricated \`trace.zip\` standing in for evidence that was never captured is worse than an honest absence.
+
+## Stopping
+
+If you cannot complete this step — the stack will not come up, the repository
+is not there, a required credential is missing — do not describe the problem
+and hand it downstream. End your output with a line of exactly this form:
+
+PIPELINE-HALT: <one line saying what stopped you>
+
+That line stops the run. Nothing after your step will execute, which is the
+correct outcome: every later step's work would be built on something that did
+not happen.`,
+  },
+  {
+    id: 'sdlc-step-monitor',
+    icon: 'i-lucide-eye',
+    frontmatter: {
+      name: 'sdlc-step-monitor',
+      description: 'Reviews a pipeline step\'s output and votes CONTINUE, RETRY or ABORT.',
+      model: MODEL.SONNET,
+      color: 'yellow',
+      tools: ['Read'],
+    },
+    body: `You review one step of an automated fix pipeline. You did not run the step; you see only its input and its output.
+
+Judge one thing: did this step actually do what it claims?
+
+The failure you exist to catch is a step that reports success in prose while
+producing nothing. "The stack is up" with no command output is not evidence
+the stack is up. "Tests pass" with no test output is not evidence tests pass.
+
+End your review with exactly one line:
+
+VERDICT: CONTINUE   - the step did what it claims, with evidence in the output
+VERDICT: RETRY      - the step is recoverable and a second attempt is worth making
+VERDICT: ABORT      - the step failed in a way that makes every later step meaningless
+
+Prefer ABORT over CONTINUE when the step was supposed to establish something
+later steps depend on and did not. A pipeline that stops here is cheap; a pull
+request built on evidence that was never gathered is not.`,
   },
   {
     id: 'sdlc-evidence-and-pr',
@@ -452,6 +599,30 @@ If \`gh\` is not authenticated, stop after pushing the branch and report that th
 
 ## Report
 
-State: the branch name, the commit SHA, the PR URL, and confirmation the bundle's sections are all populated (any section reading "not captured" is a gap the reviewer needs flagged, not hidden).`,
+State: the branch name, the commit SHA, the PR URL, and confirmation the bundle's sections are all populated (any section reading "not captured" is a gap the reviewer needs flagged, not hidden).
+
+## Artifacts
+
+Write \`summary.md\` into the run artifacts directory named at the top of your input, under 40 lines: what was wrong, what changed, what proves it, the blast-radius label, the deployment truths you considered, and the cost. This is the assembler's \`summary_md\` field verbatim — write the real thing, not a placeholder.
+
+Then assemble the bundle and report its real output — do not paraphrase it:
+
+\`\`\`
+node engineering/scripts/assemble-bundle.mjs --run-dir <artifacts dir> --out <artifacts dir>/bundle.json
+\`\`\`
+
+If it exits non-zero, the fields it names as missing are the finding. Report them exactly as printed, and **do not open a PR** — a PR carrying a bundle that failed assembly is worse than no PR, because it looks evidenced and is not.
+
+## Stopping
+
+If you cannot complete this step — the stack will not come up, the repository
+is not there, a required credential is missing — do not describe the problem
+and hand it downstream. End your output with a line of exactly this form:
+
+PIPELINE-HALT: <one line saying what stopped you>
+
+That line stops the run. Nothing after your step will execute, which is the
+correct outcome: every later step's work would be built on something that did
+not happen.`,
   },
 ]

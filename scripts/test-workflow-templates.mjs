@@ -5,7 +5,8 @@
  *   node scripts/test-workflow-templates.mjs
  */
 import assert from 'node:assert/strict'
-import { materializeTemplateSteps } from '../app/utils/workflowTemplates.ts'
+import { materializeTemplateSteps, workflowTemplates as WORKFLOW_TEMPLATES } from '../app/utils/workflowTemplates.ts'
+import { agentTemplates as AGENT_TEMPLATES } from '../app/utils/templates.ts'
 
 const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 
@@ -134,6 +135,61 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
   const terminalSteps = materializeTemplateSteps(terminalTemplate, slugs)
   assert.deepEqual(terminalSteps[0].next, [])
+}
+
+// ── 7. Runbook A declares the wiring its evidence bundle depends on ───────
+{
+  const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
+  assert.ok(runbook, 'the Runbook A template exists')
+
+  const slugs = Object.fromEntries(runbook.steps.map(s => [s.agentTemplateId, s.agentTemplateId]))
+  slugs['sdlc-step-monitor'] = 'sdlc-step-monitor'
+  const steps = materializeTemplateSteps(runbook, slugs)
+
+  const evidence = steps.find(s => s.agentSlug === 'sdlc-evidence-and-pr')
+  assert.equal(evidence.contextMode, 'ancestors',
+    'the evidence step must see the pre-fix FAIL, which is three hops upstream')
+
+  const provisioner = steps.find(s => s.agentSlug === 'sdlc-stack-provisioner')
+  const verifier = steps.find(s => s.agentSlug === 'sdlc-verifier')
+  assert.equal(provisioner.monitorSlug, 'sdlc-step-monitor',
+    'a silent stack failure makes everything after it meaningless')
+  assert.equal(verifier.monitorSlug, 'sdlc-step-monitor')
+
+  // The monitor agent must actually exist, or monitorSlug names nothing and
+  // runMonitor's catch quietly turns every review into CONTINUE.
+  assert.ok(AGENT_TEMPLATES.find(a => a.id === 'sdlc-step-monitor'),
+    'the monitor agent template exists')
+
+  // An unresolvable monitor is dropped rather than kept as a dangling name.
+  const noMonitor = materializeTemplateSteps(
+    runbook, Object.fromEntries(runbook.steps.map(s => [s.agentTemplateId, s.agentTemplateId])))
+  assert.equal(noMonitor.find(s => s.agentSlug === 'sdlc-verifier').monitorSlug, undefined,
+    'a monitorSlug that resolves to nothing is dropped, not left dangling')
+}
+
+// ── 8. The sdlc prompts instruct what the evidence bundle requires ────────
+{
+  // AgentTemplate has no `prompt` field (the brief's snippet names one that
+  // does not exist) - the prompt text lives in `.body`, per the actual
+  // AgentTemplate interface in app/utils/templates.ts.
+  const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
+  assert.match(body('sdlc-test-author'), /oracle-before\.xml/,
+    'the test author is told the exact artifact filename the assembler reads')
+  assert.match(body('sdlc-test-author'), /three times/i,
+    'three-run determinism is instructed, or the bundle fails at oracle.runs')
+  assert.match(body('sdlc-verifier'), /oracle-after\.xml/)
+  assert.match(body('sdlc-verifier'), /regression\.xml/)
+  assert.match(body('sdlc-ticket-intake'), /intent\.md/)
+  assert.match(body('sdlc-ticket-intake'), /context-packet\.json/)
+  assert.match(body('sdlc-fix-implementer'), /plan\.md/)
+  assert.match(body('sdlc-evidence-and-pr'), /summary\.md/)
+  for (const id of ['sdlc-ticket-intake', 'sdlc-stack-provisioner', 'sdlc-test-author',
+                    'sdlc-fix-implementer', 'sdlc-verifier', 'sdlc-trace-capture',
+                    'sdlc-evidence-and-pr']) {
+    assert.match(body(id), /PIPELINE-HALT/,
+      `${id} must know how to stop the run rather than report failure downstream`)
+  }
 }
 
 console.log('workflowTemplates: all assertions passed')

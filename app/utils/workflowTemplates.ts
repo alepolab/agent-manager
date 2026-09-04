@@ -9,6 +9,12 @@ export interface WorkflowTemplateStep {
    * behaved before graphs were expressible here.
    */
   next?: string[]
+  /** `agentTemplateId` of the agent that reviews this step's output. */
+  monitorSlug?: string
+  /** How many times this step may run in one execution. */
+  maxVisits?: number
+  /** See WorkflowStep.contextMode. */
+  contextMode?: 'predecessors' | 'ancestors'
 }
 
 export interface WorkflowTemplate {
@@ -69,6 +75,17 @@ export function materializeTemplateSteps(
         materialized.next = resolved
       }
     }
+    // monitorSlug names an AGENT, not a step, so it resolves through the same
+    // agentSlug map the step's own agentSlug does — not through
+    // stepIdByTemplateId. Dropped when unresolvable, for the same reason a
+    // dangling `next` target is dropped: a monitorSlug naming an agent that
+    // does not exist makes every review silently CONTINUE.
+    if (step.monitorSlug) {
+      const resolved = agentSlugByTemplateId[step.monitorSlug]
+      if (resolved) materialized.monitorSlug = resolved
+    }
+    if (step.maxVisits !== undefined) materialized.maxVisits = step.maxVisits
+    if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     return materialized
   })
 }
@@ -111,13 +128,16 @@ export const workflowTemplates: WorkflowTemplate[] = [
     icon: 'i-lucide-git-pull-request-arrow',
     steps: [
       { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'] },
-      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', next: ['sdlc-test-author'] },
+      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack',
+        next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'] },
       // Verification and browser evidence are independent of each other - one wave.
       { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture'] },
-      { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression', next: ['sdlc-evidence-and-pr'] },
+      { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression',
+        next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'] },
-      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR', next: [] },
+      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR',
+        next: [], contextMode: 'ancestors' },
     ],
   },
 ]
