@@ -269,7 +269,7 @@ Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
 
-\`plugin_version\` is the installed version of the \`alepo-engineering\` plugin in this repository — read it from that plugin's own \`.claude-plugin/plugin.json\`. Report \`unknown\` only if the plugin genuinely is not installed here; never guess a version number. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
+\`plugin_version\` is the installed version of the \`alepo-engineering\` plugin. Find it yourself: search under \`~/.claude/plugins/\` for an \`alepo-engineering\` directory containing a \`.claude-plugin/plugin.json\`, read that file, and use its \`version\` field verbatim — never guess a version number and never construct one from a directory or path name. If that search genuinely turns up nothing — the plugin is not installed here — the correct action is \`PIPELINE-HALT\`, never a placeholder. \`unknown\` is a string, so it passes the bundle schema's type check silently; a value that passes validation without being verifiable is worse than a step that stops, because a reviewer trusts it exactly as much as a real version and has no way to tell the difference. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
 
 ## Stopping
 
@@ -312,6 +312,15 @@ A container that is running is not a service that is serving. Confirm health thr
 ## Seeding
 
 If the context packet names a customer or specific records, seed representative data for them — including a second subscriber or account where the bug involves interaction between two. A single-record environment hides exactly the class of bug that matters.
+
+## Evidence or halt — there is no third option
+
+This step has exactly two honest outcomes. Producing a report from reading the compose file, the ticket, or any other document — however confident it reads — is not one of them; a claim with no command behind it is a guess wearing the shape of a fact, and every step after this one builds on what you assert here. An unverified premise at this step does not fail loudly — it produces a false-green result several steps downstream that looks exactly like a real one, at a point where the evidence that would have caught it no longer exists.
+
+1. **Executed-command evidence.** For every claim in your report — host path conventions, bind-mount targets, service addresses, ports, dependency ordering — quote the command you ran, its exit code, and its real output. If the live stack is unreachable, that is not license to skip evidence: \`docker compose config\` renders the fully merged compose file statically, needs no running stack, and produces real evidence for exactly the claims a live run would otherwise prove. Run it — and \`docker inspect\` against anything that is actually running — and quote the output. A static rendering is the substitute for a live stack, never an excuse to stop gathering evidence and start reasoning from the file by eye.
+2. **Halt.** If you cannot produce that evidence — the repo is not checked out, Docker itself is unreachable, a required credential is missing — end your output with \`PIPELINE-HALT: <reason>\` per "## Stopping" below.
+
+Do not resolve open questions, name host path conventions, or list service addresses from reading source files alone. If no command produced the fact, you do not have the fact.
 
 ## Report
 

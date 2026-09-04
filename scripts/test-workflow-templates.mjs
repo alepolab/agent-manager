@@ -234,4 +234,34 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
 }
 
+// ── 10. sdlc-stack-provisioner must produce executed-command evidence or
+//    halt — reading the compose file by eye is explicitly ruled out as a
+//    third outcome, not merely discouraged. This is the DEVOPS-23 defect:
+//    the agent had Bash, never ran it, and wrote a confident report anyway. ─
+{
+  const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
+  const provisioner = body('sdlc-stack-provisioner')
+  assert.match(provisioner, /docker compose config/,
+    'the static-evidence substitute for an unreachable live stack must be named by its real command')
+  assert.match(provisioner, /exit code/i,
+    'command evidence must require the exit code, not just prose claiming success')
+  assert.match(provisioner, /not one of them/i,
+    'a report produced from reading alone must be explicitly ruled out as an outcome, not just discouraged')
+}
+
+// ── 11. sdlc-ticket-intake must be told exactly where to find the real
+//    plugin_version and must never accept a placeholder that passes the
+//    schema's type check while being unverifiable ("unknown" is a string,
+//    so it validates - that is the defect). ───────────────────────────────
+{
+  const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
+  const intake = body('sdlc-ticket-intake')
+  assert.match(intake, /~\/\.claude\/plugins\//,
+    'the prompt must name the concrete search path for the installed plugin, not just "read it from the plugin"')
+  assert.match(intake, /\.claude-plugin\/plugin\.json/,
+    'the prompt must name the exact file to read the version field from')
+  assert.match(intake, /never a placeholder/i,
+    'an unreadable plugin_version must halt the run, not fall back to a placeholder string')
+}
+
 console.log('workflowTemplates: all assertions passed')
