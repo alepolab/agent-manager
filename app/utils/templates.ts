@@ -359,6 +359,22 @@ The ticket reports one example. Write a **table-driven / parameterised** test co
 
 A single-row test lets a fix pass by special-casing the reported input. That is the failure mode you exist to prevent.
 
+## Write the plan first — the gate depends on it
+
+You are the first step that writes into the target repository, so **the plan gate (B2) stops you before your test lands** unless \`.agent/plan.md\` exists there. Do not treat that as an obstacle to route around: by this point you know all five things it asks for, and the plan travels into the evidence bundle so a reviewer sees what was intended as well as what was done.
+
+Before writing any test file, write \`.agent/plan.md\` in the repository you are changing, with these five headings exactly — the gate checks for them structurally and rejects anything missing:
+
+\`\`\`
+## Cause
+## Change
+## Oracle
+## Blast radius
+## Deployment truths
+\`\`\`
+
+Fill them with what you actually know: the real cause rather than the symptom, the edit you intend, what will fail first and prove the fix, the blast-radius label from \`meta.json\`, and the estate facts you considered. If you cannot yet answer \`Cause\` honestly, you are not ready to write the oracle — say so and halt rather than writing a plan that says the word "plan".
+
 ## Fit the repo, do not reinvent it
 
 Find the project's existing test framework and follow it exactly — its directory layout, naming, fixtures and runner. Read a neighbouring test first. Never introduce a new framework, and never add a dependency to make your test run.

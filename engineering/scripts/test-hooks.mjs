@@ -74,6 +74,27 @@ Single-node safe; this path holds no per-process state.
   rmSync(dir, { recursive: true, force: true })
 }
 
+// 2b. Run-artifact writes are always allowed. The evidence bundle's artifacts
+// live outside any project (under CLAUDE_DIR/workflow-runs/<id>/artifacts), so
+// no .agent/plan.md can ever exempt them - without this the plan gate (B2)
+// denies exactly the evidence the bundle standard (R1) requires, and the two
+// controls deadlock. Found by the first real pipeline run, which halted at step
+// one because ticket-intake could not write intent.md.
+{
+  const dir = workspace()
+  for (const target of [
+    '/home/alepo/.claude/workflow-runs/abc-123/artifacts/intent.md',
+    '/home/alepo/.claude/workflow-runs/abc-123/artifacts/meta.json',
+    '/home/alepo/.claude/workflow-runs/abc-123/artifacts/steps/step-01-intake.json',
+  ]) {
+    const r = runHook('plan-gate.mjs', { cwd: dir, tool_name: 'Write', tool_input: { file_path: target } })
+    assert.equal(r.code, 0, `run artifacts must be writable with no plan present: ${target} -> ${r.message}`)
+  }
+  // The exemption must stay narrow: a path merely mentioning the word must not slip through.
+  const sneaky = runHook('plan-gate.mjs', { cwd: dir, tool_input: { file_path: join(dir, 'src/workflow-runs-notes.ts') }, tool_name: 'Write' })
+  assert.equal(sneaky.code, 2, 'a source file whose name merely resembles the artifacts path must still be gated')
+}
+
 // 3. A complete plan → allowed.
 {
   const dir = workspace(d => writeFileSync(join(d, '.agent/plan.md'), PLAN))

@@ -48,6 +48,18 @@ function main() {
   // otherwise the gate forbids satisfying the gate.
   if (target.includes('.agent/')) process.exit(0)
 
+  // A workflow run's evidence artifacts, likewise. They live outside any
+  // project — under CLAUDE_DIR/workflow-runs/<id>/artifacts — so no plan in
+  // any repo could ever exempt them, and gating them would have this control
+  // (B2) deny exactly the evidence the bundle standard (R1) requires. The
+  // first real pipeline run deadlocked on precisely that, halting at step one
+  // because ticket-intake could not write intent.md.
+  //
+  // Kept deliberately narrow: both path segments, in order, so a source file
+  // whose name merely resembles the path stays gated. This exempts evidence
+  // ABOUT the work, never the work itself.
+  if (/[\\/]workflow-runs[\\/][^\\/]+[\\/]artifacts[\\/]/.test(target)) process.exit(0)
+
   const planFile = join(cwd, PLAN_PATH)
   if (!existsSync(planFile)) {
     console.error(
