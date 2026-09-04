@@ -267,7 +267,7 @@ Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
-- \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`.
+- \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
 
 \`plugin_version\` is the installed version of the \`alepo-engineering\` plugin in this repository — read it from that plugin's own \`.claude-plugin/plugin.json\`. Report \`unknown\` only if the plugin genuinely is not installed here; never guess a version number. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
 

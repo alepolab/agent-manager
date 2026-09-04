@@ -221,7 +221,12 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     for (const owner of owners) {
       const text = body(owner)
       for (const value of values) {
-        assert.ok(text.includes(value),
+        // Backticked, not bare. A bare substring check cannot tell "taught as
+        // an allowed value" from "happens to appear in prose" - and most of
+        // these enum values are ordinary English words. Adding `deployment`
+        // to the schema passed this test unchanged, purely because the prompt
+        // already said "Deployment truths" in an unrelated section.
+        assert.ok(text.includes('`' + value + '`'),
           `${owner}'s prompt must name the literal ${field} value "${value}" verbatim - ` +
           `an agent that has never seen the word can't write it, and the schema rejects anything else`)
       }

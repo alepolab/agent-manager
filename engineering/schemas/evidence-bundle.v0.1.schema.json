@@ -20,7 +20,7 @@
       "enum": ["parsing", "dates", "validation", "state", "protocol", "leak", "capacity", "degradation", null]
     },
     "product": { "type": "string" },
-    "blast_radius": { "type": "string", "enum": ["docs", "ui_parsing", "schema", "protocol", "money"] },
+    "blast_radius": { "type": "string", "enum": ["docs", "ui_parsing", "schema", "protocol", "money", "deployment"], "description": "What is at risk if the change is wrong. \"deployment\" covers changes whose failure mode is in how the system is deployed or operated - compose mounts, topology, provisioning - rather than in code behaviour." },
     "identity": { "type": "string", "description": "The agent account that authored. Must not be an account able to approve." },
     "context_packet_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "intent_sha": { "type": "string", "minLength": 7 },

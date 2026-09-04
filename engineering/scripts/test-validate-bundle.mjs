@@ -100,6 +100,17 @@ check('work_type: bug with class: null is rejected', () => {
 // ── 2. A money change with no adversarial verification ─────────────────────
 // Money paths are exactly the ones a plausible-looking but wrong fix costs
 // real currency, so they get a mandatory adversarial pass.
+// A deployment-config defect has a blast radius, and before this value existed
+// it had nowhere honest to go: the enum was built around code changes, so the
+// first real ticket through the pipeline (DEVOPS-23, missing compose bind
+// mounts) had to be mislabelled `schema` to validate at all. A label nobody
+// can apply truthfully is worse than a missing one, because it still gets
+// filled in.
+check('blast_radius: deployment validates, and does not demand adversarial', () => {
+  const problems = validateBundle(broken((b) => { b.blast_radius = 'deployment'; b.adversarial = null }))
+  assert.deepEqual(problems, [], `a deployment-labelled bundle must validate: ${JSON.stringify(problems)}`)
+})
+
 check('blast_radius: money with adversarial: null is rejected', () => {
   const problems = validateBundle(broken(b => { b.blast_radius = 'money'; b.adversarial = null }))
   assert.ok(problems.length, 'expected at least one problem')
