@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
 import type { TicketState } from '~~/shared/types/watch'
@@ -127,6 +127,22 @@ export async function recordSuccess(watchId: string, key: string): Promise<Ticke
   all[key] = next
   await saveWatchState(watchId, all)
   return next
+}
+
+/**
+ * Removes a watch's entire ticket-state file. Called only from
+ * `DELETE /api/watches/[id]` — see that route's docstring for why state is
+ * deleted rather than orphaned when a watch is deleted: leaving it behind
+ * would let a later watch reusing the same id silently inherit old
+ * dispositions, including `escalated` tickets that would then never be
+ * picked up again. Returns whether a file actually existed to remove, so
+ * the caller can report explicitly rather than silently no-op.
+ */
+export async function deleteWatchState(watchId: string): Promise<boolean> {
+  const path = watchStatePath(watchId)
+  if (!existsSync(path)) return false
+  await unlink(path)
+  return true
 }
 
 /**

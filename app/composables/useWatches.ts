@@ -19,6 +19,15 @@ export interface CycleResult {
   failed: string[]
 }
 
+export interface DeleteWatchResult {
+  deleted: boolean
+  id: string
+  /** Whether a ticket-state file existed and was deleted along with the
+   *  watch — see `DELETE /api/watches/[id]` for why state is deleted rather
+   *  than left orphaned. */
+  stateDeleted: boolean
+}
+
 /**
  * Watches are keyed by `id`, not `slug`, and carry a second per-watch
  * resource (ticket state) the generic `useCrud` shape doesn't model — so
@@ -88,6 +97,24 @@ export function useWatches() {
     return state
   }
 
+  /**
+   * Deletes a watch and its ticket state together — see
+   * `DELETE /api/watches/[id]`'s docstring for why state is deleted rather
+   * than orphaned. Prunes the local `states`/`polling` maps too, so a stale
+   * entry for a deleted watch can't resurface in the UI.
+   */
+  async function remove(id: string): Promise<DeleteWatchResult> {
+    const result = await $fetch<DeleteWatchResult>(`/api/watches/${id}`, { method: 'DELETE' })
+    watches.value = watches.value.filter(w => w.id !== id)
+    const nextStates = { ...states.value }
+    delete nextStates[id]
+    states.value = nextStates
+    const nextPolling = { ...polling.value }
+    delete nextPolling[id]
+    polling.value = nextPolling
+    return result
+  }
+
   return {
     watches,
     loading,
@@ -100,5 +127,6 @@ export function useWatches() {
     fetchState,
     poll,
     clearEscalation,
+    remove,
   }
 }

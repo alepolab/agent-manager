@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Watch, TicketState, TicketDisposition } from '~~/shared/types/watch'
 
-const { watches, loading, error, states, polling, fetchAll, save, setEnabled, fetchState, poll, clearEscalation } = useWatches()
+const { watches, loading, error, states, polling, fetchAll, save, setEnabled, fetchState, poll, clearEscalation, remove } = useWatches()
 const { workflows, fetchAll: fetchWorkflows } = useWorkflows()
 const toast = useToast()
 
@@ -115,6 +115,27 @@ async function onClearEscalation(watch: Watch, key: string) {
     toast.add({ title: `${key} cleared`, description: 'Eligible for a fresh attempt next cycle.', color: 'success' })
   } catch (e: any) {
     toast.add({ title: 'Failed to clear escalation', description: e?.data?.message || e?.message, color: 'error' })
+  }
+}
+
+/** Deleting a watch also deletes its ticket state (including any escalated
+ *  tickets) — see the DELETE route's docstring for why. The confirm makes
+ *  that explicit up front since it can't be undone; the toast reports what
+ *  actually happened rather than assuming. */
+async function onDelete(watch: Watch) {
+  const confirmed = confirm(
+    `Delete watch "${watch.name}"? This also deletes its ticket state, including any escalated tickets. This cannot be undone.`,
+  )
+  if (!confirmed) return
+  try {
+    const result = await remove(watch.id)
+    toast.add({
+      title: 'Watch deleted',
+      description: result.stateDeleted ? 'Ticket state deleted too.' : 'No ticket state existed for this watch.',
+      color: 'success',
+    })
+  } catch (e: any) {
+    toast.add({ title: 'Failed to delete watch', description: e?.data?.message || e?.message, color: 'error' })
   }
 }
 
@@ -257,6 +278,14 @@ function relativeTime(ms: number): string {
                   <span class="field-toggle__thumb" />
                 </span>
               </label>
+              <UButton
+                icon="i-lucide-trash-2"
+                size="xs"
+                variant="ghost"
+                color="error"
+                title="Delete watch"
+                @click="onDelete(watch)"
+              />
             </div>
           </div>
 

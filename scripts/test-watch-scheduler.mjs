@@ -6,7 +6,7 @@
  *   node scripts/test-watch-scheduler.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -15,6 +15,7 @@ const sched = await import('../server/utils/watchScheduler.ts')
 const { setTicketSource } = await import('../server/utils/ticketSource.ts')
 const store = await import('../server/utils/watchStateStore.ts')
 const runStore = await import('../server/utils/workflowRunStore.ts')
+const config = await import('../server/utils/watchConfig.ts')
 
 /** A run record via the real store, its outcome overridden for the test. */
 async function makeRun(overrides = {}) {
@@ -250,6 +251,145 @@ const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
     'a disabled watch stops polling — its timer was torn down, not just its dispatch skipped')
 
   sched.stopScheduler()
+}
+
+// ══ GAP 1: deleting a watch removes it from listWatches AND leaves no
+//    orphaned timer. The scheduler's supervisor (reconcileTimers, 376ccd2)
+//    must tear the timer down on its own — same as a disable — with no
+//    restart. Driven against real timers, not mocked ones, exactly like the
+//    enable/disable block above. ═══════════════════════════════════════════
+{
+  let deleteWatchTicks = 0
+  setTicketSource({
+    fetch: async (w) => {
+      if (w.id !== 'w-delete-me') return []
+      deleteWatchTicks++
+      return [t(`DEL-${deleteWatchTicks}`)]
+    },
+  })
+  sched.setRunStarter(async () => {
+    const run = await makeRun()
+    return { runId: run.id }
+  })
+  // The scheduler now reads the REAL config store, exactly as
+  // server/plugins/watcher.ts wires it in production.
+  sched.setWatchSource(config.listWatches)
+
+  await config.saveWatch({ ...watch, id: 'w-delete-me', intervalSeconds: 1, enabled: false })
+  await config.saveWatch({ ...watch, id: 'w-delete-me', intervalSeconds: 1, enabled: true })
+
+  sched.startScheduler(50) // fast supervisor cadence, same as the enable/disable block
+  await new Promise(resolve => setTimeout(resolve, 1500))
+  assert.ok(deleteWatchTicks >= 1, 'sanity: the watch is actually polling before it is deleted')
+
+  const removed = await config.deleteWatch('w-delete-me')
+  assert.equal(removed, true, 'deleteWatch reports the watch existed')
+  assert.equal(await config.getWatch('w-delete-me'), null, 'gone from the config store')
+  assert.ok(!(await config.listWatches()).some(w => w.id === 'w-delete-me'), 'gone from listWatches')
+
+  await new Promise(resolve => setTimeout(resolve, 200)) // let the supervisor tear the timer down
+  const atDelete = deleteWatchTicks
+  await new Promise(resolve => setTimeout(resolve, 1500)) // longer than one full 1s interval
+  assert.equal(deleteWatchTicks, atDelete,
+    'no orphaned timer: a deleted watch stops polling on its own, no restart required')
+
+  sched.stopScheduler()
+
+  assert.equal(await config.deleteWatch('w-delete-me'), false,
+    'deleting an already-gone watch reports false rather than throwing')
+}
+
+// ── GAP 1: ticket-state-on-delete decision — state is DELETED, not
+//    orphaned, so a watch later re-created under the same id starts clean
+//    instead of silently inheriting old (possibly escalated) dispositions.
+//    This is the behaviour DELETE /api/watches/[id] carries out; exercised
+//    here at the store level since that route has no direct test harness. ──
+{
+  await store.recordAttempt('w-delete-state', 'ORPHAN-1')
+  // maxAttempts=1 so a single recorded attempt is already at the cap —
+  // escalates immediately, giving the sharpest version of the scenario the
+  // decision exists to prevent (a silently-inherited ESCALATED ticket).
+  await store.recordFailure('w-delete-state', 'ORPHAN-1', 'boom', 1)
+  const before = await store.getWatchState('w-delete-state')
+  assert.equal(before['ORPHAN-1'].disposition, 'escalated', 'setup: escalated before delete')
+
+  const existed = await store.deleteWatchState('w-delete-state')
+  assert.equal(existed, true, 'deleteWatchState reports a file actually existed')
+
+  const after = await store.getWatchState('w-delete-state')
+  assert.deepEqual(after, {}, 'ticket state is gone, not left orphaned on disk')
+
+  // The scenario this decision exists to prevent: a watch re-created with
+  // the same id must start with a clean slate.
+  const reCreated = await store.getWatchState('w-delete-state')
+  assert.equal(reCreated['ORPHAN-1'], undefined,
+    'a re-created watch with the same id does not silently inherit the old escalated ticket')
+
+  assert.equal(await store.deleteWatchState('w-delete-state'), false,
+    'deleting state that no longer exists reports false rather than throwing')
+}
+
+// ══ GAP 2: realRunStarter validates ticket shape before dispatch. A
+//    malformed ticket (no key — nothing to track or dispatch) fails ONLY
+//    itself; the well-formed tickets in the SAME cycle still dispatch,
+//    through the REAL run starter (not a stub), including a real
+//    (stubbed-agent) workflow run — the same seam
+//    scripts/test-workflow-runner.mjs uses to avoid a network call. ════════
+{
+  const { realRunStarter, validateTicket } = await import('../server/utils/watchRunStarter.ts')
+  const runner = await import('../server/utils/workflowRunner.ts')
+
+  // validateTicket, unit-level: exactly the two undispatchable shapes, and
+  // exactly what is NOT rejected (a stylistic gap, not an undispatchable one).
+  assert.match(
+    validateTicket({ key: '', summary: 's', description: 'd', updatedAt: 1 }) ?? '',
+    /no key/,
+  )
+  assert.match(
+    validateTicket({ key: 'K-1', summary: '', description: '', updatedAt: 1 }) ?? '',
+    /summary or description/,
+  )
+  assert.equal(
+    validateTicket({ key: 'K-1', summary: '', description: 'd', updatedAt: 1 }), null,
+    'missing summary alone is not disqualifying — there is still something for the prompt',
+  )
+  assert.equal(
+    validateTicket({ key: 'K-1', summary: 's', description: '', updatedAt: 1 }), null,
+    'missing description alone is not disqualifying — there is still something for the prompt',
+  )
+
+  // Stub the agent caller so this exercises the real startRun path with no
+  // network call — same seam scripts/test-workflow-runner.mjs stubs.
+  runner.setAgentCaller(async () => 'stub output')
+
+  const wfSlug = 'watch-realrunstarter-demo'
+  mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', `${wfSlug}.json`), JSON.stringify({
+    name: 'Demo', steps: [{ id: 'a', agentSlug: 'agent-a', label: 'A' }],
+  }))
+
+  const rWatch = { ...watch, id: 'w-realrunstarter', workflowSlug: wfSlug }
+  sched.setRunStarter(realRunStarter)
+  setTicketSource({
+    fetch: async () => [
+      { key: 'GOOD-1', summary: 'ok', description: 'fine', updatedAt: 1 },
+      { summary: 'no key on this one', description: 'still no key', updatedAt: 2 }, // malformed: no key
+      { key: 'GOOD-2', summary: 'ok too', description: 'also fine', updatedAt: 3 },
+    ],
+  })
+
+  const result = await sched.runCycle(rWatch)
+  assert.deepEqual(result.dispatched.sort(), ['GOOD-1', 'GOOD-2'],
+    'both well-formed tickets dispatched through the REAL run starter, even with a malformed ticket between them')
+  assert.equal(result.failed.length, 1, 'exactly the malformed ticket failed — not the whole cycle')
+
+  const state = await store.getWatchState('w-realrunstarter')
+  assert.equal(state['GOOD-1'].disposition, 'dispatched')
+  assert.equal(state['GOOD-2'].disposition, 'dispatched')
+  const malformedKey = result.failed[0]
+  assert.equal(state[malformedKey].disposition, 'failed')
+  assert.match(state[malformedKey].lastError, /no key/i,
+    "the malformed ticket's lastError states why it could not be dispatched")
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })

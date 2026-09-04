@@ -70,3 +70,21 @@ export async function saveWatch(watch: Watch): Promise<Watch> {
   await writeWatches(all)
   return toSave
 }
+
+/**
+ * Removes one watch from `watches.json`. Returns whether it existed.
+ *
+ * Deliberately does not touch that watch's ticket-state file
+ * (`watch-state/<id>.json`) — this module has no dependency on
+ * `watchStateStore.ts` by design (see the file docstring: config and
+ * per-ticket state are separate stores). `DELETE /api/watches/[id]` is
+ * where the decision to delete state too is made and carried out.
+ */
+export async function deleteWatch(id: string): Promise<boolean> {
+  const all = await listWatches()
+  const index = all.findIndex(w => w.id === id)
+  if (index === -1) return false
+  all.splice(index, 1)
+  await writeWatches(all)
+  return true
+}
