@@ -191,5 +191,66 @@ const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
   assert.equal(state['CYC-1'].attempts, 2, 'the retry is a genuinely new attempt on top of the one already counted')
 }
 
+// ══ THE PART 1 FIX: a watch enabled AFTER `startScheduler()` has already
+//    run must still poll on its own timer, and a disabled watch must stop
+//    polling — without a server restart. `startScheduler` used to read the
+//    watch list exactly once at boot; this drives real timers (a fast
+//    supervisor cadence, not a mocked one) and asserts on the OBSERVED
+//    effect of polling — the run starter actually being invoked by a timer
+//    firing on its own — not on a function having been called synchronously. ══
+{
+  let autoWatches = [] // mutated below to simulate watches.json changing under the scheduler
+  sched.setWatchSource(() => autoWatches)
+
+  let ticketCounter = 0
+  setTicketSource({
+    fetch: async (w) => {
+      if (w.id !== 'w-auto') return []
+      // A fresh ticket key every fetch so each tick has something new and
+      // eligible to dispatch — isolates "did the timer fire" from dedupe.
+      ticketCounter++
+      return [t(`AUTO-${ticketCounter}`)]
+    },
+  })
+
+  const starterCalls = []
+  sched.setRunStarter(async (_w, ticket) => {
+    starterCalls.push(ticket.key)
+    const run = await makeRun()
+    return { runId: run.id }
+  })
+
+  // Scheduler starts with NOTHING enabled — mirrors a server that booted
+  // before this watch existed, or before it was ever enabled.
+  sched.startScheduler(50) // fast supervisor cadence so the test doesn't wait on a production interval
+
+  await new Promise(resolve => setTimeout(resolve, 200))
+  assert.equal(starterCalls.length, 0, 'nothing polls before any watch exists')
+
+  // The watch is created and enabled AFTER the scheduler already started —
+  // exactly the gap T5 found: `saveWatch` writing this has no way to touch
+  // a timer that was set up once at boot.
+  autoWatches = [{ ...watch, id: 'w-auto', enabled: true, intervalSeconds: 1 }]
+
+  // Long enough for the supervisor (50ms) to pick up the new watch and for
+  // its own 1s timer to fire at least twice, with margin.
+  await new Promise(resolve => setTimeout(resolve, 3500))
+  const afterEnable = starterCalls.length
+  assert.ok(afterEnable >= 2,
+    `a watch enabled after startScheduler() must poll on its own timer without a restart (observed ${afterEnable} dispatch attempts, wanted >= 2)`)
+
+  // Disabling must stop the timer itself, not just skip dispatch inside
+  // runCycle (which already returns early for a disabled watch, but that's
+  // not what's being proven here — the timer must not even fire).
+  autoWatches = [{ ...watch, id: 'w-auto', enabled: false, intervalSeconds: 1 }]
+  await new Promise(resolve => setTimeout(resolve, 200)) // let the supervisor tear the timer down
+  const atDisable = starterCalls.length
+  await new Promise(resolve => setTimeout(resolve, 1500)) // longer than one full 1s interval
+  assert.equal(starterCalls.length, atDisable,
+    'a disabled watch stops polling — its timer was torn down, not just its dispatch skipped')
+
+  sched.stopScheduler()
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('watchScheduler: all assertions passed')

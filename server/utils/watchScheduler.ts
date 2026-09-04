@@ -207,7 +207,27 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
   return { dispatched, skipped, failed }
 }
 
-const timers = new Map<string, ReturnType<typeof setInterval>>()
+interface ScheduledTimer {
+  timer: ReturnType<typeof setInterval>
+  intervalSeconds: number
+  /** The watch this timer last ticked against — kept fresh on every
+   *  reconcile even when the interval itself is unchanged, so a field
+   *  change (workflow slug, caps, query) that doesn't require retiming
+   *  still reaches the next tick instead of the timer firing against a
+   *  watch object frozen at schedule time. */
+  watch: Watch
+}
+
+const timers = new Map<string, ScheduledTimer>()
+let supervisor: ReturnType<typeof setInterval> | null = null
+
+/**
+ * Cadence at which the supervisor re-reads the watch list and reconciles
+ * per-watch timers against it. A parameter to `startScheduler` (with this
+ * as its default), not a hardcoded constant, so a test can drive it fast
+ * without waiting on a production-sized interval.
+ */
+export const DEFAULT_SUPERVISOR_INTERVAL_MS = 1000
 
 export type WatchSource = () => Promise<Watch[]> | Watch[]
 
@@ -240,28 +260,86 @@ async function tick(watch: Watch): Promise<void> {
 }
 
 /**
- * Starts a `setInterval` per enabled watch returned by the current watch
- * source. Re-entrant: calling this again first stops any previously
- * scheduled timers, so it is safe to call after the watch list changes.
+ * Reconciles the live `timers` map against the current watch source. This is
+ * the Part 1 fix: `startScheduler` used to read the watch list exactly once
+ * at boot, so a watch created, enabled, disabled, or retimed afterward never
+ * took effect until the process restarted — the manual `poll` endpoint was
+ * the only thing that ever ran it. Called once immediately by
+ * `startScheduler` and then on every supervisor tick.
+ *
+ *  - enabled + unscheduled (new, or just flipped on): gets a timer
+ *  - enabled + `intervalSeconds` changed: old timer cleared, new one set —
+ *    retimed, never accumulated into a second interval
+ *  - enabled + unchanged: left running, but its captured `watch` is
+ *    refreshed so other field edits still reach the next tick
+ *  - disabled, or no longer returned by the source at all (deleted): timer
+ *    stopped and removed — no orphaned timer survives a disable or delete
  */
-export function startScheduler(): void {
-  stopScheduler()
-  const boot = async () => {
-    const watches = await watchSource()
-    for (const watch of watches) {
-      if (!watch.enabled) continue
-      const timer = setInterval(() => {
-        void tick(watch)
-      }, Math.max(1, watch.intervalSeconds) * 1000)
-      timers.set(watch.id, timer)
+async function reconcileTimers(): Promise<void> {
+  const watches = await watchSource()
+  const seen = new Set<string>()
+
+  for (const watch of watches) {
+    seen.add(watch.id)
+    const existing = timers.get(watch.id)
+    const intervalSeconds = Math.max(1, watch.intervalSeconds)
+
+    if (!watch.enabled) {
+      if (existing) {
+        clearInterval(existing.timer)
+        timers.delete(watch.id)
+      }
+      continue
+    }
+
+    if (existing) {
+      existing.watch = watch
+      if (existing.intervalSeconds === intervalSeconds) continue
+      clearInterval(existing.timer) // retime: replace, never accumulate
+    }
+
+    const entry: ScheduledTimer = {
+      watch,
+      intervalSeconds,
+      timer: setInterval(() => { void tick(entry.watch) }, intervalSeconds * 1000),
+    }
+    timers.set(watch.id, entry)
+  }
+
+  // A watch no longer returned by the source at all (deleted) must not
+  // leave an orphaned timer running against a watch that no longer exists.
+  for (const id of timers.keys()) {
+    if (!seen.has(id)) {
+      clearInterval(timers.get(id)!.timer)
+      timers.delete(id)
     }
   }
-  void boot()
 }
 
-/** Stops every timer started by `startScheduler`. Safe to call when nothing
- *  is running. */
+/**
+ * Starts the supervisor: reconciles timers immediately, then again every
+ * `supervisorIntervalMs`. Re-entrant: calling this again first stops
+ * everything (`stopScheduler`), so it is safe to call more than once.
+ *
+ * `supervisorIntervalMs` defaults to `DEFAULT_SUPERVISOR_INTERVAL_MS` so
+ * every real caller — `server/plugins/watcher.ts` calls `startScheduler()`
+ * with no arguments — still matches the watch source's own contract (no
+ * parameter needed to react to changes); a test may pass a shorter value to
+ * drive real timers without a production-sized wait.
+ */
+export function startScheduler(supervisorIntervalMs = DEFAULT_SUPERVISOR_INTERVAL_MS): void {
+  stopScheduler()
+  void reconcileTimers()
+  supervisor = setInterval(() => { void reconcileTimers() }, supervisorIntervalMs)
+}
+
+/** Stops every timer started by `startScheduler`, including the supervisor
+ *  itself. Safe to call when nothing is running. */
 export function stopScheduler(): void {
-  for (const timer of timers.values()) clearInterval(timer)
+  for (const entry of timers.values()) clearInterval(entry.timer)
   timers.clear()
+  if (supervisor) {
+    clearInterval(supervisor)
+    supervisor = null
+  }
 }
