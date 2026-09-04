@@ -20,7 +20,7 @@ import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 // which model actually ran instead of asserting a constant. Both are valid
 // AgentCaller results; normalizeAgentResult() below is the one place that
 // tells them apart.
-export type AgentCallOutput = string | { output: string, model: string }
+export type AgentCallOutput = string | { output: string, model: string | null }
 export type AgentCaller =
   (agentSlug: string, input: string, projectDir?: string) => Promise<AgentCallOutput>
 
@@ -251,7 +251,7 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
 /** The one place that tells apart a plain-string test stub's result from
  *  the real caller's { output, model } shape. A stub that doesn't report a
  *  model yields `model: undefined` here — never guessed. */
-function normalizeAgentResult(r: AgentCallOutput): { output: string, model?: string } {
+function normalizeAgentResult(r: AgentCallOutput): { output: string, model?: string | null } {
   return typeof r === 'string' ? { output: r } : r
 }
 

@@ -18,11 +18,13 @@ export interface RunStep {
   visits: number
   monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
   monitorNote?: string
-  /** The model alias the agent call actually used, when the caller reports
-   *  it. Absent when a stub caller (tests) or a failed call never returned
-   *  one — never guessed, since a wrong value here is the kind of defect
-   *  that produces no error. */
-  model?: string
+  /** The model the agent call actually ran, as the SDK's own system/init
+   *  message reported it (an observed id, e.g. 'claude-sonnet-4-6') - never
+   *  the alias requested. Absent when a stub caller (tests) never returned
+   *  one; `null` when the real caller ran but no init message reported a
+   *  model. Never guessed either way, since a wrong value here is the kind
+   *  of defect that produces no error. */
+  model?: string | null
 }
 
 export interface WorkflowRun {
