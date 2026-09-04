@@ -13,6 +13,19 @@ export interface AgentTemplate {
   body: string
 }
 
+// Shared, word-for-word, across every `sdlc-*` agent body below. It reads as a
+// standing rule rather than step-specific advice precisely because it is
+// identical everywhere — do not paraphrase per agent, and do not let a future
+// edit touch it in one body without touching all seven. See
+// scripts/test-workflow-templates.mjs for the regression test that enforces this.
+const SDLC_STANDING_RULES = `## Standing rules
+
+These hold at every step in this pipeline, not just this one:
+
+- **Verify against the artifact, not the description.** A doc, a \`FROM\` line, a config file, a ticket's own words — none of them are the thing itself. The SDK's own documentation once showed full model ids for an option that in practice only accepts bare aliases; the doc was wrong and the running system was right. Check the thing that will actually run, not what something says about it.
+- **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
+- **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
+
 export const agentTemplates: AgentTemplate[] = [
   {
     id: 'code-reviewer',
@@ -273,6 +286,12 @@ Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast
 
 \`plugin_version\` is the installed version of the \`alepo-engineering\` plugin. Find it yourself: search under \`~/.claude/plugins/\` for an \`alepo-engineering\` directory containing a \`.claude-plugin/plugin.json\`, read that file, and use its \`version\` field verbatim — never guess a version number and never construct one from a directory or path name. If that search genuinely turns up nothing — the plugin is not installed here — the correct action is \`PIPELINE-HALT\`, never a placeholder. \`unknown\` is a string, so it passes the bundle schema's type check silently; a value that passes validation without being verifiable is worse than a step that stops, because a reviewer trusts it exactly as much as a real version and has no way to tell the difference. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
 
+## Absent beats invented
+
+A value you cannot honestly derive from the ticket is not yours to supply. A \`model\` field was once recorded as fact by a runner that had never actually selected a model — the value looked plausible and nothing downstream could tell it apart from a real one. The same trap is available here: guessing a repository, a class, or a product from what "usually" breaks this way, rather than from what the ticket actually says. "Not stated" and "unclear" are correct, checkable answers; a confident guess dressed up as one of the enum values is not, however plausible it reads, and there is no way for a later step to notice you guessed.
+
+${SDLC_STANDING_RULES}
+
 ## Stopping
 
 If you cannot complete this step — the stack will not come up, the repository
@@ -337,6 +356,16 @@ Merge a \`stack\` key into \`meta.json\` in the run artifacts directory named at
 - \`liquibase_tag\` (string, or \`null\` if no Liquibase migration applied) — optional, but always include the key, even as \`null\`.
 
 \`meta.json\` already exists — read it, merge \`stack\` into the object, and write the whole object back. Never overwrite it.
+
+## Estate facts that bite here
+
+- Docker DNS resolves compose **service names and network aliases**, not \`container_name\` — if a service seems unreachable by name, confirm the alias with \`docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} aliases={{$v.Aliases}}{{end}}'\` before concluding the service is down.
+- If the profile you bring up touches \`sso\` (Keycloak + URM), that stack is **shared** with FFM, CRM, PCRF and VMS. Anything destructive there — recreating the URM container, deleting realm roles, re-seeding — affects other teams' running stacks. Say so explicitly in your report before doing it, and record what you removed so it can be restored.
+- Containerised apps in this estate run \`TZ=Asia/Kolkata\`. A timestamp that looks "wrong" against UTC is not evidence of a bug in what you just seeded.
+- A healthcheck reporting green does not mean requests succeed: healthcheck-green-but-every-request-401 is the signature of Keycloak/URM auth wiring, not the service itself. Confirm with an actual authenticated request, not just the healthcheck endpoint.
+- Config resolution here is **env first, config file second**, and \`\${VAR:-}\` in a compose file *defines* the variable as an empty string rather than leaving it unset. If you are seeding or checking a value the product treats as mandatory, confirm what the container's actual environment holds — empty, unset, and absent are three different states here and behave differently.
+
+${SDLC_STANDING_RULES}
 
 ## Stopping
 
@@ -406,6 +435,14 @@ Write the pre-fix run to \`oracle-before.xml\` in the run artifacts directory na
 
 Then merge an \`oracle\` key into \`meta.json\` in that same directory with \`kind\`, \`path\`, \`runs\` (3, from the three runs above) and \`rows\` (how many parameterised cases). Do not set \`verdict\` yourself — the assembler derives it from \`oracle-before.xml\`. \`kind\` is a closed enum; use exactly one of: \`parameterised_test\`, \`acceptance_tests\`, \`verification_check\`, \`doc_build\`, \`reproduction\` (this is almost always \`parameterised_test\`, given the table-driven test this step produces). \`meta.json\` already exists — read it, merge \`oracle\` into the object, and write the whole object back. Never overwrite it.
 
+## Zero is not a pass
+
+\`<testsuite tests="0" failures="0"/>\` is not a passing suite, and it is not the FAIL you are supposed to produce here either. "No failures" only means something when tests actually ran — a filter that matches nothing, a collection error that silently drops the whole file, and a suite where every row is skipped all render as zero failures, and none of them are evidence the bug is real. Before you trust \`oracle-before.xml\`, check the \`tests\` count is what you expect (one per row, times three runs) — not just that \`failures\` is non-zero.
+
+This is also why a single run is not evidence on its own: three runs distinguish a real, deterministic reproduction from a flake that happened to fail once. If the three runs disagree with each other, you have not reliably reproduced the bug — say so and keep investigating rather than reporting the run that happened to go red.
+
+${SDLC_STANDING_RULES}
+
 ## Stopping
 
 If you cannot complete this step — the stack will not come up, the repository
@@ -469,6 +506,12 @@ Then merge a \`fix\` key into \`meta.json\` in that same directory. \`fix\` is a
 - \`merge_order\` (array of repo names, required only when \`repos\` has more than one entry — omit it entirely for a single-repo fix) — the order the repos must land in.
 
 \`meta.json\` already exists — read it, merge \`fix\` into the object, and write the whole object back. Never overwrite it.
+
+## Counted, not estimated
+
+\`files_changed\` and \`lines_changed\` are counts — get them from \`git diff --stat\` or equivalent, not from memory of what you touched. A \`model\` field was once recorded as fact by a runner that had never actually selected a model; the same failure mode is writing a plausible-looking number into \`fix\` without having run the command that would make it true. Absent-and-rejected beats present-and-wrong: if you cannot honestly compute a value here — a merge order you are not certain of, a commit sha you have not verified exists — leave it out and let the bundle validator reject it, rather than writing something that merely looks right.
+
+${SDLC_STANDING_RULES}
 
 ## Stopping
 
@@ -541,6 +584,14 @@ Then merge \`oracle_after\`, \`regression\`, and \`adversarial\` (the object abo
 
 \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
 
+## Prove the test tests something
+
+A test suite that stays green with the feature under test switched off entirely is not passing — it is not testing anything. That happened four separate times in this system before anyone caught it. Before you trust a green \`oracle-after.xml\`, take one adversarial pass: disable or revert the behaviour the fix introduced and confirm the suite goes red, then restore it. If it stays green with the fix effectively undone, the fix is not what is making the test pass, and that belongs in your report, not passed over quietly.
+
+Extend the same suspicion to any success signal you did not write yourself: a check that reads \`'result' in message\` is true for error results too, so every API failure can get silently recorded as an empty successful output. Read what a pass/fail field actually contains before you rely on it, not just whether it exists.
+
+${SDLC_STANDING_RULES}
+
 ## Stopping
 
 If you cannot complete this step — the stack will not come up, the repository
@@ -580,6 +631,12 @@ Either the captured evidence (command, exit code, counts, trace path, screenshot
 If you captured a trace, write it to \`trace.zip\` in the run artifacts directory named at the top of your input — the assembler records its filename only if the file is actually there.
 
 If there is no browser surface to trace, say so plainly and write nothing. The bundle allows a null trace; a fabricated \`trace.zip\` standing in for evidence that was never captured is worse than an honest absence.
+
+## An exit code is not a captured trace
+
+A Playwright run can exit 0 with nothing meaningful behind it — no tests collected, every test skipped, a \`trace.zip\` that exists but is empty. Confirm the counts (tests run, passed, failed) before you report a result, and confirm the trace file is actually populated before you name it in your report — an exit code alone is no more evidence than "the stack is up" is evidence with no request behind it.
+
+${SDLC_STANDING_RULES}
 
 ## Stopping
 
@@ -682,6 +739,12 @@ node engineering/scripts/assemble-bundle.mjs --run-dir <artifacts dir> --out <ar
 \`\`\`
 
 If it exits non-zero, the fields it names as missing are the finding. Report them exactly as printed, and **do not open a PR** — a PR carrying a bundle that failed assembly is worse than no PR, because it looks evidenced and is not.
+
+## Absent beats wrong, in the bundle too
+
+Every field you assemble here inherits the rule behind the PR-link placeholder above: a value that looks plausible but was never actually verified is worse than a missing one, because a missing field fails loudly at validation and a wrong one does not fail at all. If a prior step left something unresolved, implausible, or unverifiable in \`meta.json\`, that is a finding for your report — flag it — not something to smooth over so the bundle validates cleanly.
+
+${SDLC_STANDING_RULES}
 
 ## Stopping
 

@@ -276,4 +276,68 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     'the prompt must rule out null for watch, which is what a live run actually wrote')
 }
 
+// ── 12. The standing-rules section is word-for-word identical across every
+//    `sdlc-*` body. It is meant to read as a shared rule, not per-agent
+//    advice — a future edit that tweaks it in one body and not the others
+//    would defeat that, silently. Checked against the literal source text of
+//    SDLC_STANDING_RULES rather than a paraphrase, so a wording change in one
+//    place is guaranteed to still match every body it was copied into. ──────
+{
+  const source = readFileSync(new URL('../app/utils/templates.ts', import.meta.url), 'utf8')
+  const constMatch = source.match(/const SDLC_STANDING_RULES = `([\s\S]*?)`\n/)
+  assert.ok(constMatch, 'SDLC_STANDING_RULES constant must exist in app/utils/templates.ts')
+  // The constant's own source uses \` to escape literal backticks inside the
+  // template literal; un-escape those the same way the JS engine would so the
+  // comparison is against the actual runtime string, not its escaped source.
+  const standingRules = constMatch[1].replace(/\\`/g, '`').replace(/\\\$/g, '$')
+
+  const sdlcIds = ['sdlc-ticket-intake', 'sdlc-stack-provisioner', 'sdlc-test-author',
+                    'sdlc-fix-implementer', 'sdlc-verifier', 'sdlc-trace-capture',
+                    'sdlc-evidence-and-pr']
+  const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
+  for (const id of sdlcIds) {
+    assert.ok(body(id).includes(standingRules),
+      `${id}'s body must carry the SDLC_STANDING_RULES section verbatim - ` +
+      `it is meant to read as a standing rule, not advice that can drift per agent`)
+  }
+}
+
+// ── 13. No `sdlc-*` frontmatter block contains a repeated key. TypeScript
+//    silently resolves a duplicate object key to the last occurrence, so an
+//    insertion that lands inside the wrong block would not fail to compile -
+//    it would just quietly discard whatever the first occurrence set. That
+//    happened once already while this file was being edited. Scanned against
+//    the raw source text, since by the time the object is imported the
+//    duplicate has already collapsed and there is nothing left to detect. ───
+{
+  const source = readFileSync(new URL('../app/utils/templates.ts', import.meta.url), 'utf8')
+  // Each agent template entry starts with `id: '<id>',` at the object's top level
+  // (two-space indent) - split the file into per-entry chunks on that boundary.
+  const entryStarts = [...source.matchAll(/^  \{\n    id: '([^']+)',/gm)]
+  assert.ok(entryStarts.length > 0, 'expected to find at least one agent template entry')
+
+  for (let i = 0; i < entryStarts.length; i++) {
+    const id = entryStarts[i][1]
+    const start = entryStarts[i].index
+    const end = i + 1 < entryStarts.length ? entryStarts[i + 1].index : source.length
+    const entry = source.slice(start, end)
+
+    const frontmatterMatch = entry.match(/frontmatter: \{([\s\S]*?)\n    \},\n    body:/)
+    assert.ok(frontmatterMatch, `${id}: expected a frontmatter block bounded by 'frontmatter: {' ... '},\\n    body:'`)
+
+    // Frontmatter values in this file are strings, numbers, or flat arrays -
+    // no nested objects - so every top-level key is a line matching this shape.
+    const keyLines = [...frontmatterMatch[1].matchAll(/^      (\w+):/gm)].map(m => m[1])
+    const seen = new Set()
+    const duplicates = new Set()
+    for (const key of keyLines) {
+      if (seen.has(key)) duplicates.add(key)
+      seen.add(key)
+    }
+    assert.equal(duplicates.size, 0,
+      `${id}'s frontmatter block has a repeated key (${[...duplicates].join(', ')}) - ` +
+      'TypeScript resolves this to the last occurrence silently, discarding the first')
+  }
+}
+
 console.log('workflowTemplates: all assertions passed')
