@@ -14,14 +14,19 @@ import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 type StepWithUsage = RunStep & { usage?: AgentUsage | null }
 
 /**
- * Where a run's evidence lives. Deliberately OUTSIDE CLAUDE_DIR: Claude Code
- * treats `~/.claude/**` as sensitive config and the Write tool refuses to
- * write there — an sdlc-* agent instructed to write into a directory under
- * CLAUDE_DIR (the original design) is instructed to write somewhere it
- * structurally cannot. Measured directly: a real callAgent() call with a
- * scratch agent, checked with existsSync, blocked on
- * `~/.claude/workflow-runs/**` and succeeded on `~/.agent-manager/**` and
- * `/tmp/**`. Default root is `~/.agent-manager/workflow-runs`; AGENT_RUNS_DIR
+ * Where a run's evidence lives. Deliberately OUTSIDE CLAUDE_DIR: a real
+ * callAgent() call, checked with existsSync (never the agent's own account),
+ * has been observed blocked writing under `~/.claude/workflow-runs/**` in
+ * three separate measurements — a live DEVOPS-23 run that halted at step
+ * one, and two follow-up probes across different working directories — and
+ * has NOT been reproduced in one other session, including a probe against
+ * this exact `~/.claude/workflow-runs/**` path that succeeded there. The
+ * mechanism (a Write-tool guard over `~/.claude/**` as sensitive config,
+ * presumably) is not isolated — nobody has pinned down what varies between
+ * the sessions that saw it and the one that didn't. Treat the block as real
+ * and plan around it (that is what this file does), but don't repeat it
+ * downstream as settled fact beyond "observed blocked most of the time,
+ * mechanism unconfirmed." Default root is `~/.agent-manager/workflow-runs`; AGENT_RUNS_DIR
  * overrides it (tests and deployments both use this). The run *record* JSON
  * (workflowRunStore.ts) is unaffected and deliberately stays under
  * CLAUDE_DIR — that's the server's own state, written with `fs` by the
