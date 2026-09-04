@@ -11,7 +11,8 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
-    "typecheck": "nuxt typecheck"
+    "typecheck": "nuxt typecheck",
+    "test:e2e": "node e2e/workflow-run-panel.smoke.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.76",
@@ -35,6 +36,8 @@
   "devDependencies": {
     "@iconify-json/lucide": "^1.2.95",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.7"
+    "playwright": "^1.62.1",
+    "typescript": "^5.7",
+    "vue-tsc": "^3.3.11"
   }
 }

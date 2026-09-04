@@ -29,3 +29,7 @@ tsconfig.tsbuildinfo
 
 # Staged Claude config payload (rebuilt by scripts/stage-claude-config.sh)
 docker/claude-config/
+
+# Playwright browser-test artifacts (e2e/*.smoke.mjs), if ever produced
+test-results/
+playwright-report/
