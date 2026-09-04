@@ -8,14 +8,32 @@
  * Source: https://www.anthropic.com/pricing
  */
 
-export const MODEL_IDS = ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'] as const
+export const MODEL_IDS = ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] as const
 export type ModelId = (typeof MODEL_IDS)[number]
 
-/** Map from the short "tier" alias (used in agent frontmatter) to the full API model id */
+/**
+ * Map from the short "tier" alias (used in agent frontmatter) to the full API
+ * model id.
+ *
+ * Verified by live `query()` calls against the installed
+ * @anthropic-ai/claude-agent-sdk (0.2.81) on 2026-09-03, reading the
+ * `system`/`init` message's `model` field for each alias:
+ *   sonnet -> claude-sonnet-4-6
+ *   opus   -> claude-opus-4-6
+ *   haiku  -> claude-haiku-4-5-20251001
+ *
+ * These full ids move whenever a new model snapshot is released, without
+ * notice - the alias ('sonnet' | 'opus' | 'haiku') is the stable thing to
+ * actually pass to the SDK (see agentCaller.ts, which does exactly that and
+ * does NOT consume this map). This table exists to RECORD what ran, not to
+ * be fed back into `query()`'s `options.model` - re-verify before doing
+ * that; a previous (now corrected) version of this map held ids
+ * ('claude-opus-4' etc.) that the SDK rejected outright.
+ */
 export const MODEL_ALIAS: Record<string, ModelId> = {
-  opus: 'claude-opus-4',
-  sonnet: 'claude-sonnet-4',
-  haiku: 'claude-haiku-4',
+  opus: 'claude-opus-4-6',
+  sonnet: 'claude-sonnet-4-6',
+  haiku: 'claude-haiku-4-5-20251001',
 }
 
 /**
@@ -58,25 +76,25 @@ export interface ServerModelMeta {
 }
 
 export const SERVER_MODEL_META: Record<ModelId, ServerModelMeta> = {
-  'claude-opus-4': {
-    id: 'claude-opus-4',
+  'claude-opus-4-6': {
+    id: 'claude-opus-4-6',
     contextWindow: 200_000,
     pricing: { input: 15.0, output: 75.0, cached: 1.5 },
   },
-  'claude-sonnet-4': {
-    id: 'claude-sonnet-4',
+  'claude-sonnet-4-6': {
+    id: 'claude-sonnet-4-6',
     contextWindow: 200_000,
     pricing: { input: 3.0, output: 15.0, cached: 0.3 },
   },
-  'claude-haiku-4': {
-    id: 'claude-haiku-4',
+  'claude-haiku-4-5-20251001': {
+    id: 'claude-haiku-4-5-20251001',
     contextWindow: 200_000,
     pricing: { input: 0.8, output: 4.0, cached: 0.08 },
   },
 }
 
 /** Fallback pricing when model is unknown */
-export const DEFAULT_PRICING: ModelPricing = SERVER_MODEL_META['claude-sonnet-4'].pricing
+export const DEFAULT_PRICING: ModelPricing = SERVER_MODEL_META['claude-sonnet-4-6'].pricing
 
 /** Default context window when model is unknown */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
