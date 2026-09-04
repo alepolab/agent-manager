@@ -245,6 +245,27 @@ assert.ok(cStart < bEnd,
   assert.ok(p4.includes('OUTPUT-OF-a3'), 'default mode includes the direct predecessor')
 }
 
+// A large upstream output under DEFAULT contextMode is passed through whole.
+// This is the guard for the regression the budget nearly introduced: capping
+// the default path would silently change every existing workflow whose step
+// emits a full diff or log dump.
+{
+  const huge = 'Y'.repeat(100000)
+  const two = {
+    slug: 'passthrough', name: 'Passthrough',
+    steps: [
+      { id: 'p1', agentSlug: 'p-1', label: 'One', next: ['p2'] },
+      { id: 'p2', agentSlug: 'p-2', label: 'Two', next: [] },
+    ],
+  }
+  runner.setAgentCaller(async () => huge)
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow: two, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const input = r.steps.find(s => s.stepId === 'p2').input
+  assert.ok(input.includes(huge), 'default mode passes a large upstream output through whole')
+  assert.ok(!input.includes('[truncated'), 'default mode never truncates')
+}
+
 // The join is capped, and the cap never drops a whole ancestor.
 {
   const big = 'X'.repeat(200000)

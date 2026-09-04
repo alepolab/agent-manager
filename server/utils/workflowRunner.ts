@@ -178,6 +178,13 @@ const MAX_JOINED_CONTEXT = 60000
  * budget a verbose early step could consume the whole allowance and push the
  * pre-fix FAIL output out entirely — silently reintroducing the exact defect
  * `contextMode: 'ancestors'` exists to fix. Truncation is always marked.
+ *
+ * Used only by `contextMode: 'ancestors'` — that mode's fan-in is unbounded
+ * by the graph (it can pull in the entire upstream chain), so it is the one
+ * that needs a cap. The default predecessor-join path has always passed
+ * upstream output through whole via bare `joinInputs`, and must keep doing
+ * so: capping it would silently change every existing workflow whose step
+ * legitimately emits a full diff or log dump.
  */
 function joinBudgeted(parts: { label: string, text: string }[]): string {
   if (!parts.length) return ''
@@ -203,13 +210,19 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
   const trigger = l.state.triggeredBy[id]
   if (trigger) return l.outputs[trigger] ?? ''
   const step = stepOf(l, id)
+  const useAncestors = step?.contextMode === 'ancestors'
   // ancestorsOf returns nearest-first; reverse so the join reads
   // oldest-to-newest, the order a person reads a pipeline in.
-  const preds = step?.contextMode === 'ancestors'
+  const preds = useAncestors
     ? ancestorsOf(l.graph, id).reverse()
     : (l.graph.forwardPreds[id] ?? [])
   if (!preds.length) return initialPrompt
-  return joinBudgeted(preds.map(p => ({ label: recOf(run, p).label, text: l.outputs[p] ?? '' })))
+  const parts = preds.map(p => ({ label: recOf(run, p).label, text: l.outputs[p] ?? '' }))
+  // The budget is 'ancestors'-only: that mode is the one whose fan-in is
+  // unbounded by the graph. The default path has always passed upstream
+  // output through whole, and a step legitimately emitting a large diff or
+  // log dump must keep doing so.
+  return useAncestors ? joinBudgeted(parts) : joinInputs(parts)
 }
 
 /**
