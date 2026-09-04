@@ -278,6 +278,18 @@ try {
     )
   }
 
+  // The at-a-glance summary. The seeded run has one completed, one running and
+  // one pending step, so exactly one is settled — asserting the count, not just
+  // the bar's presence, is what makes this catch a miscount.
+  const countEl = page.locator('[data-testid="run-progress-count"]')
+  await countEl.waitFor({ state: 'visible', timeout: 30_000 })
+  const countText = (await countEl.textContent()).replace(/\s+/g, ' ').trim()
+  assert.equal(countText, '1 / 3', `progress count must report settled steps, got "${countText}"`)
+
+  const segments = page.locator('[data-testid="run-progress-bar"] > span')
+  assert.equal(await segments.count(), 3,
+    'the bar carries one segment per step, so a reader sees the shape of the run, not a percentage')
+
   console.log(
     'PASS: workflow run panel rendered all 3 seeded step rows (completed, running, pending) '
     + 'with correct labels and status colors',

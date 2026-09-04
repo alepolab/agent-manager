@@ -21,6 +21,19 @@ const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
   const secs = Math.round((end - s.startedAt) / 1000)
   return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
 }
+/**
+ * Progress is reported as a count and a segment per step, never as a single
+ * percentage. A run whose third step failed and whose remaining four were
+ * skipped is not "43% done" — it is finished, badly. One segment per step,
+ * coloured by that step's own status, says what actually happened; a bar
+ * filling left to right would imply progress the run never made.
+ */
+const settled = new Set(['completed', 'failed', 'skipped', 'stopped'])
+const progress = computed(() => {
+  const steps = props.run?.steps ?? []
+  return { done: steps.filter(s => settled.has(s.status)).length, total: steps.length }
+})
+
 const expanded = ref<string | null>(null)
 </script>
 
@@ -31,7 +44,21 @@ const expanded = ref<string | null>(null)
         {{ run.status }}
       </span>
       <span class="text-[12px] text-label">{{ run.workflowName }}</span>
-      <span class="text-[11px] text-label ml-auto">{{ elapsed({ startedAt: run.startedAt, completedAt: run.endedAt }) }}</span>
+      <span class="text-[11px] text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">
+        {{ progress.done }} / {{ progress.total }}
+      </span>
+      <span class="text-[11px] text-label">{{ elapsed({ startedAt: run.startedAt, completedAt: run.endedAt }) }}</span>
+    </div>
+
+    <!-- One segment per step, coloured by that step's status. See `progress`. -->
+    <div class="flex gap-0.5" data-testid="run-progress-bar" :aria-label="`${progress.done} of ${progress.total} steps settled`">
+      <span
+        v-for="step in run.steps"
+        :key="`seg-${step.stepId}`"
+        class="h-1 flex-1 rounded-sm"
+        :style="{ background: STATUS_COLOR[step.status] }"
+        :title="`${step.label}: ${step.status}`"
+      />
     </div>
 
     <p v-if="run.status === 'interrupted'" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">
