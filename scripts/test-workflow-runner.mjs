@@ -6,7 +6,7 @@
  *   node scripts/test-workflow-runner.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -25,6 +25,28 @@ const workflow = {
     { id: 'c', agentSlug: 'agent-c', label: 'C', next: ['d'] },
     { id: 'd', agentSlug: 'agent-d', label: 'D', next: [] },
   ],
+}
+
+/**
+ * An agent's only channel for learning where to write is the artifact
+ * header prepended to its input (`Write every artifact you produce into:
+ * <dir>`). Tests use that same channel to make the stub agent poison
+ * meta.json with a false claim mid-run — the one thing only
+ * finalizeRunArtifacts, not initRunArtifacts's seed, can undo. Asserting
+ * identity/cost alone without this would pass from the seed even with
+ * finalize disabled entirely.
+ */
+function poisonMetaFromInput(input) {
+  const m = input.match(/Write every artifact you produce into: (\S+)/)
+  if (!m) return
+  const metaPath = join(m[1], 'meta.json')
+  const cur = JSON.parse(readFileSync(metaPath, 'utf8'))
+  writeFileSync(metaPath, JSON.stringify({
+    ...cur,
+    identity: 'agent-overwrote-this',
+    cost: { ...cur.cost, input_tokens: 999999 },
+    ticket: 'AGENT-1', // an agent-owned key; must SURVIVE finalize
+  }, null, 2))
 }
 
 // ── 0. startRun returns BEFORE the run finishes — proves the fix ──────────
@@ -290,17 +312,24 @@ assert.ok(cStart < bEnd,
   assert.ok(input.includes('MARKER-big-2'), 'the near ancestor is still present')
 }
 
-// The runner writes its own record of every run.
+// The runner writes its own record of every run — and finalize's
+// re-assertion of the runner-owned keys is what an assertion here actually
+// has to prove, not initRunArtifacts's seed. The stub agent poisons
+// meta.json mid-run; the settled run's meta.json must show the poison
+// overwritten, not merely present from the start.
 {
-  const { existsSync, readFileSync } = await import('node:fs')
-  const { join } = await import('node:path')
-  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  runner.setAgentCaller(async (agentSlug, input) => {
+    poisonMetaFromInput(input)
+    return `output of ${agentSlug}`
+  })
   const r = await runner.waitForSettled(
     (await runner.startRun({ workflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
   const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
   assert.ok(existsSync(join(dir, 'meta.json')), 'meta.json exists after a run')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
-  assert.equal(meta.identity, 'demo', 'meta.json names the workflow that ran')
+  assert.equal(meta.identity, 'demo', 'finalize re-asserts the runner identity over the agent claim')
+  assert.equal(meta.cost.input_tokens, 0, 'a self-reported token count is overwritten, not trusted')
+  assert.equal(meta.ticket, 'AGENT-1', 'agent-owned keys survive finalize')
   assert.ok(existsSync(join(dir, 'steps', 'step-01-agent-a.json')), 'per-step record exists')
   const first = JSON.parse(readFileSync(join(dir, 'steps', 'step-01-agent-a.json'), 'utf8'))
   assert.equal(first.output, 'output of agent-a', 'the step record holds the real output')
@@ -312,10 +341,10 @@ assert.ok(cStart < bEnd,
 // finalizeRunArtifacts now lives in exactly one place — publish(), gated on a
 // terminal status — rather than at each of the six-plus call sites a run can
 // settle from. A run settled purely through respondToRun (never touching
-// runWave's terminal branches) must still get a finalized meta.json.
+// runWave's terminal branches) must still get a finalized meta.json — proven
+// by poisoning it mid-run and checking the poison is gone, not merely by
+// checking fields the seed already sets.
 {
-  const { readFileSync } = await import('node:fs')
-  const { join } = await import('node:path')
   // Same shape as the C3 retry-once workflow above: a RETRY verdict re-arms
   // the sole node and pauses on it, so the run's eventual 'completed' comes
   // entirely from respondToRun's own isFinished check — runWave's terminal
@@ -325,7 +354,8 @@ assert.ok(cStart < bEnd,
     steps: [{ id: 'only', agentSlug: 'agent-only', label: 'Only', next: [], monitorSlug: 'monitor-only', maxVisits: 3 }],
   }
   let monitorCalls = 0
-  runner.setAgentCaller(async (agentSlug) => {
+  runner.setAgentCaller(async (agentSlug, input) => {
+    poisonMetaFromInput(input)
     if (agentSlug === 'monitor-only') {
       monitorCalls += 1
       return monitorCalls === 1 ? 'Needs work.\nVERDICT: RETRY' : 'Looks good.\nVERDICT: CONTINUE'
@@ -341,15 +371,18 @@ assert.ok(cStart < bEnd,
   const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
   assert.equal(meta.identity, 'respond-settle',
-    'a respondToRun-settled run still finalizes meta.json, with no call site in respondToRun itself')
-  assert.equal(typeof meta.cost.wall_clock_min, 'number', 'wall clock is recorded off the wave path too')
+    'finalize re-asserts the runner identity over the agent claim, with no call site in respondToRun itself')
+  assert.equal(meta.cost.input_tokens, 0, 'a self-reported token count is overwritten, not trusted')
+  assert.equal(meta.ticket, 'AGENT-1', 'agent-owned keys survive finalize')
 }
 
-// stopRun is a second terminal path with no wave-loop coverage; it must finalize too.
+// stopRun is a second terminal path with no wave-loop coverage; it must
+// finalize too — same poison-and-check proof as above.
 {
-  const { readFileSync } = await import('node:fs')
-  const { join } = await import('node:path')
-  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  runner.setAgentCaller(async (agentSlug, input) => {
+    poisonMetaFromInput(input)
+    return `output of ${agentSlug}`
+  })
   let r = await runner.startRun({ workflow, initialPrompt: 'go', autoRun: false })
   r = await runner.waitForSettled(r.id, TIMEOUT)
   assert.equal(r.status, 'paused')
@@ -357,8 +390,9 @@ assert.ok(cStart < bEnd,
   assert.equal(r.status, 'stopped', 'stopRun actually stops a paused run')
   const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
   const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
-  assert.equal(meta.identity, 'demo', 'a stopRun-settled run still finalizes meta.json')
-  assert.equal(typeof meta.cost.wall_clock_min, 'number', 'wall clock is recorded on the stop path too')
+  assert.equal(meta.identity, 'demo', 'finalize re-asserts the runner identity over the agent claim')
+  assert.equal(meta.cost.input_tokens, 0, 'a self-reported token count is overwritten, not trusted')
+  assert.equal(meta.ticket, 'AGENT-1', 'agent-owned keys survive finalize')
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
