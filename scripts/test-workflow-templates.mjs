@@ -264,4 +264,16 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     'an unreadable plugin_version must halt the run, not fall back to a placeholder string')
 }
 
+// A directly-invoked run has no watch, but the schema requires the field as a
+// non-nullable string. The reserved literal is the only honest value, and the
+// prompt is the only place an agent can learn it — a live run wrote `null` and
+// would have failed assembly.
+{
+  const intake = AGENT_TEMPLATES.find(a => a.id === 'sdlc-ticket-intake').body
+  assert.ok(intake.includes('`direct-invocation`'),
+    'sdlc-ticket-intake must name the reserved watch literal for a directly-invoked run')
+  assert.ok(/never\s+\\?`?null/i.test(intake) || intake.includes('Never `null`'),
+    'the prompt must rule out null for watch, which is what a live run actually wrote')
+}
+
 console.log('workflowTemplates: all assertions passed')
