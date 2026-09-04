@@ -147,4 +147,56 @@ const baseProducts = readFileSync(join(root, 'registry/products.yaml'), 'utf8')
   assert.match(r.out, /is not one of/, r.out)
 }
 
+// ── 13. match.unconfirmed must be inert — cannot also carry routing criteria ─
+// A product with unconfirmed routing must be structurally incapable of
+// matching a ticket. Setting unconfirmed: true alongside a real criterion is
+// exactly the "tries to both route and be unconfirmed" case the task exists
+// to reject — a wrong match silently misroutes a ticket, which is worse than
+// the product being absent.
+{
+  const unconfirmedPcMatch = [
+    '  pc:',
+    '    match:',
+    '      unconfirmed: true                       # CONFIRM: no Jira product-routing source found',
+    '    repos: [alepolab/pc]'
+  ].join('\n')
+  assert.ok(baseProducts.includes(unconfirmedPcMatch), 'fixture text must match products.yaml verbatim, or this test is not testing what it says')
+  const r = runWith({
+    products: baseProducts.replace(
+      '      unconfirmed: true                       # CONFIRM: no Jira product-routing source found\n    repos: [alepolab/pc]',
+      '      unconfirmed: true\n      components: [PC]\n    repos: [alepolab/pc]'
+    )
+  })
+  assert.equal(r.code, 1, 'unconfirmed: true with components set must fail')
+  assert.match(r.out, /match\.unconfirmed is true but also sets components/, r.out)
+}
+
+// ── 14. match must be either confirmed (has a criterion) or explicitly
+//        marked unconfirmed — never silently neither ─────────────────────
+{
+  const r = runWith({
+    products: baseProducts.replace(
+      '      unconfirmed: true                       # CONFIRM: no Jira product-routing source found\n    repos: [alepolab/pc]',
+      '      unconfirmed: false\n    repos: [alepolab/pc]'
+    )
+  })
+  assert.equal(r.code, 1, 'match with no criteria and unconfirmed: false must fail, not pass as silently unmatchable')
+  assert.match(r.out, /mark match\.unconfirmed: true/, r.out)
+}
+
+// ── 15. an unconfirmed product is inert but otherwise valid — proves the
+//        registry check accepts the "present but not routable" state ──────
+{
+  const vmsUnconfirmedMatch = [
+    '  vms:',
+    '    match:',
+    '      components: [VMS, Voucher]'
+  ].join('\n')
+  assert.ok(baseProducts.includes(vmsUnconfirmedMatch), 'fixture text must match products.yaml verbatim, or this test is not testing what it says')
+  const r = runWith({
+    products: baseProducts.replace(vmsUnconfirmedMatch, '  vms:\n    match:\n      unconfirmed: true')
+  })
+  assert.equal(r.code, 0, `an inert (unconfirmed, no criteria) product must still pass the registry check, got:\n${r.out}`)
+}
+
 console.log('validate-registry: all assertions passed')

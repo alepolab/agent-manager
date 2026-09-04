@@ -26,6 +26,18 @@
 # fail-safe default, because a wrong `can_upgrade` tells a customer who cannot
 # upgrade to go upgrade, while a wrong `pinned` only costs an unnecessary
 # backport. Confirm per product before this drives a real ticket.
+#
+# match.unconfirmed: true (cgw, pc, cm, rpm, billing, ocs, selfcare, crm, urm,
+# wso2, tacacs-platform, ams, added 2026-09-04) marks routing that has no
+# evidence source at all — the Jira instance's 50+ projects are overwhelmingly
+# customer-engagement and CR buckets (AFGMB, ALLO, ACTBB, AFDRC, ...), not
+# product routers, so components/projects/labels cannot be derived the way
+# images/version were. An unconfirmed product carries no components, projects
+# or labels — the registry check rejects an entry that sets both — so it is
+# present, documented and ready for a repo champion to confirm, but cannot
+# silently claim a ticket in the meantime. A wrong match is worse than a
+# missing product: it quietly sends a ticket to the wrong repo instead of
+# failing loudly.
 
 products:
   aaa:
@@ -207,3 +219,425 @@ products:
         floating latest for continuous deploy of pre-release code — ignore
         those when resolving a customer-reported release version.
     upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence; vouchers are a money path (see owners.money)
+
+
+  cgw:
+    # charging-gateway. User notes suggest the SA board covers OCS/charging,
+    # but that is a hint for a human, not an active match criterion — see
+    # match.unconfirmed below and the file header note.
+    match:
+      unconfirmed: true                      # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/charging-gateway]
+    branches:
+      bug: main                              # CONFIRM: GitHub default branch; repo not in the CLAUDE.md repo map's branch column, policy not independently confirmed
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/cgw      # matches the compose-profile vocabulary in the CLAUDE.md repo map (cgw)
+      topology_default: 1node                # CONFIRM: no HA/pairing evidence found
+      liquibase: false                       # CONFIRM
+    tests:
+      unit: 'npm test'                       # CONFIRM: tech stack not independently confirmed
+    owners:
+      protocol: cgw-tech-leads               # CONFIRM: group name guessed from domain
+      money: billing-owners                  # charging changes what gets billed
+    # Evidence: charging-gateway (GHCR package) confirmed linked to
+    # alepolab/charging-gateway via repository.full_name. Full 19-tag history
+    # sampled (single page, under the per-page cap).
+    images: [charging-gateway]
+    version:
+      strategy: branch_date_sha
+      hint: >-
+        Tags are develop-YYYYMMDD-<shortsha> / ci-release-YYYYMMDD-<shortsha>
+        (full history: 19 unique tags). A single v14.0.0-rc.1 tag exists but
+        was never followed by a GA v14.0.0 or any patch — not a resolvable
+        release-number convention. Two legacy bare tags (3.0.0, 3.0.1, no v
+        prefix) predate the current scheme and don't fit it either. Resolve a
+        reported version from the ticket's own date/sha evidence, as with ffm.
+    upgrade_policy: pinned                   # CONFIRM: fail-safe default, no evidence
+
+  pc:
+    match:
+      unconfirmed: true                       # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/pc]
+    branches:
+      bug: main                               # CONFIRM: GitHub default branch; repo not in the CLAUDE.md repo map's branch column
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/pc        # matches the compose-profile vocabulary (pc)
+      topology_default: 1node                 # CONFIRM
+      liquibase: false                        # CONFIRM
+    tests:
+      unit: 'npm test'                        # CONFIRM: tech stack not independently confirmed
+    owners:
+      schema: pc-owners                       # CONFIRM: group name guessed; Product Catalogue owns catalog/pricing schema
+    # Evidence: pc (GHCR package) confirmed linked to alepolab/pc via
+    # repository.full_name. Full 144-tag paginated history sampled.
+    images: [pc]
+    version:
+      strategy: semver_tag
+      hint: >-
+        Release tags are vMAJOR.MINOR.PATCH plus vX.Y.Z-rc.N and
+        v1.0.0-beta.N pre-releases (v1.0.0-beta.1 through .5, v14.0.0-rc.1/2/3,
+        v14.0.0 GA — full 144-tag history). The CI tags use a malformed
+        double-hyphen shape (ci-release--YYYYMMDD-sha, develop--YYYYMMDD-sha —
+        worth fixing at the source) but don't collide with the vX.Y.Z shape;
+        ignore them along with latest.
+    upgrade_policy: pinned                    # CONFIRM: fail-safe default, no evidence
+
+  cm:
+    match:
+      unconfirmed: true                        # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/collection-manager]
+    branches:
+      bug: main                                # CONFIRM: GitHub default branch; repo not in the CLAUDE.md repo map's branch column
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/cm         # matches the compose-profile vocabulary (cm)
+      topology_default: 1node                  # CONFIRM
+      liquibase: false                         # CONFIRM
+    tests:
+      unit: 'npm test'                         # CONFIRM: tech stack not independently confirmed
+    owners:
+      money: billing-owners                    # collections/dunning is a money path
+      schema: cm-owners                        # CONFIRM: group name guessed
+    # Evidence: collection-manager confirmed linked to
+    # alepolab/collection-manager via repository.full_name; full paginated
+    # history (198 version entries) sampled. Excluded from images:
+    # collection-manager-ci-release and collection-manager-develop (same
+    # repo, pure CI mirrors — tags are only sha-*/branch names, no version);
+    # collection-manager-v1.0.0-beta and collection-manager-v14.0.0-beta-1
+    # (same repo, one-off packages with the version baked into the package
+    # name, predating the tag-based versioning now used on the main
+    # package); and collection-manager-fix/sbn-2932-out-of-dunning-activity
+    # (same repo, a stray feature-branch artifact — tags are just a sha and
+    # the branch name).
+    images: [collection-manager]
+    version:
+      strategy: semver_tag
+      hint: >-
+        vMAJOR.MINOR.PATCH release tags with beta/rc pre-releases
+        (v1.0.0-beta.1/2, v14.0.0-beta.1, v14.0.0-rc.1-3, v14.0.0, v14.0.1,
+        v14.0.2 — full paginated history). See the images: comment above for
+        the four excluded sibling packages and why none of them is the
+        version source.
+    upgrade_policy: pinned                     # CONFIRM: fail-safe default, no evidence; collections is a money path (see owners.money)
+
+  rpm:
+    match:
+      unconfirmed: true                         # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/recharge-promotion-manager]
+    branches:
+      bug: main                                 # CONFIRM: GitHub default branch; repo not in the CLAUDE.md repo map's branch column
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/rpm         # matches the compose-profile vocabulary (rpm)
+      topology_default: 1node                   # CONFIRM
+      liquibase: false                          # CONFIRM
+    tests:
+      unit: 'npm test'                          # CONFIRM: tech stack not independently confirmed
+    owners:
+      money: billing-owners                     # recharge/promotions is a money path
+      schema: rpm-owners                        # CONFIRM: group name guessed
+    # Evidence: recharge-promotion-manager confirmed linked to
+    # alepolab/recharge-promotion-manager via repository.full_name. Full
+    # 59-tag paginated history sampled.
+    images: [recharge-promotion-manager]
+    version:
+      strategy: semver_tag
+      hint: >-
+        vMAJOR.MINOR.PATCH tags including v1.0.0-beta.1, v14.0.0-rc.1/2,
+        v14.0.0, v14.0.1 (full 59-tag history). One anomalous v2.0.0 tag sits
+        outside the v14.x sequence — not part of the current release line,
+        ignore it. Ignore develop-YYYYMMDD-sha / ci-release-YYYYMMDD-sha /
+        latest CI noise.
+    upgrade_policy: pinned                      # CONFIRM: fail-safe default, no evidence; recharge/promotions is a money path (see owners.money)
+
+  billing:
+    match:
+      unconfirmed: true                          # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/billing_cpp14]
+    branches:
+      bug: main                                  # CONFIRM: GitHub default branch; the CLAUDE.md repo map lists no default branch for billing_cpp14
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/billing      # matches the compose-profile vocabulary (billing)
+      topology_default: 1node                    # CONFIRM
+      liquibase: false                           # CONFIRM
+    build: 'make build'                          # CONFIRM: C++17 engine, mirrors aaa/pcrf's C++ build step
+    tests:
+      unit: 'ctest'                               # CONFIRM
+      atdd: 'robot --xunit out.xml tests/billing' # CONFIRM: repo map states "Billing engine rbsbill (C++17) + Robot ATDD"
+    owners:
+      money: billing-owners                      # rbsbill is the core money-processing engine
+      schema: billing-tech-leads                 # CONFIRM: group name guessed
+    # Evidence: alepobilling-14 and billing-builder-oel9 both confirmed
+    # linked to alepolab/billing_cpp14 via repository.full_name. Full 56-tag
+    # history sampled on alepobilling-14 (single page, complete); 1 tag on
+    # billing-builder-oel9.
+    images: [alepobilling-14, billing-builder-oel9]
+    version:
+      strategy: semver_tag
+      hint: >-
+        vMAJOR.MINOR.PATCH (optionally -debug) on alepobilling-14 (v14.0.2
+        through v14.0.6 sampled, full 56-tag history), plus DDMMYYYY nightly
+        tags (e.g. 03092026) and bare debug/latest — ignore those.
+        billing-builder-oel9 carries only latest, no version tag (build
+        tooling image; included for completeness, ignore for version
+        resolution).
+    upgrade_policy: pinned                       # CONFIRM: fail-safe default, no evidence; rbsbill is a money path (see owners.money)
+
+  ocs:
+    match:
+      unconfirmed: true                           # CONFIRM: no Jira product-routing source found; user notes suggest board SA (OCS/charging) but this is a hint, not confirmed routing
+    repos: [alepolab/ocs_cpp14]
+    branches:
+      bug: main                                   # CONFIRM: GitHub default branch; the CLAUDE.md repo map lists no default branch for ocs_cpp14
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/ocs           # matches the compose-profile vocabulary (ocs)
+      topology_default: 1node                     # CONFIRM
+      liquibase: false                            # CONFIRM
+    build: 'make build'                           # CONFIRM: C++14 engine, mirrors aaa/pcrf's C++ build step
+    tests:
+      unit: 'ctest'                                # CONFIRM
+    owners:
+      protocol: ocs-tech-leads                    # CONFIRM: group name guessed; Diameter online charging
+      money: billing-owners                       # OCS changes what gets charged
+    # Evidence: alepoocs-14 and ocs-builder-oel9 both confirmed linked to
+    # alepolab/ocs_cpp14 via repository.full_name. Full 59-tag history
+    # sampled on alepoocs-14 (single page, complete); 2 tags on
+    # ocs-builder-oel9. Excluded: ocs-ems (GHCR package) confirmed linked to
+    # alepolab/ocs-ems — a separate, unlisted repo, not ocs_cpp14, despite
+    # the name similarity.
+    images: [alepoocs-14, ocs-builder-oel9]
+    version:
+      strategy: semver_tag
+      hint: >-
+        vMAJOR.MINOR.PATCH (optionally -debug or -rc.N) on alepoocs-14
+        (v14.0.0-rc.3 through v14.0.2 sampled, full 59-tag history), plus
+        YYYYMMDD nightly tags and one stray devops18-test — ignore those.
+        ocs-builder-oel9 carries only a long-sha tag and latest, no version
+        (build tooling image).
+    upgrade_policy: pinned                        # CONFIRM: fail-safe default, no evidence; OCS is a money path (see owners.money)
+
+  selfcare:
+    match:
+      unconfirmed: true                            # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/lum-selfcare-v1]
+    branches:
+      bug: main                                    # CONFIRM: GitHub default branch; the CLAUDE.md repo map lists no default branch for lum-selfcare-v1
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/selfcare       # matches the compose-profile vocabulary (selfcare)
+      topology_default: 1node                      # CONFIRM
+      liquibase: false                             # CONFIRM
+    tests:
+      unit: 'npm test'                             # CONFIRM: Angular + Node per the CLAUDE.md repo map
+      ui_trace: playwright                         # Angular front end
+    owners:
+      ui_parsing: selfcare-owners                  # CONFIRM: group name guessed
+    # Evidence: lum-selfcare and lum-selfcare-ci-release both confirmed
+    # linked to alepolab/lum-selfcare-v1 via repository.full_name — full
+    # 325-tag and 108-tag paginated histories sampled respectively.
+    # Excluded: selfcarenow, selfcarenow-develop, selfcarenow-ci-release
+    # (confirmed linked to alepolab/selfcarenow) and selfcare (confirmed
+    # linked to alepolab/selfcare) — three different, unlisted repos, not
+    # lum-selfcare-v1, despite the near-identical package names. This is
+    # exactly the repo-name-vs-image-name trap this task's evidence standard
+    # exists to catch.
+    images: [lum-selfcare, lum-selfcare-ci-release]
+    version:
+      strategy: semver_tag
+      hint: >-
+        vMAJOR.MINOR.PATCH on lum-selfcare (v14.0.0-beta.1 through v14.0.17,
+        full 325-tag history), plus develop-/ci-release-/main-<date>-<sha> CI
+        tags and latest — ignore those. lum-selfcare-ci-release is a pure CI
+        mirror package (sha-* and ci-release-<date>-<sha> only, no version
+        tag anywhere in its 108-tag full history).
+    upgrade_policy: pinned                         # CONFIRM: fail-safe default, no evidence
+
+  crm:
+    match:
+      unconfirmed: true                             # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/ase_lbss]
+    branches:
+      # CONFIRM: GitHub default branch; the CLAUDE.md repo map lists no
+      # default branch for ase_lbss. Note: ase_lbss is itself documented as
+      # "a multi-repo workspace: each modules/* is its own git repo" — this
+      # entry covers only the top-level container repo and the alepo-crm
+      # image confirmed linked to it; the modules/* sub-repos were not
+      # evidenced and are out of scope here.
+      bug: main
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/crm             # matches the compose-profile vocabulary (crm)
+      topology_default: 1node                       # CONFIRM
+      liquibase: false                              # CONFIRM
+    tests:
+      unit: 'npm test'                              # CONFIRM: tech stack not independently confirmed for the top-level repo
+      ui_trace: playwright                          # CRM portal has a UI surface
+    owners:
+      ui_parsing: crm-owners                        # CONFIRM: group name guessed
+      schema: crm-owners                            # CONFIRM
+    # Evidence: alepo-crm confirmed linked to alepolab/ase_lbss via
+    # repository.full_name. Full 104-tag paginated history sampled.
+    images: [alepo-crm]
+    version:
+      strategy: semver_tag
+      hint: >-
+        Per-customer builds: <CUSTOMER>-vMAJOR.MINOR.PATCH, e.g.
+        SASKTEL-v14.0.0 through SASKTEL-v14.0.13 (a 14-release sequence, full
+        104-tag history), plus a separate generic/OWNCORE-style stream
+        (v14.0.0, v14.0.0-ga, v14.0.0-ga.rc.1/2) and per-customer rc suffixes
+        (v14.0.0-rc.1-SASKTEL through -rc.4-SASKTEL). The customer prefix
+        must come from the ticket, not guessed — the same version number is
+        not published for every customer. Ignore develop-<sha>,
+        ci-release-<sha>, <CUSTOMER>-ci-release-<sha>, and date-suffixed dev
+        snapshots (develop-v14.0.0-01.07) — none of these is a release.
+    upgrade_policy: pinned                          # CONFIRM: fail-safe default, no evidence
+
+  urm:
+    match:
+      unconfirmed: true                              # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/urm]
+    branches:
+      bug: main                                      # CONFIRM: GitHub's default_branch is main; the CLAUDE.md repo map states urm's default branch as develop — a real discrepancy, needs a repo champion to confirm the actual integration branch before this drives a checkout
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/sso              # CONFIRM: urms is part of the shared sso stack (Keycloak + URM) per the CLAUDE.md deployment topology, not its own compose profile in the canonical product list — recreating this stack affects FFM, CRM, PCRF, VMS and others
+      topology_default: 1node                        # CONFIRM
+      liquibase: false                                # CONFIRM
+    tests:
+      unit: 'npm test'                                # CONFIRM: tech stack not independently confirmed
+    owners:
+      schema: urm-tech-leads                          # CONFIRM: group name guessed
+    # Evidence: urm/urms confirmed linked to alepolab/urm via
+    # repository.full_name. Full 130-tag paginated history sampled.
+    images: [urm/urms]
+    version:
+      strategy: semver_tag
+      hint: >-
+        vMAJOR.MINOR.PATCH on urm/urms (v1.0.0 and v1.0.0-beta.1-5 early,
+        v14.0.0-rc.1-4, v14.0.0, v14.0.1, v14.0.2 — full 130-tag history),
+        plus develop-/ci-release-<date>-<sha> and latest to ignore. Two odd
+        v3.0.0-mpos-base / v3.0.0-mpos-base-r1 tags sit outside the main line
+        — likely an mpos-specific variant build, not this product's release
+        version; ignore for URM ticket resolution.
+    upgrade_policy: pinned                            # CONFIRM: fail-safe default, no evidence
+
+  wso2:
+    match:
+      unconfirmed: true                                # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/wso2]
+    branches:
+      bug: main                                        # CONFIRM: GitHub's default_branch is main; the CLAUDE.md repo map states wso2's default branch as develop — a real discrepancy, needs a repo champion to confirm the actual integration branch before this drives a checkout
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/wso2                # CONFIRM: not in the CLAUDE.md compose-profile list; guessed from the repo name
+      topology_default: 1node                           # CONFIRM
+      liquibase: false                                  # CONFIRM
+    tests:
+      unit: 'mvn test'                                  # CONFIRM: WSO2 MI is Maven-based; not independently confirmed for this repo
+    owners:
+      protocol: wso2-tech-leads                         # CONFIRM: group name guessed; integration layer fronts SMPP/API protocols per observed tags (e.g. sasktel-hotfix-smpp-systemtype-trx)
+    # Evidence: wso2 and alepo-wso2-integration both confirmed linked to
+    # alepolab/wso2 via repository.full_name. Full 1-tag and 272-tag
+    # paginated histories sampled respectively.
+    images: [wso2, alepo-wso2-integration]
+    version:
+      strategy: semver_tag
+      hint: >-
+        alepo-wso2-integration publishes per-customer builds:
+        <customer>-vMAJOR.MINOR.PATCH (sasktel-v14.0.0 through
+        sasktel-v14.0.8, a clean 9-release sequence; full 272-tag history).
+        The customer prefix must come from the ticket's customer/profile, not
+        guessed — the same version number is not published for every
+        customer. Ignore develop-sha-*, ci-release-*,
+        <customer>-primary-develop, <customer>-main, <customer>-latest CI
+        noise, and the one-off v3.1.0-beta-r1 tag with no customer prefix.
+        The wso2 package itself (org-level, unprefixed) carries exactly one
+        tag ever, SE-Demo-v3.0.0 — a one-off demo build, not an ongoing
+        release stream; do not treat it as this product's version source.
+    upgrade_policy: pinned                              # CONFIRM: fail-safe default, no evidence
+
+  tacacs-platform:
+    match:
+      unconfirmed: true                                  # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/tacplus-server, alepolab/tacacs-platform]
+    multi_repo: true
+    branches:
+      # CONFIRM: GitHub's default branches disagree across this product's
+      # two repos (tacplus-server=master, tacacs-platform=main) and both
+      # disagree with the CLAUDE.md repo map's stated develop. A single
+      # branches: block cannot represent two different real defaults — this
+      # needs a repo champion to state the actual policy per repo, not just
+      # a value pick.
+      bug: main
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/tacacs                # CONFIRM: not in the CLAUDE.md compose-profile list; guessed from the repo name
+      topology_default: 1node                             # CONFIRM
+      liquibase: true                                      # tacacs-liquibase is a real, confirmed GHCR image for this product (see images:)
+    tests:
+      unit: 'go test ./...'                                # CONFIRM: tacplus-server is Go per the CLAUDE.md repo map; tacacs-platform's web admin (Next.js) is not covered by this command
+      ui_trace: playwright                                 # Next.js 15 web admin
+    owners:
+      protocol: tacacs-tech-leads                          # CONFIRM: group name guessed; TACACS+ is a wire protocol
+      ui_parsing: tacacs-web-owners                        # CONFIRM: group name guessed
+    # Evidence: tacacs-server confirmed linked to alepolab/tacplus-server;
+    # tacacs-web, tacacs-liquibase and tacacs-keygen confirmed linked to
+    # alepolab/tacacs-platform — two repos, one product, the same shape as
+    # pcrf's multi_repo. Full histories sampled: tacacs-server 47 tags,
+    # tacacs-web 37, tacacs-liquibase 19, tacacs-keygen 12 (all under the
+    # per-page cap, so complete). Excluded: tacacsplusserver (GHCR package,
+    # near-identical name) confirmed linked to alepolab/devops-adhoc — an
+    # unrelated repo, not this product.
+    images: [tacacs-server, tacacs-web, tacacs-liquibase, tacacs-keygen]
+    version:
+      strategy: semver_tag
+      hint: >-
+        All four images share the same vMAJOR.MINOR[.PATCH] tag family
+        (v0.0.0 through v2.1, sampled complete on each package). This is
+        noisier than the org's other semver products: some tags omit the
+        patch (v2.0, v2.1), some carry a Jira-ticket suffix (v0.0.1_TAC-149)
+        or are a bare Jira key with no version at all (TAC-102), and there is
+        a wide internal/test tag family (v1.0.0-internal.*, v1.0.0.testN,
+        vtest, vtest1, vdeep.*, v1beta) that must be discarded, not matched
+        loosely. Resolve only a clean vMAJOR.MINOR.PATCH (or MAJOR.MINOR)
+        token found in the ticket against these; anything else observed here
+        is not a release.
+    upgrade_policy: pinned                                 # CONFIRM: fail-safe default, no evidence
+
+  ams:
+    match:
+      unconfirmed: true                                     # CONFIRM: no Jira product-routing source found
+    repos: [alepolab/alepo-mediation-studio]
+    branches:
+      bug: main                                             # CONFIRM: GitHub default branch; the CLAUDE.md repo map lists no default branch for alepo-mediation-studio
+      feature: main
+    stack:
+      compose: alepo-dev-team-infra/ams                    # CONFIRM: not in the CLAUDE.md compose-profile list; guessed, unconfirmed
+      topology_default: 1node                               # CONFIRM
+      liquibase: false                                      # CONFIRM
+    tests:
+      unit: 'npm test'                                      # CONFIRM: tech stack not independently confirmed
+    owners:
+      money: billing-owners                                 # CDR/xDR mediation feeds billing/charging input
+    # Evidence: the repo (alepolab/alepo-mediation-studio) is confirmed live
+    # and non-archived. No entry in
+    # `gh api /orgs/alepolab/packages?package_type=container` has a
+    # repository.full_name of alepolab/alepo-mediation-studio, as of
+    # 2026-09-04 — this product currently publishes no catalogued GHCR image
+    # at all, a stronger gap than pms (which has images with no
+    # version-shaped tags). Re-check the org's package list before assuming
+    # this is still true.
+    images: []
+    version:
+      strategy: none
+      hint: >-
+        No GHCR container package links back to
+        alepolab/alepo-mediation-studio at all — not even an unversioned
+        one — so there is nothing in images: to check a tag against. Halt
+        and escalate rather than substituting another product's image or
+        guessing a build.
+    upgrade_policy: pinned                                  # CONFIRM: fail-safe default, no evidence

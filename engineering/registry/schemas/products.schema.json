@@ -22,13 +22,17 @@
       "properties": {
         "match": {
           "type": "object",
-          "description": "How a ticket resolves to this product. At least one criterion must be present, or every ticket matches everything.",
+          "description": "How a ticket resolves to this product. At least one criterion must be present, or every ticket matches everything. A product whose routing has not been confirmed against a real source (e.g. Jira components/projects that route by product rather than by customer engagement) must set unconfirmed: true instead of guessing components/projects/labels — see the unconfirmed property. The registry check enforces that the two are mutually exclusive: unconfirmed: true with any routing criterion also present is rejected, not silently allowed to route.",
           "minProperties": 1,
           "additionalProperties": false,
           "properties": {
             "components": { "type": "array", "minItems": 1, "items": { "type": "string" } },
             "projects": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-            "labels": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+            "labels": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+            "unconfirmed": {
+              "type": "boolean",
+              "description": "True marks this product as present in the registry but not yet routable: no reliable source exists yet to derive components/projects/labels for it (e.g. the Jira instance's projects are customer-engagement buckets, not product routers). While true, components/projects/labels must be absent — the registry check rejects an entry that sets both, and every consumer of match (the registry check's reachability accounting, and the /triage command's product-match step) must treat an unconfirmed product as matching nothing until a repo champion supplies real criteria and removes this flag."
+            }
           }
         },
         "repos": {

@@ -261,6 +261,23 @@ const ORDER = ['docs', 'ui_parsing', 'schema', 'protocol', 'money']
 for (const [name, p] of Object.entries(products)) {
   const where = `products.${name}`
 
+  // A product with unconfirmed routing must be structurally incapable of
+  // matching a ticket — that inertness is the whole point of the flag: a
+  // wrong match silently misroutes a ticket, which is worse than the product
+  // being absent. Reject any entry that tries to be both routable and
+  // unconfirmed, in either direction.
+  if (p.match?.unconfirmed === true) {
+    const criteria = ['components', 'projects', 'labels'].filter(k => (p.match[k]?.length ?? 0) > 0)
+    if (criteria.length) {
+      fail(where, `match.unconfirmed is true but also sets ${criteria.join(', ')} — routing must be fully unconfirmed (inert) or fully confirmed, never both`)
+    }
+  } else {
+    const hasCriteria = ['components', 'projects', 'labels'].some(k => (p.match?.[k]?.length ?? 0) > 0)
+    if (!hasCriteria) {
+      fail(where, 'match has no components/projects/labels and is not marked unconfirmed — mark match.unconfirmed: true if routing genuinely has no evidence yet, rather than leaving it silently unmatchable')
+    }
+  }
+
   // A bug branch template referencing {version} needs somewhere to get it.
   if (typeof p.branches?.bug === 'string' && p.branches.bug.includes('{version}') && !p.version_source) {
     fail(where, 'branches.bug uses {version} but the product declares no version_source')
@@ -321,6 +338,10 @@ for (const [name, p] of Object.entries(products)) {
 const allComponents = new Set()
 const allProjects = new Set()
 for (const p of Object.values(products)) {
+  // Defense in depth: an unconfirmed product is already blocked above from
+  // carrying components/projects at all, but never let one contribute to the
+  // reachability set even if that guard is ever weakened.
+  if (p.match?.unconfirmed === true) continue
   for (const c of p.match?.components ?? []) allComponents.add(String(c).toLowerCase())
   for (const pr of p.match?.projects ?? []) allProjects.add(String(pr).toUpperCase())
 }

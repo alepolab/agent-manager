@@ -55,6 +55,12 @@ product you matched and the field that matched it. If nothing matches,
 say so — that is a registry gap, not a triage failure, and belongs in your
 report as exactly that.
 
+A product whose `match` carries `unconfirmed: true` has no `components`,
+`projects`, or `labels` to match against by construction — never match a
+ticket to it, even on a name or component that seems obviously related.
+Report it as a registry gap needing a repo champion's confirmation, the
+same as any other product that matched nothing.
+
 ## 5. Dedupe
 
 Compare the ticket's reported example against any other ticket, PR, or
