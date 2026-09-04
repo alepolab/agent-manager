@@ -78,5 +78,48 @@ await store.recordDispatch('w2', 'CSUP-1', 'run-9')
 assert.equal((await store.getWatchState('w1'))['CSUP-1'].disposition, 'done')
 assert.equal((await store.getWatchState('w2'))['CSUP-1'].disposition, 'dispatched')
 
+// ══ 9. Keyless tickets must never collide on the JS-object-key coercion of
+//    `undefined` → "undefined". Two DISTINCT malformed tickets (no `key`)
+//    on the same watch, across cycles, must not share attempts or
+//    disposition — one must never be able to push the other to `escalated`
+//    without having been attempted MAX_ATTEMPTS times itself. Fed directly
+//    at the store level the same way watchScheduler.ts's runCycle drives it:
+//    recordAttempt before the starter, recordFailure in the catch block.
+//    See scripts/watch-state-collision-baseline.mjs for the empirical proof
+//    against the un-fixed store (two distinct keyless tickets collapsing
+//    into one shared "undefined" entry that escalates after 3 combined
+//    attempts, even though neither ticket individually reached 3). ════════
+await assert.rejects(
+  () => store.recordAttempt('w3', undefined),
+  /key/i,
+  'a keyless ticket is refused outright — there is nothing stable to track it by',
+)
+const keylessA = await store.recordFailure('w3', undefined, 'ticket A failed', store.MAX_ATTEMPTS)
+assert.equal(keylessA.attempts, 0, 'a refused attempt is not counted against anything')
+
+await assert.rejects(() => store.recordAttempt('w3', ''))
+const keylessB = await store.recordFailure('w3', '', 'ticket B failed', store.MAX_ATTEMPTS)
+assert.equal(keylessB.attempts, 0)
+
+// A second cycle for "ticket A" (still keyless, so indistinguishable from
+// any other keyless ticket at the store's boundary) must not accumulate
+// onto whatever ticket B left behind.
+await assert.rejects(() => store.recordAttempt('w3', undefined))
+const keylessA2 = await store.recordFailure('w3', undefined, 'ticket A failed again', store.MAX_ATTEMPTS)
+assert.notEqual(keylessA2.disposition, 'escalated',
+  'two distinct keyless tickets must not combine their attempts into a shared escalation')
+
+// Nothing keyless is ever persisted to disk — there is no shared
+// "undefined" (or "") entry left behind for the next cycle to inherit.
+const w3State = await store.getWatchState('w3')
+assert.deepEqual(w3State, {}, 'a keyless ticket leaves no trace in the state file')
+
+// clearEscalation and saveTicketState apply the same refusal.
+assert.equal(await store.clearEscalation('w3', undefined), null,
+  'clearing an untrackable key is a no-op, not a crash')
+await assert.rejects(() => store.saveTicketState({
+  key: '', watchId: 'w3', disposition: 'new', attempts: 0, firstSeenAt: 1, updatedAt: 1,
+}))
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('watchStateStore: all assertions passed')

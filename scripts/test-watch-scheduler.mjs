@@ -386,10 +386,18 @@ const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
   const state = await store.getWatchState('w-realrunstarter')
   assert.equal(state['GOOD-1'].disposition, 'dispatched')
   assert.equal(state['GOOD-2'].disposition, 'dispatched')
+  // watchStateStore.recordAttempt now refuses a keyless ticket outright
+  // (thrown before realRunStarter's own validateTicket ever runs), and
+  // recordFailure — reached from runCycle's catch block — does not persist
+  // one either. That is the state-collision fix: a keyless ticket must
+  // leave NO entry behind, because `state[undefined]` is the exact shared
+  // slot that let two different malformed tickets collide across cycles.
   const malformedKey = result.failed[0]
-  assert.equal(state[malformedKey].disposition, 'failed')
-  assert.match(state[malformedKey].lastError, /no key/i,
-    "the malformed ticket's lastError states why it could not be dispatched")
+  assert.equal(malformedKey, undefined, 'the malformed ticket has no key to report in the first place')
+  assert.equal(state[malformedKey], undefined,
+    'a keyless ticket leaves no persisted state — there is nothing stable to reconcile it against on the next cycle')
+  assert.equal(Object.keys(state).length, 2,
+    'only the two well-formed tickets are tracked — the malformed one never gets an entry, shared or otherwise')
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
