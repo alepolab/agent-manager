@@ -16,13 +16,29 @@ export function runArtifactsDir(runId: string): string {
 const safe = (s: string) =>
   s.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/\.{2,}/g, '-').replace(/^\.+/, '').slice(0, 60) || 'step'
 
+/**
+ * The model(s) the run's own steps actually used, not an asserted constant.
+ * A step that hasn't reported one yet (not run, a stub caller, or a call
+ * that threw before returning) contributes nothing rather than a guess. If
+ * every step that DID report agrees, that's the value; if they differ, the
+ * distinct values join with '+' — the bundle schema types `model` as a
+ * free-form string, so a joined value is valid, and honest where a single
+ * arbitrary pick would not be. Before any step has run (initRunArtifacts's
+ * seed), or if none has reported yet, DEFAULT_MODEL_ALIAS stands in;
+ * finalize corrects it once real values exist.
+ */
+function modelsUsed(run: WorkflowRun): string {
+  const reported = [...new Set(run.steps.map(s => s.model).filter((m): m is string => Boolean(m)))]
+  return reported.length ? reported.join('+') : DEFAULT_MODEL_ALIAS
+}
+
 /** Keys the RUNNER owns. An agent may write them; finalize overwrites them.
  *  Split out so there is exactly one list, used by both seed and finalize. */
 function runnerOwned(run: WorkflowRun) {
   const ended = run.endedAt ?? Date.now()
   return {
     identity: run.workflowSlug,
-    model: DEFAULT_MODEL_ALIAS,
+    model: modelsUsed(run),
     cost: {
       // The runner does not observe token usage. Zero is honest; a plausible
       // number would be a fabricated field in an evidence bundle.
@@ -57,6 +73,7 @@ export async function writeStepArtifact(run: WorkflowRun, rec: RunStep, index: n
     completedAt: rec.completedAt ?? null,
     input: rec.input ?? '',
     output: rec.output ?? '',
+    model: rec.model ?? null,
   }, null, 2))
 }
 

@@ -395,5 +395,51 @@ assert.ok(cStart < bEnd,
   assert.equal(meta.ticket, 'AGENT-1', 'agent-owned keys survive finalize')
 }
 
+// meta.json's `model` now reflects the model(s) steps actually reported,
+// not an asserted constant (fix round 3). Frontmatter->model resolution
+// itself is covered separately by resolveModel()'s pure tests in
+// scripts/test-agent-tool-policy.mjs; this proves the runner RECORDS
+// whatever the agent caller reports, end to end through RunStep.model and
+// meta.json.
+{
+  const singleModelWorkflow = {
+    slug: 'model-single', name: 'Model Single',
+    steps: [{ id: 'only', agentSlug: 'agent-declares-opus', label: 'Only', next: [] }],
+  }
+  // Stands in for callAgent() resolving frontmatter `model: opus` (see
+  // resolveModel() and its tests) and reporting it back, exactly the shape
+  // normalizeAgentResult() in workflowRunner.ts expects.
+  runner.setAgentCaller(async agentSlug => ({ output: `output of ${agentSlug}`, model: 'opus' }))
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow: singleModelWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const step = r.steps.find(s => s.stepId === 'only')
+  assert.equal(step.model, 'opus', 'the reported model is recorded on the step')
+  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.equal(meta.model, 'opus', 'a single-model run records that model, not a constant default')
+  const stepFile = JSON.parse(
+    readFileSync(join(dir, 'steps', 'step-01-agent-declares-opus.json'), 'utf8'))
+  assert.equal(stepFile.model, 'opus', 'the per-step artifact records the model too')
+}
+
+{
+  const mixedModelWorkflow = {
+    slug: 'model-mixed', name: 'Model Mixed',
+    steps: [
+      { id: 'x', agentSlug: 'agent-x', label: 'X', next: ['y'] },
+      { id: 'y', agentSlug: 'agent-y', label: 'Y', next: [] },
+    ],
+  }
+  runner.setAgentCaller(async (agentSlug) => {
+    const model = agentSlug === 'agent-x' ? 'opus' : 'haiku'
+    return { output: `output of ${agentSlug}`, model }
+  })
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow: mixedModelWorkflow, initialPrompt: 'go', autoRun: true })).id, TIMEOUT)
+  const dir = join(process.env.CLAUDE_DIR, 'workflow-runs', r.id, 'artifacts')
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.equal(meta.model, 'opus+haiku', 'a mixed-model run joins the distinct values, not a single pick')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

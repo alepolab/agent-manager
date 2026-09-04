@@ -13,8 +13,16 @@ import {
 } from './runArtifacts.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 
+// Widened to a union rather than requiring every caller to return the
+// richer shape: dozens of test stubs across this file's own test suite
+// return a plain string via setAgentCaller(), and the real callAgent() (see
+// agentCaller.ts) now returns { output, model } so the runner can record
+// which model actually ran instead of asserting a constant. Both are valid
+// AgentCaller results; normalizeAgentResult() below is the one place that
+// tells them apart.
+export type AgentCallOutput = string | { output: string, model: string }
 export type AgentCaller =
-  (agentSlug: string, input: string, projectDir?: string) => Promise<string>
+  (agentSlug: string, input: string, projectDir?: string) => Promise<AgentCallOutput>
 
 // The real caller is imported and wired here directly, at module scope, in
 // the same file that reads it. Previously this defaulted to a throwing stub
@@ -240,6 +248,13 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
   return useAncestors ? joinBudgeted(parts) : joinInputs(parts)
 }
 
+/** The one place that tells apart a plain-string test stub's result from
+ *  the real caller's { output, model } shape. A stub that doesn't report a
+ *  model yields `model: undefined` here — never guessed. */
+function normalizeAgentResult(r: AgentCallOutput): { output: string, model?: string } {
+  return typeof r === 'string' ? { output: r } : r
+}
+
 /**
  * Runs the monitor agent in its own try/catch, isolated from the main agent call's.
  * A broken monitor must not take the workflow down with it (C1): it defaults to
@@ -255,11 +270,12 @@ async function runMonitor(
 ): Promise<{ verdict: 'CONTINUE' | 'RETRY' | 'ABORT', review: string }> {
   if (!step.monitorSlug) return { verdict: 'CONTINUE', review: '' }
   try {
-    const review = await agentCaller(
+    const raw = await agentCaller(
       step.monitorSlug,
       monitorPrompt({ label: step.label, agentSlug: step.agentSlug, input, output }),
       projectDir,
     )
+    const { output: review } = normalizeAgentResult(raw)
     const verdict = parseVerdict(review)
     Object.assign(rec, { monitorVerdict: verdict, monitorNote: review })
     return { verdict, review }
@@ -286,7 +302,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const input = artifactHeader(runArtifactsDir(run.id)) + body
   markRunning(l.state, id)
   Object.assign(rec, {
-    status: 'running', input, output: '', error: undefined,
+    status: 'running', input, output: '', error: undefined, model: undefined,
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
     startedAt: Date.now(), visits: l.state.visits[id],
   })
@@ -297,9 +313,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   await publish(run)
 
   try {
-    const output = await agentCaller(step.agentSlug, input, run.projectDir)
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir)
+    const { output, model } = normalizeAgentResult(raw)
     l.outputs[id] = output
-    Object.assign(rec, { status: 'completed', output, completedAt: Date.now() })
+    Object.assign(rec, { status: 'completed', output, model, completedAt: Date.now() })
 
     if (step.monitorSlug) {
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir)

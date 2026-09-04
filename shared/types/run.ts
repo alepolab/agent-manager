@@ -18,6 +18,11 @@ export interface RunStep {
   visits: number
   monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
   monitorNote?: string
+  /** The model alias the agent call actually used, when the caller reports
+   *  it. Absent when a stub caller (tests) or a failed call never returned
+   *  one — never guessed, since a wrong value here is the kind of defect
+   *  that produces no error. */
+  model?: string
 }
 
 export interface WorkflowRun {

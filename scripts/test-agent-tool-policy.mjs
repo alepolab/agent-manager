@@ -11,8 +11,10 @@ import assert from 'node:assert/strict'
 import {
   resolveTools,
   resolveMaxTurns,
+  resolveModel,
   DEFAULT_MAX_TURNS,
 } from '../server/utils/agentToolPolicy.ts'
+import { MODEL_ALIAS, DEFAULT_MODEL_ALIAS } from '../server/utils/models.ts'
 
 // ── 1. No frontmatter at all keeps today's effective behaviour ────────────
 // Today's effective behaviour (bug and all) is the SDK's full default toolset,
@@ -44,7 +46,20 @@ assert.equal(resolveMaxTurns({ maxTurns: 0 }), DEFAULT_MAX_TURNS)
 assert.equal(resolveMaxTurns({ maxTurns: -5 }), DEFAULT_MAX_TURNS)
 assert.equal(resolveMaxTurns({ maxTurns: 2.5 }), DEFAULT_MAX_TURNS)
 
-console.log('agentToolPolicy: pure resolveTools()/resolveMaxTurns() assertions passed')
+// ── 5b. resolveModel: a declared model is honoured, not silently ignored ──
+// This is the fix for the defect fix round 3 caught: frontmatter.model was
+// parsed and then never used anywhere, so every agent silently ran on the
+// SDK's own default regardless of what it declared. resolveModel is the
+// pure mapping callAgent.ts now actually wires into query()'s options.
+assert.deepEqual(resolveModel({ model: 'opus' }), { alias: 'opus', id: MODEL_ALIAS.opus },
+  'a declared model resolves to its alias AND full SDK id')
+assert.deepEqual(resolveModel({ model: 'haiku' }), { alias: 'haiku', id: MODEL_ALIAS.haiku })
+assert.deepEqual(resolveModel(undefined), { alias: DEFAULT_MODEL_ALIAS, id: MODEL_ALIAS[DEFAULT_MODEL_ALIAS] },
+  'no frontmatter at all falls back to this repo\'s own documented default, not the SDK default')
+assert.deepEqual(resolveModel({}), { alias: DEFAULT_MODEL_ALIAS, id: MODEL_ALIAS[DEFAULT_MODEL_ALIAS] },
+  'frontmatter present but no model field falls back the same way')
+
+console.log('agentToolPolicy: pure resolveTools()/resolveMaxTurns()/resolveModel() assertions passed')
 
 // ── 6. The caller must pass this as `tools`, not `allowedTools` ───────────
 // Static guard against regressing the exact bug this module exists to fix:

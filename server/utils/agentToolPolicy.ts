@@ -1,3 +1,4 @@
+import { MODEL_ALIAS, DEFAULT_MODEL_ALIAS } from './models.ts'
 import type { AgentFrontmatter } from '~/types'
 
 export const DEFAULT_MAX_TURNS = 10
@@ -38,6 +39,29 @@ export function resolveTools(frontmatter?: Pick<AgentFrontmatter, 'tools'>): str
   const declared = frontmatter?.tools
   if (Array.isArray(declared)) return [...declared]
   return undefined
+}
+
+/**
+ * Resolves the model for a `query()` call from an agent's frontmatter.
+ *
+ * `frontmatter.model` (documented in CLAUDE.md's data model as
+ * `model: sonnet | opus | haiku`) used to be parsed by agentCaller.ts and
+ * then never used - every agent silently ran on whatever the SDK's own
+ * default happened to be, regardless of what its frontmatter declared, with
+ * no error. Pulled out as a pure function, same pattern as resolveTools/
+ * resolveMaxTurns above, so the mapping is testable without a live SDK call.
+ *
+ * Returns both forms: `alias` ('sonnet'/'opus'/'haiku') is what gets
+ * recorded as provenance (RunStep.model, meta.json's `model`) - it matches
+ * DEFAULT_MODEL_ALIAS and every other model-alias value in this codebase.
+ * `id` is the full model id (via this repo's own MODEL_ALIAS map) that
+ * actually gets passed to query()'s `Options.model` - checked against the
+ * installed SDK's sdk.d.ts, whose only documented examples for that field
+ * are full ids ('claude-sonnet-4-6'), not the short alias.
+ */
+export function resolveModel(frontmatter?: Pick<AgentFrontmatter, 'model'>): { alias: string, id: string } {
+  const alias = frontmatter?.model ?? DEFAULT_MODEL_ALIAS
+  return { alias, id: MODEL_ALIAS[alias] }
 }
 
 /** An agent's turn budget. Only a positive integer overrides the default. */
