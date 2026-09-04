@@ -228,6 +228,7 @@ Rules:
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Read', 'Grep', 'Glob', 'Write'],
+      skills: ['intent-template', 'using-superpowers'],
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
 
@@ -359,7 +360,7 @@ not happen.`,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 30,
-      skills: ['using-superpowers'],
+      skills: ['regression-matrix', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
 
@@ -491,7 +492,7 @@ not happen.`,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
       maxTurns: 20,
-      skills: ['using-superpowers'],
+      skills: ['regression-matrix', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
 

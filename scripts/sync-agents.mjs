@@ -19,7 +19,7 @@
  * Only `sdlc-*` agents are touched. Everything else under ~/.claude/agents is
  * the user's own and is never overwritten.
  */
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -29,6 +29,33 @@ const claudeDir = process.env.CLAUDE_DIR || join(homedir(), '.claude')
 const { agentTemplates } = await import('../app/utils/templates.ts')
 const { workflowTemplates, materializeTemplateSteps } = await import('../app/utils/workflowTemplates.ts')
 const { serializeFrontmatter } = await import('../server/utils/frontmatter.ts')
+
+// Seed the plugin's own skills into CLAUDE_DIR/skills first.
+//
+// They ship in engineering/skills/ and are installed under the plugin cache,
+// but resolveSkill's plugin path reads installed_plugins.json — and
+// alepo-engineering is not indexed there, so `intent-template` and
+// `regression-matrix` resolved to nothing. buildAgentSystemPrompt swallows a
+// per-skill failure by design (one typo must not stop an agent), so an agent
+// declaring them would have looked correct and silently received no skill at
+// all. Seeding into the skills directory uses the first resolution path, which
+// does not depend on the plugin index.
+function seedSkills() {
+  const src = join(import.meta.dirname, '..', 'engineering', 'skills')
+  if (!existsSync(src)) return
+  for (const name of readdirSync(src)) {
+    const from = join(src, name, 'SKILL.md')
+    if (!existsSync(from)) continue
+    const toDir = join(claudeDir, 'skills', name)
+    const to = join(toDir, 'SKILL.md')
+    const next = readFileSync(from, 'utf8')
+    const current = existsSync(to) ? readFileSync(to, 'utf8') : null
+    if (current === next) { console.log(`  ok      skill ${name}`); continue }
+    console.log(`  ${current === null ? 'missing' : 'drifted'} skill ${name}`)
+    if (!dryRun) { mkdirSync(toDir, { recursive: true }); writeFileSync(to, next) }
+  }
+}
+seedSkills()
 
 const sdlc = agentTemplates.filter(t => t.id.startsWith('sdlc-'))
 if (!sdlc.length) {
