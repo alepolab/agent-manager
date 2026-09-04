@@ -263,7 +263,7 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast_radius\` and \`plugin_version\` into \`meta.json\` in that same directory. \`plugin_version\` is the installed version of the \`alepo-engineering\` plugin in this repository — read it from that plugin's own \`.claude-plugin/plugin.json\`. Report \`unknown\` only if the plugin genuinely is not installed here; never guess a version number. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
 
 ## Stopping
 
