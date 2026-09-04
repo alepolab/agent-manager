@@ -27,6 +27,22 @@
  *         "class": "parsing" | null, "product": "ocs_cpp14",
  *         "blast_radius": "ui_parsing", "identity": "agent-sdlc-01",
  *         "model": "claude-sonnet-4-5", "plugin_version": "0.1.0",
+ *         // watch: the id of the watch (registry/watches.yaml) that
+ *         // dispatched this run. A run started directly, not by a watcher,
+ *         // MUST set this to the reserved literal "direct-invocation" —
+ *         // never null, never omitted. The schema keeps `watch` required
+ *         // and typed as a non-nullable string on purpose: allowing null
+ *         // would make "nothing triggered this" indistinguishable from "the
+ *         // field was left out". Whatever populates meta.json must resolve
+ *         // one of these two shapes; there is no third, honest option.
+ *         //
+ *         // plugin_version: must be the exact "version" field read from the
+ *         // installed plugin's .claude-plugin/plugin.json (full semver,
+ *         // e.g. "0.1.0" — the schema enforces the MAJOR.MINOR.PATCH
+ *         // pattern). If that file cannot be located or parsed, the run
+ *         // must halt rather than write a placeholder ("unknown", "n/a",
+ *         // "TBD", ""): a placeholder that validates is worse than a bundle
+ *         // that fails to assemble, because it looks like verified evidence.
  *         "stack": { "profile": "...", "topology": "...", "liquibase_tag": null },
  *         "oracle":       { "kind": "parameterised_test", "path": "tests/x.py", "runs": 3, "rows": 4 },
  *         "oracle_after": { "kind": "parameterised_test", "path": "tests/x.py", "runs": 3, "rows": 4 },

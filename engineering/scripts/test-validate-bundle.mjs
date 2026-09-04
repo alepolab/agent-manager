@@ -164,6 +164,74 @@ check('a missing context_packet_hash is rejected', () => {
   assert.ok(problems.some(p => /context_packet_hash/.test(p)), `expected a message naming "context_packet_hash", got:\n${problems.join('\n')}`)
 })
 
+// ── 8a. plugin_version is a placeholder, not a real semver ─────────────────
+// On a live run, sdlc-ticket-intake could not locate the installed plugin's
+// plugin.json and wrote plugin_version: "unknown". A bare `{"type": "string"}`
+// let that validate — an unverifiable value wearing the shape of a verified
+// one. The pattern must accept what the plugin actually declares
+// (~/.claude/plugins/cache/alepo-engineering/alepo-engineering/*/.claude-plugin/plugin.json
+// has "version": "0.1.0", a plain MAJOR.MINOR.PATCH) and reject every
+// placeholder a stuck lookup might fall back to.
+check('plugin_version: "unknown" is rejected', () => {
+  const problems = validateBundle(broken(b => { b.plugin_version = 'unknown' }))
+  assert.ok(problems.length, 'expected at least one problem')
+  assert.ok(problems.some(p => /plugin_version/.test(p)), `expected a message naming "plugin_version", got:\n${problems.join('\n')}`)
+})
+
+check('plugin_version: "n/a" is rejected', () => {
+  const problems = validateBundle(broken(b => { b.plugin_version = 'n/a' }))
+  assert.ok(problems.length, 'expected at least one problem')
+  assert.ok(problems.some(p => /plugin_version/.test(p)), `expected a message naming "plugin_version", got:\n${problems.join('\n')}`)
+})
+
+check('plugin_version: "TBD" is rejected', () => {
+  const problems = validateBundle(broken(b => { b.plugin_version = 'TBD' }))
+  assert.ok(problems.length, 'expected at least one problem')
+  assert.ok(problems.some(p => /plugin_version/.test(p)), `expected a message naming "plugin_version", got:\n${problems.join('\n')}`)
+})
+
+check('plugin_version: "" (empty string) is rejected', () => {
+  const problems = validateBundle(broken(b => { b.plugin_version = '' }))
+  assert.ok(problems.length, 'expected at least one problem')
+  assert.ok(problems.some(p => /plugin_version/.test(p)), `expected a message naming "plugin_version", got:\n${problems.join('\n')}`)
+})
+
+check('plugin_version: "N/A" (case variant placeholder) is rejected', () => {
+  const problems = validateBundle(broken(b => { b.plugin_version = 'N/A' }))
+  assert.ok(problems.length, 'expected at least one problem')
+  assert.ok(problems.some(p => /plugin_version/.test(p)), `expected a message naming "plugin_version", got:\n${problems.join('\n')}`)
+})
+
+check('plugin_version: "1.0" (not full major.minor.patch) is rejected', () => {
+  const problems = validateBundle(broken(b => { b.plugin_version = '1.0' }))
+  assert.ok(problems.length, 'expected at least one problem')
+  assert.ok(problems.some(p => /plugin_version/.test(p)), `expected a message naming "plugin_version", got:\n${problems.join('\n')}`)
+})
+
+check('plugin_version: "0.1.0" (the real installed plugin version) validates', () => {
+  const problems = validateBundle(broken(b => { b.plugin_version = '0.1.0' }))
+  assert.deepEqual(problems, [], `expected no problems, got:\n${problems.join('\n')}`)
+})
+
+// ── 8b. watch: a directly-invoked run has no watch, but must not write null ─
+// The live run that exposed this was started directly rather than by the
+// watcher, so intake wrote watch: null, which fails assembly outright
+// (`watch` is required and typed as a non-nullable string). Loosening the
+// type to allow null would make "nothing triggered this" indistinguishable
+// from "the field was simply omitted" — so the standard instead reserves the
+// literal "direct-invocation" for a manually-started run. The field keeps
+// answering "what triggered this?" truthfully in both cases.
+check('watch: null is rejected — a directly-invoked run must use the reserved literal, not null', () => {
+  const problems = validateBundle(broken(b => { b.watch = null }))
+  assert.ok(problems.length, 'expected at least one problem')
+  assert.ok(problems.some(p => /watch/.test(p)), `expected a message naming "watch", got:\n${problems.join('\n')}`)
+})
+
+check('watch: "direct-invocation" (the reserved literal for a manually-started run) validates', () => {
+  const problems = validateBundle(broken(b => { b.watch = 'direct-invocation' }))
+  assert.deepEqual(problems, [], `expected no problems, got:\n${problems.join('\n')}`)
+})
+
 // ── 8. Two repos, no merge_order ─────────────────────────────────────────────
 // With more than one repo the apply order across them is otherwise
 // undefined — the schema only documents this in prose, so it must be

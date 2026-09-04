@@ -12,7 +12,10 @@
   "additionalProperties": false,
   "properties": {
     "ticket": { "type": "string", "pattern": "^[A-Z][A-Z0-9]+-[0-9]+$" },
-    "watch": { "type": "string" },
+    "watch": {
+      "type": "string",
+      "description": "The id of the watch (registry/watches.yaml) that dispatched this run. A run started directly, not by a watcher, MUST use the reserved literal \"direct-invocation\" here — never null and never omitted. The field always answers \"what triggered this?\"; the reserved literal is how a manual run answers that question honestly instead of leaving it unanswerable."
+    },
     "work_type": { "type": "string", "enum": ["bug", "feature", "change_request", "infra", "docs", "security"] },
     "class": {
       "type": ["string", "null"],
@@ -27,7 +30,11 @@
     "spec_sha": { "type": ["string", "null"], "description": "Required when the watch declares requires: [spec]." },
     "plan_sha": { "type": "string", "minLength": 7 },
     "model": { "type": "string" },
-    "plugin_version": { "type": "string" },
+    "plugin_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "description": "Full semver (MAJOR.MINOR.PATCH, optional -prerelease/+build), matching the \"version\" field of the installed plugin's .claude-plugin/plugin.json. A placeholder such as \"unknown\", \"n/a\", or \"TBD\" is not a version and must not validate — if the plugin.json lookup fails, the run must halt rather than write a placeholder here."
+    },
     "stack": {
       "type": "object",
       "required": ["profile", "topology"],

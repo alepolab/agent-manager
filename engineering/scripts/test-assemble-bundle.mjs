@@ -201,6 +201,61 @@ await check('regression failures parsed from xunit are not silently treated as p
     }
   })
 
+// ── 6a. meta.json declaring a directly-invoked run (no watch) assembles ──
+// A run started directly rather than by a watcher declares watch as the
+// reserved literal "direct-invocation" in meta.json, not null. The
+// assembler does no special-casing of this — it is just a string that
+// passes straight through — but this pins that the reserved literal
+// actually produces a bundle the validator accepts end to end.
+await check('meta.watch: "direct-invocation" produces a valid bundle', async () => {
+    const dir = runDir(({ files }) => {
+      files['meta.json'] = JSON.stringify({ ...META, watch: 'direct-invocation' }, null, 2)
+    })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.deepEqual(problems, [], `expected no problems, got:\n${problems.join('\n')}`)
+      assert.equal(bundle.watch, 'direct-invocation')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+// ── 6b. meta.json with watch: null produces a bundle the validator rejects ─
+// This is the exact live-run defect: intake could not determine a watch and
+// wrote null. The assembler must not paper over it — the bundle it writes
+// must fail Task 1's validator, naming watch as the reason, so the fix is
+// "make intake write the reserved literal", not "loosen the schema".
+await check('meta.watch: null produces a bundle the validator rejects', async () => {
+    const dir = runDir(({ files }) => {
+      files['meta.json'] = JSON.stringify({ ...META, watch: null }, null, 2)
+    })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.ok(problems.some(p => /watch/.test(p)), `expected a problem naming "watch", got:\n${problems.join('\n')}`)
+      assert.equal(bundle.watch, null)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+// ── 6c. meta.json with plugin_version: "unknown" produces a bundle the
+// validator rejects ────────────────────────────────────────────────────────
+// The other live-run defect: intake could not locate the installed plugin's
+// plugin.json and wrote the placeholder "unknown". The assembled bundle
+// must be rejected, naming plugin_version.
+await check('meta.plugin_version: "unknown" produces a bundle the validator rejects', async () => {
+    const dir = runDir(({ files }) => {
+      files['meta.json'] = JSON.stringify({ ...META, plugin_version: 'unknown' }, null, 2)
+    })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.ok(problems.some(p => /plugin_version/.test(p)), `expected a problem naming "plugin_version", got:\n${problems.join('\n')}`)
+      assert.equal(bundle.plugin_version, 'unknown')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
 // ── 7. The CLI: writes --out either way, exits 0 valid / 1 invalid ───────
 await check('the CLI writes the bundle and exits 0 for a complete run dir, 1 for an incomplete one', async () => {
     const goodDir = runDir()
