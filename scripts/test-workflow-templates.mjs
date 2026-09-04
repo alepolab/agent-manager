@@ -256,8 +256,12 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 {
   const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
   const intake = body('sdlc-ticket-intake')
-  assert.match(intake, /~\/\.claude\/plugins\//,
-    'the prompt must name the concrete search path for the installed plugin, not just "read it from the plugin"')
+  // The exact command, not just the path. A real run halted the pipeline having
+  // concluded the plugin was absent: plugin.json sits four levels down, so a
+  // shallow listing or a guessed glob misses it. Describing where to look was
+  // not enough; the prompt has to hand over the invocation.
+  assert.match(intake, /find ~\/\.claude\/plugins .*-name plugin\.json/,
+    'the prompt must give the exact find invocation for plugin.json, not merely describe where it lives')
   assert.match(intake, /\.claude-plugin\/plugin\.json/,
     'the prompt must name the exact file to read the version field from')
   assert.match(intake, /never a placeholder/i,
@@ -351,6 +355,17 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     const mt = a.frontmatter.maxTurns
     assert.ok(typeof mt === 'number' && Number.isInteger(mt) && mt > 0,
       `${a.id} must declare maxTurns explicitly rather than inheriting the default`)
+  }
+}
+
+// Absence must be as hard to claim as presence. A real DEVOPS-15 run halted the
+// whole pipeline on "plugin not installed" when the plugin was installed four
+// directories deeper than it looked — the reasoning was right, the search was
+// not, and nothing told it to widen before concluding.
+{
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
+    assert.match(a.frontmatter ? a.body : '', /negative result is a failed search/i,
+      `${a.id} must carry the standing rule that a negative result is a failed search until widened`)
   }
 }
 
