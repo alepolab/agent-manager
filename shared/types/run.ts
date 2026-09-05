@@ -84,6 +84,9 @@ export interface WorkflowRun {
   error?: string
   /** The process that owns this run. A live status from a dead pid is a lie. */
   pid: number
+  /** Random id of the server process that owns this run. In a container every
+   *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
+  bootId?: string
 }
 
 export interface NewRunInput {

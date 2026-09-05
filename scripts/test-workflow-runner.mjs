@@ -670,6 +670,30 @@ assert.equal(noted.status, 'completed')
 assert.match(inputsSeen['agent-c'], /Operator note:\s*Use the staging CRM/, 'the note is in the restarted step input')
 assert.match(inputsSeen['agent-c'], /Your previous attempt/, 'the previous attempt travels with it, as a monitor retry would')
 
+// ── 15. a paused run whose process was replaced continues from disk ───────
+// In a container every server is pid 1, so a dead owner cannot be told apart
+// by pid. The run must still continue once nothing in memory knows it.
+runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `out ${agentSlug}` })
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+let orphan = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
+orphan = await runner.waitForSettled(orphan.id, TIMEOUT)
+assert.equal(orphan.status, 'paused')
+runner._dropLive(orphan.id)
+calls.length = 0
+orphan = await runner.continueRun(orphan.id)
+assert.equal(orphan.status, 'running', 'a paused run with no live record is rehydrated and continued')
+orphan = await runner.waitForSettled(orphan.id, TIMEOUT)
+assert.deepEqual(calls.sort(), ['agent-b', 'agent-c'], 'the queued wave ran once')
+{
+  const p = join(process.env.CLAUDE_DIR, 'workflow-runs', `${orphan.id}.json`)
+  const rec = JSON.parse(readFileSync(p, 'utf8'))
+  rec.status = 'running'; rec.bootId = 'some-other-process'; rec.currentStepIds = ['d']
+  rec.steps.find(s => s.stepId === 'd').status = 'running'
+  writeFileSync(p, JSON.stringify(rec))
+  runner._dropLive(orphan.id)
+}
+assert.equal((await store.getRun(orphan.id)).status, 'interrupted', 'a different boot id reads as interrupted even when the pid is alive')
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

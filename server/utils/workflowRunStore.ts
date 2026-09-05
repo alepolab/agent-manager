@@ -14,6 +14,9 @@ export function defaultBudget(): RunBudget {
 
 export const RUNS_DIR_NAME = 'workflow-runs'
 
+/** This process's identity for run ownership; see WorkflowRun.bootId. */
+export const BOOT_ID = randomUUID()
+
 const runsDir = () => resolveClaudePath(RUNS_DIR_NAME)
 const runPath = (id: string) => join(runsDir(), `${id}.json`)
 
@@ -33,7 +36,11 @@ function processAlive(pid: number): boolean {
  */
 function applyInterrupted(run: WorkflowRun): WorkflowRun {
   const live = run.status === 'running' || run.status === 'paused'
-  if (live && !processAlive(run.pid)) return { ...run, status: 'interrupted' }
+  // Either signal means the owner is gone: a boot id from another process, or
+  // a pid nothing answers on. Inside a container every server is pid 1, which
+  // is why the boot id exists at all.
+  const replaced = (!!run.bootId && run.bootId !== BOOT_ID) || !processAlive(run.pid)
+  if (live && replaced) return { ...run, status: 'interrupted' }
   return run
 }
 
@@ -62,6 +69,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     nextStepIds: [],
     startedAt: Date.now(),
     pid: process.pid,
+    bootId: BOOT_ID,
     budget: defaultBudget(),
   }
   await saveRun(run)

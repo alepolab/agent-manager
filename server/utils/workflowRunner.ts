@@ -6,7 +6,7 @@ import {
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
-import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun } from './workflowRunStore.ts'
+import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, BOOT_ID } from './workflowRunStore.ts'
 import { resolveProduct } from './registry.ts'
 import { getModelPricing } from './models.ts'
 import { notifyRunTransition } from './notify.ts'
@@ -574,7 +574,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * the whole run. Callers await waitForSettled(runId) for the outcome.
  */
 export async function continueRun(runId: string): Promise<WorkflowRun | null> {
-  const l = live.get(runId)
+  let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds
   // name what was executing; restarting from those is the honest resume.
   if (!l) {
@@ -585,13 +585,20 @@ export async function continueRun(runId: string): Promise<WorkflowRun | null> {
       if (!from) return stored
       return restartRun(runId, from)
     }
-    return stored
+    // Paused with nothing in memory: the process that paused it is gone (a
+    // container restart leaves pid 1 in place, so only the record tells).
+    // Rebuild the scheduling state from disk and take ownership.
+    if (stored?.status !== 'paused') return stored
+    l = await rehydrate(stored)
+    stored.pid = process.pid
+    stored.bootId = BOOT_ID
+    await saveRun(stored)
   }
   // Re-entrancy guard (C6), matching the client engine's isRunning check pattern. This has
   // to be set synchronously, before the first await below - otherwise two calls that both
   // arrive while a run is paused would each see the guard still clear and both go on to
   // drive the same run's wave loop concurrently.
-  if (!l || l.running) return getRun(runId)
+  if (l.running) return getRun(runId)
   l.running = true
   const run = await getRun(runId)
   if (!run || run.status !== 'paused') {
@@ -847,6 +854,7 @@ export async function restartRun(runId: string, stepId: string, note?: string): 
   run.error = undefined
   run.endedAt = undefined
   run.pid = process.pid
+  run.bootId = BOOT_ID
   run.currentStepIds = []
   run.nextStepIds = [stepId]
   await publish(run)
