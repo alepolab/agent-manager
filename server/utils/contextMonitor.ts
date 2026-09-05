@@ -79,19 +79,19 @@ export function parseTokenUsage(output: string): Partial<TokenUsage> | null {
 
   // Match input tokens
   const inputMatch = output.match(/Input tokens?:\s*([\d,]+)/i)
-  if (inputMatch) {
+  if (inputMatch?.[1]) {
     tokens.input = parseInt(inputMatch[1].replace(/,/g, ''), 10)
   }
 
   // Match output tokens
   const outputMatch = output.match(/Output tokens?:\s*([\d,]+)/i)
-  if (outputMatch) {
+  if (outputMatch?.[1]) {
     tokens.output = parseInt(outputMatch[1].replace(/,/g, ''), 10)
   }
 
   // Match cached tokens
   const cachedMatch = output.match(/Cache (?:read )?tokens?:\s*([\d,]+)/i)
-  if (cachedMatch) {
+  if (cachedMatch?.[1]) {
     tokens.cached = parseInt(cachedMatch[1].replace(/,/g, ''), 10)
   }
 
@@ -112,7 +112,10 @@ export function parseToolCalls(output: string): ToolCall[] {
   for (const line of lines) {
     // Match tool start: "Tool: Read (path/to/file.ts)"
     const startMatch = line.match(/Tool:\s+(\w+)\s*(?:\((.*?)\))?/i)
-    if (startMatch) {
+    // Gate on the captured NAME, not merely on a match: a tool event with no
+    // name is not a tool event, and pushing one would put an entry with an
+    // undefined toolName into the timeline the UI renders.
+    if (startMatch?.[1]) {
       tools.push({
         toolName: startMatch[1],
         timestamp: new Date().toISOString(),
@@ -124,7 +127,7 @@ export function parseToolCalls(output: string): ToolCall[] {
 
     // Match tool completion: "Tool: Bash completed in 1.2s"
     const completeMatch = line.match(/Tool:\s+(\w+)\s+completed in ([\d.]+)s/i)
-    if (completeMatch) {
+    if (completeMatch?.[1] && completeMatch[2]) {
       // Find the most recent running tool with this name and mark it complete
       const tool = [...tools].reverse().find((t) => t.toolName === completeMatch[1] && t.status === 'running')
       if (tool) {

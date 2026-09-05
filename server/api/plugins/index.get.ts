@@ -52,7 +52,7 @@ export default defineEventHandler(async () => {
   const settings = await readJson<{ enabledPlugins?: Record<string, boolean> }>(settingsPath)
   const enabledMap = settings?.enabledPlugins ?? {}
 
-  const plugins: Plugin[] = await Promise.all(
+  const mapped = await Promise.all(
     Object.entries(installed.plugins).map(async ([id, entries]) => {
       const entry = entries[0]
       if (!entry) return null
@@ -65,7 +65,7 @@ export default defineEventHandler(async () => {
 
       return {
         id,
-        name: meta?.name ?? name,
+        name: meta?.name ?? name ?? id,
         marketplace: marketplace ?? 'unknown',
         description: meta?.description ?? '',
         version: entry.version,
@@ -78,6 +78,8 @@ export default defineEventHandler(async () => {
       } satisfies Plugin
     })
   )
-
-  return plugins.filter(Boolean).sort((a, b) => a!.name.localeCompare(b!.name))
+  // An entry with no install record maps to null; drop those rather than
+  // shipping holes in the list.
+  const plugins: Plugin[] = mapped.filter((p) => p !== null) as Plugin[]
+  return plugins.sort((a, b) => a.name.localeCompare(b.name))
 })

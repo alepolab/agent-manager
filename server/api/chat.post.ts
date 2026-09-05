@@ -20,7 +20,7 @@ async function getOutputStyleContent(id: string, projectDir?: string): Promise<{
   if (defaultStyle) {
     return { 
       content: id === 'default' ? '' : defaultStyle.content, 
-      keepCodingInstructions: defaultStyle.keepCodingInstructions 
+      keepCodingInstructions: defaultStyle.keepCodingInstructions ?? false 
     }
   }
 
@@ -176,11 +176,13 @@ export default defineEventHandler(async (event) => {
         allowDangerouslySkipPermissions: true,
         maxTurns: resolveMaxTurns(agentFrontmatter),
         includePartialMessages: true,
-        systemPrompt: {
-          type: 'preset',
-          preset: systemPreset,
-          append: systemAppend,
-        },
+        // `systemPreset === 'none'` means the output style asked for the coding
+        // preset to be dropped entirely - it is not a preset value the SDK
+        // accepts. Omit the preset and send the append text as a plain system
+        // prompt instead; setting `preset: 'none'` was silently invalid.
+        ...(systemPreset === 'claude_code'
+          ? { systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend } }
+          : { systemPrompt: systemAppend }),
         ...(sessionId ? { resume: sessionId } : {}),
       },
     })) {
@@ -218,8 +220,16 @@ export default defineEventHandler(async (event) => {
         })
       }
 
+      // UNREACHABLE with the current SDK: 'tool_call' and 'tool_result' are not
+      // members of SDKMessage's `type` union (it carries 'assistant', 'user',
+      // 'result', 'stream_event', 'system', ...). Tool activity arrives inside
+      // assistant content blocks instead. These branches have therefore never
+      // fired; kept, narrowed through a widened local so the comparison is
+      // honest rather than a type error, and left for whoever wires tool
+      // streaming properly.
+      const msgType = (message as { type: string }).type
       // Tool call
-      if (message.type === 'tool_call') {
+      if (msgType === 'tool_call') {
         const m = message as any
         sendEvent('tool_call', {
           id: m.id,
@@ -229,7 +239,7 @@ export default defineEventHandler(async (event) => {
       }
 
       // Tool result
-      if (message.type === 'tool_result') {
+      if (msgType === 'tool_result') {
         const m = message as any
         sendEvent('tool_result', {
           id: m.tool_use_id,

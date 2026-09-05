@@ -44,7 +44,7 @@ export default defineEventHandler(async (event) => {
         const mcpServer = await getMcpServerForSkill(slug, frontmatter, body, workingDir)
         return {
           slug,
-          frontmatter: { name: slug, ...frontmatter },
+          frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
           body,
           filePath: skillPath,
           source: 'local' as const,
@@ -68,7 +68,7 @@ export default defineEventHandler(async (event) => {
     const mcpServer = await getMcpServerForSkill(slug, frontmatter, body, workingDir)
     return {
       slug,
-      frontmatter: { name: slug, ...frontmatter },
+      frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
       body,
       filePath: standalonePath,
       source: 'local' as const,
@@ -150,7 +150,7 @@ export default defineEventHandler(async (event) => {
         const mcpServer = await getMcpServerForSkill(slug, frontmatter, body, workingDir)
         return {
           slug,
-          frontmatter: { name: slug, ...frontmatter },
+          frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
           body,
           filePath: skillPath,
           source: 'github' as const,
@@ -183,7 +183,7 @@ export default defineEventHandler(async (event) => {
         const mcpServer = await getMcpServerForSkill(slug, frontmatter, body, workingDir)
         return {
           slug,
-          frontmatter: { name: slug, ...frontmatter },
+          frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
           body,
           filePath: skillPath,
           source: 'plugin' as const,

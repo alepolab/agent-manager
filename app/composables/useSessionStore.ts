@@ -255,8 +255,12 @@ export function useSessionStore() {
 
     if (existingIdx >= 0) {
       updated = [...slot.realtimeMessages]
+      // `existingIdx >= 0` came from an indexOf on the same array, so the
+      // element is there - but indexing is `T | undefined` to the checker and
+      // three lines below read `existing.toolInput` unguarded.
       const existing = updated[existingIdx]
-      
+      if (!existing) return
+
       // Merge properties
       const merged = { ...existing, ...msg }
       
@@ -674,8 +678,10 @@ export function useSessionStore() {
     const patchMessage = (messages: NormalizedMessage[]): NormalizedMessage[] | null => {
       const idx = messages.findIndex(m => m.requestId === permissionId || m.id === permissionId)
       if (idx === -1) return null
+      const target = messages[idx]
+      if (!target) return null
       const updated = [...messages]
-      updated[idx] = { ...updated[idx], resolvedDecision: decision, resolvedAnswer: answer }
+      updated[idx] = { ...target, resolvedDecision: decision, resolvedAnswer: answer }
       return updated
     }
 

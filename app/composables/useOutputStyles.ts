@@ -18,7 +18,7 @@ export function useOutputStyles() {
       styles.value = data
     } catch (err: any) {
       error.value = err.message || 'Failed to fetch output styles'
-      toast.add({ title: 'Failed to load output styles', description: error.value, color: 'error' })
+      toast.add({ title: 'Failed to load output styles', description: error.value ?? undefined, color: 'error' })
     } finally {
       loading.value = false
     }

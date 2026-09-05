@@ -113,6 +113,18 @@ async function toggleAlwaysThinking(enabled: boolean) {
   await updateSetting({ alwaysThinkingEnabled: enabled })
 }
 
+const TASKS_PICKER_DEFAULT_SECONDS = 60
+
+/** Persist the /tasks-picker-infra lookback window. Rejects anything that is
+ *  not a positive number rather than writing it: a window of 0 or NaN makes
+ *  the command silently return nothing, which looks exactly like a quiet
+ *  board. Clamped to a minimum of 1 second for the same reason. */
+async function updateTasksPickerWindow(raw: string) {
+  const n = Math.floor(Number(raw))
+  if (!Number.isFinite(n) || n < 1) return
+  await updateSetting({ tasksPickerWindowSeconds: n })
+}
+
 async function togglePlugin(name: string, enabled: boolean) {
   if (!settings.value) return
   await updateSetting({
@@ -313,6 +325,29 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               </span>
             </label>
           </div>
+
+          <!-- /tasks-picker-infra lookback window -->
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <div class="text-[13px] font-medium">Task picker window</div>
+              <div class="text-[12px] mt-0.5 text-label">
+                How far back <code>/tasks-picker-infra</code> looks for newly raised DEVOPS issues.
+                Jira cannot filter below one minute, so the command queries the window rounded up to
+                whole minutes and applies the exact seconds itself.
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <input
+                type="number"
+                min="1"
+                class="w-24 text-[13px] px-2 py-1 rounded-md bg-card border border-subtle text-right tabular-nums"
+                data-testid="tasks-picker-window"
+                :value="settings?.tasksPickerWindowSeconds ?? TASKS_PICKER_DEFAULT_SECONDS"
+                @change="updateTasksPickerWindow(($event.target as HTMLInputElement).value)"
+              />
+              <span class="text-[12px] text-label">seconds</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -454,7 +489,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
       >
         <div class="flex items-center justify-between">
           <h3 class="text-section-title">Automations</h3>
-          <UButton label="Add Automation" icon="i-lucide-plus" size="xs" variant="soft" @click="showAddHookModal = true" />
+          <UButton label="Add Automation" icon="i-lucide-plus" size="xs" variant="soft" @click="() => { showAddHookModal = true }" />
         </div>
         <p class="text-[12px] text-meta">
           Run shell commands automatically when certain events happen in Claude Code.
@@ -557,7 +592,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           </div>
 
           <div class="flex justify-end gap-2 pt-2">
-            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="showAddHookModal = false" />
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showAddHookModal = false }" />
             <UButton
               label="Add"
               size="sm"
@@ -596,7 +631,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               variant="ghost"
               color="neutral"
               size="sm"
-              @click="showRemoveConfirm = false"
+              @click="() => { showRemoveConfirm = false }"
             />
             <UButton
               label="Confirm Delete"

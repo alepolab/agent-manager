@@ -1,6 +1,12 @@
 <script setup lang="ts">
 const props = defineProps<{
-  modelValue: string[]
+  /** Accepts undefined because the fields bound to this are OPTIONAL on their
+   *  frontmatter types (`skills?: string[]`, `tools?: AgentTool[]`) - an agent
+   *  that declares none has no array at all. Requiring string[] forced every
+   *  call site to invent an empty array just to satisfy the binding, which is
+   *  the same as saying "declared, but empty" when the truth is "not declared".
+   *  Normalised to [] internally via `selected`. */
+  modelValue: string[] | undefined
   options: Array<{
     value: string
     label: string
@@ -20,6 +26,9 @@ const dropdownRef = ref<HTMLElement | null>(null)
 const searchQuery = ref('')
 
 const isSelected = (value: string) => (props.modelValue || []).includes(value)
+/** One normalised count for the template: `(modelValue || []).length > 0` guards
+ *  the v-if but does not narrow `modelValue` itself for the interpolation. */
+const selectedCount = computed(() => props.modelValue?.length ?? 0)
 
 const filteredOptions = computed(() => {
   const q = searchQuery.value.toLowerCase()
@@ -196,7 +205,7 @@ onUnmounted(() => {
         <!-- Footer / Stats -->
         <div v-if="filteredOptions.length > 0" class="px-4 py-2 bg-surface-base border-t flex items-center justify-between text-[10px] text-meta font-mono" style="border-color: var(--border-subtle);">
           <span>{{ filteredOptions.length }} skills found</span>
-          <span v-if="(modelValue || []).length > 0">{{ modelValue.length }} selected</span>
+          <span v-if="selectedCount > 0">{{ selectedCount }} selected</span>
         </div>
       </div>
     </Transition>

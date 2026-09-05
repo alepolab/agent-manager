@@ -1,9 +1,14 @@
-import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises'
+import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { computeFixFacts } from './gitFacts.ts'
+import { resolveClaudePath } from './claudeDir.ts'
+import { createLogger } from './log.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
+
+const log = createLogger('artifacts')
 
 /** Extends RunStep with the one field this file needs that the shared type
  *  doesn't declare. Kept local rather than widening shared/types/run.ts:
@@ -39,7 +44,7 @@ type StepWithUsage = RunStep & { usage?: AgentUsage | null }
  * anywhere in the path, not anchored to CLAUDE_DIR — moving the root changes
  * nothing for either of them.
  */
-function agentRunsRoot(): string {
+export function agentRunsRoot(): string {
   return process.env.AGENT_RUNS_DIR || join(homedir(), '.agent-manager', 'workflow-runs')
 }
 
@@ -101,6 +106,88 @@ function tokenTotals(run: WorkflowRun): { input_tokens: number, output_tokens: n
   return { input_tokens, output_tokens }
 }
 
+/**
+ * Recursively finds every `plugin.json` under `dir` whose full path both
+ * contains `pluginName` and ends in `.claude-plugin/plugin.json`. Walked by
+ * hand with `readdirSync` rather than a glob library on purpose: `**` glob
+ * patterns do not descend into a dot-directory, and `.claude-plugin` is
+ * exactly that — the reason the sdlc-ticket-intake agent's own Glob-based
+ * search for this file (app/utils/templates.ts's prompt) can never find it
+ * no matter how the pattern is written, even before accounting for that
+ * agent's cwd being the target repo, not `~/.claude`. `maxDepth` bounds the
+ * walk against a pathological tree or a symlink cycle; the real installed
+ * layout (`plugins/cache/<name>/<name>/<version>/.claude-plugin/plugin.json`)
+ * is 5 levels deep, so 8 leaves real headroom without being unbounded.
+ */
+function findPluginManifests(dir: string, pluginName: string, depth = 0, maxDepth = 8): string[] {
+  if (depth > maxDepth) return []
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return [] // unreadable directory: nothing found here, not a crash
+  }
+  const found: string[] = []
+  for (const entry of entries) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      found.push(...findPluginManifests(full, pluginName, depth + 1, maxDepth))
+    } else if (
+      entry.isFile() && entry.name === 'plugin.json'
+      && full.includes(pluginName) && full.endsWith(join('.claude-plugin', 'plugin.json'))
+    ) {
+      found.push(full)
+    }
+  }
+  return found
+}
+
+/** Numeric, dot-segment comparison — good enough to pick the higher of two
+ *  real semver strings (the shape plugin.json actually carries) without
+ *  pulling in a semver library for one comparison. Never used to validate
+ *  that a string IS a semver — that is the bundle schema's job downstream. */
+function higherVersion(a: string, b: string): string {
+  const partsOf = (v: string) => v.split('.').map(p => Number.parseInt(p, 10) || 0)
+  const [pa, pb] = [partsOf(a), partsOf(b)]
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff > 0 ? a : b
+  }
+  return a
+}
+
+/**
+ * The installed plugin's version, read directly from its own `plugin.json`
+ * by the server process — a runner-owned fact, never the intake agent's
+ * self-report (see findPluginManifests's doc comment for exactly why that
+ * agent structurally cannot find this file itself: three consecutive real
+ * runs halted at step one on this, and two earlier "fixes" to the agent's
+ * search pattern were both wrong for the same reason — the search was never
+ * the problem). Returns `undefined` — never a placeholder like "unknown" —
+ * when `~/.claude/plugins` doesn't exist, no manifest under it names the
+ * plugin, or every manifest found fails to parse to an object with a string
+ * `version`. When more than one matching manifest exists (multiple cached
+ * versions of the same plugin), the highest version wins rather than an
+ * arbitrary first-found pick.
+ */
+export function resolveInstalledPluginVersion(pluginName = 'alepo-engineering'): string | undefined {
+  const root = resolveClaudePath('plugins')
+  if (!existsSync(root)) return undefined
+  let best: string | undefined
+  for (const path of findPluginManifests(root, pluginName)) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'))
+      if (parsed && typeof parsed === 'object' && typeof parsed.version === 'string' && parsed.version) {
+        best = best ? higherVersion(best, parsed.version) : parsed.version
+      }
+    } catch {
+      /* an unparsable manifest asserts nothing */
+    }
+  }
+  log.debug('plugin version resolved', { pluginName, found: Boolean(best), version: best ?? '(none)' })
+  return best
+}
+
 /** Keys the RUNNER owns. An agent may write them; finalize overwrites them.
  *  Split out so there is exactly one list, used by both seed and finalize. */
 function runnerOwned(run: WorkflowRun) {
@@ -112,6 +199,11 @@ function runnerOwned(run: WorkflowRun) {
     // from, or trusted from, an agent's self-report), same as identity.
     watch: run.watch,
     model: modelsUsed(run),
+    // Same class of fact as identity/watch/model: something the runner can
+    // verify directly and an agent must not be trusted to self-report. See
+    // resolveInstalledPluginVersion's doc comment for why the agent could
+    // never compute this correctly itself.
+    plugin_version: resolveInstalledPluginVersion(),
     cost: {
       ...tokenTotals(run),
       attempts: Math.max(1, ...run.steps.map(s => s.visits ?? 1)),
@@ -128,13 +220,16 @@ function runnerOwned(run: WorkflowRun) {
  * and a matching repo entry's `pr`, which no git command can produce)
  * survives untouched.
  *
- * `computeFixFacts` can only prove ONE repo — the one at `run.projectDir`.
- * A multi-repo fix's OTHER repos are outside anything git can check from
- * here, so — the same trust boundary already applied to `pr` — they survive
- * as the agent's self-report rather than being dropped (fabrication by
- * omission of a real repo) or fabricated (inventing commits for a repo this
- * function never looked at). Only the ONE entry the runner can verify is
- * ever overwritten; every other entry passes through byte-for-byte.
+ * `computeFixFacts` can only prove ONE repo — the one at `run.projectDir`,
+ * measured against `run.baseCommit` (the sha captured at this run's own
+ * start, never a branch's shared base — see gitFacts.ts's doc comments for
+ * why diffing against `main` was itself a fabrication bug). A multi-repo
+ * fix's OTHER repos are outside anything git can check from here, so — the
+ * same trust boundary already applied to `pr` — they survive as the agent's
+ * self-report rather than being dropped (fabrication by omission of a real
+ * repo) or fabricated (inventing commits for a repo this function never
+ * looked at). Only the ONE entry the runner can verify is ever overwritten;
+ * every other entry passes through byte-for-byte.
  *
  * `merge_order` is kept only when it is still coherent with the resulting
  * `repos`: more than one repo present, and every name it lists among them.
@@ -143,12 +238,19 @@ function runnerOwned(run: WorkflowRun) {
  * bundle internally incoherent while still validating, since the schema's
  * multi-repo rule only fires at `repos.length > 1`.
  *
- * When `computeFixFacts` returns null — not a git repo, no commits, a
- * detached HEAD, see that function's doc comment — the three computed keys
- * are REMOVED, not left as whatever the agent claimed. Passing the agent's
- * self-report through in that case would be exactly the fabrication this
- * whole change exists to close off; the honest outcome is an absent field
- * the bundle validator then rejects.
+ * When `computeFixFacts` returns null — not a git repo, no baseline was
+ * recorded, no commits since the baseline, see that function's doc comment
+ * for the full list — the three computed keys are REMOVED, not left as
+ * whatever the agent claimed. Passing the agent's self-report through in
+ * that case would be exactly the fabrication this whole change exists to
+ * close off; the honest outcome is an absent field the bundle validator
+ * then rejects. This includes the run that made no commits at all: a `fix`
+ * block reporting zero-valued numbers would still assert "this run touched
+ * the repo", which is exactly as misleading as inventing thirty-three
+ * commits a run never made — so a no-commit run gets no computed fix keys
+ * either, same as any other "cannot compute" outcome. If the agent wrote no
+ * `fix` at all in that case, the whole block stays absent (see the fallback
+ * below) rather than a block reduced to placeholder zeros.
  */
 async function reconcileFix(
   existing: Record<string, unknown>,
@@ -159,9 +261,13 @@ async function reconcileFix(
     : undefined
   const { repos: _repos, files_changed: _fc, lines_changed: _lc, merge_order: _mo, ...restFix } = existingFix ?? {}
 
-  const computed = await computeFixFacts(run.projectDir).catch(() => null)
+  const computed = await computeFixFacts(run.projectDir, run.baseCommit).catch(() => null)
 
   if (computed) {
+    log.debug('fix facts computed from git', {
+      runId: run.id, repo: computed.repo, commits: computed.commits,
+      files_changed: computed.files_changed, lines_changed: computed.lines_changed,
+    })
     const priorRepos = Array.isArray(existingFix?.repos) ? existingFix!.repos as Array<Record<string, unknown>> : []
     const priorEntry = priorRepos.find(r => r && r.repo === computed.repo)
     const repoEntry: Record<string, unknown> = { repo: computed.repo, commits: computed.commits }
@@ -182,6 +288,11 @@ async function reconcileFix(
     const mergeOrderCoherent = repos.length > 1
       && priorMergeOrder !== undefined
       && priorMergeOrder.every(name => typeof name === 'string' && repoNames.has(name))
+    if (priorMergeOrder !== undefined && !mergeOrderCoherent) {
+      log.warn('merge_order dropped: incoherent with the repos git actually computed', {
+        runId: run.id, priorMergeOrder, repoNames: [...repoNames],
+      })
+    }
 
     return {
       ...restFix,
@@ -194,7 +305,13 @@ async function reconcileFix(
 
   // Nothing computable. If the agent wrote nothing at all either, leave
   // `fix` entirely absent rather than fabricating an empty object.
-  if (existingFix === undefined) return undefined
+  if (existingFix === undefined) {
+    log.debug('no fix facts computable and none reported; fix block stays absent', { runId: run.id })
+    return undefined
+  }
+  log.warn('fix facts not computable from git; repos/files_changed/lines_changed dropped from meta', {
+    runId: run.id,
+  })
   return restFix
 }
 
@@ -203,6 +320,7 @@ export async function initRunArtifacts(run: WorkflowRun, workflowName: string): 
   await mkdir(join(dir, 'steps'), { recursive: true })
   await writeFile(join(dir, 'meta.json'),
     JSON.stringify({ ...runnerOwned(run), workflow: workflowName }, null, 2))
+  log.debug('run artifacts initialized', { runId: run.id, dir })
 }
 
 /**
@@ -236,6 +354,10 @@ export async function writeStepArtifact(
     model: rec.model ?? null,
     usage: (rec as StepWithUsage).usage ?? null,
   }, null, 2))
+  log.debug('step artifact written', {
+    runId: run.id, name, status: rec.status,
+    inputLength: (rec.input ?? '').length, outputLength: (rec.output ?? '').length,
+  })
 }
 
 /**
@@ -261,6 +383,7 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   else merged.fix = fix
 
   await writeFile(path, JSON.stringify(merged, null, 2))
+  log.debug('meta.json reconciled with runner-owned facts', { runId: run.id, hasFix: fix !== undefined })
 }
 
 /**
@@ -281,6 +404,53 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
  */
 export async function markArtifactsUnusable(runId: string): Promise<void> {
   await rm(join(runArtifactsDir(runId), 'meta.json'), { force: true })
+  log.error('meta.json removed after a finalize failure; the assembler will see this run as absent', { runId })
+}
+
+/**
+ * Copy the finalized run directory into the project's own tree at
+ * `.agent/evidence-run/`, so the evidence travels with the pull request.
+ *
+ * This is what lets `.github/workflows/evidence-bundle.yml` actually pass. A
+ * GitHub Actions artifact can only be created from inside a workflow run, and
+ * this pipeline runs on an engineer's machine - so nothing was ever in a
+ * position to upload `evidence-run-<sha>`, and the check could only fail with
+ * "no artifact found". Committing the directory instead needs no repo secret,
+ * costs nothing per pull request, and puts the evidence in the diff where a
+ * reviewer reads it, rather than in an artifact that expires.
+ *
+ * Best effort by design: a run that produced real work must not be reported as
+ * failed because a copy into the project tree did not succeed. A failure here
+ * is logged and swallowed, and the consequence is visible anyway - CI finds no
+ * evidence and the check fails, which is the correct outcome, arrived at
+ * honestly.
+ *
+ * Returns the destination path when it copied, otherwise null.
+ */
+export async function publishEvidenceToProject(
+  runId: string,
+  projectDir: string | undefined,
+): Promise<string | null> {
+  if (!projectDir) return null
+  try {
+    const src = runArtifactsDir(runId)
+    const dest = join(projectDir, '.agent', 'evidence-run')
+    // Replace rather than merge: a stale artifact from a previous run left
+    // beside this run's files would be assembled into the bundle as though it
+    // belonged to it, which is the fabrication this whole module exists to
+    // prevent.
+    await rm(dest, { recursive: true, force: true })
+    await mkdir(dest, { recursive: true })
+    await cp(src, dest, { recursive: true })
+    log.info('evidence published into the project tree for CI', { runId, dest })
+    return dest
+  } catch (err) {
+    log.error('could not publish evidence into the project tree; CI will find none', {
+      runId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
 }
 
 /** Prepended to every step's input. The only channel an agent has for

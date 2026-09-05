@@ -1,5 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { existsSync } from 'node:fs'
 import { parseFrontmatter } from '../../../utils/frontmatter'
 import { getClaudeCodeProjects } from '../../../utils/claudeCodeHistory'
@@ -48,7 +48,7 @@ export default defineEventHandler(async (event) => {
               slug,
               filename: file,
               directory: relative(projectPath, agentsDir),
-              frontmatter: { name: slug, description: '', ...frontmatter },
+              frontmatter: { ...frontmatter, name: frontmatter.name ?? slug, description: frontmatter.description ?? '' },
               body,
               hasMemory: frontmatter.memory === 'local' || frontmatter.memory === 'project',
               filePath,
@@ -103,7 +103,7 @@ export default defineEventHandler(async (event) => {
 
       skills.push({
         slug,
-        frontmatter: { name: slug, description: '', ...frontmatter },
+        frontmatter: { ...frontmatter, name: frontmatter.name ?? slug, description: frontmatter.description ?? '' },
         body,
         filePath: skillPath,
         source: 'local',

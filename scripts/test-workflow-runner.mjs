@@ -6,9 +6,14 @@
  *   node scripts/test-workflow-runner.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+}
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'runner-'))
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'runner-artifacts-'))
@@ -483,6 +488,75 @@ assert.ok(cStart < bEnd,
     'downstream steps are skipped, not left pending in a dead run')
 }
 
+// PIPELINE-SKIP is a SUCCESS: the run continues, downstream steps still run,
+// and only the recorded status differs. This is the distinction that makes the
+// outcome worth having - a step that skipped must not read, in the evidence
+// bundle, like a step that failed OR like one that did the work.
+{
+  const skipModel = 'haiku'
+  runner.setAgentCaller(async (agentSlug) => {
+    if (agentSlug === 'agent-b') {
+      return {
+        output: 'ran `grep -ci eswatini docker-compose.crm.yml` -> 8, already present\nPIPELINE-SKIP: capability already in place',
+        model: skipModel,
+      }
+    }
+    return `output of ${agentSlug}`
+  })
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+
+  assert.equal(r.status, 'completed', 'a skipped step does not fail the run - that is the whole point')
+  const b = r.steps.find(s => s.stepId === 'b')
+  assert.equal(b.status, 'skipped', 'the skipping step records skipped, not completed')
+  assert.equal(b.skipReason, 'capability already in place', 'the stated reason is preserved')
+  assert.equal(b.error, undefined, 'a skip is not an error')
+  assert.equal(b.model, skipModel, 'the model that ran is still recorded')
+  assert.ok(b.output.includes('PIPELINE-SKIP'), 'the output is kept for the record')
+
+  // The load-bearing assertion. A halt marks downstream steps `skipped`
+  // because the run died; a self-declared skip must instead let them RUN.
+  // Those two produce the same status on `d` if the scheduler treats them
+  // alike, so assert on d's own completion, not merely that it is not pending.
+  const d = r.steps.find(s => s.stepId === 'd')
+  assert.equal(d.status, 'completed',
+    'downstream of a skip must actually run - a skip schedules like a completed step, unlike a halt')
+  assert.ok(d.output.includes('output of'), 'the downstream step produced real output')
+}
+
+// A run that names a ticket tells that ticket it finished. The notifier is
+// gated (it posts nothing without JIRA_POST_ENABLED=1 and real credentials),
+// so what is asserted here is the wiring: a completed run with a ticketKey
+// renders and RECORDS the comment as jira-comment.json beside its evidence.
+// Without a ticket key nothing is written - an ad-hoc run against a scratch
+// brief must not invent an issue to comment on.
+{
+  runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
+
+  const withTicket = await runner.waitForSettled(
+    (await runner.startRun({
+      workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true,
+      ticketKey: 'DEVOPS-15',
+    })).id, TIMEOUT)
+  assert.equal(withTicket.status, 'completed')
+  assert.equal(withTicket.ticketKey, 'DEVOPS-15',
+    'the ticket key is runner-owned provenance carried onto the run, like `watch`')
+  const notified = join(process.env.AGENT_RUNS_DIR, withTicket.id, 'artifacts', 'jira-comment.json')
+  assert.ok(existsSync(notified),
+    'a completed run naming a ticket must record the comment it would post')
+  const recorded = JSON.parse(readFileSync(notified, 'utf8'))
+  assert.match(JSON.stringify(recorded), /DEVOPS-15/,
+    'the recorded comment names the ticket it is for')
+
+  const noTicket = await runner.waitForSettled(
+    (await runner.startRun({
+      workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true,
+    })).id, TIMEOUT)
+  assert.equal(noTicket.status, 'completed')
+  assert.ok(!existsSync(join(process.env.AGENT_RUNS_DIR, noTicket.id, 'artifacts', 'jira-comment.json')),
+    'no ticket key: nothing is recorded, and no issue is invented to comment on')
+}
+
 // Real token usage flows end to end: agentCaller.ts's { output, model, usage }
 // shape all the way through executeNode -> RunStep.usage -> runArtifacts.ts's
 // summed cost.input_tokens/output_tokens in meta.json. Two steps, two
@@ -526,6 +600,74 @@ assert.ok(cStart < bEnd,
   assert.equal(r.status, 'completed', 'a workflow with no steps completes via the empty-wave branch')
   assert.deepEqual(r.currentStepIds, [], 'no step ever ran')
   assert.ok(r.endedAt, 'the empty-wave branch still records when the run ended')
+}
+
+// THE end-to-end regression this whole change exists for (DEVOPS-15): a real
+// project directory, on a long-lived branch that already has real commits
+// ahead of main BEFORE the run starts, run through startRun itself — not
+// finalizeRunArtifacts called directly, so this proves startRun actually
+// captures WorkflowRun.baseCommit (via gitFacts.ts's captureBaseline) and
+// that the whole pipeline (startRun -> runWave -> publish -> finalize) wires
+// it through correctly. The stub agent halts the run at the first step and
+// makes no commits — the exact shape of the real DEVOPS-15 run that
+// attested to 33 commits, 17 files and 1083 lines it never touched.
+{
+  const projectDir = mkdtempSync(join(tmpdir(), 'runner-project-develop-'))
+  git(projectDir, ['init', '-q', '-b', 'main'])
+  git(projectDir, ['config', 'user.email', 'test@example.invalid'])
+  git(projectDir, ['config', 'user.name', 'Test'])
+  writeFileSync(join(projectDir, 'a.txt'), 'line1\n')
+  git(projectDir, ['add', '.'])
+  git(projectDir, ['commit', '-q', '-m', 'initial'])
+  git(projectDir, ['remote', 'add', 'origin', 'git@github.com:alepolab/alepo-dev-team-infra.git'])
+  git(projectDir, ['checkout', '-q', '-b', 'develop'])
+  for (let i = 0; i < 33; i += 1) {
+    appendFileSync(join(projectDir, 'a.txt'), `pre-existing line ${i}\n`)
+    git(projectDir, ['add', '.'])
+    git(projectDir, ['commit', '-q', '-m', `pre-existing develop commit ${i}`])
+  }
+  const aheadOfMain = git(projectDir, ['rev-list', 'main..HEAD']).split('\n').filter(Boolean)
+  assert.equal(aheadOfMain.length, 33, 'sanity: develop is 33 commits ahead of main before the run starts')
+  const developTip = git(projectDir, ['rev-parse', 'HEAD'])
+
+  const haltWorkflow = {
+    slug: 'devops-15', name: 'DEVOPS-15 Regression',
+    steps: [{ id: 'intake', agentSlug: 'sdlc-ticket-intake', label: 'Intake', next: [] }],
+  }
+  runner.setAgentCaller(async (agentSlug, input) => {
+    // An agent halting the run also self-reports a fabricated fix — same
+    // shape as the real DEVOPS-15 meta.json (33 commits, 17 files, 1083
+    // lines) — proving reconciliation, not merely an honest agent, is what
+    // keeps it out of the bundle.
+    const m = input.match(/Write every artifact you produce into: (\S+)/)
+    const metaPath = join(m[1], 'meta.json')
+    const cur = JSON.parse(readFileSync(metaPath, 'utf8'))
+    writeFileSync(metaPath, JSON.stringify({
+      ...cur,
+      fix: {
+        repos: [{ repo: 'alepolab/alepo-dev-team-infra', commits: aheadOfMain, pr: null }],
+        files_changed: 17, lines_changed: 1083, test_dirs_unlocked: false, unlock_reason: null,
+      },
+    }, null, 2))
+    return `could not bring the stack up\nPIPELINE-HALT: ${agentSlug} stopped`
+  })
+  const r = await runner.waitForSettled(
+    (await runner.startRun({
+      workflow: haltWorkflow, initialPrompt: 'fix DEVOPS-15', watch: 'direct-invocation',
+      autoRun: true, projectDir,
+    })).id, TIMEOUT)
+  assert.equal(r.status, 'failed', 'the halted step fails the run, exactly as the real DEVOPS-15 run did')
+  assert.equal(r.baseCommit, developTip,
+    'startRun captured develop\'s own tip as baseCommit, not main\'s — before the (single, halting) step ran')
+
+  const dir = join(process.env.AGENT_RUNS_DIR, r.id, 'artifacts')
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.ok(!meta.fix || !('repos' in meta.fix),
+    'a run that made no commits attests to no fix.repos, even though the branch is 33 commits ahead of main')
+  assert.ok(!meta.fix || !('files_changed' in meta.fix), 'no fabricated files_changed survives finalize')
+  assert.ok(!meta.fix || !('lines_changed' in meta.fix), 'no fabricated lines_changed survives finalize')
+
+  rmSync(projectDir, { recursive: true, force: true })
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })

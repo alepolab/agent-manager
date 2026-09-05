@@ -107,6 +107,9 @@ jobs:
             core.setOutput('artifact_id', String(artifact.id))
             core.setOutput('run_id', String(artifact.workflow_run.id))
 
+      # Gated on `locate`, NOT `resolve`: resolve runs after this step, so
+      # depending on it here would evaluate an output that does not exist yet
+      # and silently skip the download for every PR that DID upload an artifact.
       - name: Download run directory
         if: steps.locate.outputs.found == 'true'
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
@@ -116,14 +119,46 @@ jobs:
           artifact-ids: ${{ steps.locate.outputs.artifact_id }}
           path: run-dir
 
+      # Second source for the run directory, and the one that works today.
+      #
+      # A workflow artifact can only be created from inside a workflow run, but
+      # this pipeline runs on an engineer's machine - so nothing was ever in a
+      # position to upload `evidence-run-<sha>`, and the check could only ever
+      # fail with "no artifact found". Running the whole seven-stage pipeline in
+      # CI instead would mean Claude credentials as a repo secret and ~20 minutes
+      # of API spend on every pull request.
+      #
+      # So the pipeline commits its run directory to the branch at
+      # .agent/evidence-run/ and CI reads it from the checkout. No secrets, no
+      # per-PR cost, and the evidence lands in the diff where a reviewer can
+      # read it rather than in an artifact that expires. The artifact path above
+      # still wins when one exists, so a future CI-side run needs no change here.
+      - name: Resolve run directory
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.locate.outputs.found }}" = "true" ]; then
+            echo "run_dir=$GITHUB_WORKSPACE/run-dir" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "source=uploaded artifact evidence-run-<sha>"
+          elif [ -d "$GITHUB_WORKSPACE/.agent/evidence-run" ]; then
+            echo "run_dir=$GITHUB_WORKSPACE/.agent/evidence-run" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "source=committed .agent/evidence-run/"
+            ls -1 "$GITHUB_WORKSPACE/.agent/evidence-run"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "no evidence: neither an uploaded artifact nor .agent/evidence-run/"
+          fi
+
       - name: Assemble bundle
         id: assemble
-        if: steps.locate.outputs.found == 'true'
+        if: steps.resolve.outputs.found == 'true'
         working-directory: engineering
         run: |
           set +e
           node scripts/assemble-bundle.mjs \
-            --run-dir "$GITHUB_WORKSPACE/run-dir" \
+            --run-dir "${{ steps.resolve.outputs.run_dir }}" \
             --out "$GITHUB_WORKSPACE/bundle.json" \
             > "$GITHUB_WORKSPACE/assemble.log" 2>&1
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
@@ -131,7 +166,7 @@ jobs:
 
       - name: Validate bundle
         id: validate
-        if: steps.locate.outputs.found == 'true'
+        if: steps.resolve.outputs.found == 'true'
         working-directory: engineering
         run: |
           set +e
@@ -142,7 +177,7 @@ jobs:
 
       - name: Render summary
         id: render
-        if: steps.locate.outputs.found == 'true'
+        if: steps.resolve.outputs.found == 'true'
         working-directory: engineering
         run: |
           node scripts/bundle-summary.mjs "$GITHUB_WORKSPACE/bundle.json" \
@@ -156,7 +191,7 @@ jobs:
           # value is guaranteed to be one of a fixed set of tokens; anything
           # that could carry quotes, backticks or newlines (log/file
           # contents) is read from disk instead, never templated in.
-          FOUND: ${{ steps.locate.outputs.found }}
+          FOUND: ${{ steps.resolve.outputs.found }}
           VALIDATE_EXIT: ${{ steps.validate.outputs.exit_code }}
         with:
           script: |

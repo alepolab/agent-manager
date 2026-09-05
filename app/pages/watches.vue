@@ -191,7 +191,7 @@ function relativeTime(ms: number): string {
         <span class="text-[12px] text-meta">{{ watches.length }}</span>
       </template>
       <template #right>
-        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="showCreateModal = true" />
+        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
@@ -220,7 +220,7 @@ function relativeTime(ms: number): string {
       <div v-else-if="!watches.length" class="flex flex-col items-center justify-center py-16 space-y-3">
         <UIcon name="i-lucide-eye" class="size-8 text-meta" />
         <p class="text-[13px] text-label">No watches configured yet.</p>
-        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="showCreateModal = true" />
+        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </div>
 
       <!-- Watch list -->
@@ -382,7 +382,7 @@ function relativeTime(ms: number): string {
               </label>
             </div>
             <div class="flex justify-end gap-2 pt-2">
-              <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="showCreateModal = false" />
+              <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showCreateModal = false }" />
               <UButton type="submit" label="Create" size="sm" :loading="creating" :disabled="!form.name.trim() || !form.workflowSlug" />
             </div>
           </form>

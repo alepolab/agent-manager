@@ -62,7 +62,7 @@ function onPluginInstalled() {
           icon="i-lucide-plus"
           size="sm"
           variant="soft"
-          @click="showAddPluginModal = true"
+          @click="() => { showAddPluginModal = true }"
         />
       </template>
     </PageHeader>
@@ -197,7 +197,7 @@ function onPluginInstalled() {
           <UButton
             label="Quick Install"
             icon="i-lucide-plus"
-            @click="showAddPluginModal = true"
+            @click="() => { showAddPluginModal = true }"
           />
         </div>
       </div>

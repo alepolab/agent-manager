@@ -1,18 +1,24 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun } from './workflowRunStore.ts'
-import { callAgent, type AgentUsage } from './agentCaller.ts'
+import { callAgent, type AgentUsage, type AgentProgress } from './agentCaller.ts'
+import { captureBaseline } from './gitFacts.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
+  publishEvidenceToProject,
   markArtifactsUnusable,
 } from './runArtifacts.ts'
+import { createLogger, preview } from './log.ts'
+import { notifyTicketOutcome } from './ticketNotifier.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
+
+const log = createLogger('runner')
 
 // Widened to a union rather than requiring every caller to return the
 // richer shape: dozens of test stubs across this file's own test suite
@@ -23,7 +29,10 @@ import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 // normalizeAgentResult() below is the one place that tells them apart.
 export type AgentCallOutput = string | { output: string, model: string | null, usage?: AgentUsage | null }
 export type AgentCaller =
-  (agentSlug: string, input: string, projectDir?: string) => Promise<AgentCallOutput>
+  // onProgress is optional and additive: every existing test stub (2- or
+  // 3-arg functions registered via setAgentCaller) remains a valid AgentCaller
+  // under TS's structural typing, and simply never receives it.
+  (agentSlug: string, input: string, projectDir?: string, onProgress?: (p: AgentProgress) => void) => Promise<AgentCallOutput>
 
 // The real caller is imported and wired here directly, at module scope, in
 // the same file that reads it. Previously this defaulted to a throwing stub
@@ -56,6 +65,8 @@ export interface StartRunOpts {
    *  one. Threaded straight to createRun; no default here, since a silent
    *  default is exactly the kind of guess this field exists to rule out. */
   watch: string
+  /** See WorkflowRun.ticketKey - the issue this run is for, when known. */
+  ticketKey?: string
   autoRun: boolean
   projectDir?: string
 }
@@ -106,6 +117,37 @@ async function publish(run: WorkflowRun) {
     if (TERMINAL_STATUSES.includes(run.status)) {
       try {
         await finalizeRunArtifacts(run)
+        log.debug('run artifacts finalized', { runId: run.id, status: run.status })
+        // Only a COMPLETED run's evidence goes into the project tree. A failed
+        // or stopped run has, by definition, evidence with a hole in it, and
+        // committing that would hand CI a bundle that looks complete because
+        // the assembler cannot tell a missing stage from an absent file.
+        if (run.status === 'completed') await publishEvidenceToProject(run.id, run.projectDir)
+        // Tell the ticket its run finished. Best effort and deliberately last:
+        // notifyTicketOutcome is already gated - it posts nothing unless
+        // JIRA_POST_ENABLED=1 and credentials resolve - so on an ordinary
+        // machine this renders and records the comment without sending it.
+        // A notification failure must never change the run's outcome; the work
+        // is done either way, and a run reported as failed because Jira was
+        // unreachable would be a lie about the code.
+        if (run.ticketKey) {
+          try {
+            const result = await notifyTicketOutcome(
+              { id: run.watch, name: run.workflowName },
+              run.ticketKey,
+              run,
+            )
+            log.info('ticket notified', {
+              runId: run.id, ticketKey: run.ticketKey,
+              posted: result.posted, reason: result.reason ?? '(none)',
+            })
+          } catch (err) {
+            log.error('ticket notification failed; the run itself is unaffected', {
+              runId: run.id, ticketKey: run.ticketKey,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
       } catch (err) {
         // NOT best-effort-and-silent: finalizeRunArtifacts is the only place
         // the runner's own facts (identity/model/cost/fix) are re-asserted
@@ -115,7 +157,10 @@ async function publish(run: WorkflowRun) {
         // Logged so the failure is visible, and meta.json is removed so the
         // assembler sees an absent run — required keys missing, loudly
         // rejected — rather than silently assembling from unreconciled data.
-        console.error(`[workflowRunner] finalizeRunArtifacts failed for run ${run.id}:`, err)
+        log.error('finalizeRunArtifacts failed', {
+          runId: run.id, status: run.status,
+          error: err instanceof Error ? err.message : String(err),
+        })
         try { await markArtifactsUnusable(run.id) } catch { /* nothing further we can do */ }
       }
     }
@@ -176,6 +221,7 @@ async function failRun(run: WorkflowRun, err: unknown): Promise<void> {
   run.endedAt = Date.now()
   run.currentStepIds = []
   run.nextStepIds = []
+  log.error('run loop threw; marking run failed', { runId: run.id, error: run.error })
   await publish(run)
 }
 
@@ -299,10 +345,22 @@ async function runMonitor(
     const { output: review } = normalizeAgentResult(raw)
     const verdict = parseVerdict(review)
     Object.assign(rec, { monitorVerdict: verdict, monitorNote: review })
+    // CONTINUE is the expected, silent-majority outcome; RETRY/ABORT are the
+    // noteworthy ones — a monitor sending a step back, or killing the run,
+    // is exactly the kind of decision a reviewer reconstructing a run needs
+    // to see without re-running anything.
+    const log_ = verdict === 'CONTINUE' ? log.debug : log.warn
+    log_('monitor verdict', () => ({
+      stepId: rec.stepId, monitorSlug: step.monitorSlug, verdict, reviewPreview: preview(review),
+    }))
     return { verdict, review }
   } catch (err) {
     const monitorNote = `Monitor failed: ${err instanceof Error ? err.message : 'unknown error'}`
     Object.assign(rec, { monitorVerdict: 'CONTINUE', monitorNote })
+    log.warn('monitor call failed; defaulting to CONTINUE', {
+      stepId: rec.stepId, monitorSlug: step.monitorSlug,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return { verdict: 'CONTINUE', review: monitorNote }
   }
 }
@@ -326,7 +384,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
     startedAt: Date.now(), visits: l.state.visits[id],
+    // Progress telemetry is per-visit, not cumulative across retries — a
+    // fresh visit's turn count must not start from a previous attempt's.
+    assistantMessages: undefined, lastTool: undefined, lastActivityAt: undefined,
   })
+  log.debug('step starting', () => ({
+    runId: run.id, stepId: id, agentSlug: step.agentSlug, visits: rec.visits,
+    inputLength: input.length, inputPreview: preview(body),
+  }))
   // currentStepIds is NOT touched here. For a wave, it already holds every node in the
   // wave (set once by runWave before any of them start) - see the C4 note there for why
   // narrowing it to this one node would corrupt that during concurrent execution. For a
@@ -334,8 +399,18 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   await publish(run)
 
   try {
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir)
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir, (progress: AgentProgress) => {
+      // Diagnostic only (see AgentProgress's doc comment) - mutated directly
+      // onto the live rec and republished so the SSE stream carries it, but
+      // never written to the step's persisted artifact JSON and never
+      // touched by runnerOwned()'s facts.
+      Object.assign(rec, {
+        assistantMessages: progress.turn, lastTool: progress.lastTool, lastActivityAt: progress.lastActivityAt,
+      })
+      void publish(run)
+    })
     const { output, model, usage } = normalizeAgentResult(raw)
+    const durationMs = Date.now() - (rec.startedAt ?? Date.now())
 
     // A halt is a failure the agent raised deliberately. Checked before the
     // monitor and before the output is published downstream: a step that says
@@ -350,12 +425,33 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       Object.assign(rec, {
         status: 'failed', output, model, usage, error: `Step halted: ${halt}`, completedAt: Date.now(),
       })
+      log.warn('step halted', () => ({
+        runId: run.id, stepId: id, agentSlug: step.agentSlug, reason: preview(halt), durationMs,
+      }))
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
       return false
     }
 
+    // A skip is a SUCCESS, not a failure: the step examined its job, found
+    // nothing to do, and said so. It schedules exactly like a completed step
+    // - the output is published downstream and markCompleted runs at the end
+    // of this path - and the monitor below still reviews it, which is what
+    // stops a skip being used to dodge real work. Only the recorded status
+    // differs, so the evidence bundle can distinguish "nothing was needed"
+    // from "it was fixed". See parseSkip for why this outcome exists.
+    const skip = parseSkip(output)
     l.outputs[id] = output
-    Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
+    Object.assign(rec, {
+      status: skip ? 'skipped' : 'completed',
+      output, model, usage, completedAt: Date.now(),
+      ...(skip ? { skipReason: skip } : {}),
+    })
+    log.info(skip ? 'step skipped itself' : 'step completed', () => ({
+      runId: run.id, stepId: id, agentSlug: step.agentSlug, model,
+      ...(skip ? { skipReason: preview(skip) } : {}),
+      outputLength: output.length, durationMs,
+      inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
+    }))
 
     if (step.monitorSlug) {
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir)
@@ -393,6 +489,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       error: err instanceof Error ? err.message : 'Unknown error',
       completedAt: Date.now(),
     })
+    log.error('step call threw', {
+      runId: run.id, stepId: id, agentSlug: step.agentSlug,
+      error: err instanceof Error ? err.message : String(err),
+    })
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return false
   }
@@ -408,6 +508,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
+    log.info('run completed', { runId: run.id, workflowSlug: run.workflowSlug })
     await publish(run)
     return run
   }
@@ -418,6 +519,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // it reflecting only whichever node happened to reach that line last, not the wave.
   run.currentStepIds = wave
   run.nextStepIds = []
+  log.debug('wave starting', { runId: run.id, stepIds: wave })
   await publish(run)
 
   // Genuine concurrency (C4), each executeNode call publish()es independently as it
@@ -433,6 +535,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
+    log.warn('run failed', { runId: run.id, workflowSlug: run.workflowSlug, failedInWave: wave })
     await publish(run)
     return run
   }
@@ -471,13 +574,23 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  // Captured BEFORE createRun, so the baseline is the project directory's
+  // HEAD at the true moment execution begins — before any step, and so any
+  // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
+  // and shared/types/run.ts's WorkflowRun.baseCommit for why this can never
+  // fall back to a guess: an absent baseline means computeFixFacts later
+  // reports nothing, rather than diffing against a branch's shared base and
+  // attributing that branch's whole history to this run.
+  const baseCommit = await captureBaseline(opts.projectDir)
   const run = await createRun({
     workflowSlug: opts.workflow.slug,
     workflowName: opts.workflow.name,
     autoRun: opts.autoRun,
     initialPrompt: opts.initialPrompt,
     watch: opts.watch,
+    ticketKey: opts.ticketKey,
     projectDir: opts.projectDir,
+    baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
   const graph = buildGraph(opts.workflow.steps)
@@ -599,6 +712,7 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   run.endedAt = Date.now()
   run.currentStepIds = []
   run.nextStepIds = []
+  log.info('run stopped', { runId: run.id })
   await publish(run)
   return run
 }

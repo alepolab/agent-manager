@@ -1,3 +1,30 @@
 {
-  "extends": "./.nuxt/tsconfig.json"
+  "extends": "./.nuxt/tsconfig.json",
+  "compilerOptions": {
+    // The `.ts` extensions in our own relative imports are deliberate, not a
+    // slip. server/utils/*.ts import each other with the extension so the
+    // plain-node test scripts (`node scripts/test-*.mjs`, which rely on Node's
+    // type stripping) can import the same modules Nitro bundles - without it
+    // those scripts cannot resolve them at all. Nitro is unbothered either way.
+    //
+    // vue-tsc reported all 58 of these as TS5097. Enabling the flag is the
+    // correct resolution rather than rewriting 58 imports to suit a checker
+    // that emits nothing: it is safe precisely because we only ever typecheck
+    // with --noEmit, which TypeScript itself requires for this option.
+    "allowImportingTsExtensions": true
+  },
+  // Nuxt's generated include is `../**/*`, which sweeps in docker/claude-config -
+  // the BAKED third-party plugin cache (superpowers, mattpocock-skills). Those
+  // are other people's example files, vendored verbatim; we neither own them nor
+  // may edit them, and five of their errors were being reported as ours. The
+  // generated exclude list has to be restated in full because `extends` replaces
+  // this key rather than merging it - dropping one of these entries would quietly
+  // pull node_modules back into the check.
+  "exclude": [
+    "dist",
+    ".data",
+    ".output",
+    "docker",
+    "node_modules"
+  ]
 }

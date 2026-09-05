@@ -81,6 +81,10 @@ export interface ProviderQueryOptions {
   effort?: 'low' | 'medium' | 'high' | 'max'
   /** User message to save with correct sessionId (passed from WS handler) */
   userMessage?: NormalizedMessage
+  /** Output style to apply to this query. Read by claudeProvider and passed by
+   *  the v2 chat socket; it was simply never declared here, so both ends
+   *  type-errored while the feature worked at runtime. */
+  outputStyleId?: string
 }
 
 /**

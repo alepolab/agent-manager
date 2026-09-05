@@ -23,6 +23,26 @@ const SDLC_STANDING_RULES = `## Standing rules
 These hold at every step in this pipeline, not just this one:
 
 - **Verify against the artifact, not the description.** A doc, a \`FROM\` line, a config file, a ticket's own words — none of them are the thing itself. The SDK's own documentation once showed full model ids for an option that in practice only accepts bare aliases; the doc was wrong and the running system was right. Check the thing that will actually run, not what something says about it.
+- **"Nothing to do here" is a real, honest outcome — declare it.** Your job is to reach the correct end state, not to produce a diff. If your step's work is already satisfied, or does not apply to this ticket at all, end your output with a single line:
+
+      PIPELINE-SKIP: <one sentence saying what you checked and why nothing was needed>
+
+  The pipeline treats that as a success and carries on to the next step, and your reasoning is passed downstream. It is NOT a halt — use \`PIPELINE-HALT:\` only when you are genuinely blocked and later steps must not proceed.
+
+  This exists because its absence has killed real runs. \`sdlc-stack-provisioner\` was handed an infra ticket verified entirely by how compose *renders* — nothing to stand up — and, having no way to say so, spent its whole turn budget issuing commands until it died on \`error_max_turns\` with no output at all. Manufacturing work to look productive is worse than doing nothing, because it burns the budget the rest of the run needs.
+
+  Two conditions, both required. **Say what you measured** — the command you ran, the file you read, the count you got — because "seems fine" is not a finding. And **never skip to avoid difficulty**: a step that is hard, slow, or unclear is still yours. Skip only when the work is genuinely already done or genuinely does not apply. A monitor may review your skip, and a skip you cannot justify is worse than an honest failure.
+
+- **Never touch a remote, and never rewrite history.** Pushing, fetching, pulling, rebasing or merging from a remote, force-pushing, amending, hard-resetting, and opening a pull request are all off limits unless the run's brief tells you to, in words, for your step. Committing locally is the whole of your git mandate.
+
+  A remote is shared. Other people's branches, CI runs and review state live there, and a push cannot be quietly undone. A real run proves the cost: the final step pushed its branch despite the brief saying in as many words not to. A LATER run then fetched that branch, rebased onto it, and inherited the earlier attempt's commits — so the repository ended up with the same capability twice under two different names (\`crm-eswatini-postmigrate\` and \`crm-postmigrate-eswatini\`), each with its own passing test file. Every test was green, and the run reported success.
+
+  Fetching and pulling look harmless because they only read. They are not: they import other work into your branch, and rebasing onto what they bring back silently mixes someone else's changes into what your run will claim as its own.
+
+- **Check whether it already exists before you add it — including under another name.** Before creating a service, profile, test file, script or config block, search for one that already does the job. Match on what it *does*, not on the name you were about to use: a thing named \`x-y-z\` and a thing named \`x-z-y\` are the same capability twice, and both will pass their own tests while the repository quietly carries a duplicate. If the intake step reported that the capability is already present, that report is evidence — act on it rather than re-deriving it.
+
+- **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
+- **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
 - **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
 
@@ -241,6 +261,26 @@ Rules:
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Read', 'Grep', 'Glob', 'Write'],
+      // Turn budgets are a CIRCUIT BREAKER, not a ration.
+      //
+      // They were originally set near each step's expected cost, and that shape
+      // of limit fails badly: it does not degrade, it destroys. A step one turn
+      // over its cap does not return partial work - it raises error_max_turns
+      // with EMPTY output, failing the run and discarding everything every
+      // earlier step spent. Measured on DEVOPS-15, in order: the provisioner
+      // died twice at 40, the verifier at 20, the evidence step at 15, and the
+      // implementer at 30 having already written the correct fix.
+      //
+      // Each was then raised one at a time, which was whack-a-mole against a
+      // single underlying mistake. What actually stops an agent manufacturing
+      // work is the declared-skip outcome and the standing rules, not a tight
+      // cap. So the cap's only remaining job is to stop a genuine runaway loop,
+      // and it is set at roughly twice the largest observed successful step
+      // (334s / 40 turns) for every agent that runs commands.
+      //
+      // A higher cap costs more only in the rare runaway case. A cap set too
+      // low costs 100% of the run, every time it bites.
+      maxTurns: 30,
       skills: ['intent-template', 'using-superpowers'],
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
@@ -277,14 +317,16 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast_radius\` and \`plugin_version\` into \`meta.json\` in that same directory. Three of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. Three of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
 
-\`plugin_version\` is the installed version of the \`alepo-engineering\` plugin. Find it yourself: search under \`~/.claude/plugins/\` for an \`alepo-engineering\` directory containing a \`.claude-plugin/plugin.json\`, read that file, and use its \`version\` field verbatim — never guess a version number and never construct one from a directory or path name. If that search genuinely turns up nothing — the plugin is not installed here — the correct action is \`PIPELINE-HALT\`, never a placeholder. \`unknown\` is a string, so it passes the bundle schema's type check silently; a value that passes validation without being verifiable is worse than a step that stops, because a reviewer trusts it exactly as much as a real version and has no way to tell the difference. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
+Do **not** write \`plugin_version\`, \`identity\`, \`model\`, \`watch\` or \`cost\`. Those are runner-owned provenance: the server process writes them and re-asserts them over anything an agent puts there, because they are facts about the run rather than about the ticket. Three real runs halted here trying to find the installed plugin — the working directory is the target repository, so a search of \`~/.claude\` could never succeed no matter how good the pattern. If you find one of these keys already present in \`meta.json\`, leave it exactly as it is.
+
+\`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
 
 ## Absent beats invented
 
@@ -313,8 +355,8 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 40,
-      skills: ['using-git-worktrees', 'using-superpowers'],
+      maxTurns: 60,
+      skills: ['ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You stand up the environment the rest of the pipeline tests against. Nothing downstream works if you get this wrong, and a stack you *believe* is up but is not produces a false FAIL that wastes the whole run.
 
@@ -333,6 +375,27 @@ A container that is running is not a service that is serving. Confirm health thr
 ## Seeding
 
 If the context packet names a customer or specific records, seed representative data for them — including a second subscriber or account where the bug involves interaction between two. A single-record environment hides exactly the class of bug that matters.
+
+## Tear down what you brought up
+
+Anything you stand up to test gets removed. A stack left running holds ports,
+volumes, container names and a subnet that the next run — or another person —
+will collide with, and the collision surfaces far from here as a bind failure or
+a container that will not start, with nothing pointing back at you.
+
+Record, in your report, exactly what you started and the command that removes
+it, so the teardown is auditable rather than assumed. Say so plainly if you
+could not remove something.
+
+Two things you must NOT do while tearing down. Never remove anything you did not
+start — this estate shares one network and one SSO stack (Keycloak and URM serve
+FFM, CRM, PCRF and VMS), and a stack you did not bring up belongs to someone
+else. And never use a volume-destroying teardown (\`down -v\`, or any volume
+prune) unless you created the volume in this run: that deletes seeded data other
+runs depend on, and it cannot be undone.
+
+If you skipped provisioning, there is nothing to tear down — say that, and do
+not run a teardown "just in case" against a stack you never started.
 
 ## Evidence or halt — there is no third option
 
@@ -388,8 +451,8 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 30,
-      skills: ['regression-matrix', 'using-superpowers'],
+      maxTurns: 60,
+      skills: ['regression-matrix', 'test-driven-development', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
 
@@ -464,8 +527,8 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 30,
-      skills: ['systematic-debugging', 'using-git-worktrees', 'using-superpowers'],
+      maxTurns: 60,
+      skills: ['systematic-debugging', 'ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You fix the cause, not the symptom. The failing test from the previous step defines done.
 
@@ -534,8 +597,8 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 20,
-      skills: ['regression-matrix', 'using-superpowers'],
+      maxTurns: 60,
+      skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
 
@@ -612,9 +675,9 @@ not happen.`,
       description: 'Captures browser evidence for UI-facing changes, or reports cleanly that none applies.',
       model: MODEL.SONNET,
       color: 'purple',
-      tools: ['Bash', 'Read', 'Glob'],
-      maxTurns: 20,
-      skills: ['agent-browser'],
+      tools: ['Bash', 'Read', 'Glob', 'Write'],
+      maxTurns: 30,
+      skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You capture browser evidence for the change, against the stack the provisioning step brought up.
 
@@ -659,6 +722,8 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'yellow',
       tools: ['Read'],
+      maxTurns: 10,
+      skills: ['requesting-code-review', 'ponytail-review'],
     },
     body: `You review one step of an automated fix pipeline. You did not run the step; you see only its input and its output.
 
@@ -676,7 +741,24 @@ VERDICT: ABORT      - the step failed in a way that makes every later step meani
 
 Prefer ABORT over CONTINUE when the step was supposed to establish something
 later steps depend on and did not. A pipeline that stops here is cheap; a pull
-request built on evidence that was never gathered is not.`,
+request built on evidence that was never gathered is not.
+
+## A declared skip is not a failure
+
+A step may end with PIPELINE-SKIP: <reason> to say its work was already
+satisfied or does not apply to this ticket. That is a legitimate outcome and
+CONTINUE is usually the right verdict - an infra ticket verified entirely by a
+static compose render genuinely has no stack to stand up, and forcing work
+there wastes the budget later steps need.
+
+Judge a skip by the same standard as any other output: **did it measure
+anything?** A skip naming the command it ran, the file it read, or the count it
+got has done its job. A skip resting on "this appears unnecessary", with
+nothing checked, is the prose-without-evidence failure you exist to catch - vote
+RETRY so the step does the work of establishing it.
+
+Never vote ABORT on a skip merely for being a skip. Judge the evidence, not the
+shape of the answer.`,
   },
   {
     id: 'sdlc-evidence-and-pr',
@@ -687,9 +769,53 @@ request built on evidence that was never gathered is not.`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
-      maxTurns: 15,
+      maxTurns: 60,
+      skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
+
+## Commit the evidence, or CI has none
+
+The run directory is copied to \`.agent/evidence-run/\` in the project tree by
+the runner when the run completes. Copying is not committing: \`.github/workflows/evidence-bundle.yml\`
+reads that directory **from the pull request's checkout**, so evidence left
+untracked is evidence CI cannot see. A real run produced a full, correct bundle
+and committed only the test file — the check would have failed with "no
+evidence" while the files sat on disk beside it.
+
+So \`git add .agent/evidence-run\` and include it in your commit.
+
+## Which branch the pull request targets
+
+Promotion in this estate runs develop -> ci-release -> main. A fix therefore
+enters at develop and is promoted; it does not land on main directly.
+
+So when the defect is present on more than one protected branch — main,
+ci-release and develop all carrying it — the pull request targets **develop**,
+never main. Opening it against main would put the fix ahead of the branch every
+later release is cut from, and the next promotion from develop would silently
+revert it. State the target branch and this reasoning in the report.
+
+Target main only when the repository has no develop branch at all, or when the
+brief names main explicitly. If the repository's own CLAUDE.md names a different
+default (some repos here use \`development\` or \`master\`), that file wins over
+this rule — say which one you followed and why.
+
+## Git: local only
+
+Commit locally and stop. Pushing, fetching, pulling, rebasing or merging from a
+remote, force-pushing, amending and opening a pull request are all off limits
+unless the run's brief tells you to, in words.
+
+This is the step most likely to get it wrong, because opening a PR sounds like
+your job. A real run pushed its branch to the shared repository while the brief
+said in as many words not to. A later run then fetched that branch and rebased
+onto it, inheriting the earlier attempt's commits, and the repository ended up
+carrying the same capability twice under two names — each with its own passing
+test. Nothing failed. The run reported success.
+
+If the brief withholds permission to push, the PR body is an artifact you
+write, not a request you send.
 
 ## Assemble the bundle
 

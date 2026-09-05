@@ -32,7 +32,7 @@ export function useMCP() {
       })
     } catch (err: any) {
       error.value = err.message || 'Failed to fetch MCP servers'
-      toast.add({ title: 'Failed to load servers', description: error.value, color: 'error' })
+      toast.add({ title: 'Failed to load servers', description: error.value ?? undefined, color: 'error' })
     } finally {
       loading.value = false
     }

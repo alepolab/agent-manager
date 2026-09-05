@@ -10,6 +10,17 @@ export interface TicketRef {
   summary: string
   description: string
   updatedAt: number
+  /**
+   * Optional identity fields a real ticket source (Jira) can supply for
+   * comment rendering — the display name to `@mention`, and the ticket's
+   * own web URL. The file-backed stub and existing tests never set these,
+   * and nothing downstream requires them: a source that can't supply an
+   * owner renders its comment without a mention line rather than
+   * fabricating one. See `ticketNotifier.ts`.
+   */
+  assignee?: string
+  reporter?: string
+  url?: string
 }
 
 export interface TicketState {
