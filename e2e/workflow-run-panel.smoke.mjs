@@ -290,9 +290,40 @@ try {
   assert.equal(await segments.count(), 3,
     'the bar carries one segment per step, so a reader sees the shape of the run, not a percentage')
 
+  // ── Run History page (app/pages/runs/index.vue, GET /api/runs) ──────────
+  //
+  // Same seeded run, reached the other way. Runs used to be discoverable only
+  // from the workflow that produced them, so a run started headlessly by
+  // scripts/run-ticket.mjs or by a watch had nowhere to be seen. This asserts
+  // the global page finds that run and reports the same settled count the
+  // panel does - the two views reading one run differently is exactly the
+  // drift that made extracting app/utils/runStatus.ts worth doing.
+  await page.goto(`${baseUrl}/runs`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+
+  const historyRows = page.locator('[data-testid="run-history-row"]')
+  await historyRows.first().waitFor({ state: 'visible', timeout: 30_000 })
+  assert.equal(await historyRows.count(), 1,
+    'the history page must list the one seeded run, found via GET /api/runs rather than a workflow slug')
+
+  const historyCount = page.locator('[data-testid="run-history-count"]').first()
+  const historyCountText = (await historyCount.textContent()).replace(/\s+/g, ' ').trim()
+  assert.equal(historyCountText, '1 / 3',
+    `history must report the same settled count as the panel, got "${historyCountText}"`)
+
+  const historySegments = page.locator('[data-testid="run-history-bar"] > span')
+  assert.equal(await historySegments.count(), 3,
+    'history rows carry one segment per step, matching the panel')
+
+  // Expanding is the only way to see per-step detail from history, so a broken
+  // toggle makes the page a dead end rather than an obviously empty one.
+  await historyRows.first().locator('button').first().click()
+  const intakeRow = page.getByText(stepIntake.label, { exact: false }).first()
+  await intakeRow.waitFor({ state: 'visible', timeout: 15_000 })
+
   console.log(
     'PASS: workflow run panel rendered all 3 seeded step rows (completed, running, pending) '
-    + 'with correct labels and status colors',
+    + 'with correct labels and status colors; run history page listed the same run '
+    + 'with a matching settled count and expandable step detail',
   )
 } catch (err) {
   exitCode = 1

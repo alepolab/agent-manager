@@ -380,4 +380,28 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
 }
 
+// Every working step must know that "already done / not applicable" is a real
+// outcome it may declare. Without it, sdlc-stack-provisioner met an infra
+// ticket with nothing to stand up, had no way to say so, and burned its whole
+// turn budget to error_max_turns with empty output.
+{
+  const workers = AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')
+  assert.ok(workers.length >= 7, `expected the sdlc worker agents, found ${workers.length}`)
+  for (const a of workers) {
+    assert.ok(a.body.includes('PIPELINE-SKIP:'),
+      `${a.id} must be told it can declare a skip instead of manufacturing work`)
+    assert.ok(/never skip to avoid difficulty/i.test(a.body),
+      `${a.id} must also be told the limit of that permission, or a skip becomes a way out of hard work`)
+  }
+
+  // The monitor never skips - it votes - but it reviews steps that do. If it
+  // does not know a skip is legitimate it votes ABORT on one, which would kill
+  // exactly the runs this outcome exists to rescue.
+  const monitor = AGENT_TEMPLATES.find(t => t.id === 'sdlc-step-monitor')
+  assert.ok(monitor.body.includes('PIPELINE-SKIP'),
+    'the monitor must know a declared skip is a legitimate outcome, not a failure to abort on')
+  assert.ok(!monitor.body.includes('never skip to avoid difficulty'),
+    'the monitor is not a worker and must not be given the worker rule')
+}
+
 console.log('workflowTemplates: all assertions passed')

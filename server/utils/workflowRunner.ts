@@ -1,6 +1,6 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
@@ -398,10 +398,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       return false
     }
 
+    // A skip is a SUCCESS, not a failure: the step examined its job, found
+    // nothing to do, and said so. It schedules exactly like a completed step
+    // - the output is published downstream and markCompleted runs at the end
+    // of this path - and the monitor below still reviews it, which is what
+    // stops a skip being used to dodge real work. Only the recorded status
+    // differs, so the evidence bundle can distinguish "nothing was needed"
+    // from "it was fixed". See parseSkip for why this outcome exists.
+    const skip = parseSkip(output)
     l.outputs[id] = output
-    Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
-    log.info('step completed', () => ({
+    Object.assign(rec, {
+      status: skip ? 'skipped' : 'completed',
+      output, model, usage, completedAt: Date.now(),
+      ...(skip ? { skipReason: skip } : {}),
+    })
+    log.info(skip ? 'step skipped itself' : 'step completed', () => ({
       runId: run.id, stepId: id, agentSlug: step.agentSlug, model,
+      ...(skip ? { skipReason: preview(skip) } : {}),
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))

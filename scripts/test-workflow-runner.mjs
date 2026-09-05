@@ -488,6 +488,42 @@ assert.ok(cStart < bEnd,
     'downstream steps are skipped, not left pending in a dead run')
 }
 
+// PIPELINE-SKIP is a SUCCESS: the run continues, downstream steps still run,
+// and only the recorded status differs. This is the distinction that makes the
+// outcome worth having - a step that skipped must not read, in the evidence
+// bundle, like a step that failed OR like one that did the work.
+{
+  const skipModel = 'haiku'
+  runner.setAgentCaller(async (agentSlug) => {
+    if (agentSlug === 'agent-b') {
+      return {
+        output: 'ran `grep -ci eswatini docker-compose.crm.yml` -> 8, already present\nPIPELINE-SKIP: capability already in place',
+        model: skipModel,
+      }
+    }
+    return `output of ${agentSlug}`
+  })
+  const r = await runner.waitForSettled(
+    (await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+
+  assert.equal(r.status, 'completed', 'a skipped step does not fail the run - that is the whole point')
+  const b = r.steps.find(s => s.stepId === 'b')
+  assert.equal(b.status, 'skipped', 'the skipping step records skipped, not completed')
+  assert.equal(b.skipReason, 'capability already in place', 'the stated reason is preserved')
+  assert.equal(b.error, undefined, 'a skip is not an error')
+  assert.equal(b.model, skipModel, 'the model that ran is still recorded')
+  assert.ok(b.output.includes('PIPELINE-SKIP'), 'the output is kept for the record')
+
+  // The load-bearing assertion. A halt marks downstream steps `skipped`
+  // because the run died; a self-declared skip must instead let them RUN.
+  // Those two produce the same status on `d` if the scheduler treats them
+  // alike, so assert on d's own completion, not merely that it is not pending.
+  const d = r.steps.find(s => s.stepId === 'd')
+  assert.equal(d.status, 'completed',
+    'downstream of a skip must actually run - a skip schedules like a completed step, unlike a halt')
+  assert.ok(d.output.includes('output of'), 'the downstream step produced real output')
+}
+
 // Real token usage flows end to end: agentCaller.ts's { output, model, usage }
 // shape all the way through executeNode -> RunStep.usage -> runArtifacts.ts's
 // summed cost.input_tokens/output_tokens in meta.json. Two steps, two

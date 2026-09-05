@@ -109,7 +109,7 @@ function furthestStep(run: WorkflowRun) {
         </div>
 
         <div class="space-y-2">
-          <div v-for="run in filtered" :key="run.id" class="rounded-lg bg-card border border-subtle overflow-hidden">
+          <div v-for="run in filtered" :key="run.id" data-testid="run-history-row" class="rounded-lg bg-card border border-subtle overflow-hidden">
             <button
               class="w-full flex items-center gap-3 px-4 py-3 text-left"
               @click="expanded = expanded === run.id ? null : run.id"
@@ -119,14 +119,14 @@ function furthestStep(run: WorkflowRun) {
               <span class="text-[11px] font-mono uppercase shrink-0" :style="{ color: runStatusColor(run.status) }">{{ run.status }}</span>
 
               <span class="ml-auto flex items-center gap-3 shrink-0">
-                <span class="text-[11px] text-label tabular-nums">{{ settledCount(run) }} / {{ run.steps.length }}</span>
+                <span class="text-[11px] text-label tabular-nums" data-testid="run-history-count">{{ settledCount(run) }} / {{ run.steps.length }}</span>
                 <span class="text-[11px] text-label tabular-nums">{{ elapsedLabel({ startedAt: run.startedAt, completedAt: run.endedAt }) }}</span>
                 <span class="text-[11px] text-meta">{{ new Date(run.startedAt).toLocaleString() }}</span>
               </span>
             </button>
 
             <!-- One segment per step, coloured by that step's own status. -->
-            <div class="flex gap-0.5 px-4 pb-2">
+            <div class="flex gap-0.5 px-4 pb-2" data-testid="run-history-bar">
               <span
                 v-for="step in run.steps"
                 :key="`seg-${run.id}-${step.stepId}`"

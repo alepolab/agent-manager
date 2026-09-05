@@ -23,6 +23,16 @@ const SDLC_STANDING_RULES = `## Standing rules
 These hold at every step in this pipeline, not just this one:
 
 - **Verify against the artifact, not the description.** A doc, a \`FROM\` line, a config file, a ticket's own words — none of them are the thing itself. The SDK's own documentation once showed full model ids for an option that in practice only accepts bare aliases; the doc was wrong and the running system was right. Check the thing that will actually run, not what something says about it.
+- **"Nothing to do here" is a real, honest outcome — declare it.** Your job is to reach the correct end state, not to produce a diff. If your step's work is already satisfied, or does not apply to this ticket at all, end your output with a single line:
+
+      PIPELINE-SKIP: <one sentence saying what you checked and why nothing was needed>
+
+  The pipeline treats that as a success and carries on to the next step, and your reasoning is passed downstream. It is NOT a halt — use \`PIPELINE-HALT:\` only when you are genuinely blocked and later steps must not proceed.
+
+  This exists because its absence has killed real runs. \`sdlc-stack-provisioner\` was handed an infra ticket verified entirely by how compose *renders* — nothing to stand up — and, having no way to say so, spent its whole turn budget issuing commands until it died on \`error_max_turns\` with no output at all. Manufacturing work to look productive is worse than doing nothing, because it burns the budget the rest of the run needs.
+
+  Two conditions, both required. **Say what you measured** — the command you ran, the file you read, the count you got — because "seems fine" is not a finding. And **never skip to avoid difficulty**: a step that is hard, slow, or unclear is still yours. Skip only when the work is genuinely already done or genuinely does not apply. A monitor may review your skip, and a skip you cannot justify is worse than an honest failure.
+
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -690,7 +700,24 @@ VERDICT: ABORT      - the step failed in a way that makes every later step meani
 
 Prefer ABORT over CONTINUE when the step was supposed to establish something
 later steps depend on and did not. A pipeline that stops here is cheap; a pull
-request built on evidence that was never gathered is not.`,
+request built on evidence that was never gathered is not.
+
+## A declared skip is not a failure
+
+A step may end with PIPELINE-SKIP: <reason> to say its work was already
+satisfied or does not apply to this ticket. That is a legitimate outcome and
+CONTINUE is usually the right verdict - an infra ticket verified entirely by a
+static compose render genuinely has no stack to stand up, and forcing work
+there wastes the budget later steps need.
+
+Judge a skip by the same standard as any other output: **did it measure
+anything?** A skip naming the command it ran, the file it read, or the count it
+got has done its job. A skip resting on "this appears unnecessary", with
+nothing checked, is the prose-without-evidence failure you exist to catch - vote
+RETRY so the step does the work of establishing it.
+
+Never vote ABORT on a skip merely for being a skip. Judge the evidence, not the
+shape of the answer.`,
   },
   {
     id: 'sdlc-evidence-and-pr',

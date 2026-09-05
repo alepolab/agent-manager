@@ -19,6 +19,7 @@ import {
   joinInputs,
   parseVerdict,
   parseHalt,
+  parseSkip,
   edgeKey,
   MAX_CONCURRENCY,
   ancestorsOf,
@@ -265,6 +266,28 @@ assert.equal(joinInputs([]), '')
   assert.equal(parseHalt(''), null)
   assert.equal(parseHalt(undefined), null, 'unreadable output does not halt')
   assert.equal(parseHalt('PIPELINE-HALT:   '), null, 'a marker with no reason is not a halt')
+}
+
+// parseSkip: the third honest outcome - work already done, or not applicable
+{
+  assert.equal(parseSkip('all good'), null, 'ordinary output does not skip')
+  assert.equal(parseSkip('checked the compose render\nPIPELINE-SKIP: no stack needed for a static ticket'),
+    'no stack needed for a static ticket')
+  assert.equal(parseSkip('PIPELINE-SKIP: first\nPIPELINE-SKIP: second'), 'second',
+    'the last marker wins, matching parseHalt and parseVerdict')
+  assert.equal(parseSkip('the agent may mention PIPELINE-SKIP: mid-sentence in prose'), null,
+    'the marker must start its own line - prose about it is not a skip')
+  assert.equal(parseSkip(''), null)
+  assert.equal(parseSkip(undefined), null, 'unreadable output does not skip')
+  assert.equal(parseSkip('PIPELINE-SKIP:   '), null, 'a marker with no reason is not a skip')
+
+  // The two markers are independent, and a step emitting both is in trouble
+  // rather than idle - the runner checks halt first for exactly this reason.
+  const both = 'PIPELINE-SKIP: nothing to do\nPIPELINE-HALT: actually blocked'
+  assert.equal(parseHalt(both), 'actually blocked', 'a halt is still detected alongside a skip')
+  assert.equal(parseSkip(both), 'nothing to do', 'a skip is still detected alongside a halt')
+  assert.equal(parseSkip('PIPELINE-HALT: blocked'), null, 'a halt alone is not a skip')
+  assert.equal(parseHalt('PIPELINE-SKIP: idle'), null, 'a skip alone is not a halt')
 }
 
 console.log('workflowGraph: all checks passed')

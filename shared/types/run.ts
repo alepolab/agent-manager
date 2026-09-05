@@ -46,6 +46,11 @@ export interface RunStep {
    *  measured, so it is not asserted here. Use this to see that an agent is
    *  still moving and roughly how much it has done, never to judge how close
    *  it is to its limit. */
+  /** Why this step declared itself not applicable, when `status` is
+   *  'skipped' because the agent emitted `PIPELINE-SKIP:`. Absent for a step
+   *  the scheduler skipped after an upstream failure - those two are very
+   *  different events and the bundle must not conflate them. */
+  skipReason?: string
   assistantMessages?: number
   lastTool?: string
   lastActivityAt?: number
