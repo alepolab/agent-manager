@@ -13,10 +13,11 @@ const execFileP = promisify(execFile)
  * configured default project. Descriptions arrive as ADF and are flattened to
  * text; formatting is not what the pipeline reads, the words are.
  */
-export type Exec = (args: string[]) => Promise<string>
+export type Exec = (args: string[], env?: Record<string, string>) => Promise<string>
 
-const realExec: Exec = async (args) => {
-  const { stdout } = await execFileP('jira', args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })
+export type ExecEnv = Record<string, string> | undefined
+const realExec: Exec = async (args, env?: ExecEnv) => {
+  const { stdout } = await execFileP('jira', args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024, env: env ? { ...process.env, ...env } : process.env })
   return stdout
 }
 let exec: Exec = realExec
@@ -43,8 +44,8 @@ export function adfToText(node: any): string {
 
 export interface JiraIssue { key: string, summary: string, description: string, labels: string[], updatedAt: number, url?: string }
 
-export async function viewIssue(key: string): Promise<JiraIssue> {
-  const raw = JSON.parse(await exec(['issue', 'view', key, '--raw']))
+export async function viewIssue(key: string, env?: Record<string, string>): Promise<JiraIssue> {
+  const raw = JSON.parse(await exec(['issue', 'view', key, '--raw'], env))
   const f = raw.fields ?? {}
   const description = typeof f.description === 'string' ? f.description : adfToText(f.description)
   return {
@@ -108,11 +109,11 @@ export function createJiraTicketSource(): TicketSource {
 }
 
 /** For a manual run started with only a key: the ticket text, or null when the CLI cannot serve it. */
-export async function expandTicketKey(prompt: string): Promise<string | null> {
+export async function expandTicketKey(prompt: string, env?: Record<string, string>): Promise<string | null> {
   const key = prompt.trim()
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) return null
   try {
-    return ticketText(await viewIssue(key))
+    return ticketText(await viewIssue(key, env))
   } catch {
     return null
   }

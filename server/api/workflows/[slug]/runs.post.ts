@@ -1,6 +1,8 @@
 import { startRun } from '../../../utils/workflowRunner'
 import { findActiveRun } from '../../../utils/workflowRunStore'
 import { expandTicketKey } from '../../../utils/jiraTicketSource'
+import { currentUser } from '../../../utils/session'
+import { envForUser } from '../../../utils/users'
 
 export default defineEventHandler(async (event) => {
   const slug = getRouterParam(event, 'slug')!
@@ -29,7 +31,8 @@ export default defineEventHandler(async (event) => {
   // as the run exists, and the run continues server-side. That is the feature.
   // A bare ticket key becomes the ticket itself when the jira CLI can serve
   // it; otherwise the key is passed through and the intake step works from it.
-  const initialPrompt = (await expandTicketKey(body.initialPrompt)) ?? body.initialPrompt
+  const user = await currentUser(event)
+  const initialPrompt = (await expandTicketKey(body.initialPrompt, await envForUser(user?.login))) ?? body.initialPrompt
 
   const run = await startRun({
     workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
@@ -39,6 +42,7 @@ export default defineEventHandler(async (event) => {
     watch: 'direct-invocation',
     autoRun: body.autoRun === true,
     projectDir: body.projectDir,
+    startedBy: user?.login,
   })
   return run
 })

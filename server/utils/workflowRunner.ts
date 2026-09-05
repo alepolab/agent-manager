@@ -10,6 +10,7 @@ import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, BOOT_ID }
 import { resolveProduct } from './registry.ts'
 import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
+import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage } from './agentCaller.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -26,7 +27,12 @@ import type { WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 // normalizeAgentResult() below is the one place that tells them apart.
 export type AgentCallOutput = string | { output: string, model: string | null, usage?: AgentUsage | null }
 export type AgentCaller =
-  (agentSlug: string, input: string, projectDir?: string, signal?: AbortSignal) => Promise<AgentCallOutput>
+  (agentSlug: string, input: string, projectDir?: string, signal?: AbortSignal, env?: Record<string, string>) => Promise<AgentCallOutput>
+
+/** Resolves the environment a run's starter should run agents with. Test seam. */
+export type EnvResolver = (login: string | undefined) => Promise<Record<string, string>>
+let envResolver: EnvResolver = (login) => envForUser(login)
+export function setEnvResolver(fn: EnvResolver) { envResolver = fn }
 
 // The real caller is imported and wired here directly, at module scope, in
 // the same file that reads it. Previously this defaulted to a throwing stub
@@ -61,6 +67,7 @@ export interface StartRunOpts {
   watch: string
   autoRun: boolean
   projectDir?: string
+  startedBy?: string
 }
 
 /** In-memory scheduling state, keyed by run id. Lost on restart — which is
@@ -369,7 +376,8 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const ac = new AbortController()
   l.aborts.set(id, ac)
   try {
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, ac.signal)
+    const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir, ac.signal, userEnv)
     const { output, model, usage } = normalizeAgentResult(raw)
 
     // A halt is a failure the agent raised deliberately. Checked before the
@@ -544,6 +552,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const product = await resolveProduct(opts.initialPrompt).catch(() => undefined)
   const run = await createRun({
     product,
+    startedBy: opts.startedBy,
     workflowSlug: opts.workflow.slug,
     workflowName: opts.workflow.name,
     autoRun: opts.autoRun,
@@ -803,7 +812,7 @@ const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted'
  * step's output, under the same run id and artifacts directory. The previous
  * attempt of each reset step is snapshotted the way monitor retries are.
  */
-export async function restartRun(runId: string, stepId: string, note?: string): Promise<WorkflowRun> {
+export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string): Promise<WorkflowRun> {
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
   if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
@@ -855,6 +864,7 @@ export async function restartRun(runId: string, stepId: string, note?: string): 
   run.endedAt = undefined
   run.pid = process.pid
   run.bootId = BOOT_ID
+  if (startedBy) run.startedBy = startedBy
   run.currentStepIds = []
   run.nextStepIds = [stepId]
   await publish(run)

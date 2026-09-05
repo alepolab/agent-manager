@@ -1,5 +1,6 @@
 import { listWatches, saveWatch } from '../../utils/watchConfig.ts'
 import type { Watch } from '../../../shared/types/watch.ts'
+import { currentUser } from '../../utils/session'
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'watch'
@@ -14,6 +15,8 @@ function slugify(name: string): string {
  */
 export default defineEventHandler(async (event) => {
   const body = await readBody<Partial<Watch>>(event)
+  const user = await currentUser(event)
+  if (user && !body.createdBy) body.createdBy = user.login
   if (!body?.name?.trim()) {
     throw createError({ statusCode: 400, message: 'name is required' })
   }

@@ -694,6 +694,20 @@ assert.deepEqual(calls.sort(), ['agent-b', 'agent-c'], 'the queued wave ran once
 }
 assert.equal((await store.getRun(orphan.id)).status, 'interrupted', 'a different boot id reads as interrupted even when the pid is alive')
 
+// ── 16. the starter's environment reaches every agent call ────────────────
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+runner.setEnvResolver(async (login) => (login === 'sandeep' ? { GH_TOKEN: 'gh-for-sandeep', JIRA_API_TOKEN: 'jira-for-sandeep' } : {}))
+const envsSeen = []
+runner.setAgentCaller(async (agentSlug, input, projectDir, signal, env) => { envsSeen.push(env); return `out ${agentSlug}` })
+let owned = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'sandeep' })
+owned = await runner.waitForSettled(owned.id, TIMEOUT)
+assert.equal(owned.startedBy, 'sandeep', 'the run records who started it')
+assert.equal(envsSeen.length, 4)
+assert.ok(envsSeen.every(e => e?.GH_TOKEN === 'gh-for-sandeep' && e?.JIRA_API_TOKEN === 'jira-for-sandeep'), 'every agent call carries the starter identity')
+let anon = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+anon = await runner.waitForSettled(anon.id, TIMEOUT)
+assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

@@ -73,6 +73,8 @@ export interface WorkflowRun {
   watch: string
   projectDir?: string
   product?: ProductMatch
+  /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
+  startedBy?: string
   steps: RunStep[]
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
@@ -101,5 +103,6 @@ export interface NewRunInput {
   watch: string
   projectDir?: string
   product?: ProductMatch
+  startedBy?: string
   steps: { stepId: string, label: string, agentSlug: string }[]
 }

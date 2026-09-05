@@ -61,6 +61,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     watch: input.watch,
     projectDir: input.projectDir,
     product: input.product,
+    startedBy: input.startedBy,
     steps: input.steps.map(s => ({
       stepId: s.stepId, label: s.label, agentSlug: s.agentSlug,
       status: 'pending', input: '', output: '', visits: 0,

@@ -81,7 +81,7 @@ export interface AgentCallResult {
  * is never the request — it's what the SDK's own `system`/`init` message
  * reports it resolved to, captured below.
  */
-export async function callAgent(agentSlug: string, input: string, projectDir?: string, signal?: AbortSignal): Promise<AgentCallResult> {
+export async function callAgent(agentSlug: string, input: string, projectDir?: string, signal?: AbortSignal, userEnv: Record<string, string> = {}): Promise<AgentCallResult> {
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -117,7 +117,11 @@ export async function callAgent(agentSlug: string, input: string, projectDir?: s
       cwd,
       // A bot identity for git and gh, when one is configured, so agent pushes
       // and PRs are not attributed to whoever runs the server.
-      ...(process.env.AGENT_GH_TOKEN ? { env: { ...process.env, GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } } : {}),
+      // Identity for git, gh and jira: the starter's own tokens when they have
+      // a profile, else the bot token, else whatever the host holds.
+      ...((process.env.AGENT_GH_TOKEN || Object.keys(userEnv).length)
+        ? { env: { ...process.env, ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}), ...userEnv } }
+        : {}),
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
