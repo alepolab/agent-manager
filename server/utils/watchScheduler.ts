@@ -29,7 +29,9 @@ import {
   MAX_ATTEMPTS,
 } from './watchStateStore.ts'
 import { getRun } from './workflowRunStore.ts'
+import { notifyTicketOutcome } from './ticketNotifier.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
+import type { WorkflowRun } from '~~/shared/types/run'
 
 /** Run statuses that mean the ticket's attempt did not pan out. */
 const RUN_FAILURE_STATUSES = new Set(['failed', 'stopped', 'interrupted'])
@@ -52,6 +54,22 @@ const RUN_FAILURE_STATUSES = new Set(['failed', 'stopped', 'interrupted'])
  * counted by `runCycle` at dispatch time (T3's fix). Reconciling a run's
  * outcome is not itself a new attempt.
  */
+/**
+ * B5's "posts the PR link back" half, wired at the one place a ticket's run
+ * outcome is actually known. Never allowed to throw into `reconcile` — a
+ * ticket's disposition (already committed by `recordSuccess`/`recordFailure`
+ * just above each call site) must never be re-opened or blocked by a
+ * notification failure; `notifyTicketOutcome` itself is already
+ * defensive, this is a last-resort guard on top of that.
+ */
+async function safeNotify(watch: Watch, ticketKey: string, run: WorkflowRun): Promise<void> {
+  try {
+    await notifyTicketOutcome(watch, ticketKey, run)
+  } catch {
+    // Best-effort — see docstring above.
+  }
+}
+
 export async function reconcile(watch: Watch): Promise<void> {
   const state = await getWatchState(watch.id)
 
@@ -83,6 +101,7 @@ export async function reconcile(watch: Watch): Promise<void> {
 
     if (run.status === 'completed') {
       await recordSuccess(watch.id, ticket.key)
+      await safeNotify(watch, ticket.key, run)
     } else if (RUN_FAILURE_STATUSES.has(run.status)) {
       await recordFailure(
         watch.id,
@@ -90,6 +109,7 @@ export async function reconcile(watch: Watch): Promise<void> {
         run.error ?? `run ended with status '${run.status}'`,
         MAX_ATTEMPTS,
       )
+      await safeNotify(watch, ticket.key, run)
     }
     // 'running' or 'paused': the run is still in flight — leave it dispatched.
   }

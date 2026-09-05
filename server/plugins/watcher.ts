@@ -22,13 +22,29 @@
  * itself) without wanting a live setInterval poll loop and its outbound
  * dispatch calls. See task-4-report.md for how this was verified against a
  * live timer, not just read from source.
+ *
+ * Ticket source (B5, half one): `ticketSource.ts`'s own default is the
+ * file-backed stub, which is exactly right for a deployment with no Jira
+ * configured — nothing here changes for that case. Only when all three
+ * `JIRA_*` credentials (`jiraCredentials.ts`) are actually present does this
+ * plugin swap in `createJiraTicketSource()`, so a real ticket reaches the
+ * pipeline without anyone copying it by hand. Posting the result back stays
+ * gated separately, inside `ticketNotifier.ts`, by `JIRA_POST_ENABLED` — a
+ * deployment can read from Jira here while still never writing to it.
  */
 import { listWatches } from '../utils/watchConfig.ts'
 import { setWatchSource, setRunStarter, startScheduler } from '../utils/watchScheduler.ts'
 import { realRunStarter } from '../utils/watchRunStarter.ts'
+import { setTicketSource } from '../utils/ticketSource.ts'
+import { createJiraTicketSource } from '../utils/jiraTicketSource.ts'
+import { hasJiraCredentialsConfigured } from '../utils/jiraCredentials.ts'
 
 export default defineNitroPlugin(() => {
   if (process.env.WATCHER_DISABLED === '1') return
+
+  if (hasJiraCredentialsConfigured()) {
+    setTicketSource(createJiraTicketSource())
+  }
 
   setWatchSource(listWatches)
   setRunStarter(realRunStarter)
