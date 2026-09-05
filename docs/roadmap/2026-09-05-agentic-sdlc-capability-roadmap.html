@@ -92,10 +92,10 @@
 <h3>Tier 3: makes it complete</h3>
 <div class="wrap"><table>
 <tr><th>#</th><th>Item</th><th>Effort</th></tr>
-<tr><td>14</td><td>Live Jira fetch by key for manual runs and the watcher, then Jira write-back of status and the PR link. Needs a server-side Jira client the app does not have. <span class="tag ok">Delivered 5 Sep via the jira CLI: JIRA_TICKET_SOURCE=cli for watches, bare-key expansion for manual runs. Write-back not yet.</span></td><td>L</td></tr>
+<tr><td>14</td><td>Live Jira fetch by key for manual runs and the watcher, then Jira write-back of status and the PR link. Needs a server-side Jira client the app does not have. <span class="tag ok">Delivered 5 Sep via the jira CLI: JIRA_TICKET_SOURCE=cli for watches, bare-key expansion for manual runs, and write-back of the outcome as a ticket comment.</span></td><td>L</td></tr>
 <tr><td>15</td><td>Assign-like-a-teammate: the watcher treats "assignee = pipeline" or a label as dispatch, matching how GitHub and Jira agents are triggered now. <span class="tag ok">Available through a watch JQL such as assignee = pipeline once JIRA_TICKET_SOURCE=cli is on.</span></td><td>S after 14</td></tr>
 <tr><td>16</td><td>A CLI for run, restart, clone and status, so terminal-bound developers never open the browser. The endpoints exist. <span class="tag ok">Delivered 5 Sep: bin/am.mjs.</span></td><td>S</td></tr>
-<tr><td>17</td><td>Per-product secret catalogues and recipes for pcrf, ffm, pms and vms.</td><td>M per product, owned by repo champions</td></tr>
+<tr><td>17</td><td>Per-product secret catalogues and recipes for pcrf, ffm, pms and vms. <span class="tag ok">Drafts written 5 Sep from the compose files and env template; each needs a repo champion to confirm.</span></td><td>M per product, owned by repo champions</td></tr>
 <tr><td>18</td><td>Deploy and rollback step keyed off the registry, with the liquibase flag driving a migration-aware rollback plan.</td><td>L</td></tr>
 <tr><td>19</td><td>Multi-repo changes as one run with per-repo PRs and a merge order, using the registry's <code>multi_repo</code> flag.</td><td>L</td></tr>
 </table></div>
