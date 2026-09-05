@@ -256,20 +256,15 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 {
   const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
   const intake = body('sdlc-ticket-intake')
-  // The exact pattern, and specifically one that names `.claude-plugin`.
-  // A `**` wildcard does not descend into a dot-directory even with dot
-  // matching on — measured — so `**/alepo-engineering/**/plugin.json` returns
-  // nothing and reads as "not installed". A real run halted the whole pipeline
-  // on that false conclusion. The prompt must hand over a pattern that works,
-  // and intake has no Bash, so it must be a Glob rather than a shell command.
-  assert.match(intake, /\*\*\/alepo-engineering\/\*\*\/\.claude-plugin\/plugin\.json/,
-    'intake must be given a glob that names .claude-plugin explicitly, since ** skips dot-directories')
-  assert.ok(!/find ~\/\.claude\/plugins/.test(intake),
-    'intake has no Bash tool, so it must not be told to run find')
-  assert.match(intake, /\.claude-plugin\/plugin\.json/,
-    'the prompt must name the exact file to read the version field from')
-  assert.match(intake, /never a placeholder/i,
-    'an unreadable plugin_version must halt the run, not fall back to a placeholder string')
+  // plugin_version is runner-owned provenance, not intake's job. Three real
+  // runs halted because intake was asked to find the installed plugin from a
+  // working directory set to the TARGET repository — its Glob is scoped there,
+  // so no pattern could ever reach ~/.claude. The runner writes the field; the
+  // prompt must not send an agent looking for it.
+  assert.ok(!/installed version of the/.test(intake),
+    'intake must not be told to locate plugin_version — the runner owns it')
+  assert.match(intake, /runner-owned provenance/,
+    'intake must be told which meta.json keys are the runner\'s, so it leaves them alone')
 }
 
 // A directly-invoked run has no watch, but the schema requires the field as a

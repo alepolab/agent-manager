@@ -58,6 +58,34 @@ COPY --from=build /app/node_modules/node-pty/build /app/.output/server/node_modu
 # A bind mount would instead hide all of this.
 COPY docker/claude-config /root/.claude
 
+# Git credentials for private-repo imports.
+#
+# The app clones and ls-remotes with plain `git` subprocesses, so it inherits
+# whatever credentials the environment provides. On the host that is the `gh`
+# credential helper reading ~/.config/gh/hosts.yml; a container has neither gh
+# nor that file, so private imports fail there while succeeding on the host —
+# the same operation, two different answers, with nothing saying why.
+#
+# This helper supplies a token from the environment instead. The token is never
+# written to disk and never echoed: git reads it on stdin-free stdout at the
+# moment of use, and it lives only in the process environment.
+#
+# GITHUB_TOKEN unset OR empty means no credentials at all, and git falls back to
+# unauthenticated access — public repos keep working. That distinction matters
+# because compose's `${VAR:-}` DEFINES the variable as an empty string rather
+# than leaving it absent, so a presence check alone would wrongly claim
+# credentials exist and turn a clean "repo not found" into a confusing auth
+# failure.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      '[ "$1" = get ] || exit 0' \
+      '[ -n "$GITHUB_TOKEN" ] || exit 0' \
+      'echo username=x-access-token' \
+      'echo "password=$GITHUB_TOKEN"' \
+    > /usr/local/bin/git-credential-env \
+    && chmod +x /usr/local/bin/git-credential-env \
+    && git config --system credential."https://github.com".helper env 2>/dev/null || true
+
 # Set environment variables
 ENV HOST=0.0.0.0
 ENV PORT=3030

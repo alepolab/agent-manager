@@ -67,6 +67,17 @@ services:
       - HOST=0.0.0.0
       - PORT=3030
       - NODE_ENV=production
+      # Optional. Supplies credentials for importing PRIVATE GitHub repos.
+      # Absent or empty means unauthenticated git, and public imports still
+      # work — so leaving this unset is a supported configuration, not a
+      # broken one. Populate it from your own login rather than minting a
+      # long-lived secret:
+      #
+      #   GITHUB_TOKEN=$(gh auth token) docker compose up -d
+      #
+      # The token is passed through the environment only; it is never written
+      # into the image, the volume, or any file the container keeps.
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/api/health"]
       interval: 30s
