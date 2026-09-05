@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Manager as an Agentic SDLC System: Capability Roadmap</title>
+<style>
+  :root { --ink:#1f2430; --muted:#5b6472; --line:#e3e6ea; --bg:#ffffff; --soft:#f6f7f9; --accent:#b7791f; --ok:#1f7a4d; --warn:#a15c00; --bad:#a33a3a; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#e6e8eb; --muted:#a2a9b4; --line:#2c313a; --bg:#14171c; --soft:#1c2027; --accent:#e0a640; --ok:#5ec48a; --warn:#e0a640; --bad:#e07a7a; } }
+  html { color-scheme: light dark; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 -apple-system, "Segoe UI", Inter, system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 26px; line-height:1.25; margin: 0 0 6px; }
+  h2 { font-size: 19px; margin: 40px 0 10px; padding-top: 18px; border-top: 1px solid var(--line); }
+  h3 { font-size: 15px; margin: 22px 0 6px; }
+  p, li { max-width: 72ch; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 26px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 10px 0 18px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; background: var(--soft); }
+  .wrap { overflow-x: auto; }
+  .tag { display:inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .callout { background: var(--soft); border-left: 3px solid var(--accent); padding: 12px 16px; margin: 16px 0; }
+  code { font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+  ol li, ul li { margin: 4px 0; }
+  .small { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Manager as an Agentic SDLC System</h1>
+<div class="meta">Capability roadmap. 5 September 2026. Sources: an internet survey of thirteen agentic SDLC products and frameworks, a file-level gap analysis of this repository, and two days of live Runbook A runs on ticket SCN-402.</div>
+
+<h2>Summary</h2>
+<p>The system already does the things that mature products converge on: an isolated stack per run, a visible plan gated by a hook, a failing test before a fix, verification with an independent monitor, an evidence bundle in the PR, and as of today, restart, resume and clone of runs. On SCN-402 it went from ticket to an open PR with evidence, PR #459, with the last step restarted in place rather than re-run from scratch.</p>
+<p>What blocks daily use is not missing agents. It is that routing and environment knowledge lives in agent prose instead of data the runner can act on, that some written intent is inert, and that the developer still babysits. The roadmap below orders fixes by which blocker they remove, and most of the first tier is small.</p>
+
+<h2>Where the product stands against the market</h2>
+<div class="wrap"><table>
+<tr><th>Capability that recurs across mature products</th><th>Here today</th><th>Note</th></tr>
+<tr><td>Isolated environment per task</td><td><span class="ok">Yes</span></td><td>Docker stack per run, on the host daemon. Products in the deployment repo or with their own compose. Only selfcarenow has a proven recipe.</td></tr>
+<tr><td>Agent never touches protected branches</td><td><span class="ok">Yes</span></td><td>PR step uses <code>fix/&lt;KEY&gt;</code> and refuses main, develop, ci-release. Pushes under the developer's own gh identity, which no mature product does.</td></tr>
+<tr><td>Plan before code, visible and gated</td><td><span class="ok">Yes, enforced</span></td><td>A PreToolUse hook, not a prompt. Stronger than most vendors, who only show the plan.</td></tr>
+<tr><td>Test-first with a lock on the oracle</td><td><span class="ok">Yes, enforced</span></td><td>Test lock covers Bash as well as Edit. No vendor surveyed does this.</td></tr>
+<tr><td>Automatic test-run-and-iterate</td><td><span class="ok">Yes</span></td><td>Verifier runs the oracle three times, the full suite, typecheck, and a revert check.</td></tr>
+<tr><td>Independent review inside the loop</td><td><span class="warn">Partial</span></td><td>Step monitor on 2 of 7 steps. No security scan pass. GitHub and GitLab now run CodeQL or CWE review before a human sees the PR.</td></tr>
+<tr><td>Session transcript as audit artifact, linked from the PR</td><td><span class="warn">Partial</span></td><td>Artifacts and bundle exist on disk and in the PR body. No link from the PR to the run, no viewer.</td></tr>
+<tr><td>Ticket system as the unit of work</td><td><span class="warn">Partial</span></td><td>Watcher dispatches from Jira. Manual runs still paste text. No write-back to Jira or Slack.</td></tr>
+<tr><td>Pause, resume, restart, handoff</td><td><span class="ok">Yes, as of today</span></td><td>Restart from any settled step under the same run, resume after a server restart, clone. Comparable to OpenHands' SDK primitive, ahead of most vendors' ad hoc handoff.</td></tr>
+<tr><td>Mission-control view of all runs</td><td><span class="ok">Yes, as of today</span></td><td>Runs page with open, restart, clone, stop. Missing cost and model per step, which the data already records.</td></tr>
+<tr><td>Usage-metered cost with a cap</td><td><span class="bad">No</span></td><td>Turn budgets per agent only. No wall-clock or token cap, no spend display. The market moved to token metering with admin budgets this year.</td></tr>
+<tr><td>Multi-repo change as one unit</td><td><span class="bad">No</span></td><td>Rare in the market too. Registry has a <code>multi_repo</code> flag nothing reads.</td></tr>
+</table></div>
+
+<h2>What the live runs taught</h2>
+<ul>
+<li><b>Prompts carried facts they could not verify.</b> The intake agent searched a hidden directory with tools that skip hidden directories. The provisioner ran from inside a container and tested host ports. Both fixed by putting facts in the runner's step header and the prompt, but the pattern will recur wherever knowledge is prose.</li>
+<li><b>Turn budgets were set for small repos.</b> Three steps died on <code>error_max_turns</code> in a large monorepo. Budgets doubled. A time and token cap is the real control.</li>
+<li><b>The monitor only sees output text.</b> Steps that wrote artifacts but did not list them were sent back. Now every step is told to end with a directory listing. Cheap, and it removed a whole class of retries.</li>
+<li><b>Failed runs were disposable.</b> Every prompt fix cost a 35-minute rerun. Restart from a step closed that. The PR step fix was validated in eight minutes instead.</li>
+<li><b>Stop does not abort the agent.</b> A run marked stopped kept executing and opened the PR anyway. The runner must cancel the SDK call, not just the record.</li>
+<li><b>Re-syncing a workflow orphans its runs.</b> The template sync regenerates step ids, so older runs no longer matched their workflow. Restart now aligns ids by position; the sync should preserve ids.</li>
+</ul>
+
+<h2>Roadmap</h2>
+<p class="small">S, M, L are relative effort. Items marked <span class="tag">decision</span> need a call from you before code helps.</p>
+
+<h3>Tier 1: unblocks daily use</h3>
+<div class="wrap"><table>
+<tr><th>#</th><th>Item</th><th>Removes</th><th>Effort</th></tr>
+<tr><td>1</td><td>Resolve product, repos, branch policy and stack from <code>engineering/registry/products.yaml</code> before step 1, and inject the match into the run. Move the selfcarenow recipe into a per-product recipe file the provisioner reads.</td><td>Hand-written recipes in prompts. Hotfix and feature tickets branching identically. Only one product working.</td><td>S code, M per product</td></tr>
+<tr><td>2</td><td>Wire agent <code>skills</code> frontmatter into the actual model call. The resolver exists with no callers.</td><td>Every skill named on the seven agents is silently ignored.</td><td>S</td></tr>
+<tr><td>3</td><td>Wall-clock and token cap per run in the wave loop, plus cost, tokens and model per step on the Runs page and run bar. The data is already recorded.</td><td>Runaway runs. Tech leads opening raw JSON to see cost.</td><td>S + S</td></tr>
+<tr><td>4</td><td>Make Stop abort the in-flight SDK call with an AbortController, and make the template sync keep existing step ids.</td><td>Ghost runs that finish after being stopped. Orphaned runs after a sync.</td><td>S</td></tr>
+<tr><td>5</td><td>Put the monitor on the five unwatched steps.</td><td>Misclassification discovered at the PR instead of at intake.</td><td>S</td></tr>
+<tr><td>6</td><td>A per-step "restart with a note" so a developer can hand the agent a correction on resume, the Devin handoff pattern.</td><td>Re-running a step with no way to steer it.</td><td>S</td></tr>
+</table></div>
+
+<h3>Tier 2: makes it trustworthy</h3>
+<div class="wrap"><table>
+<tr><th>#</th><th>Item</th><th>Removes</th><th>Effort</th></tr>
+<tr><td>7</td><td><span class="tag">decision</span> A bot identity for pushes and PRs, injected as <code>GH_TOKEN</code> into the run process.</td><td>Agent commits indistinguishable from yours. Corrupted blame and review metrics.</td><td>S after the account exists</td></tr>
+<tr><td>8</td><td>A secrets hook in the alepo-engineering plugin, the same shape as the plan gate, that denies copying <code>.env</code> files into run artifacts or transcripts.</td><td>Reliance on prompt discipline for secret handling. A run already read a developer's <code>.env</code>.</td><td>S</td></tr>
+<tr><td>9</td><td>CI feedback: poll PR checks the way the watcher polls Jira, and flip the run to needs-attention on a red check. Visibility first, no auto-fix.</td><td>Developers polling GitHub after the pipeline "finished".</td><td>M</td></tr>
+<tr><td>10</td><td>Security review pass on the diff before the PR opens, using the repo's existing scanners or a review agent, reported in the bundle.</td><td>The human reviewer as the only defence against agent-introduced vulnerabilities.</td><td>M</td></tr>
+<tr><td>11</td><td>Slack notification on halt, pause and completion via an incoming webhook, with the Runs page link.</td><td>Babysitting the Runs page.</td><td>S</td></tr>
+<tr><td>12</td><td>A feature-shaped path: after intake, <code>work_type: feature</code> reframes test-author and fix-implementer prompts from "prove the bug" to "prove the behaviour is absent".</td><td>Feature tickets forced through a bug-repro frame.</td><td>M</td></tr>
+<tr><td>13</td><td>Evidence viewer: render the bundle in the run's slide-over and link the run from the PR body.</td><td>Reviewers reading a long markdown body with no way back to the run.</td><td>M</td></tr>
+</table></div>
+
+<h3>Tier 3: makes it complete</h3>
+<div class="wrap"><table>
+<tr><th>#</th><th>Item</th><th>Effort</th></tr>
+<tr><td>14</td><td>Live Jira fetch by key for manual runs and the watcher, then Jira write-back of status and the PR link. Needs a server-side Jira client the app does not have.</td><td>L</td></tr>
+<tr><td>15</td><td>Assign-like-a-teammate: the watcher treats "assignee = pipeline" or a label as dispatch, matching how GitHub and Jira agents are triggered now.</td><td>S after 14</td></tr>
+<tr><td>16</td><td>A CLI for run, restart, clone and status, so terminal-bound developers never open the browser. The endpoints exist.</td><td>S</td></tr>
+<tr><td>17</td><td>Per-product secret catalogues and recipes for pcrf, ffm, pms and vms.</td><td>M per product, owned by repo champions</td></tr>
+<tr><td>18</td><td>Deploy and rollback step keyed off the registry, with the liquibase flag driving a migration-aware rollback plan.</td><td>L</td></tr>
+<tr><td>19</td><td>Multi-repo changes as one run with per-repo PRs and a merge order, using the registry's <code>multi_repo</code> flag.</td><td>L</td></tr>
+</table></div>
+
+<h2>Decisions needed from you</h2>
+<ol>
+<li>Bot account for pushes and PRs, or continue under personal identities.</li>
+<li>Whether <code>.agent/plan.md</code> should be committed into product repos, as PR #459 did, or travel only in the evidence bundle.</li>
+<li>Resolve the <code>CONFIRM</code> entries in the registry before it becomes the routing source. A wrong value would misroute a ticket instead of failing a check.</li>
+<li>Whether the pipeline may ever open a PR without a pause before the push step. Today the answer is set per run in the modal.</li>
+</ol>
+
+<h2>Non-goals</h2>
+<ul>
+<li>Auto-merge. Human merge stays the gate.</li>
+<li>A generic SDLC platform. The registry, compose conventions and branch policies are this estate's.</li>
+<li>An approval step inside the run in place of PR review.</li>
+</ul>
+
+<h2>Today's changes, for the record</h2>
+<p>Uncommitted in the agent-manager working tree: restart, resume and clone in the runner with tests; the Runs page, run bar, slide-over and card actions; intake, provisioner, verifier, trace and PR prompt fixes with raised budgets; the step header additions; Dockerfile pinned to bun 1.3 with a frozen lockfile; a host-specific compose override. In the selfcarenow repo: branch <code>fix/SCN-402</code> pushed and PR #459 open; two archive branches hold the earlier runs' fixes. The local stack is rebuilt and healthy.</p>
+<p class="small">Research files: <code>research-agentic-sdlc-landscape.md</code> and <code>research-sdlc-gap-analysis.md</code> alongside this file in <code>docs/roadmap/</code>, both with source links and file references.</p>
+</main>
+</body>
+</html>
