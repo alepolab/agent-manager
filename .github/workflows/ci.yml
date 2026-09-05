@@ -264,7 +264,23 @@ jobs:
           #
           # Delete this baseline block (and just let the job fail on any
           # error) once scripts/test-workflow-graph.mjs is fixed.
-          baseline="scripts/test-workflow-graph.mjs(58,1): error TS1005: '=>' expected."
+          # The line number is part of the byte-for-byte match, so ANY edit to
+          # scripts/test-workflow-graph.mjs that shifts this line breaks the
+          # baseline and reddens the job - which is exactly what adding one
+          # import did (58 -> 59). That brittleness is deliberate: a baseline
+          # that tolerated a moving target would also tolerate a different
+          # error appearing at the same place.
+          #
+          # WARNING, and this is the important part: this single error is a
+          # PARSE failure, and a parse failure aborts the build before the rest
+          # of the project is checked. Fixing it (rewriting the arrow function
+          # on line 55 as a function declaration) makes the build proceed and
+          # surface 419 further error lines across app/ and server/ that this
+          # baseline has been hiding all along. So "typecheck clean except one
+          # known error" has never been true - it is "typecheck never ran".
+          # See the note in the PR that raised this; the fix is a follow-up,
+          # not something to smuggle into an unrelated change.
+          baseline="scripts/test-workflow-graph.mjs(59,1): error TS1005: '=>' expected."
           actual="$(tr -d '\r' < /tmp/tsc.log)"
 
           if [ "$actual" = "$baseline" ]; then
