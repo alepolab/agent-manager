@@ -1,5 +1,6 @@
 import { authSession } from '../../utils/session'
 import { saveProfile } from '../../utils/users'
+import { membershipFailureDetail } from '../../utils/orgMembership'
 
 const ORG = () => process.env.GITHUB_ORG || 'alepolab'
 
@@ -28,10 +29,24 @@ export default defineEventHandler(async (event) => {
   const gh = (path: string) => fetch(`https://api.github.com${path}`, { headers: { authorization: `Bearer ${token.access_token}`, accept: 'application/vnd.github+json', 'user-agent': 'agent-manager' } })
   const me = (await (await gh('/user')).json()) as { login?: string, name?: string, avatar_url?: string }
   if (!me.login) return sendRedirect(event, '/login?error=' + encodeURIComponent('GitHub did not return a user'))
+  // Membership is checked, but the FAILURE has to name itself: this endpoint
+  // returns a non-2xx for three unrelated reasons, and collapsing them into
+  // "you are not a member" once sent a real, active org admin looking for an
+  // invitation they already had. See server/utils/orgMembership.ts.
   const membership = await gh(`/user/memberships/orgs/${ORG()}`)
-  const state_ = membership.ok ? ((await membership.json()) as { state?: string }).state : undefined
+  let state_: string | undefined
+  if (membership.ok) {
+    state_ = ((await membership.json()) as { state?: string }).state
+  }
+  else {
+    // Body, not token: this response carries GitHub's own explanation and no
+    // credential. Truncated because it is a log line, not a document.
+    const body = await membership.text().catch(() => '')
+    console.warn(`[auth] membership check for @${me.login} on ${ORG()} returned ${membership.status}: ${body.slice(0, 200)}`)
+  }
   if (state_ !== 'active') {
-    return sendRedirect(event, '/login?error=' + encodeURIComponent(`@${me.login} is not an active member of the ${ORG()} GitHub organisation. Ask an org owner for an invitation, then sign in again.`))
+    const detail = membershipFailureDetail({ status: membership.status, state: state_, org: ORG(), login: me.login })
+    return sendRedirect(event, '/login?error=' + encodeURIComponent(`Could not confirm @${me.login} as an active member of the ${ORG()} GitHub organisation. ${detail}`))
   }
 
   await saveProfile(me.login, { name: me.name ?? undefined, avatar: me.avatar_url, githubTokenPlain: token.access_token })
