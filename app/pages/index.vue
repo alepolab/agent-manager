@@ -54,6 +54,17 @@ const cost = computed(() => ({
 
 const ticket = ref('')
 const starting = ref(false)
+/** Where the registry would route this ticket; shown before Start so the wrong stack is never a surprise. */
+const routing = ref<{ name: string, suite: string | null, repos: string[], recipe: boolean } | null | undefined>(undefined)
+let routeTimer: ReturnType<typeof setTimeout> | null = null
+watch(ticket, (t) => {
+  if (routeTimer) clearTimeout(routeTimer)
+  if (!t.trim()) { routing.value = undefined; return }
+  routeTimer = setTimeout(async () => {
+    try { routing.value = (await $fetch<{ product: typeof routing.value }>('/api/registry/resolve', { query: { q: t.trim().slice(0, 2000) } })).product }
+    catch { routing.value = undefined }
+  }, 400)
+})
 const runbook = computed(() => workflows.value.find(w => w.slug.startsWith('runbook')) ?? workflows.value[0])
 async function startFromTicket() {
   if (!ticket.value.trim() || !runbook.value) return
@@ -89,6 +100,8 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
           <label class="field-label">Start a run from a ticket</label>
           <input v-model="ticket" class="field-input w-full" placeholder="SCN-402, or paste the ticket text" :disabled="!runbook" />
           <span class="field-hint">{{ runbook ? `Runs ${runbook.name}. A bare key is expanded from Jira when your profile has a token.` : 'Create a workflow first.' }}</span>
+          <span v-if="routing" class="field-hint block" style="color: var(--success);">Routes to {{ routing.name }}{{ routing.suite ? ` (${routing.suite})` : '' }}: {{ routing.repos.join(', ') || 'no repos listed' }}{{ routing.recipe ? '' : ', no recipe yet' }}</span>
+          <span v-else-if="routing === null" class="field-hint block" style="color: var(--warning);">No product in the registry matches this ticket. Intake will work from the text alone; add the project key or a product label to route it.</span>
         </div>
         <UButton type="submit" label="Start" icon="i-lucide-play" :loading="starting" :disabled="!ticket.trim() || !runbook" />
       </form>

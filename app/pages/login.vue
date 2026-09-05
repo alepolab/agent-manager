@@ -2,6 +2,9 @@
 definePageMeta({ layout: false })
 const route = useRoute()
 const error = computed(() => typeof route.query.error === 'string' ? route.query.error : '')
+onMounted(async () => {
+  try { if ((await $fetch<{ authDisabled: boolean }>('/api/config')).authDisabled) await navigateTo(typeof route.query.next === 'string' ? route.query.next : '/') } catch { /* stay */ }
+})
 </script>
 
 <template>

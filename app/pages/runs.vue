@@ -49,7 +49,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
 const STATUSES = ['running', 'paused', 'completed', 'failed', 'stopped', 'interrupted']
 const shown = computed(() => runs.value.filter(r =>
-  (!filter.value || r.workflowName.toLowerCase().includes(filter.value.toLowerCase()))
+  (!filter.value || [r.workflowName, r.initialPrompt.split('\n')[0] ?? '', r.startedBy ?? '', r.product?.name ?? ''].some(v => v.toLowerCase().includes(filter.value.toLowerCase())))
   && (!status.value || r.status === status.value)
   && (!mine.value || r.startedBy === me.value?.login)))
 
@@ -107,7 +107,7 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<strin
       </p>
 
       <div class="flex gap-2 items-center">
-        <input v-model="filter" placeholder="Filter by workflow..." class="field-search max-w-xs" aria-label="Filter by workflow name" />
+        <input v-model="filter" placeholder="Filter by ticket, workflow, product or person..." class="field-search max-w-xs" aria-label="Filter runs" />
         <label class="text-[12px] text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox" /> Mine</label>
         <select v-model="status" class="field-input w-40" aria-label="Filter by status">
           <option value="">All statuses</option>

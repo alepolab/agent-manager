@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
+import { summarizeRunCost } from './costReport.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 
 export function defaultBudget(): RunBudget {
@@ -84,7 +85,12 @@ function applyInterrupted(run: WorkflowRun): WorkflowRun {
 
 /** Runs persisted before budgets existed get the defaults on read. */
 function applyDefaults(run: WorkflowRun): WorkflowRun {
-  return run.budget ? run : { ...run, budget: defaultBudget() }
+  const out = run.budget ? run : { ...run, budget: defaultBudget() }
+  if (out.usage) return out
+  // Runs recorded before run.usage existed still have per-step usage; the
+  // cost report is the one place that prices it, so the lists agree with it.
+  const t = summarizeRunCost(out).totals
+  return { ...out, usage: { input_tokens: t.input_tokens, output_tokens: t.output_tokens, usd: Math.round(t.cost_usd * 10000) / 10000 } }
 }
 
 export async function createRun(input: NewRunInput): Promise<WorkflowRun> {

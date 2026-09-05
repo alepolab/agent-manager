@@ -7,7 +7,9 @@ interface TeamStatus {
   skills: Item[]
   commands: Item[]
   workflow: { slug: string, state: Item['state'], steps: number }
-  registry: { ok: boolean, products: number, path: string | null }
+  watches: Item[]
+  registry: { ok: boolean, products: number, path: string | null, items: { key: string, suite?: string, repos: string[], recipe: boolean }[] }
+  instance: { claudeDir: string, runsDir: string, workspaceRoot: string, auth: string, githubOrg: string, jiraRead: boolean, jiraPost: boolean, slack: boolean, ciPoller: boolean, budget: { maxMinutes: number, maxTokens: number } }
   drifted: number
   checkedAt: number
 }
@@ -76,6 +78,39 @@ const color = (s: Item['state']) => s === 'ok' ? 'var(--success)' : s === 'missi
             <div v-for="c in status.commands" :key="c.name" class="flex items-center justify-between text-[12px] py-0.5">
               <span class="font-mono">/{{ c.name }}</span><span :style="{ color: color(c.state) }">{{ c.state }}</span>
             </div>
+          </div>
+        </div>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-xl p-4" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <div class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Watches</div>
+            <p v-if="!status.watches.length" class="text-[12px] text-label">None defined in the registry.</p>
+            <div v-for="w in status.watches" :key="w.id" class="flex items-center justify-between text-[12px] py-0.5">
+              <NuxtLink to="/watches" class="font-mono focus-ring">{{ w.id }}</NuxtLink><span :style="{ color: color(w.state) }">{{ w.state }}</span>
+            </div>
+            <p class="text-[11px] text-label mt-2">Seeded disabled. Enable one on the Watches page once its query has been checked against real tickets.</p>
+          </div>
+          <div class="rounded-xl p-4" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <div class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Products</div>
+            <p v-if="!status.registry.items.length" class="text-[12px] text-label">Registry not readable.</p>
+            <div v-for="p in status.registry.items" :key="p.key" class="flex items-center gap-2 text-[12px] py-0.5">
+              <span class="font-mono">{{ p.key }}</span>
+              <span v-if="p.suite" class="text-label">{{ p.suite }}</span>
+              <span class="text-label truncate ml-auto" :title="p.repos.join(', ')">{{ p.repos.length }} repo{{ p.repos.length === 1 ? '' : 's' }}</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded" :style="{ color: p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }">{{ p.recipe ? 'recipe' : 'no recipe' }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="rounded-xl p-4 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <div class="font-medium mb-2" style="color: var(--text-primary);">This instance</div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1">
+            <div><span class="text-label">Sign-in</span><div>{{ status.instance.auth === 'github' ? `GitHub, ${status.instance.githubOrg}` : 'disabled (local)' }}</div></div>
+            <div><span class="text-label">Jira</span><div>{{ status.instance.jiraRead ? 'reads tickets' : 'not configured' }}{{ status.instance.jiraPost ? ', posts outcomes' : '' }}</div></div>
+            <div><span class="text-label">Slack</span><div>{{ status.instance.slack ? 'notifies' : 'off' }}</div></div>
+            <div><span class="text-label">CI poller</span><div>{{ status.instance.ciPoller ? 'on' : 'off' }}</div></div>
+            <div><span class="text-label">Run budget</span><div>{{ status.instance.budget.maxMinutes }} min, {{ status.instance.budget.maxTokens.toLocaleString() }} tokens</div></div>
+            <div class="md:col-span-3"><span class="text-label">Checkouts</span><div class="font-mono truncate" :title="status.instance.workspaceRoot">{{ status.instance.workspaceRoot }}/&lt;repo&gt;</div></div>
+            <div class="md:col-span-2"><span class="text-label">Config</span><div class="font-mono truncate" :title="status.instance.claudeDir">{{ status.instance.claudeDir }}</div></div>
+            <div class="md:col-span-2"><span class="text-label">Runs</span><div class="font-mono truncate" :title="status.instance.runsDir">{{ status.instance.runsDir }}</div></div>
           </div>
         </div>
         <p class="text-[11px] text-label">Checked {{ new Date(status.checkedAt).toLocaleTimeString() }}. <button class="underline" @click="refresh">Check again</button></p>
