@@ -107,7 +107,7 @@ function tokenTotals(run: WorkflowRun): { input_tokens: number, output_tokens: n
 function runnerOwned(run: WorkflowRun) {
   const ended = run.endedAt ?? Date.now()
   return {
-    identity: run.workflowSlug,
+    identity: run.startedBy ?? run.workflowSlug,
     // The runner's own fact for what dispatched this run — set once at
     // startRun and carried on the run record ever since (never inferred
     // from, or trusted from, an agent's self-report), same as identity.
@@ -296,7 +296,7 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
 
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string): string {
   const lines = [
     '## Run artifacts directory',
     '',
@@ -326,6 +326,7 @@ export function artifactHeader(dir: string, product?: ProductMatch): string {
       'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
     )
   }
+  if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
   lines.push('', '---', '')
   return lines.join('\n')
 }

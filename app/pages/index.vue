@@ -14,6 +14,7 @@ const { workflows, fetchAll: fetchWorkflows } = useWorkflows()
 const toast = useToast()
 
 const runs = ref<WorkflowRun[]>([])
+const escalated = ref<{ key: string, watchId: string, lastError?: string, updatedAt: number }[]>([])
 const team = ref<{ pluginVersion: string | null, drifted: number, registry: { ok: boolean, products: number } } | null>(null)
 const loaded = ref(false)
 
@@ -21,6 +22,11 @@ async function refresh() {
   const [r, t] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs'), $fetch<typeof team.value>('/api/team/status')])
   if (r.status === 'fulfilled') runs.value = r.value
   if (t.status === 'fulfilled') team.value = t.value
+  try {
+    const watches = await $fetch<{ id: string }[]>('/api/watches')
+    const states = await Promise.all(watches.map(w => $fetch<Record<string, { key: string, watchId: string, disposition: string, lastError?: string, updatedAt: number }>>(`/api/watches/${w.id}/state`).catch(() => ({}))))
+    escalated.value = states.flatMap(s => Object.values(s)).filter(t => t.disposition === 'escalated')
+  } catch { escalated.value = [] }
   loaded.value = true
 }
 let timer: ReturnType<typeof setInterval> | null = null
@@ -89,15 +95,21 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
 
       <!-- Needs attention -->
       <section>
-        <h2 class="text-section-label mb-2">Needs attention <span class="text-meta font-normal">{{ attention.length }}</span></h2>
+        <h2 class="text-section-label mb-2">Needs attention <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
         <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
-        <p v-else-if="!attention.length" class="text-[13px] text-label">Nothing waiting on you.</p>
+        <p v-else-if="!attention.length && !escalated.length" class="text-[13px] text-label">Nothing waiting on you.</p>
         <div v-else class="space-y-1">
           <NuxtLink v-for="r in attention" :key="r.id" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
             <span class="font-medium truncate" style="color: var(--text-primary);">{{ r.initialPrompt.split('\n')[0].slice(0, 60) }}</span>
             <span class="text-label truncate">{{ why(r) }}</span>
             <span class="ml-auto text-label whitespace-nowrap">{{ r.startedBy || '' }} · {{ ago(r.startedAt) }}</span>
+          </NuxtLink>
+          <NuxtLink v-for="t in escalated" :key="t.watchId + t.key" to="/watches" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <span class="font-mono uppercase text-[11px] w-20 shrink-0" style="color: var(--error);">escalated</span>
+            <span class="font-medium truncate" style="color: var(--text-primary);">{{ t.key }}</span>
+            <span class="text-label truncate">{{ t.lastError || 'attempts exhausted; clear the escalation on the watch to retry' }}</span>
+            <span class="ml-auto text-label whitespace-nowrap">{{ t.watchId }} · {{ ago(t.updatedAt) }}</span>
           </NuxtLink>
         </div>
       </section>

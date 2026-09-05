@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { getSession, authDisabled } from '../../utils/session'
+import { authSession, authDisabled } from '../../utils/session'
 
 /** Start the GitHub OAuth dance. With AUTH_DISABLED there is nothing to do. */
 export default defineEventHandler(async (event) => {
@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
   const clientId = process.env.GITHUB_CLIENT_ID
   if (!clientId) throw createError({ statusCode: 500, message: 'GITHUB_CLIENT_ID is not configured' })
   const state = randomBytes(16).toString('hex')
-  const session = await getSession(event)
+  const session = await authSession(event)
   await session.update({ ...session.data, oauthState: state } as any)
   const base = (process.env.AGENT_MANAGER_URL || `http://${getRequestHost(event)}`).replace(/\/$/, '')
   const url = new URL('https://github.com/login/oauth/authorize')

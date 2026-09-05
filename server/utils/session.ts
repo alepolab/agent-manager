@@ -21,7 +21,7 @@ function password(): string {
   throw new Error('AGENT_MANAGER_SECRET must be set (32+ characters) when authentication is enabled')
 }
 
-export async function getSession(event: H3Event) {
+export async function authSession(event: H3Event) {
   return useSession<{ user?: SessionUser }>(event, {
     password: password(),
     name: 'am',
@@ -33,7 +33,7 @@ export async function getSession(event: H3Event) {
 export async function currentUser(event: H3Event): Promise<SessionUser | null> {
   if (authDisabled()) return { login: process.env.DEV_USER || 'local', name: 'Local developer' }
   try {
-    const session = await getSession(event)
+    const session = await authSession(event)
     return session.data.user ?? null
   } catch {
     // An unreadable or tampered cookie is a signed-out visitor, never a 500.

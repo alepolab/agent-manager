@@ -93,7 +93,7 @@ async function save() {
     toast.add({ title: 'Saved', color: 'success' })
     if (updated.slug !== slug) router.replace(`/skills/${updated.slug}`)
   } catch (e: any) {
-    if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: e.data?.message || 'Reload to see the latest version before saving again.', color: 'warning' })
+    if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
     else toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
   } finally {
     saving.value = false

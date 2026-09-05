@@ -360,7 +360,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const input = artifactHeader(runArtifactsDir(run.id), run.product) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy) + body
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,

@@ -117,7 +117,8 @@ async function save() {
     }
   } catch (e: any) {
     console.error('Failed to save:', e)
-    toast.add({
+    if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
+    else toast.add({
       title: 'Failed to save agent',
       description: e.data?.message || e.message,
       color: 'error'

@@ -127,6 +127,8 @@ All values are environment variables. Never write them into files in this repo.
 - `skills/`, `commands/`: intent template, regression matrix, triage, reproduce, baseline.
 - `schemas/evidence-bundle.v0.1.schema.json`: what every agent-authored PR carries.
 
+To add a product: add an entry under its suite in `registry/products.yaml` (key, labels, repos, default branch, stack profile, test command), write `recipes/<key>.md` describing how to stand the stack up and prove it is healthy, run the validator, and open a PR. Intake routes a ticket to the product by key, label or component name.
+
 After changing anything under `engineering/`, reinstall the plugin so the instance picks it up. Validate with `node engineering/scripts/validate-registry.mjs`.
 
 ## Development

@@ -33,7 +33,12 @@ bun run typecheck    # Run TypeScript type checking
 - `/workflows` - Visual workflow builder
 - `/graph` - Relationship visualization
 - `/explore` - Browse templates and marketplace
-- `/cli` - Full terminal emulator with context monitoring
+- `/cli` - Chat with Claude Code against the working directory
+- `/runs` - Pipeline runs: status, cost, restart, clone, stop
+- `/watches` - Jira queues that feed the pipeline
+- `/team` - Drift against the alepo-engineering plugin, Apply team standards
+- `/profile` - Per-developer Jira credentials
+- `/login` - GitHub sign-in (skipped when AUTH_DISABLED=1)
 - `/settings` - Global settings
 
 **Composables** (`app/composables/`):
@@ -45,9 +50,8 @@ The app uses a centralized CRUD pattern via `useCrud.ts` which provides standard
 - `useStudioChat.ts` - Agent Studio chat with SSE streaming
 - `useGithubImports.ts` - Import skills from GitHub repos
 - `useMarketplace.ts` - Browse and install plugins from marketplace
-- `useTerminal.ts` - Terminal emulator with xterm.js integration and WebSocket streaming
+- `useUser.ts` - Signed-in developer from `/api/me`
 - `useContextMonitor.ts` - Real-time context metrics tracking (tokens, cost, files, tools)
-- `useCliExecution.ts` - CLI session management with agent-aware and standalone modes
 
 **Chat/Studio System**:
 The Agent Studio (`/agents/[slug]` page with test panel) uses SSE (Server-Sent Events) for streaming responses. The backend (`server/api/chat.post.ts`) uses the `@anthropic-ai/claude-agent-sdk` to query agents and stream results back as `text_delta`, `thinking_delta`, `tool_progress` events.
@@ -267,13 +271,9 @@ Save to JSONL file (~/.claude/chat-sessions/{sessionId}.jsonl)
 - Default SDK behavior
 - Quicker access for ad-hoc queries
 
-### Mode Toggle
+### Identity and team
 
-The `/cli` page has tabs to switch between:
-- **Terminal** - Full PTY terminal emulator
-- **Chat** - Conversational Claude Code interface
-
-Both modes share the same agent selector and working directory settings.
+`server/utils/session.ts` holds the sealed-cookie session (`authSession`, `currentUser`, `requireUser`); `server/middleware/auth.ts` rejects `/api/*` without one unless `AUTH_DISABLED=1`. `server/utils/users.ts` stores per-developer profiles with AES-256-GCM sealed tokens and builds the env a run's agents get (`envForUser`). `server/utils/teamSync.ts` compares the config directory with the plugin and templates; `server/plugins/teamSeed.ts` applies it at boot.
 
 ## Testing
 
@@ -282,8 +282,8 @@ When adding new features:
 - Test relationship detection by creating agents/commands with cross-references
 - Test Studio chat by verifying SSE events stream correctly
 - Test GitHub imports with real repos (e.g., public skill repos)
-- Test CLI terminal by verifying PTY spawning, WebSocket streaming, and context monitoring
-- Test session management by creating/terminating sessions and checking `~/.claude/cli-history/`
+- Run the plain-node tests: `for t in scripts/test-*.mjs engineering/scripts/test-*.mjs; do node "$t" || break; done`
+- A UI change is verified in the running app with agent-browser, not by the build
 
 ## Environment Variables
 
@@ -296,7 +296,7 @@ CLAUDE_DIR="~/.claude"  # Override default Claude config directory
 Components in `app/components/` are auto-imported with special prefixing:
 - `chat/*` - Chat UI components (no prefix)
 - `studio/*` - Agent Studio components (no prefix)
-- `cli/*` - CLI terminal components (no prefix)
+- `cli/*` - Chat page components (no prefix)
 - Everything else - Standard component naming
 
 ## Type Definitions
@@ -306,8 +306,7 @@ All TypeScript types are centralized in `app/types/index.ts`. Key types:
 - `Relationship` - Links between entities
 - `ChatMessage`, `StreamActivity` - Studio chat
 - `GithubImport`, `Plugin` - External integrations
-- `CliSession`, `ContextMetrics`, `TokenUsage`, `FileChange`, `ToolCall` - CLI terminal and monitoring
-- `CliWebSocketMessage`, `CliWebSocketEvent` - Terminal WebSocket types
+- `ContextMetrics`, `TokenUsage`, `ToolCall` - Chat token and cost tracking
 - `NormalizedMessage`, `ChatSession`, `ChatSessionSummary` - Chat mode types
 - `ChatWebSocketMessage`, `ChatWebSocketEvent` - Chat WebSocket types
 
