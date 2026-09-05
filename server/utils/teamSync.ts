@@ -123,12 +123,30 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
     }
   }
 
+  // Commands take the same plugin-preferred, shipped-fallback shape as skills
+  // above, and for the same reason: a team container installs no plugin, so
+  // this read seeded ZERO commands and the four the product ships - baseline,
+  // reproduce, triage, tasks-picker-infra - reached nobody.
+  //
+  // That failure was invisible from every angle we had. The boot line reports
+  // "0 commands", and 0 is a legitimate count for a repo that ships none.
+  // scripts/sync-agents.mjs, the host-side twin of this function, DOES read
+  // engineering/commands, so the host and the container disagreed about what
+  // the product contains. And test-agent-skills.mjs asserts the command files
+  // ship and are well-formed, which stayed true the whole time they were
+  // unreachable - a shipped command nobody can invoke passes every check that
+  // looks at the repo instead of at the seeded result.
+  const shippedCommands = join(process.cwd(), 'engineering', 'commands')
+  const commandsSource = (plugin && existsSync(join(plugin.installPath, 'commands')))
+    ? join(plugin.installPath, 'commands')
+    : (existsSync(shippedCommands) ? shippedCommands : null)
+
   const commands: TeamStatus['commands'] = []
   const commandsDir = resolveClaudePath('commands')
-  if (plugin && existsSync(join(plugin.installPath, 'commands'))) {
-    for (const name of await readdir(join(plugin.installPath, 'commands'))) {
+  if (commandsSource) {
+    for (const name of await readdir(commandsSource)) {
       if (!name.endsWith('.md')) continue
-      const next = await readFile(join(plugin.installPath, 'commands', name), 'utf-8')
+      const next = await readFile(join(commandsSource, name), 'utf-8')
       const to = join(commandsDir, name)
       const current = await readOr(to)
       let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
