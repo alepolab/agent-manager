@@ -10,6 +10,11 @@ const runs = ref<WorkflowRun[]>([])
 const loaded = ref(false)
 const loadError = ref<string | null>(null)
 const busy = ref<string | null>(null)
+const { me } = useUser()
+const mine = computed({
+  get: () => route.query.mine === '1',
+  set: v => router.replace({ query: { ...route.query, mine: v ? '1' : undefined } }),
+})
 
 // Filters live in the URL so a filtered view can be shared or reloaded.
 const filter = computed({
@@ -45,7 +50,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 const STATUSES = ['running', 'paused', 'completed', 'failed', 'stopped', 'interrupted']
 const shown = computed(() => runs.value.filter(r =>
   (!filter.value || r.workflowName.toLowerCase().includes(filter.value.toLowerCase()))
-  && (!status.value || r.status === status.value)))
+  && (!status.value || r.status === status.value)
+  && (!mine.value || r.startedBy === me.value?.login)))
 
 const duration = (r: WorkflowRun) => {
   const secs = Math.round(((r.endedAt ?? Date.now()) - r.startedAt) / 1000)
@@ -102,6 +108,7 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: unknown) {
 
       <div class="flex gap-2 items-center">
         <input v-model="filter" placeholder="Filter by workflow..." class="field-search max-w-xs" aria-label="Filter by workflow name" />
+        <label class="text-[12px] text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox" /> Mine</label>
         <select v-model="status" class="field-input w-40" aria-label="Filter by status">
           <option value="">All statuses</option>
           <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
@@ -133,6 +140,7 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: unknown) {
           <thead>
             <tr class="text-left text-label" style="background: var(--surface-raised);">
               <th class="px-3 py-2 font-medium">Workflow</th>
+              <th class="px-3 py-2 font-medium">By</th>
               <th class="px-3 py-2 font-medium">Status</th>
               <th class="px-3 py-2 font-medium">Started</th>
               <th class="px-3 py-2 font-medium">Duration</th>
@@ -145,6 +153,7 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: unknown) {
           <tbody aria-live="polite">
             <tr v-for="r in shown" :key="r.id" style="border-top: 1px solid var(--border-subtle);">
               <td class="px-3 py-2 font-medium">{{ r.workflowName }}</td>
+              <td class="px-3 py-2 text-label">{{ r.startedBy || '' }}</td>
               <td class="px-3 py-2 font-mono uppercase text-[11px]" :style="{ color: RUN_STATUS_COLOR[r.status] }">
                 {{ r.status }}
                 <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans text-[10px] underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>

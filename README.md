@@ -24,6 +24,19 @@
 
 <br/>
 
+## Sign-in and identity
+
+On a shared instance every developer signs in with GitHub; membership of the `GITHUB_ORG` organisation (default `alepolab`) is required. The token from sign-in is stored encrypted and used for the pushes and pull requests of runs that developer starts. On the Profile page each developer adds their Atlassian email and a Jira API token, also stored encrypted, so ticket reads and outcome comments happen as them.
+
+| Variable | Effect |
+|---|---|
+| `AUTH_DISABLED=1` | No sign-in; every request is `DEV_USER` (default `local`). For a single developer's machine or the pilot before the OAuth app exists. |
+| `AGENT_MANAGER_SECRET` | 32+ characters. Seals the session cookie and encrypts stored tokens. Required when auth is on. |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app registered under the org, callback `<AGENT_MANAGER_URL>/api/auth/callback`. |
+| `GITHUB_ORG` | Organisation whose active members may sign in. |
+| `AGENT_USERS_DIR` | Where profiles live (default `~/.agent-manager/users`). Files are mode 600 and hold only sealed tokens. |
+| `LOCAL_DESKTOP=1` | Enables the folder picker and reveal-in-file-manager buttons, which only make sense when the browser and server share a desktop. |
+
 ## Run configuration
 
 Environment variables read by the server. All optional; each feature is off until its variable is set.

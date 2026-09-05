@@ -113,6 +113,7 @@ onMounted(async () => {
 })
 
 const { settings, load: loadSettings } = useSettings()
+const { me, signOut } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
 const labs = computed(() => settings.value?.agentManager?.labs === true)
 const navTopAll = [
@@ -356,6 +357,24 @@ function badgeFor(to: string) {
             </template>
           </button>
         </div>
+
+        <!-- Signed-in developer -->
+        <ClientOnly>
+          <div v-if="me" :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
+            <NuxtLink
+              to="/profile"
+              class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring"
+              :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
+              style="color: var(--text-tertiary);"
+              :title="`${me.name || me.login} · profile`"
+            >
+              <img v-if="me.avatar" :src="me.avatar" alt="" class="size-5 rounded-full" />
+              <UIcon v-else name="i-lucide-user" class="size-4" />
+              <span v-if="!sidebarCollapsed" class="text-[12px] truncate flex-1 text-left" style="font-family: var(--font-sans);">{{ me.name || me.login }}</span>
+              <button v-if="!sidebarCollapsed && !me.authDisabled" class="text-[10px] underline" @click.prevent="signOut">Sign out</button>
+            </NuxtLink>
+          </div>
+        </ClientOnly>
 
         <!-- Theme toggle -->
         <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
