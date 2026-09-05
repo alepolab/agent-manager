@@ -136,10 +136,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
         next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'], monitorSlug: 'sdlc-step-monitor' },
       // Verification and browser evidence are independent of each other - one wave.
-      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression',
         next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
+      // Security review runs beside verification and tracing; the PR waits on all three.
+      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR',
         next: [], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
     ],
