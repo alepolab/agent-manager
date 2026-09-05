@@ -34,7 +34,7 @@
 
 <h2>Summary</h2>
 <p>The system already does the things that mature products converge on: an isolated stack per run, a visible plan gated by a hook, a failing test before a fix, verification with an independent monitor, an evidence bundle in the PR, and as of today, restart, resume and clone of runs. On SCN-402 it went from ticket to an open PR with evidence, PR #459, with the last step restarted in place rather than re-run from scratch.</p>
-<p>What blocks daily use is not missing agents. It is that routing and environment knowledge lives in agent prose instead of data the runner can act on, that some written intent is inert, and that the developer still babysits. The roadmap below orders fixes by which blocker they remove, and most of the first tier is small.</p>
+<p>What blocks daily use is not missing agents. It is that routing and environment knowledge lives in agent prose instead of data the runner can act on, and that the developer still babysits. The roadmap below orders fixes by which blocker they remove, and most of the first tier is small.</p>
 
 <h2>Where the product stands against the market</h2>
 <div class="wrap"><table>
@@ -70,7 +70,7 @@
 <div class="wrap"><table>
 <tr><th>#</th><th>Item</th><th>Removes</th><th>Effort</th></tr>
 <tr><td>1</td><td>Resolve product, repos, branch policy and stack from <code>engineering/registry/products.yaml</code> before step 1, and inject the match into the run. Move the selfcarenow recipe into a per-product recipe file the provisioner reads.</td><td>Hand-written recipes in prompts. Hotfix and feature tickets branching identically. Only one product working.</td><td>S code, M per product</td></tr>
-<tr><td>2</td><td>Wire agent <code>skills</code> frontmatter into the actual model call. The resolver exists with no callers.</td><td>Every skill named on the seven agents is silently ignored.</td><td>S</td></tr>
+<tr><td>2</td><td>Verify skills reach the model with a test that asserts a declared skill's body appears in the built system prompt. The gap analysis claimed the resolver had no callers; reading <code>agentCaller.ts</code> shows it is wired through <code>buildAgentSystemPrompt</code>, so this is a guard, not a fix.</td><td>A regression nobody would notice, since a missing skill degrades silently by design.</td><td>S</td></tr>
 <tr><td>3</td><td>Wall-clock and token cap per run in the wave loop, plus cost, tokens and model per step on the Runs page and run bar. The data is already recorded.</td><td>Runaway runs. Tech leads opening raw JSON to see cost.</td><td>S + S</td></tr>
 <tr><td>4</td><td>Make Stop abort the in-flight SDK call with an AbortController, and make the template sync keep existing step ids.</td><td>Ghost runs that finish after being stopped. Orphaned runs after a sync.</td><td>S</td></tr>
 <tr><td>5</td><td>Put the monitor on the five unwatched steps.</td><td>Misclassification discovered at the PR instead of at intake.</td><td>S</td></tr>
