@@ -41,7 +41,7 @@ const filteredCount = computed(() =>
         <span class="font-mono text-[12px] text-meta">{{ commands.length }}</span>
       </template>
       <template #right>
-        <UButton label="New Command" icon="i-lucide-plus" size="sm" @click="showCreateModal = true" />
+        <UButton label="New Command" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
@@ -142,7 +142,7 @@ const filteredCount = computed(() =>
           <span class="text-meta"># Claude follows your command's instructions</span>
         </div>
         <p class="text-[13px] text-label">Commands let you trigger repeatable workflows with a slash.</p>
-        <UButton label="Create a command" size="sm" @click="showCreateModal = true" />
+        <UButton label="Create a command" size="sm" @click="() => { showCreateModal = true }" />
       </div>
     </div>
 

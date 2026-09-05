@@ -86,9 +86,11 @@ function onKeydown(e: KeyboardEvent) {
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
     selectedIndex.value = Math.max(selectedIndex.value - 1, 0)
-  } else if (e.key === 'Enter' && results.value[selectedIndex.value]) {
+  } else if (e.key === 'Enter') {
+    const hit = results.value[selectedIndex.value]
+    if (!hit) return
     e.preventDefault()
-    navigate(results.value[selectedIndex.value].to)
+    navigate(hit.to)
   }
 }
 

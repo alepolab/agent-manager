@@ -1,6 +1,36 @@
 import { validateGitRepository, getCurrentBranchName, spawnAsync } from '../../../../utils/gitUtils'
 
-export default defineEventHandler(async (event) => {
+/**
+ * One shape, always. This handler used to return either a success object or a
+ * bare `{ error, projectPath }`, and the union was inferred rather than
+ * declared - so every field the panel reads (`branch`, `staged`, `modified`,
+ * `untracked`, `deleted`) existed on only one arm and on neither as far as the
+ * client was concerned. That produced 20 of this project's typecheck errors
+ * from a single endpoint, and left the component reading properties TypeScript
+ * could not prove were there.
+ *
+ * Declaring the shape here rather than narrowing at 20 call sites also gives
+ * the panel something sane to render on failure: empty lists, not undefined.
+ */
+export interface GitStatusResponse {
+  branch: string
+  modified: string[]
+  added: string[]
+  deleted: string[]
+  untracked: string[]
+  staged: string[]
+  projectPath: string
+  /** Present only when the status could not be read. The lists are empty in
+   *  that case, never absent, so a consumer can render without narrowing. */
+  error?: string
+}
+
+const emptyStatus = (projectPath: string, error?: string): GitStatusResponse => ({
+  branch: '', modified: [], added: [], deleted: [], untracked: [], staged: [], projectPath,
+  ...(error ? { error } : {}),
+})
+
+export default defineEventHandler(async (event): Promise<GitStatusResponse> => {
   const projectName = getRouterParam(event, 'projectName')
   if (!projectName) {
     throw createError({ statusCode: 400, message: 'Project name is required' })
@@ -57,10 +87,7 @@ export default defineEventHandler(async (event) => {
       staged,
       projectPath
     }
-  } catch (error: any) {
-    return {
-      error: error.message,
-      projectPath
-    }
+  } catch (error: unknown) {
+    return emptyStatus(projectPath, error instanceof Error ? error.message : String(error))
   }
 })

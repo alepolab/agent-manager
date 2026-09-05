@@ -7,7 +7,10 @@ const { agents, fetchAll: fetchAgents } = useAgents();
 const { commands, fetchAll: fetchCommands } = useCommands();
 const { plugins, fetchAll: fetchPlugins } = usePlugins();
 const { skills, fetchAll: fetchSkills } = useSkills();
-const { imports: githubImports, fetchImports } = useGithubImports();
+// useGithubImports exposes skillImports and agentImports separately; there is
+// no combined `imports`. The dashboard counts both together.
+const { skillImports, agentImports, fetchImports } = useGithubImports();
+const githubImports = computed(() => [...skillImports.value, ...agentImports.value]);
 const { settings, load: loadSettings } = useSettings();
 
 const dirInput = ref("");

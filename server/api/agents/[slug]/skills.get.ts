@@ -155,7 +155,7 @@ export default defineEventHandler(async (event) => {
       const { frontmatter, body } = parseFrontmatter<SkillFrontmatter>(rawSkill)
       results.push({
         slug,
-        frontmatter: { name: slug, ...frontmatter },
+        frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
         body,
         filePath: found.filePath,
         source: found.source as 'standalone' | 'plugin',

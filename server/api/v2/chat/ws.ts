@@ -25,7 +25,10 @@ export default defineWebSocketHandler({
             peer.send(JSON.stringify({
               kind: 'error',
               id: `error-${Date.now()}`,
-              sessionId: msg.sessionId || peer.id,
+              // A permission_response carries no sessionId - the socket's peer
+              // id IS the session for this exchange, which the `||` fallback
+              // already relied on.
+              sessionId: peer.id,
               timestamp: new Date().toISOString(),
               content: `Provider '${providerName}' not found`,
               isError: true,
@@ -115,7 +118,7 @@ export default defineWebSocketHandler({
             peer.send(JSON.stringify({
               kind: 'status',
               id: `status-${Date.now()}`,
-              sessionId: msg.sessionId || peer.id,
+              sessionId: peer.id,
               timestamp: new Date().toISOString(),
               content: `Permission ${msg.decision === 'allow' ? 'granted' : 'denied'}`,
             }))

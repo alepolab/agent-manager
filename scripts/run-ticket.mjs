@@ -20,7 +20,7 @@
  * thing to forget to update.
  */
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 
 function arg(name, fallback) {
@@ -53,6 +53,14 @@ const { runArtifactsDir } = await import('../server/utils/runArtifacts.ts')
 
 const projectDir = arg('project-dir', process.env.RUN_PROJECT_DIR)
 
+// The ticket this run is for. Taken from --ticket, else inferred from the
+// brief's filename (briefs/DEVOPS-15.md -> DEVOPS-15), which is how every
+// brief in this repo is named. Runner-owned: stated here, never read back
+// from anything an agent wrote. Absent means "do not notify" - which is the
+// right default for an ad-hoc run against a scratch brief.
+const ticketKey = arg('ticket') || (basename(briefPath).match(/^([A-Z]+-\d+)/)?.[1] ?? undefined)
+if (ticketKey) console.log(`TICKET=${ticketKey}`)
+
 // Pre-flight: refuse to start on a dirty target repository.
 //
 // A run that begins on top of uncommitted work cannot produce an honest
@@ -83,6 +91,7 @@ const run = await runner.startRun({
   // registered watch. 'direct-invocation' is the reserved literal the
   // evidence bundle schema requires for exactly that case.
   watch: 'direct-invocation',
+  ...(ticketKey ? { ticketKey } : {}),
   autoRun: true,
   ...(projectDir ? { projectDir } : {}),
 })

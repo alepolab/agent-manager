@@ -39,7 +39,7 @@ watch([frontmatter, body], () => {
 function restoreDraft() {
   const draft = loadDraft()
   if (draft) {
-    frontmatter.value = { ...frontmatter.value, ...(draft.frontmatter as AgentFrontmatter) }
+    frontmatter.value = { ...frontmatter.value, ...(draft.frontmatter as unknown as AgentFrontmatter) }
     body.value = draft.body
     clearDraft()
     toast.add({ title: 'Draft restored', color: 'success' })
@@ -170,7 +170,7 @@ useUnsavedChanges(isDirty)
           variant="ghost"
           :color="isTestPanelOpen ? 'primary' : 'neutral'"
           :title="isTestPanelOpen ? 'Hide Test Panel' : 'Show Test Panel'"
-          @click="isTestPanelOpen = !isTestPanelOpen"
+          @click="() => { isTestPanelOpen = !isTestPanelOpen }"
         />
         <UButton
           v-if="filePath"
@@ -188,7 +188,7 @@ useUnsavedChanges(isDirty)
           variant="ghost"
           color="error"
           title="Delete agent"
-          @click="showDeleteConfirm = true"
+          @click="() => { showDeleteConfirm = true }"
         />
         <UButton
           :label="saving ? 'Saving...' : 'Save'"

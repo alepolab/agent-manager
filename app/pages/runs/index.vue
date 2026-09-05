@@ -98,7 +98,7 @@ function furthestStep(run: WorkflowRun) {
         <span class="text-[12px] text-meta">{{ runs.length }}</span>
       </template>
       <template #right>
-        <UButton label="Refresh" icon="i-lucide-refresh-cw" size="sm" variant="ghost" color="neutral" @click="load" />
+        <UButton label="Refresh" icon="i-lucide-refresh-cw" size="sm" variant="ghost" color="neutral" @click="() => load()" />
       </template>
     </PageHeader>
 

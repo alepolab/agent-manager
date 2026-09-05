@@ -404,4 +404,46 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     'the monitor is not a worker and must not be given the worker rule')
 }
 
+// A remote is shared and a push cannot be quietly undone. A real run pushed its
+// branch to the shared repository despite the brief forbidding it in words; a
+// later run then fetched that branch and rebased onto it, and the repository
+// ended up carrying the same capability twice under two names, each with its
+// own passing test. Nothing failed and the run reported success.
+{
+  const workers = AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')
+  for (const a of workers) {
+    assert.ok(a.body.includes('Never touch a remote'),
+      `${a.id} must be told not to push, fetch, pull, rebase or open a PR unbidden`)
+    assert.ok(/already exists before you add it/i.test(a.body),
+      `${a.id} must be told to look for the capability under another name before adding it`)
+  }
+
+  // The evidence step is the one most likely to push, because opening a PR
+  // sounds like its job - and it is the only step that can commit the evidence
+  // CI reads from the checkout.
+  const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
+  assert.ok(evidence.body.includes('git add .agent/evidence-run'),
+    'the evidence step must commit .agent/evidence-run, or CI checks out a branch with no evidence in it')
+  assert.ok(evidence.body.includes('Git: local only'),
+    'the evidence step needs its own explicit local-only git mandate')
+}
+
+// Anything stood up to test gets removed, and the PR enters the promotion chain
+// at develop rather than jumping to main.
+{
+  const prov = AGENT_TEMPLATES.find(t => t.id === 'sdlc-stack-provisioner')
+  assert.ok(prov.body.includes('Tear down what you brought up'),
+    'the provisioner must be told to decommission what it started; a leaked stack collides with the next run')
+  assert.ok(/never use a volume-destroying\s+teardown/i.test(prov.body),
+    'teardown must exclude volume destruction it did not create - that deletes seeded data other runs depend on')
+  assert.ok(/never remove anything you did not\s+start/i.test(prov.body),
+    'teardown must not touch stacks this run did not bring up - the sso stack is shared')
+
+  const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
+  assert.ok(evidence.body.includes('Which branch the pull request targets'),
+    'the evidence step must know which branch to target')
+  assert.ok(/targets \*\*develop\*\*,\s+never main/.test(evidence.body),
+    'a defect present on main, ci-release and develop enters at develop; landing on main is reverted by the next promotion')
+}
+
 console.log('workflowTemplates: all assertions passed')

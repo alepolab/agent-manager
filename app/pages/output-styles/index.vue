@@ -129,7 +129,7 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
     <UModal v-model:open="isModalOpen">
       <template #content>
         <AddOutputStyleModal
-          :initial-data="editingStyle"
+          :initial-data="editingStyle ?? undefined"
           @close="isModalOpen = false"
           @save="onSaveStyle"
         />

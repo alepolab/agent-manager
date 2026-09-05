@@ -53,7 +53,12 @@ function simulate(nodes, onComplete = () => {}) {
   return { graph, state, waves }
 }
 
-const step = (id, extra = {}) => ({ id, ...extra })
+// Written as a function declaration, not an arrow. As an arrow with a default
+// parameter this line was a PARSE error under vue-tsc (TS1005), and a parse
+// error aborts the build before the rest of the project is checked - so this
+// one line hid 419 further typecheck errors and made CI green on a build that
+// never ran. Keep it a declaration.
+function step(id, extra = {}) { return { id, ...extra } }
 
 // ── 1. Legacy workflows (no `next`) still walk in array order ──────────────
 {

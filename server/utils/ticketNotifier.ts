@@ -130,8 +130,18 @@ async function readReportedPrUrls(runId: string): Promise<string[]> {
  * network call, which matters because this function must never post for
  * real during a test run.
  */
+/** The minimum the notifier needs to name what triggered the run. `Watch`
+ *  satisfies this structurally, so every existing caller is unchanged - but a
+ *  run started from the command line or the UI, which has no watch at all, can
+ *  now be reported on too. Jira does not care which of them started it; it
+ *  cares that the ticket gets its comment. */
+export interface NotifySource {
+  id: string
+  name: string
+}
+
 export async function notifyTicketOutcome(
-  watch: Watch,
+  watch: NotifySource,
   ticketKey: string,
   run: WorkflowRun,
   owner: { assignee?: string, reporter?: string } = {},

@@ -71,6 +71,11 @@ export interface WorkflowRun {
    *  always has an honest answer, and 'direct-invocation' is it when
    *  nothing did. */
   watch: string
+  /** The ticket this run is for (e.g. 'DEVOPS-15'), when the caller knows it.
+   *  Runner-owned like `watch`: stated once at creation, never inferred from
+   *  anything an agent writes. Its only job is to tell the notifier which
+   *  issue to comment on when the run finishes with a pull request. */
+  ticketKey?: string
   projectDir?: string
   /** `projectDir`'s HEAD sha, captured by the runner (startRun, via
    *  gitFacts.ts's captureBaseline) the instant this run started, before any
@@ -180,6 +185,9 @@ export interface NewRunInput {
   /** See WorkflowRun.watch — the caller states it, createRun carries it
    *  straight onto the persisted run, unmodified. */
   watch: string
+  /** See WorkflowRun.ticketKey — the caller states it, createRun carries it
+   *  straight onto the persisted run, unmodified. */
+  ticketKey?: string
   projectDir?: string
   /** See WorkflowRun.baseCommit — startRun captures it via
    *  gitFacts.ts's captureBaseline and passes it straight through; createRun

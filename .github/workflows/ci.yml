@@ -251,44 +251,20 @@ jobs:
             exit 0
           fi
 
-          # Ratchet, not a blanket ignore: exactly one pre-existing error is
-          # known at the time this workflow was added (TS1005 in
-          # scripts/test-workflow-graph.mjs, a file this CI change may not
-          # touch). If the ENTIRE output is exactly that one line, treat it as
-          # the accepted baseline and pass with a visible warning. Any other
-          # output — a second error, a different message, the same error at a
-          # different location — is NOT a byte-for-byte match and fails the
-          # job. This blocks every *new* typecheck error without permanently
-          # red-lining every PR over a defect this workflow didn't introduce
-          # and isn't allowed to fix.
+          # No baseline any more. The project typechecks clean, so any error at
+          # all fails this job.
           #
-          # Delete this baseline block (and just let the job fail on any
-          # error) once scripts/test-workflow-graph.mjs is fixed.
-          # The line number is part of the byte-for-byte match, so ANY edit to
-          # scripts/test-workflow-graph.mjs that shifts this line breaks the
-          # baseline and reddens the job - which is exactly what adding one
-          # import did (58 -> 59). That brittleness is deliberate: a baseline
-          # that tolerated a moving target would also tolerate a different
-          # error appearing at the same place.
-          #
-          # WARNING, and this is the important part: this single error is a
-          # PARSE failure, and a parse failure aborts the build before the rest
-          # of the project is checked. Fixing it (rewriting the arrow function
-          # on line 55 as a function declaration) makes the build proceed and
-          # surface 419 further error lines across app/ and server/ that this
-          # baseline has been hiding all along. So "typecheck clean except one
-          # known error" has never been true - it is "typecheck never ran".
-          # See the note in the PR that raised this; the fix is a follow-up,
-          # not something to smuggle into an unrelated change.
-          baseline="scripts/test-workflow-graph.mjs(59,1): error TS1005: '=>' expected."
-          actual="$(tr -d '\r' < /tmp/tsc.log)"
-
-          if [ "$actual" = "$baseline" ]; then
-            echo "::warning file=scripts/test-workflow-graph.mjs,line=58::known pre-existing typecheck error — not blocking this PR. Any additional or different typecheck error fails the build."
-            exit 0
-          fi
-
-          echo "::error::typecheck failed with output beyond the known baseline (see log above)"
+          # What used to be here was a byte-for-byte match against one known
+          # error - and that error was a PARSE failure in
+          # scripts/test-workflow-graph.mjs, which aborted the build before the
+          # rest of the project was ever checked. The job was green because
+          # nothing ran. Fixing that one line surfaced 245 real errors across
+          # app/ and server/, including a missing `relative` import that would
+          # have thrown at runtime, a write to a read-only computed that Vue
+          # refuses, and two unreachable branches in the chat endpoint. All are
+          # now fixed; if this ever needs a baseline again, that is a signal to
+          # fix the errors, not to re-add one.
+          echo "::error::typecheck failed (see log above)"
           exit 1
 
   build:

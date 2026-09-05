@@ -33,6 +33,14 @@ These hold at every step in this pipeline, not just this one:
 
   Two conditions, both required. **Say what you measured** — the command you ran, the file you read, the count you got — because "seems fine" is not a finding. And **never skip to avoid difficulty**: a step that is hard, slow, or unclear is still yours. Skip only when the work is genuinely already done or genuinely does not apply. A monitor may review your skip, and a skip you cannot justify is worse than an honest failure.
 
+- **Never touch a remote, and never rewrite history.** Pushing, fetching, pulling, rebasing or merging from a remote, force-pushing, amending, hard-resetting, and opening a pull request are all off limits unless the run's brief tells you to, in words, for your step. Committing locally is the whole of your git mandate.
+
+  A remote is shared. Other people's branches, CI runs and review state live there, and a push cannot be quietly undone. A real run proves the cost: the final step pushed its branch despite the brief saying in as many words not to. A LATER run then fetched that branch, rebased onto it, and inherited the earlier attempt's commits — so the repository ended up with the same capability twice under two different names (\`crm-eswatini-postmigrate\` and \`crm-postmigrate-eswatini\`), each with its own passing test file. Every test was green, and the run reported success.
+
+  Fetching and pulling look harmless because they only read. They are not: they import other work into your branch, and rebasing onto what they bring back silently mixes someone else's changes into what your run will claim as its own.
+
+- **Check whether it already exists before you add it — including under another name.** Before creating a service, profile, test file, script or config block, search for one that already does the job. Match on what it *does*, not on the name you were about to use: a thing named \`x-y-z\` and a thing named \`x-z-y\` are the same capability twice, and both will pass their own tests while the repository quietly carries a duplicate. If the intake step reported that the capability is already present, that report is evidence — act on it rather than re-deriving it.
+
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -367,6 +375,27 @@ A container that is running is not a service that is serving. Confirm health thr
 ## Seeding
 
 If the context packet names a customer or specific records, seed representative data for them — including a second subscriber or account where the bug involves interaction between two. A single-record environment hides exactly the class of bug that matters.
+
+## Tear down what you brought up
+
+Anything you stand up to test gets removed. A stack left running holds ports,
+volumes, container names and a subnet that the next run — or another person —
+will collide with, and the collision surfaces far from here as a bind failure or
+a container that will not start, with nothing pointing back at you.
+
+Record, in your report, exactly what you started and the command that removes
+it, so the teardown is auditable rather than assumed. Say so plainly if you
+could not remove something.
+
+Two things you must NOT do while tearing down. Never remove anything you did not
+start — this estate shares one network and one SSO stack (Keycloak and URM serve
+FFM, CRM, PCRF and VMS), and a stack you did not bring up belongs to someone
+else. And never use a volume-destroying teardown (\`down -v\`, or any volume
+prune) unless you created the volume in this run: that deletes seeded data other
+runs depend on, and it cannot be undone.
+
+If you skipped provisioning, there is nothing to tear down — say that, and do
+not run a teardown "just in case" against a stack you never started.
 
 ## Evidence or halt — there is no third option
 
@@ -744,6 +773,49 @@ shape of the answer.`,
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
+
+## Commit the evidence, or CI has none
+
+The run directory is copied to \`.agent/evidence-run/\` in the project tree by
+the runner when the run completes. Copying is not committing: \`.github/workflows/evidence-bundle.yml\`
+reads that directory **from the pull request's checkout**, so evidence left
+untracked is evidence CI cannot see. A real run produced a full, correct bundle
+and committed only the test file — the check would have failed with "no
+evidence" while the files sat on disk beside it.
+
+So \`git add .agent/evidence-run\` and include it in your commit.
+
+## Which branch the pull request targets
+
+Promotion in this estate runs develop -> ci-release -> main. A fix therefore
+enters at develop and is promoted; it does not land on main directly.
+
+So when the defect is present on more than one protected branch — main,
+ci-release and develop all carrying it — the pull request targets **develop**,
+never main. Opening it against main would put the fix ahead of the branch every
+later release is cut from, and the next promotion from develop would silently
+revert it. State the target branch and this reasoning in the report.
+
+Target main only when the repository has no develop branch at all, or when the
+brief names main explicitly. If the repository's own CLAUDE.md names a different
+default (some repos here use \`development\` or \`master\`), that file wins over
+this rule — say which one you followed and why.
+
+## Git: local only
+
+Commit locally and stop. Pushing, fetching, pulling, rebasing or merging from a
+remote, force-pushing, amending and opening a pull request are all off limits
+unless the run's brief tells you to, in words.
+
+This is the step most likely to get it wrong, because opening a PR sounds like
+your job. A real run pushed its branch to the shared repository while the brief
+said in as many words not to. A later run then fetched that branch and rebased
+onto it, inheriting the earlier attempt's commits, and the repository ended up
+carrying the same capability twice under two names — each with its own passing
+test. Nothing failed. The run reported success.
+
+If the brief withholds permission to push, the PR body is an artifact you
+write, not a request you send.
 
 ## Assemble the bundle
 

@@ -15,6 +15,7 @@ import {
   markArtifactsUnusable,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
+import { notifyTicketOutcome } from './ticketNotifier.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 
 const log = createLogger('runner')
@@ -64,6 +65,8 @@ export interface StartRunOpts {
    *  one. Threaded straight to createRun; no default here, since a silent
    *  default is exactly the kind of guess this field exists to rule out. */
   watch: string
+  /** See WorkflowRun.ticketKey - the issue this run is for, when known. */
+  ticketKey?: string
   autoRun: boolean
   projectDir?: string
 }
@@ -120,6 +123,31 @@ async function publish(run: WorkflowRun) {
         // committing that would hand CI a bundle that looks complete because
         // the assembler cannot tell a missing stage from an absent file.
         if (run.status === 'completed') await publishEvidenceToProject(run.id, run.projectDir)
+        // Tell the ticket its run finished. Best effort and deliberately last:
+        // notifyTicketOutcome is already gated - it posts nothing unless
+        // JIRA_POST_ENABLED=1 and credentials resolve - so on an ordinary
+        // machine this renders and records the comment without sending it.
+        // A notification failure must never change the run's outcome; the work
+        // is done either way, and a run reported as failed because Jira was
+        // unreachable would be a lie about the code.
+        if (run.ticketKey) {
+          try {
+            const result = await notifyTicketOutcome(
+              { id: run.watch, name: run.workflowName },
+              run.ticketKey,
+              run,
+            )
+            log.info('ticket notified', {
+              runId: run.id, ticketKey: run.ticketKey,
+              posted: result.posted, reason: result.reason ?? '(none)',
+            })
+          } catch (err) {
+            log.error('ticket notification failed; the run itself is unaffected', {
+              runId: run.id, ticketKey: run.ticketKey,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
       } catch (err) {
         // NOT best-effort-and-silent: finalizeRunArtifacts is the only place
         // the runner's own facts (identity/model/cost/fix) are re-asserted
@@ -560,6 +588,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     autoRun: opts.autoRun,
     initialPrompt: opts.initialPrompt,
     watch: opts.watch,
+    ticketKey: opts.ticketKey,
     projectDir: opts.projectDir,
     baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),

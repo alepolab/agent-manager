@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { VueFlow, Handle, Position } from '@vue-flow/core'
+import type { Edge } from '@vue-flow/core'
+import { VueFlow, Handle, Position, MarkerType } from '@vue-flow/core'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import '@vue-flow/core/dist/style.css'
@@ -132,7 +133,7 @@ const nodes = computed(() => {
   return [...stepNodes, ...monitorNodes]
 })
 
-const edges = computed(() => {
+const edges = computed<Edge[]>(() => {
   const g = graph.value
   const flowEdges = workflowSteps.value.flatMap(step =>
     (g.succ[step.id] ?? []).map((target) => {
@@ -150,7 +151,7 @@ const edges = computed(() => {
         style: isBack
           ? { stroke: 'var(--warning, #e5a93e)', strokeWidth: 1.5 }
           : { strokeDasharray: '5 5', stroke: 'var(--accent)' },
-        markerEnd: { type: 'arrowclosed', color: isBack ? 'var(--warning, #e5a93e)' : 'var(--accent)' },
+        markerEnd: { type: MarkerType.ArrowClosed, color: isBack ? 'var(--warning, #e5a93e)' : 'var(--accent)' },
       }
     }),
   )
@@ -352,7 +353,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         icon="i-lucide-plus"
         size="xs"
         variant="soft"
-        @click="showMobileAgentPicker = true"
+        @click="() => { showMobileAgentPicker = true }"
       />
 
       <UButton
@@ -370,7 +371,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         icon="i-lucide-play"
         size="sm"
         :disabled="!canRun"
-        @click="showRunModal = true"
+        @click="() => { showRunModal = true }"
       />
       <UButton label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
       <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" @click="deleteWorkflow" />
@@ -569,7 +570,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           </div>
 
           <div class="flex justify-end">
-            <UButton label="Done" size="sm" @click="settingsStepId = null" />
+            <UButton label="Done" size="sm" @click="() => { settingsStepId = null }" />
           </div>
         </div>
       </template>
@@ -602,7 +603,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             </button>
           </div>
           <div class="flex justify-end">
-            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="showMobileAgentPicker = false" />
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showMobileAgentPicker = false }" />
           </div>
         </div>
       </template>

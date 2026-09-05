@@ -29,7 +29,7 @@ watch([frontmatter, body], () => {
 function restoreDraft() {
   const draft = loadDraft()
   if (draft) {
-    frontmatter.value = draft.frontmatter as CommandFrontmatter
+    frontmatter.value = draft.frontmatter as unknown as CommandFrontmatter
     body.value = draft.body
     clearDraft()
     toast.add({ title: 'Draft restored', color: 'success' })
@@ -164,7 +164,7 @@ useUnsavedChanges(isDirty)
           size="sm"
           variant="ghost"
           color="error"
-          @click="showDeleteConfirm = true"
+          @click="() => { showDeleteConfirm = true }"
         />
         <UButton 
           label="Save" 
@@ -262,7 +262,7 @@ useUnsavedChanges(isDirty)
             Permanently delete <strong>/{{ command?.frontmatter.name }}</strong>? This action cannot be undone.
           </p>
           <div class="flex justify-end gap-2">
-            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="showDeleteConfirm = false" />
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showDeleteConfirm = false }" />
             <UButton label="Delete" color="error" size="sm" @click="deleteCommand" />
           </div>
         </div>

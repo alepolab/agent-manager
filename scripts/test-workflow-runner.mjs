@@ -524,6 +524,39 @@ assert.ok(cStart < bEnd,
   assert.ok(d.output.includes('output of'), 'the downstream step produced real output')
 }
 
+// A run that names a ticket tells that ticket it finished. The notifier is
+// gated (it posts nothing without JIRA_POST_ENABLED=1 and real credentials),
+// so what is asserted here is the wiring: a completed run with a ticketKey
+// renders and RECORDS the comment as jira-comment.json beside its evidence.
+// Without a ticket key nothing is written - an ad-hoc run against a scratch
+// brief must not invent an issue to comment on.
+{
+  runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
+
+  const withTicket = await runner.waitForSettled(
+    (await runner.startRun({
+      workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true,
+      ticketKey: 'DEVOPS-15',
+    })).id, TIMEOUT)
+  assert.equal(withTicket.status, 'completed')
+  assert.equal(withTicket.ticketKey, 'DEVOPS-15',
+    'the ticket key is runner-owned provenance carried onto the run, like `watch`')
+  const notified = join(process.env.AGENT_RUNS_DIR, withTicket.id, 'artifacts', 'jira-comment.json')
+  assert.ok(existsSync(notified),
+    'a completed run naming a ticket must record the comment it would post')
+  const recorded = JSON.parse(readFileSync(notified, 'utf8'))
+  assert.match(JSON.stringify(recorded), /DEVOPS-15/,
+    'the recorded comment names the ticket it is for')
+
+  const noTicket = await runner.waitForSettled(
+    (await runner.startRun({
+      workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true,
+    })).id, TIMEOUT)
+  assert.equal(noTicket.status, 'completed')
+  assert.ok(!existsSync(join(process.env.AGENT_RUNS_DIR, noTicket.id, 'artifacts', 'jira-comment.json')),
+    'no ticket key: nothing is recorded, and no issue is invented to comment on')
+}
+
 // Real token usage flows end to end: agentCaller.ts's { output, model, usage }
 // shape all the way through executeNode -> RunStep.usage -> runArtifacts.ts's
 // summed cost.input_tokens/output_tokens in meta.json. Two steps, two

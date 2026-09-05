@@ -58,7 +58,7 @@ export function useWorkflowRun(slug: string) {
     }
   }
 
-  const act = (path: string, body?: unknown) => async () => {
+  const act = (path: string, body?: Record<string, unknown>) => async () => {
     if (!run.value) return
     run.value = await $fetch<WorkflowRun>(`/api/runs/${run.value.id}/${path}`, { method: 'POST', body })
   }

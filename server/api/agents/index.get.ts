@@ -28,7 +28,7 @@ async function scanDir(dir: string, relDir: string): Promise<Agent[]> {
         slug,
         filename: entry.name,
         directory: relDir,
-        frontmatter: { name: slug, ...frontmatter },
+        frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
         body,
         hasMemory,
         filePath: fullPath,

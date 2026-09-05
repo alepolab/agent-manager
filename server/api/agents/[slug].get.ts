@@ -38,7 +38,7 @@ export default defineEventHandler(async (event) => {
     slug,
     filename: `${slug}.md`,
     directory,
-    frontmatter: { name: slug, ...frontmatter },
+    frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
     body,
     hasMemory: existsSync(memoryDir),
     filePath,

@@ -27,11 +27,11 @@ const groupedItems = computed(() => {
   const groups: Record<string, typeof availableItems.value> = {}
   for (const item of availableItems.value) {
     const cat = item.category || 'Other'
-    if (!groups[cat]) groups[cat] = []
-    groups[cat].push(item)
+    const bucket = (groups[cat] ??= [])
+    bucket.push(item)
   }
   return Object.keys(groups).sort().reduce((acc, key) => {
-    acc[key] = groups[key]
+    acc[key] = groups[key] ?? []
     return acc
   }, {} as Record<string, typeof availableItems.value>)
 })
@@ -67,7 +67,9 @@ async function loadItems() {
   try {
     const { skills, agents } = await getAvailableItems(props.entry.owner, props.entry.repo, props.type)
     const items = props.type === 'skills' ? skills : agents
-    availableItems.value = items
+    // `category` is optional on the wire; the grouping below requires it to
+    // exist, and null is the honest "uncategorised" rather than a made-up name.
+    availableItems.value = items.map(i => ({ ...i, category: i.category ?? null }))
     selectedItems.value = new Set(items.filter(i => i.selected).map(i => i.slug))
     initCollapsed()
   } catch {
@@ -197,7 +199,7 @@ onMounted(loadItems)
             variant="ghost"
             color="neutral"
             :disabled="loadingItems"
-            @click="editing = true"
+            @click="() => { editing = true }"
           />
           <UButton
             v-if="hasUpdate"
