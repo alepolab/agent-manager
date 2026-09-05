@@ -539,7 +539,15 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 20,
+      // 40, not 20. Measured: on DEVOPS-15 this step died at error_max_turns
+      // after 219s with 20, while every other step passed. It carries the
+      // heaviest command load in the pipeline - the new parameterised suite,
+      // the repo's full regression suite (297 bats tests there), and the lint /
+      // format / type gates - and each `npx --yes bats` invocation is slow. The
+      // budgets were set uniformly by workload guess rather than measurement,
+      // which left the one step that runs everything with the smallest
+      // allowance of any Bash-using agent.
+      maxTurns: 40,
       skills: ['regression-matrix', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.

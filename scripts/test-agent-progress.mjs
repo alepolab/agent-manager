@@ -6,7 +6,7 @@
  * The problem this exists to catch: a running step used to report only
  * `status: 'running'` and a start timestamp — nothing else — until it
  * terminated, sometimes minutes later. This proves the runner records
- * `turnCount` / `lastTool` / `lastActivityAt` on the step as they're
+ * `assistantMessages` / `lastTool` / `lastActivityAt` on the step as they're
  * reported, and leaves them absent (never a fabricated 0) when the caller
  * never reports anything.
  *
@@ -57,7 +57,7 @@ function workflow(slug) {
   const settled = await runner.waitForSettled(run.id)
   const step = settled.steps.find(s => s.stepId === 's1')
 
-  assert.equal(step.turnCount, 2, 'the step must record the LATEST reported turn count')
+  assert.equal(step.assistantMessages, 2, 'the step must record the LATEST reported assistant-message count')
   assert.equal(step.lastTool, 'Bash', 'the step must record the most recently invoked tool')
   assert.equal(step.lastActivityAt, 2000, 'lastActivityAt must advance with each report')
 }
@@ -74,7 +74,7 @@ function workflow(slug) {
   const settled = await runner.waitForSettled(run.id)
   const step = settled.steps.find(s => s.stepId === 's1')
 
-  assert.equal(step.turnCount, undefined, 'no progress reported: turnCount must stay absent')
+  assert.equal(step.assistantMessages, undefined, 'no progress reported: assistantMessages must stay absent')
   assert.equal(step.lastTool, undefined, 'no progress reported: lastTool must stay absent')
   assert.equal(step.lastActivityAt, undefined, 'no progress reported: lastActivityAt must stay absent')
 }

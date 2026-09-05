@@ -112,6 +112,7 @@ const navTop = [
   { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
   { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
   { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
+  { label: 'Run History', icon: 'i-lucide-history', to: '/runs' },
   { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
   { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },
   { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins' },

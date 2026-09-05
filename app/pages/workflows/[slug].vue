@@ -31,6 +31,13 @@ function attachRun(id: string) {
   if (found) run.value = found
 }
 
+/** Return from a run's detail to the history list. The panel renders the list
+ *  as v-else of the detail, so without a way to clear the selection, opening
+ *  any run hid every other run for the rest of the visit. */
+function closeRun() {
+  run.value = null
+}
+
 const workflow = ref<Workflow | null>(null)
 const workflowSteps = ref<WorkflowStep[]>([])
 const name = ref('')
@@ -518,6 +525,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             @continue="continueRun"
             @stop="stop"
             @attach="attachRun"
+            @close="closeRun"
           />
         </div>
       </div>

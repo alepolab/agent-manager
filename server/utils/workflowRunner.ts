@@ -352,7 +352,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     startedAt: Date.now(), visits: l.state.visits[id],
     // Progress telemetry is per-visit, not cumulative across retries — a
     // fresh visit's turn count must not start from a previous attempt's.
-    turnCount: undefined, lastTool: undefined, lastActivityAt: undefined,
+    assistantMessages: undefined, lastTool: undefined, lastActivityAt: undefined,
   })
   log.debug('step starting', () => ({
     runId: run.id, stepId: id, agentSlug: step.agentSlug, visits: rec.visits,
@@ -371,7 +371,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       // never written to the step's persisted artifact JSON and never
       // touched by runnerOwned()'s facts.
       Object.assign(rec, {
-        turnCount: progress.turn, lastTool: progress.lastTool, lastActivityAt: progress.lastActivityAt,
+        assistantMessages: progress.turn, lastTool: progress.lastTool, lastActivityAt: progress.lastActivityAt,
       })
       void publish(run)
     })

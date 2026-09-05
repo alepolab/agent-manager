@@ -230,7 +230,7 @@ export async function callAgent(
       emitProgress()
     }
     if (message.type === 'result') {
-      const interpreted = interpretResultMessage(message)
+      const interpreted = interpretResultMessage(message, maxTurns)
       result = interpreted.output
       usage = interpreted.usage
     }
@@ -275,6 +275,14 @@ export async function callAgent(
  */
 export function interpretResultMessage(
   message: { subtype: string, is_error?: boolean, result?: string, usage?: unknown, errors?: string[] },
+  /** The budget this call ran under, folded into the thrown message. The SDK
+   *  reports `error_max_turns` with an empty `errors` array, so the bare error
+   *  read "no further detail" and said nothing about WHICH limit was hit -
+   *  diagnosing one meant grepping the agent templates for the number. It also
+   *  invited the wrong conclusion: progress telemetry counts assistant
+   *  messages, not SDK turns, so a step showing 87 messages against a budget of
+   *  40 looks like a broken limit when the limit worked correctly. */
+  maxTurns?: number,
 ): { output: string, usage: AgentUsage | null } {
   if (message.subtype === 'success' && !message.is_error) {
     return { output: String(message.result ?? ''), usage: usageFrom(message.usage) }
@@ -285,10 +293,13 @@ export function interpretResultMessage(
     isError: Boolean(message.is_error),
     errorsPreview: errors?.length ? preview(errors.join('; ')) : '(none)',
   }))
+  const budget = message.subtype === 'error_max_turns' && maxTurns
+    ? ` (turn budget: ${maxTurns} - raise this agent's maxTurns if the step legitimately needs more work)`
+    : ''
   throw new Error(
     `Claude Code returned an error result (${message.subtype}` +
     `${message.is_error ? ', is_error' : ''}): ` +
-    `${errors?.join('; ') || 'no further detail'}`,
+    `${errors?.join('; ') || 'no further detail'}${budget}`,
   )
 }
 

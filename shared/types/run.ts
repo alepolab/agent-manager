@@ -35,7 +35,18 @@ export interface RunStep {
    *  evidence bundle trusts. Absent — never a fabricated 0 — whenever the
    *  agent caller never reported anything (a test stub, or a real call that
    *  produced no assistant turn before failing). */
-  turnCount?: number
+  /** Assistant messages observed on the SDK stream so far.
+   *
+   *  NOT the SDK's own turn count, and deliberately not named as though it
+   *  were: it is NOT comparable to the agent's `maxTurns` budget. A real run
+   *  measured 87 assistant messages against a `maxTurns: 40` provisioner that
+   *  ended in `error_max_turns` — read as "87 of 40", that reads as a broken
+   *  budget, and the budget was in fact working correctly. The exact
+   *  relationship between the two is an SDK internal this code has not
+   *  measured, so it is not asserted here. Use this to see that an agent is
+   *  still moving and roughly how much it has done, never to judge how close
+   *  it is to its limit. */
+  assistantMessages?: number
   lastTool?: string
   lastActivityAt?: number
 }

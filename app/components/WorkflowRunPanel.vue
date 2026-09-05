@@ -2,25 +2,12 @@
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[] }>()
-const emit = defineEmits<{ continue: [], stop: [], attach: [id: string] }>()
+const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], close: [] }>()
 
-const STATUS_COLOR: Record<string, string> = {
-  running: 'var(--info, #3b82f6)',
-  paused: 'var(--warning, #f59e0b)',
-  completed: 'var(--success, #22c55e)',
-  failed: 'var(--error, #ef4444)',
-  stopped: 'var(--text-disabled, #9ca3af)',
-  interrupted: 'var(--error, #ef4444)',
-  pending: 'var(--text-disabled, #9ca3af)',
-  skipped: 'var(--text-disabled, #9ca3af)',
-}
-
-const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
-  if (!s.startedAt) return ''
-  const end = s.completedAt ?? Date.now()
-  const secs = Math.round((end - s.startedAt) / 1000)
-  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
-}
+// Colours and duration formatting live in app/utils/runStatus.ts so this panel
+// and the /runs history page cannot drift apart.
+const STATUS_COLOR = RUN_STATUS_COLOR
+const elapsed = elapsedLabel
 /**
  * Progress is reported as a count and a segment per step, never as a single
  * percentage. A run whose third step failed and whose remaining four were
@@ -28,7 +15,7 @@ const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
  * coloured by that step's own status, says what actually happened; a bar
  * filling left to right would imply progress the run never made.
  */
-const settled = new Set(['completed', 'failed', 'skipped', 'stopped'])
+const settled = SETTLED_STATUSES
 const progress = computed(() => {
   const steps = props.run?.steps ?? []
   return { done: steps.filter(s => settled.has(s.status)).length, total: steps.length }
@@ -60,6 +47,17 @@ const money = (n: number) => `$${n.toFixed(4)}`
 <template>
   <div v-if="run" class="border rounded-md p-4 space-y-3">
     <div class="flex items-center gap-3">
+      <!-- Without this there is no way back to the history: the list below is
+           v-else of this block, so opening a run hid every other run with no
+           affordance to return. -->
+      <button
+        v-if="runs.length > 1"
+        class="text-[11px] text-label hover:underline shrink-0"
+        data-testid="run-back-to-history"
+        @click="emit('close')"
+      >
+        &larr; All runs ({{ runs.length }})
+      </button>
       <span class="text-[11px] font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">
         {{ run.status }}
       </span>
@@ -131,11 +129,18 @@ const money = (n: number) => `$${n.toFixed(4)}`
   </div>
 
   <div v-else-if="runs.length" class="space-y-1">
-    <p class="text-[11px] text-label">Previous runs</p>
+    <div class="flex items-center gap-2">
+      <p class="text-[11px] text-label">Previous runs</p>
+      <NuxtLink to="/runs" class="ml-auto text-[11px] text-label hover:underline">All run history &rarr;</NuxtLink>
+    </div>
     <button v-for="r in runs.slice(0, 10)" :key="r.id" class="w-full flex items-center gap-2 text-[12px] py-1 text-left" @click="emit('attach', r.id)">
       <span class="w-2 h-2 rounded-full" :style="{ background: STATUS_COLOR[r.status] }" />
       <span>{{ new Date(r.startedAt).toLocaleString() }}</span>
+      <span class="text-[10px] text-label">{{ elapsed({ startedAt: r.startedAt, completedAt: r.endedAt }) }}</span>
       <span class="ml-auto text-[10px] font-mono text-label">{{ r.status }}</span>
     </button>
+    <p v-if="runs.length > 10" class="text-[11px] text-label pt-1">
+      Showing 10 of {{ runs.length }}. <NuxtLink to="/runs" class="hover:underline">See all</NuxtLink>.
+    </p>
   </div>
 </template>
