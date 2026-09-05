@@ -43,7 +43,9 @@ export const MAX_TOTAL_RUNS = 50
 /** Parallel branches share one projectDir - keep the blast radius small. */
 export const MAX_CONCURRENCY = 3
 
-export const edgeKey = (from: string, to: string): string => `${from}->${to}`
+export function edgeKey(from: string, to: string): string {
+  return `${from}->${to}`
+}
 
 /**
  * Hard-capped at DEFAULT_MAX_VISITS, deliberately.
