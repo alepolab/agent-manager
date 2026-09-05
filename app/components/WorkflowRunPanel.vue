@@ -1,19 +1,13 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
+import { RUN_STATUS_COLOR as STATUS_COLOR } from '~/utils/runStatus'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[] }>()
-const emit = defineEmits<{ continue: [], stop: [], attach: [id: string] }>()
+const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string], clone: [] }>()
 
-const STATUS_COLOR: Record<string, string> = {
-  running: 'var(--info, #3b82f6)',
-  paused: 'var(--warning, #f59e0b)',
-  completed: 'var(--success, #22c55e)',
-  failed: 'var(--error, #ef4444)',
-  stopped: 'var(--text-disabled, #9ca3af)',
-  interrupted: 'var(--error, #ef4444)',
-  pending: 'var(--text-disabled, #9ca3af)',
-  skipped: 'var(--text-disabled, #9ca3af)',
-}
+/** Restart and clone only make sense once nothing is executing. */
+const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
+const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
 
 const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
   if (!s.startedAt) return ''
@@ -51,15 +45,7 @@ const expanded = ref<string | null>(null)
     </div>
 
     <!-- One segment per step, coloured by that step's status. See `progress`. -->
-    <div class="flex gap-0.5" data-testid="run-progress-bar" :aria-label="`${progress.done} of ${progress.total} steps settled`">
-      <span
-        v-for="step in run.steps"
-        :key="`seg-${step.stepId}`"
-        class="h-1 flex-1 rounded-sm"
-        :style="{ background: STATUS_COLOR[step.status] }"
-        :title="`${step.label}: ${step.status}`"
-      />
-    </div>
+    <RunProgressBar :steps="run.steps" :aria-label="`${progress.done} of ${progress.total} steps settled`" />
 
     <p v-if="run.status === 'interrupted'" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">
       The process that was running this is gone. Its steps are frozen where they stopped.
@@ -68,14 +54,27 @@ const expanded = ref<string | null>(null)
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">
       <div v-for="step in run.steps" :key="step.stepId" class="text-[12px]">
-        <button class="w-full flex items-center gap-2 text-left py-1" @click="expanded = expanded === step.stepId ? null : step.stepId">
-          <span class="w-2 h-2 rounded-full shrink-0" :style="{ background: STATUS_COLOR[step.status] }" />
-          <span class="font-medium">{{ step.label }}</span>
-          <span class="text-label font-mono text-[10px]">{{ step.agentSlug }}</span>
-          <span v-if="step.visits > 1" class="text-[10px] text-label">×{{ step.visits }}</span>
-          <span v-if="step.monitorVerdict" class="text-[10px] font-mono">{{ step.monitorVerdict }}</span>
-          <span class="ml-auto text-[10px] text-label">{{ elapsed(step) }}</span>
-        </button>
+        <div class="flex items-center gap-1">
+          <button
+            class="flex-1 min-w-0 flex items-center gap-2 text-left py-1"
+            :aria-expanded="expanded === step.stepId"
+            @click="expanded = expanded === step.stepId ? null : step.stepId"
+          >
+            <span class="w-2 h-2 rounded-full shrink-0" :style="{ background: STATUS_COLOR[step.status] }" />
+            <span class="font-medium">{{ step.label }}</span>
+            <span class="text-label font-mono text-[10px]">{{ step.agentSlug }}</span>
+            <span v-if="step.visits > 1" class="text-[10px] text-label">×{{ step.visits }}</span>
+            <span v-if="step.monitorVerdict" class="text-[10px] font-mono">{{ step.monitorVerdict }}</span>
+            <span class="ml-auto text-[10px] text-label">{{ elapsed(step) }}</span>
+          </button>
+          <!-- Visible on the row itself: an action nobody has to discover by expanding. -->
+          <UButton
+            v-if="settledRun && stepSettled(step)"
+            size="xs" variant="ghost" color="neutral" icon="i-lucide-rotate-ccw"
+            :aria-label="`Restart from ${step.label}`" :title="`Restart from ${step.label}`"
+            @click="emit('restart', step.stepId)"
+          />
+        </div>
         <div v-if="expanded === step.stepId" class="pl-4 pb-2 space-y-1">
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
           <pre v-if="step.output" class="text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
@@ -86,7 +85,9 @@ const expanded = ref<string | null>(null)
 
     <div class="flex gap-2">
       <UButton v-if="run.status === 'paused'" size="xs" label="Continue" @click="emit('continue')" />
+      <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
       <UButton v-if="run.status === 'running' || run.status === 'paused'" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
+      <UButton v-if="settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
     </div>
   </div>
 

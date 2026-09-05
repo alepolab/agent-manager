@@ -58,20 +58,24 @@ export function useWorkflowRun(slug: string) {
     }
   }
 
-  const act = (path: string, body?: unknown) => async () => {
+  // listen() again after every action: a finished run has no open stream, so
+  // without it a restart's progress would never reach the page.
+  const act = (path: string) => async (body?: unknown) => {
     if (!run.value) return
     run.value = await $fetch<WorkflowRun>(`/api/runs/${run.value.id}/${path}`, { method: 'POST', body })
+    listen(run.value.id)
   }
 
   onScopeDispose(() => source?.close())
 
   return {
     run, runs, loading, error, attach, start, refreshRuns,
-    continueRun: act('continue'),
+    continueRun: () => act('continue')(),
+    restart: (stepId: string) => act('restart')({ stepId }),
     respond: async (reply: string) => {
       if (!run.value) return
       run.value = await $fetch<WorkflowRun>(`/api/runs/${run.value.id}/respond`, { method: 'POST', body: { reply } })
     },
-    stop: act('stop'),
+    stop: () => act('stop')(),
   }
 }
