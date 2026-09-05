@@ -9,6 +9,7 @@ import {
 import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun } from './workflowRunStore.ts'
 import { resolveProduct } from './registry.ts'
 import { getModelPricing } from './models.ts'
+import { notifyRunTransition } from './notify.ts'
 import { callAgent, type AgentUsage } from './agentCaller.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -153,6 +154,7 @@ async function publish(run: WorkflowRun) {
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
+    notifyRunTransition(run)
   })
   publishChains.set(run.id, next)
   await next

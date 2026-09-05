@@ -115,6 +115,9 @@ export async function callAgent(agentSlug: string, input: string, projectDir?: s
     prompt: input,
     options: {
       cwd,
+      // A bot identity for git and gh, when one is configured, so agent pushes
+      // and PRs are not attributed to whoever runs the server.
+      ...(process.env.AGENT_GH_TOKEN ? { env: { ...process.env, GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } } : {}),
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

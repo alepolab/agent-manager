@@ -29,6 +29,17 @@ export interface RunStep {
   usage?: { input_tokens: number, output_tokens: number } | null
 }
 
+/** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
+export interface RunCi {
+  pr: string
+  status: 'pending' | 'passing' | 'failing' | 'unknown'
+  checks: { name: string, bucket: string }[]
+  checkedAt: number
+  /** True once the checks reached a final state; the poller stops looking. */
+  final: boolean
+  error?: string
+}
+
 export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
 export interface RunBudget { maxMinutes: number, maxTokens: number }
 
@@ -63,6 +74,7 @@ export interface WorkflowRun {
   steps: RunStep[]
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
+  ci?: RunCi
   /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
   budget: RunBudget
   currentStepIds: string[]

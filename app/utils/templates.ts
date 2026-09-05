@@ -407,6 +407,10 @@ The ticket reports one example. Write a **table-driven / parameterised** test co
 
 A single-row test lets a fix pass by special-casing the reported input. That is the failure mode you exist to prevent.
 
+## Feature and change tickets
+
+Read \`work_type\` from \`meta.json\` before choosing what the oracle proves. For \`bug\`, the test reproduces the reported failure and goes red on current code. For \`feature\` or \`change_request\` there is no failure to reproduce: the test states the behaviour the ticket asks for and goes red because that behaviour is absent, one row per acceptance criterion the ticket names. Say which framing you used in \`plan.md\`; a feature oracle written as if it were a bug reproduction proves nothing.
+
 ## Write the plan first — the gate depends on it
 
 You are the first step that writes into the target repository, so **the plan gate (B2) stops you before your test lands** unless \`.agent/plan.md\` exists there. Do not treat that as an obstacle to route around: by this point you know all five things it asks for, and the plan travels into the evidence bundle so a reviewer sees what was intended as well as what was done.
@@ -480,6 +484,10 @@ not happen.`,
 ## The test file is locked
 
 **Do not modify the test file named in the previous step's report, or any file under a \`test\`, \`tests\`, \`spec\` or \`__tests__\` directory, under any circumstance.** If you believe the test itself is wrong, stop and say so in your report — do not edit it. A green test you were free to rewrite is worth nothing as evidence, which is the entire point of this pipeline.
+
+## Feature and change tickets
+
+When \`meta.json\` says \`work_type\` is \`feature\` or \`change_request\`, the "cause" is the absence of the behaviour, and the change is the smallest implementation that makes the oracle's rows pass without touching what they do not cover. The same rules apply: no refactor, no tidy-up, no scope beyond the rows.
 
 ## Method
 
