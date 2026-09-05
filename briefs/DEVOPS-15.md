@@ -31,4 +31,6 @@ CONTEXT AND CONSTRAINTS FOR THIS RUN — read carefully:
 
 - **You cannot bring up the live stack.** It runs on host 172.16.115.61, to which this session has no shell access. If the stack-provisioning step cannot proceed, say so and halt rather than pretending. `docker compose config` is available locally and is the correct substitute for static claims.
 
-- **DO NOT push any branch and DO NOT open a pull request.** Commit locally only. In place of opening a PR, write the PR body you would have submitted into the run artifacts directory as `pr-body.md`, and record the intended PR URL as null.
+- **FOR THE FINAL STEP ONLY (evidence bundle + PR):** do not push any branch and do not open a pull request. Commit locally only; in place of opening a PR, write the PR body you would have submitted into the run artifacts directory as `pr-body.md`, and record the intended PR URL as null.
+
+  Every other step: this constraint is not yours. Do your own step's work and nothing further. A brief describes the whole run, so it necessarily contains instructions addressed to stages other than the one reading it.

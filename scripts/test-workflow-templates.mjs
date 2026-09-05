@@ -368,4 +368,16 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
 }
 
+// A brief describes the whole run, so it carries instructions addressed to
+// other stages. A real run died on exactly that: intake read a "write the PR
+// body" instruction meant for the seventh step, wrote a PR body describing a
+// fix that had not happened, and exhausted its entire turn budget before
+// finishing its own work.
+{
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
+    assert.ok(a.body.includes("Do only your own step's work"),
+      `${a.id} must carry the standing rule that instructions for other stages are not its to act on`)
+  }
+}
+
 console.log('workflowTemplates: all assertions passed')
