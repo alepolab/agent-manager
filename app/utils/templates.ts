@@ -332,7 +332,7 @@ Not every product has a \`docker-compose.<product>.yml\` in \`alepo-dev-team-inf
 
 You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
 
-Known recipe — \`selfcarenow\` (label \`NEW_WEB_SELFCARE\`, checkout \`~/alepo-workspace/selfcarenow\`): its \`docker-compose.yml\` bundles its own MongoDB replica set. The \`latest\` image tag is stale and crash-loops on a \`pnpm install\` at start; use the newest \`develop-*\` tag from GHCR instead. Host port 3000 is usually taken on this host, so publish on 3100 with a compose override using \`ports: !override\`. Set \`CI=true\`. The compose does not pass CRM settings through; add \`CRM_BASE_URL\`, \`CRM_OAUTH_CLIENT_ID\` and \`CRM_OAUTH_CLIENT_SECRET\` to the app environment as \`\${VAR}\` references so compose interpolates them from the checkout's \`.env\` without you reading the values. The build's \`/api/health\` is auth-gated and returns 401, so the shipped healthcheck never passes; override it to \`GET /login\` and treat a 200 there plus "Server ready" in the logs as up. Run it with \`--project-directory\` set to the checkout so compose finds that \`.env\`.
+Known recipes live as files: when your input's product block names a \`Recipe:\` path, read it first and follow it. It carries the product-specific quirks (image tag policy, port overrides, healthcheck, which variables to pass through). If there is no recipe and no compose in the deployment repo, fall back to the product checkout's own compose as described above, and write what you learned into your stack report so a recipe can be made from it.
 
 ## What "up" means
 
@@ -737,7 +737,7 @@ The agents that ran, the model each used, and the working directory. State plain
 
 - Branch name: \`fix/<TICKET-KEY>\` — take the key from the context packet. If there is no key, use a short descriptive slug prefixed \`fix/\`.
 - Commit subject: \`<TICKET-KEY>: <what this lands>\` (no space before the colon). No attribution trailers.
-- **Never push to \`main\`, \`develop\` or \`ci-release\`.** Push your branch and open a PR against the repository's normal target branch.
+- **Never push to \`main\`, \`develop\` or \`ci-release\`.** Push your branch and open a PR against the branch the product block's branch policy names for this run's \`work_type\` from \`meta.json\`; with no product block, the repository's default branch.
 - Write the bundle to a file and pass it with \`gh pr create --body-file\`, so nothing is lost to shell quoting.
 
 If \`gh\` is not authenticated, stop after pushing the branch and report that the PR still needs opening — the work is not lost, it just is not a PR yet.

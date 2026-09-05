@@ -27,6 +27,17 @@ export interface RunStep {
   model?: string | null
 }
 
+/** The registry entry a run resolved to at start, or absent when nothing matched. */
+export interface ProductMatch {
+  name: string
+  suite?: string
+  repos: string[]
+  branches: Record<string, string>
+  stack: { compose: string, topology_default: string, liquibase?: boolean }
+  tests: Record<string, string>
+  recipe?: string
+}
+
 export interface WorkflowRun {
   id: string
   workflowSlug: string
@@ -43,6 +54,7 @@ export interface WorkflowRun {
    *  nothing did. */
   watch: string
   projectDir?: string
+  product?: ProductMatch
   steps: RunStep[]
   currentStepIds: string[]
   nextStepIds: string[]
@@ -62,5 +74,6 @@ export interface NewRunInput {
    *  straight onto the persisted run, unmodified. */
   watch: string
   projectDir?: string
+  product?: ProductMatch
   steps: { stepId: string, label: string, agentSlug: string }[]
 }

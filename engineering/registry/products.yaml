@@ -17,6 +17,7 @@
 
 products:
   aaa:
+    suite: aaa
     match:
       components: [AAA, RADIUS]
     repos: [alepolab/aaa_rhel8]
@@ -44,6 +45,7 @@ products:
       schema: aaa-tech-leads
 
   pcrf:
+    suite: aaa
     match:
       components: [PCRF, Policy]
       projects: [PCRFV]
@@ -65,6 +67,7 @@ products:
       ui_parsing: pcrf-ems-owners
 
   ffm:
+    suite: bss
     match:
       components: [FFM, Fulfilment]
     repos: [alepolab/ffm]
@@ -83,6 +86,7 @@ products:
       schema: ffm-owners
 
   pms:
+    suite: bss
     match:
       components: [PMS, Partner]
     repos: [alepolab/pms]
@@ -103,6 +107,7 @@ products:
       schema: pms-owners
 
   vms:
+    suite: bss
     match:
       components: [VMS, Voucher]
     repos: [alepolab/voucher-management]
@@ -119,3 +124,25 @@ products:
     owners:
       money: billing-owners                   # vouchers are a money path
       ui_parsing: vms-owners
+
+  selfcarenow:
+    suite: bss
+    match:
+      projects: [SCN]
+      labels: [NEW_WEB_SELFCARE]
+      components: [Selfcare, SelfcareNow]
+    repos: [alepolab/selfcarenow]
+    branches:
+      bug: main                               # CONFIRM: origin HEAD is main; the team works on integrate/primary-develop
+      feature: main
+    stack:
+      # Product-owned compose in its checkout; not yet in alepo-dev-team-infra.
+      # The provisioner reads recipes/selfcarenow.md for the quirks.
+      compose: selfcarenow/docker-compose.yml
+      topology_default: 1node
+    tests:
+      unit: 'pnpm --filter @selfcare/web test'  # CONFIRM
+      ui_trace: playwright
+    owners:
+      protocol: selfcare-leads                # CONFIRM
+      ui_parsing: selfcare-leads

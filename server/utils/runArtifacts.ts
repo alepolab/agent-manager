@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { computeFixFacts } from './gitFacts.ts'
 import type { AgentUsage } from './agentCaller.ts'
-import type { WorkflowRun, RunStep } from '~~/shared/types/run'
+import type { WorkflowRun, RunStep, ProductMatch } from '~~/shared/types/run'
 
 /** Extends RunStep with the one field this file needs that the shared type
  *  doesn't declare. Kept local rather than widening shared/types/run.ts:
@@ -286,8 +286,8 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
 
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string): string {
-  return [
+export function artifactHeader(dir: string, product?: ProductMatch): string {
+  const lines = [
     '## Run artifacts directory',
     '',
     `Write every artifact you produce into: ${dir}`,
@@ -299,8 +299,21 @@ export function artifactHeader(dir: string): string {
     'writing it, and never write a placeholder in place of a real result.',
     'End your output with the verbatim `ls -la` of this directory: the step monitor',
     'sees only your output, and a file it cannot see in it is a file that does not exist.',
-    '',
-    '---',
-    '',
-  ].join('\n')
+  ]
+  if (product) {
+    lines.push(
+      '',
+      '## Product (from the registry)',
+      '',
+      `Product: ${product.name}${product.suite ? ` (suite: ${product.suite})` : ''}`,
+      `Repos: ${product.repos.join(', ')}`,
+      `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
+      `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
+      `Tests: ${Object.entries(product.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,
+      ...(product.recipe ? [`Recipe: ${product.recipe}`] : []),
+      'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
+    )
+  }
+  lines.push('', '---', '')
+  return lines.join('\n')
 }

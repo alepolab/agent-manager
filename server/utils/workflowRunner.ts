@@ -7,6 +7,7 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun } from './workflowRunStore.ts'
+import { resolveProduct } from './registry.ts'
 import { callAgent, type AgentUsage } from './agentCaller.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -320,7 +321,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const input = artifactHeader(runArtifactsDir(run.id)) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product) + body
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
@@ -471,7 +472,11 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  // Resolved once, before any agent runs, and carried on the run: agents are
+  // handed registry facts rather than asked to guess which product this is.
+  const product = await resolveProduct(opts.initialPrompt).catch(() => undefined)
   const run = await createRun({
+    product,
     workflowSlug: opts.workflow.slug,
     workflowName: opts.workflow.name,
     autoRun: opts.autoRun,
