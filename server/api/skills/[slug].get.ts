@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -23,7 +23,7 @@ async function readJson<T>(path: string): Promise<T | null> {
   }
 }
 
-export default defineEventHandler(async (event) => {
+async function loadSkill(event: any) {
   const slug = getRouterParam(event, 'slug')!
   const { workingDir } = getQuery(event) as { workingDir?: string }
 
@@ -196,4 +196,9 @@ export default defineEventHandler(async (event) => {
   }
 
   throw createError({ statusCode: 404, message: `Skill not found: ${slug}` })
+}
+
+export default defineEventHandler(async (event) => {
+  const item = await loadSkill(event)
+  return { ...item, lastModified: (await stat(item.filePath)).mtimeMs }
 })

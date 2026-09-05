@@ -60,6 +60,7 @@ const workflowSteps = ref<WorkflowStep[]>([])
 const name = ref('')
 const description = ref('')
 const saving = ref(false)
+const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
 const showMobileAgentPicker = ref(false)
 const paletteSearch = ref('')
@@ -72,6 +73,7 @@ onMounted(async () => {
   try {
     const data = await fetchOne(slug)
     workflow.value = data
+    lastModified.value = (data as any).lastModified ?? null
     workflowSteps.value = [...data.steps]
     name.value = data.name
     description.value = data.description
@@ -285,14 +287,17 @@ async function save() {
   if (!workflow.value) return
   saving.value = true
   try {
-    await update(slug, {
+    const saved = await update(slug, {
       name: name.value,
       description: description.value,
       steps: workflowSteps.value,
-    })
+      lastModified: lastModified.value ?? undefined,
+    } as any)
+    lastModified.value = (saved as any).lastModified ?? null
     toast.add({ title: 'Workflow saved', color: 'success' })
   } catch (e: any) {
-    toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
+    if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: e.data?.message || 'Reload to see the latest version before saving again.', color: 'warning' })
+    else toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
   } finally {
     saving.value = false
   }

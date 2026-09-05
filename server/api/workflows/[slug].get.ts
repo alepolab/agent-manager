@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import type { Workflow } from '~/types'
@@ -13,5 +13,5 @@ export default defineEventHandler(async (event) => {
 
   const raw = await readFile(filePath, 'utf-8')
   const data = JSON.parse(raw)
-  return { slug, filePath, ...data } as Workflow
+  return { slug, filePath, ...data, lastModified: (await stat(filePath)).mtimeMs } as Workflow
 })

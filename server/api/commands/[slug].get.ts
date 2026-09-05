@@ -1,11 +1,11 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import { parseFrontmatter } from '../../utils/frontmatter'
 import { slugToPath } from '../../utils/slugUtils'
 import type { CommandFrontmatter } from '~/types'
 
-export default defineEventHandler(async (event) => {
+async function loadCommand(event: any) {
   const slug = getRouterParam(event, 'slug')!
   const { directory, filename } = slugToPath(slug)
   const filePath = directory
@@ -27,4 +27,9 @@ export default defineEventHandler(async (event) => {
     body,
     filePath,
   }
+}
+
+export default defineEventHandler(async (event) => {
+  const item = await loadCommand(event)
+  return { ...item, lastModified: (await stat(item.filePath)).mtimeMs }
 })
