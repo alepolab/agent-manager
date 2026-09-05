@@ -1,0 +1,239 @@
+# CI
+#
+# Four independent jobs on every pull_request and every push to main. There is
+# no test framework in this repo — every suite is a plain Node script using
+# node:assert/strict — so each job below is a thin, deliberately unclever
+# wrapper around commands you can run yourself on a laptop. See the bottom of
+# this file for what is NOT covered (Playwright e2e) and why.
+#
+#   test-suites
+#     Runs every scripts/test-*.mjs and engineering/scripts/test-*.mjs with
+#     `node`. Each suite's exit code is checked individually and OR'd into the
+#     job's own exit code — nothing is piped through something that would
+#     swallow a non-zero exit. All 24 suites currently pass locally; see
+#     engineering/docs (or ask) if that count drifts and this comment goes
+#     stale.
+#
+#     KNOWN RISK, not yet resolved by this workflow: scripts/test-sdk.mjs
+#     shells out to the bundled Claude Code CLI via
+#     @anthropic-ai/claude-agent-sdk's query(), which needs either a live
+#     ANTHROPIC_API_KEY or an authenticated Claude Code session to get past
+#     "Claude Code process exited". Neither exists on a bare GitHub-hosted
+#     runner. This was NOT run against a runner without ambient credentials —
+#     see the PR/commit description for what to do about it (add an
+#     ANTHROPIC_API_KEY repo secret, or move this one suite out of CI) before
+#     trusting a green test-suites run that included it.
+#
+#   typecheck
+#     `node node_modules/vue-tsc/bin/vue-tsc.js -b --noEmit` — NOT
+#     `npm run typecheck`, which shells through `npx` and resolves a broken
+#     typescript@7.0.2 (see package.json / npx cache resolution; the pinned
+#     devDependency is typescript@^5.7 but npx has been observed to ignore
+#     it). There is exactly one known pre-existing error, in a file this
+#     workflow may not touch (scripts/test-workflow-graph.mjs). See the
+#     step's own comment for how it's handled and why.
+#
+#   build
+#     `npm run build` (nuxt build) must exit 0. Typecheck alone does not
+#     catch an import that resolves under Node's resolver but not Vite's —
+#     this repo has shipped exactly that defect once already.
+#
+#   validate-registry
+#     `node engineering/scripts/validate-registry.mjs` — schema + semantic
+#     checks over watches.yaml/products.yaml. Deliberately dependency-free
+#     and credential-free by design (see the script's own header); this job
+#     does not change that, and never passes `--repos` (which would clone
+#     every registered repo — out of place in an offline PR gate).
+#
+# Deliberately NOT included:
+#
+#   - `npm run test:e2e` (Playwright smoke test): boots a dev server and
+#     needs Chromium's system libraries (libnspr4, libnss3, libasound2t64),
+#     which are not installed on a default GitHub-hosted runner and are not
+#     installed by this workflow. `package.json`'s own `e2e:libs` script
+#     downloads and extracts them without root, which suggests it CAN be
+#     made to work here — but that is unverified from this workflow (no
+#     runner was available to try it against), so it is left as a follow-up
+#     rather than a step that might be silently broken from day one.
+#
+#   - Template drift (`node scripts/sync-agents.mjs --dry-run`): checked
+#     locally against an empty CLAUDE_DIR (`CLAUDE_DIR=/tmp/empty node
+#     scripts/sync-agents.mjs --dry-run`) and it reports every sdlc-* agent
+#     and both seeded skills as "missing", exit 1 — because there is no
+#     `~/.claude` on a fresh runner for it to compare against, not because
+#     anything drifted. This check is answering "does this developer's local
+#     ~/.claude match the repo", a question a stateless runner cannot ask.
+#     Adding it here would be a step that fails every single run,
+#     unconditionally, which the brief for this workflow explicitly rules
+#     out. It stays a local/pre-push check.
+#
+# Standards followed (github.com/alepolab CLAUDE.md, GitHub Actions section):
+#   - actions pinned to a commit SHA, not a tag (same pins as
+#     evidence-bundle.yml, for the same versions)
+#   - minimal `permissions:` at workflow level (contents: read only — no job
+#     here calls the Checks/PRs API, unlike evidence-bundle.yml)
+#   - a concurrency group that cancels a superseded run
+#   - dependency caching (setup-node's built-in npm cache, keyed on
+#     package-lock.json)
+#   - no secrets are read or echoed by this workflow
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-suites:
+    name: test-suites
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run every test-*.mjs suite
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          files=(scripts/test-*.mjs engineering/scripts/test-*.mjs)
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No scripts/test-*.mjs or engineering/scripts/test-*.mjs files found — that is a broken CI config, not a pass."
+            exit 1
+          fi
+
+          echo "found ${#files[@]} suite(s)"
+          fail=0
+          for f in "${files[@]}"; do
+            echo "::group::${f}"
+            if node "$f"; then
+              echo "PASS  ${f}"
+            else
+              code=$?
+              echo "FAIL  ${f} (exit ${code})"
+              echo "::error file=${f}::suite failed (exit ${code})"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+
+          exit "$fail"
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Deliberately NOT `npm run typecheck` (nuxt typecheck) — that shells
+      # through `npx vue-tsc`, and npx has been observed to resolve a
+      # standalone typescript@7.0.2 instead of the pinned ^5.7 devDependency,
+      # which changes error output out from under this gate without a commit
+      # to blame. Calling the installed binary directly pins the toolchain to
+      # exactly what package-lock.json resolved.
+      - name: Typecheck (vue-tsc -b, not npm run typecheck)
+        run: |
+          set +e
+          node node_modules/vue-tsc/bin/vue-tsc.js -b --noEmit > /tmp/tsc.log 2>&1
+          code=$?
+          cat /tmp/tsc.log
+          set -e
+
+          if [ "$code" -eq 0 ]; then
+            echo "typecheck clean"
+            exit 0
+          fi
+
+          # Ratchet, not a blanket ignore: exactly one pre-existing error is
+          # known at the time this workflow was added (TS1005 in
+          # scripts/test-workflow-graph.mjs, a file this CI change may not
+          # touch). If the ENTIRE output is exactly that one line, treat it as
+          # the accepted baseline and pass with a visible warning. Any other
+          # output — a second error, a different message, the same error at a
+          # different location — is NOT a byte-for-byte match and fails the
+          # job. This blocks every *new* typecheck error without permanently
+          # red-lining every PR over a defect this workflow didn't introduce
+          # and isn't allowed to fix.
+          #
+          # Delete this baseline block (and just let the job fail on any
+          # error) once scripts/test-workflow-graph.mjs is fixed.
+          baseline="scripts/test-workflow-graph.mjs(58,1): error TS1005: '=>' expected."
+          actual="$(tr -d '\r' < /tmp/tsc.log)"
+
+          if [ "$actual" = "$baseline" ]; then
+            echo "::warning file=scripts/test-workflow-graph.mjs,line=58::known pre-existing typecheck error — not blocking this PR. Any additional or different typecheck error fails the build."
+            exit 0
+          fi
+
+          echo "::error::typecheck failed with output beyond the known baseline (see log above)"
+          exit 1
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Catches what typecheck cannot: an import that resolves under Node's
+      # resolver but not Vite's. This repo has shipped exactly that defect.
+      - name: Build
+        run: npm run build
+
+  validate-registry:
+    name: validate-registry
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No dependencies, no credentials, no network by design (see the
+      # script's own header) — never pass --repos here, which would clone
+      # every registered repo and turn an offline check into a networked one.
+      - name: Validate registry
+        run: node engineering/scripts/validate-registry.mjs
