@@ -253,7 +253,26 @@ Rules:
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Read', 'Grep', 'Glob', 'Write'],
-      maxTurns: 25,
+      // Turn budgets are a CIRCUIT BREAKER, not a ration.
+      //
+      // They were originally set near each step's expected cost, and that shape
+      // of limit fails badly: it does not degrade, it destroys. A step one turn
+      // over its cap does not return partial work - it raises error_max_turns
+      // with EMPTY output, failing the run and discarding everything every
+      // earlier step spent. Measured on DEVOPS-15, in order: the provisioner
+      // died twice at 40, the verifier at 20, the evidence step at 15, and the
+      // implementer at 30 having already written the correct fix.
+      //
+      // Each was then raised one at a time, which was whack-a-mole against a
+      // single underlying mistake. What actually stops an agent manufacturing
+      // work is the declared-skip outcome and the standing rules, not a tight
+      // cap. So the cap's only remaining job is to stop a genuine runaway loop,
+      // and it is set at roughly twice the largest observed successful step
+      // (334s / 40 turns) for every agent that runs commands.
+      //
+      // A higher cap costs more only in the rare runaway case. A cap set too
+      // low costs 100% of the run, every time it bites.
+      maxTurns: 30,
       skills: ['intent-template', 'using-superpowers'],
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
@@ -328,7 +347,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 40,
+      maxTurns: 60,
       skills: ['ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You stand up the environment the rest of the pipeline tests against. Nothing downstream works if you get this wrong, and a stack you *believe* is up but is not produces a false FAIL that wastes the whole run.
@@ -403,7 +422,7 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 30,
+      maxTurns: 60,
       skills: ['regression-matrix', 'test-driven-development', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
@@ -479,7 +498,7 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 30,
+      maxTurns: 60,
       skills: ['systematic-debugging', 'ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You fix the cause, not the symptom. The failing test from the previous step defines done.
@@ -549,15 +568,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      // 40, not 20. Measured: on DEVOPS-15 this step died at error_max_turns
-      // after 219s with 20, while every other step passed. It carries the
-      // heaviest command load in the pipeline - the new parameterised suite,
-      // the repo's full regression suite (297 bats tests there), and the lint /
-      // format / type gates - and each `npx --yes bats` invocation is slow. The
-      // budgets were set uniformly by workload guess rather than measurement,
-      // which left the one step that runs everything with the smallest
-      // allowance of any Bash-using agent.
-      maxTurns: 40,
+      maxTurns: 60,
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
@@ -636,7 +647,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'purple',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 20,
+      maxTurns: 30,
       skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You capture browser evidence for the change, against the stack the provisioning step brought up.
@@ -729,14 +740,7 @@ shape of the answer.`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
-      // 30, not 15. Measured: this step died at error_max_turns after 74s on
-      // the first run to reach it. It is the most artifact-heavy step in the
-      // pipeline - it reads intent.md, context-packet.json, plan.md,
-      // oracle-before.xml, oracle-after.xml and regression.xml, assembles the
-      // bundle, writes pr-body.md and commits - and it had the SMALLEST budget
-      // of any Bash-using agent. Same mistake as the verifier at 20: the
-      // budgets were set by guess, and the guess ran opposite to the workload.
-      maxTurns: 30,
+      maxTurns: 60,
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.

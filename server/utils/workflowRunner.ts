@@ -11,6 +11,7 @@ import { callAgent, type AgentUsage, type AgentProgress } from './agentCaller.ts
 import { captureBaseline } from './gitFacts.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
+  publishEvidenceToProject,
   markArtifactsUnusable,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
@@ -114,6 +115,11 @@ async function publish(run: WorkflowRun) {
       try {
         await finalizeRunArtifacts(run)
         log.debug('run artifacts finalized', { runId: run.id, status: run.status })
+        // Only a COMPLETED run's evidence goes into the project tree. A failed
+        // or stopped run has, by definition, evidence with a hole in it, and
+        // committing that would hand CI a bundle that looks complete because
+        // the assembler cannot tell a missing stage from an absent file.
+        if (run.status === 'completed') await publishEvidenceToProject(run.id, run.projectDir)
       } catch (err) {
         // NOT best-effort-and-silent: finalizeRunArtifacts is the only place
         // the runner's own facts (identity/model/cost/fix) are re-asserted

@@ -499,6 +499,50 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
     'finalize re-asserts the real installed version over the agent\'s placeholder self-report')
 }
 
+// ── publishEvidenceToProject: the run directory travels with the PR ───────
+//
+// This is what makes .github/workflows/evidence-bundle.yml able to pass at
+// all. A GitHub Actions artifact can only be created inside a workflow run,
+// and this pipeline runs on an engineer's machine, so nothing could ever
+// upload `evidence-run-<sha>` and the check could only fail with "no artifact
+// found". Committing the directory is the path that works.
+{
+  const runId = 'publish-evidence-run'
+  const src = A.runArtifactsDir(runId)
+  mkdirSync(src, { recursive: true })
+  writeFileSync(join(src, 'meta.json'), JSON.stringify({ identity: 'x' }))
+  writeFileSync(join(src, 'oracle-before.xml'), '<testsuite/>')
+  mkdirSync(join(src, 'steps'), { recursive: true })
+  writeFileSync(join(src, 'steps', 'step-01.json'), '{}')
+
+  const project = mkdtempSync(join(tmpdir(), 'evidence-project-'))
+  const dest = await A.publishEvidenceToProject(runId, project)
+  assert.equal(dest, join(project, '.agent', 'evidence-run'),
+    'the destination is the path CI reads from the checkout')
+  assert.ok(existsSync(join(dest, 'meta.json')), 'meta.json travels')
+  assert.ok(existsSync(join(dest, 'oracle-before.xml')), 'the oracle evidence travels')
+  assert.ok(existsSync(join(dest, 'steps', 'step-01.json')),
+    'nested step artifacts travel too - the copy must be recursive')
+
+  // Replace, never merge. A file left behind by an earlier run would be
+  // assembled into THIS run's bundle as though it belonged to it, which is
+  // exactly the fabrication this module exists to prevent.
+  writeFileSync(join(dest, 'stale-from-a-previous-run.xml'), '<testsuite/>')
+  await A.publishEvidenceToProject(runId, project)
+  assert.ok(!existsSync(join(dest, 'stale-from-a-previous-run.xml')),
+    'a stale file from a previous run must not survive into this run\'s evidence')
+  assert.ok(existsSync(join(dest, 'meta.json')), 'the real evidence is still there after the replace')
+
+  // Best effort: no project dir is not an error, it is a run with nowhere to
+  // publish. A run that did real work must never be failed by this step.
+  assert.equal(await A.publishEvidenceToProject(runId, undefined), null,
+    'no project dir: nothing to do, and no throw')
+  assert.equal(await A.publishEvidenceToProject('no-such-run-id', project), null,
+    'a missing source directory is swallowed and reported as null, never thrown')
+
+  rmSync(project, { recursive: true, force: true })
+}
+
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('run artifacts: all checks passed')
