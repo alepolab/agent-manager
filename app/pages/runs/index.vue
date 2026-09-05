@@ -14,18 +14,53 @@ const error = ref<string | null>(null)
 const expanded = ref<string | null>(null)
 const statusFilter = ref<string>('all')
 
-async function load() {
-  loading.value = true
+/** Refetch cadence while anything is still running. The list is small and
+ *  served from disk, so this is cheap; the alternative - one SSE stream per
+ *  visible run - buys sub-second updates nobody reading a history page needs. */
+const LIVE_POLL_MS = 3000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+async function load(quiet = false) {
+  if (!quiet) loading.value = true
   error.value = null
   try {
     runs.value = await $fetch<WorkflowRun[]>('/api/runs')
   } catch (e: unknown) {
+    // A failed background refresh must not blank a list that is already on
+    // screen: keep showing the last good data and surface the error instead.
     error.value = e instanceof Error ? e.message : 'Could not load run history.'
   } finally {
     loading.value = false
   }
 }
-onMounted(load)
+
+const anyLive = computed(() => runs.value.some(r => r.status === 'running' || r.status === 'paused'))
+
+/** Poll only while something is actually live, and stop as soon as nothing
+ *  is. A history page left open overnight should not sit refetching for ever. */
+function syncPolling() {
+  if (anyLive.value && !pollTimer) {
+    pollTimer = setInterval(() => load(true), LIVE_POLL_MS)
+  } else if (!anyLive.value && pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+watch(anyLive, syncPolling)
+onMounted(async () => { await load(); syncPolling() })
+onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
+
+/** The run the expanded row is showing, re-read from `runs` on every refresh
+ *  so the detail updates in place rather than freezing at the moment it was
+ *  opened. */
+const expandedRun = computed(() => runs.value.find(r => r.id === expanded.value) ?? null)
+
+async function stopRun(id: string) {
+  try { await $fetch(`/api/runs/${id}/stop`, { method: 'POST' }); await load(true) } catch { /* surfaced by the next poll */ }
+}
+async function continueRun(id: string) {
+  try { await $fetch(`/api/runs/${id}/continue`, { method: 'POST' }); await load(true) } catch { /* surfaced by the next poll */ }
+}
 
 // Counts come from the unfiltered list so the tab labels stay stable while a
 // filter is applied - a filter that renumbers its own tabs is disorienting.
@@ -142,21 +177,25 @@ function furthestStep(run: WorkflowRun) {
               <span v-if="furthestStep(run)!.error" :style="{ color: runStatusColor('failed') }"> — {{ furthestStep(run)!.error }}</span>
             </p>
 
-            <div v-if="expanded === run.id" class="border-t border-subtle px-4 py-3 space-y-2">
+            <!-- The SAME component the workflow page uses, not a second
+                 rendering of the same data. Reusing it is what makes the two
+                 views agree by construction: per-step rows, expandable output,
+                 monitor verdicts, the cost summary and the run controls all
+                 come from one place, so a change to any of them cannot land in
+                 one view and miss the other. -->
+            <div v-if="expandedRun && expanded === run.id" class="border-t border-subtle px-4 py-3 space-y-2">
               <div class="flex items-center gap-3 text-[11px] text-label">
                 <span class="font-mono">{{ run.id }}</span>
                 <NuxtLink :to="`/workflows/${run.workflowSlug}`" class="hover:underline" style="color: var(--info);">
                   Open workflow &rarr;
                 </NuxtLink>
               </div>
-              <div v-for="step in run.steps" :key="step.stepId" class="flex items-center gap-2 text-[12px]">
-                <span class="w-2 h-2 rounded-full shrink-0" :style="{ background: runStatusColor(step.status) }" />
-                <span>{{ step.label }}</span>
-                <span class="text-label font-mono text-[10px]">{{ step.agentSlug }}</span>
-                <span v-if="step.visits > 1" class="text-[10px] text-label">&times;{{ step.visits }}</span>
-                <span v-if="step.monitorVerdict" class="text-[10px] font-mono">{{ step.monitorVerdict }}</span>
-                <span class="ml-auto text-[10px] text-label tabular-nums">{{ elapsedLabel(step) }}</span>
-              </div>
+              <WorkflowRunPanel
+                :run="expandedRun"
+                :runs="[]"
+                @stop="stopRun(run.id)"
+                @continue="continueRun(run.id)"
+              />
             </div>
           </div>
         </div>

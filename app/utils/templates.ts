@@ -729,7 +729,14 @@ shape of the answer.`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
-      maxTurns: 15,
+      // 30, not 15. Measured: this step died at error_max_turns after 74s on
+      // the first run to reach it. It is the most artifact-heavy step in the
+      // pipeline - it reads intent.md, context-packet.json, plan.md,
+      // oracle-before.xml, oracle-after.xml and regression.xml, assembles the
+      // bundle, writes pr-body.md and commits - and it had the SMALLEST budget
+      // of any Bash-using agent. Same mistake as the verifier at 20: the
+      // budgets were set by guess, and the guess ran opposite to the workload.
+      maxTurns: 30,
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
