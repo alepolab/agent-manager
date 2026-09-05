@@ -53,6 +53,29 @@ const { runArtifactsDir } = await import('../server/utils/runArtifacts.ts')
 
 const projectDir = arg('project-dir', process.env.RUN_PROJECT_DIR)
 
+// Pre-flight: refuse to start on a dirty target repository.
+//
+// A run that begins on top of uncommitted work cannot produce an honest
+// result. Its oracle stage is asked to write a test that fails against the
+// current tree, but the capability may already be sitting there unstaged; and
+// if any later step commits broadly, that pre-existing work is attributed to
+// this run for good. Both happened on DEVOPS-15: a runaway intake step wrote
+// the entire implementation and died, and the next run started on its
+// leftovers.
+//
+// --allow-dirty is deliberate rather than a force flag with a scary name:
+// re-running a ticket against a tree you have intentionally staged is a real
+// workflow, and it should be one word, said out loud, in the command line.
+const { workingTreeDirty } = await import('../server/utils/gitFacts.ts')
+const dirty = await workingTreeDirty(projectDir)
+if (dirty?.length && !process.argv.includes('--allow-dirty')) {
+  console.error(`Refusing to start: ${projectDir} has ${dirty.length} uncommitted path(s).`)
+  for (const f of dirty.slice(0, 20)) console.error(`  ${f}`)
+  if (dirty.length > 20) console.error(`  ... and ${dirty.length - 20} more`)
+  console.error('\nCommit, stash, or discard them first — or pass --allow-dirty if this is intended.')
+  process.exit(2)
+}
+
 const run = await runner.startRun({
   workflow: { slug: workflowSlug, name: wf.name, steps: wf.steps },
   initialPrompt: brief,

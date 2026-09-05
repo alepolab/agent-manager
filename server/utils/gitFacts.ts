@@ -8,6 +8,19 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout.trim()
 }
 
+/**
+ * As `git`, but WITHOUT trimming. Required for any format whose leading
+ * whitespace is significant - `status --porcelain` above all, whose lines are
+ * `XY<space><path>`: for an unstaged modification X is a literal space, so
+ * `.trim()` silently eats the first line's status column and every offset
+ * computed from it is off by one. It corrupts only the FIRST line, which is
+ * what makes it so easy to miss - the rest of the list parses perfectly.
+ */
+async function gitRaw(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 })
+  return stdout
+}
+
 /** What `computeFixFacts` can prove straight from git, in the run's project
  *  directory. Deliberately NOT `pr` — a pull request is a GitHub construct
  *  no git command can produce, so the caller (runArtifacts.ts) is the one
@@ -169,4 +182,66 @@ export async function computeFixFacts(
   }
 
   return { repo, commits, files_changed: files.length, lines_changed: linesChanged }
+}
+
+/**
+ * The paths already modified, staged, or untracked in `projectDir` at the
+ * instant a run starts — i.e. work that exists BEFORE this run and must not
+ * be attributed to it.
+ *
+ * Why this is worth a function of its own: `computeFixFacts` measures
+ * `baseCommit..HEAD`, so uncommitted changes cannot inflate its numbers
+ * directly. The leak is one step later. If any step in the pipeline runs a
+ * broad `git commit -a`, every pre-existing change in the tree is swept into
+ * the run's own commit and from that moment IS counted, honestly and
+ * irreversibly, as the run's work.
+ *
+ * This is not hypothetical. Run f7ccb4b2's intake step — holding only
+ * [Read, Grep, Glob, Write] — followed instructions addressed to later
+ * stages and wrote the whole ticket's implementation into
+ * alepo-dev-team-infra: a bats suite, a compose profile, and a README
+ * runbook. It then died on turn exhaustion, leaving 78 uncommitted lines
+ * behind. The next run started on top of them, so its oracle stage faced a
+ * repository where the capability it was supposed to prove missing was
+ * already present.
+ *
+ * Returns `null` when there is nothing to measure (no `projectDir`, or not a
+ * git working tree) — the same "say nothing rather than guess" contract the
+ * rest of this module keeps. An empty array means a genuinely clean tree.
+ */
+export async function workingTreeDirty(projectDir: string | undefined): Promise<string[] | null> {
+  if (!projectDir) return null
+  try {
+    const inside = await git(projectDir, ['rev-parse', '--is-inside-work-tree'])
+    if (inside !== 'true') return null
+  } catch {
+    return null // not a git repository
+  }
+  try {
+    // --porcelain is the stable, script-facing format; -uall lists files
+    // inside untracked directories rather than collapsing them to "dir/",
+    // which would under-report a whole tree of new files as one entry.
+    // -z delimits with NUL and, crucially, leaves paths UNQUOTED - without it
+    // git wraps any path containing a space or non-ASCII byte in quotes with
+    // escapes, so an ordinary "my file.yml" is reported under a name that
+    // matches nothing on disk.
+    const out = await gitRaw(projectDir, ['status', '--porcelain', '-uall', '-z'])
+    const entries = out.split('\0').filter(Boolean)
+    const paths: string[] = []
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!
+      // Each record is `XY<space><path>`; the status column is exactly two
+      // bytes, so the path begins at offset 3 - no trimming, which would
+      // corrupt a path legitimately ending in whitespace.
+      const status = entry.slice(0, 2)
+      paths.push(entry.slice(3))
+      // A rename/copy record is followed by a SECOND NUL-delimited field
+      // holding the ORIGIN path. Consume it, or it is read as the next status
+      // record and reported as a separate file missing its first 3 characters.
+      if (status[0] === 'R' || status[0] === 'C') i++
+    }
+    return paths
+  } catch {
+    return null
+  }
 }

@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const { computeFixFacts, captureBaseline } = await import('../server/utils/gitFacts.ts')
+const { computeFixFacts, captureBaseline, workingTreeDirty } = await import('../server/utils/gitFacts.ts')
 
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
@@ -262,6 +262,69 @@ function initRepo() {
   const baseline = await captureBaseline(dir)
   assert.equal(baseline, undefined, 'a repo with no commits yet (unborn HEAD) yields no baseline to capture')
   rmSync(dir, { recursive: true, force: true })
+}
+
+// ── 13. workingTreeDirty: clean vs dirty, and the parsing traps ───────────
+//
+// Regression guards. The first implementation reused the module's trimming
+// `git()` helper and sliced 3 bytes off each line. `git status --porcelain`
+// emits `XY<space><path>`, and for an unstaged modification X is a literal
+// space — so trim() ate the first record's status column and returned
+// "cripts/run-ticket.mjs" for `scripts/run-ticket.mjs`. Only the FIRST entry
+// was ever wrong, which is precisely why it survived a manual read.
+{
+  const dir = initRepo()
+  // initRepo tracks only a.txt; commit a second file so the modifications
+  // below are both tracked edits (' M'), which is the shape that triggered
+  // the original bug.
+  writeFileSync(join(dir, 'b.txt'), 'line1\n')
+  git(dir, ['add', '.'])
+  git(dir, ['commit', '-q', '-m', 'add b'])
+  assert.deepEqual(await workingTreeDirty(dir), [], 'a freshly committed tree is clean')
+
+  // Two modifications: the bug corrupted only the first, so one file is not
+  // enough to catch it.
+  writeFileSync(join(dir, 'a.txt'), 'changed\n')
+  writeFileSync(join(dir, 'b.txt'), 'changed\n')
+  const dirty = await workingTreeDirty(dir)
+  assert.deepEqual(dirty.slice().sort(), ['a.txt', 'b.txt'],
+    'every modified path is reported whole — no leading character eaten')
+  git(dir, ['checkout', '--', '.'])
+
+  // An untracked file inside an untracked directory: -uall must list the
+  // file, not collapse the whole tree to "sub/".
+  execFileSync('mkdir', ['-p', join(dir, 'sub')])
+  writeFileSync(join(dir, 'sub', 'new.txt'), 'x\n')
+  assert.deepEqual(await workingTreeDirty(dir), ['sub/new.txt'],
+    '-uall lists files inside untracked directories rather than the directory')
+  rmSync(join(dir, 'sub'), { recursive: true, force: true })
+
+  // A path containing a space. Without -z, git quotes and escapes it
+  // ("my file.txt"), yielding a name that matches nothing on disk.
+  writeFileSync(join(dir, 'my file.txt'), 'x\n')
+  assert.deepEqual(await workingTreeDirty(dir), ['my file.txt'],
+    'a path with a space is reported verbatim, unquoted')
+  rmSync(join(dir, 'my file.txt'), { force: true })
+
+  // A staged rename emits a SECOND NUL field holding the origin path. If it
+  // is not consumed, it is parsed as another status record and reported as a
+  // phantom file missing its first three characters.
+  git(dir, ['mv', 'a.txt', 'renamed.txt'])
+  const renamed = await workingTreeDirty(dir)
+  assert.deepEqual(renamed, ['renamed.txt'],
+    'a rename reports the destination once — the origin field is consumed, not read as a record')
+  git(dir, ['reset', '-q', '--hard'])
+
+  assert.deepEqual(await workingTreeDirty(dir), [], 'the tree is clean again after reset')
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// ── 14. workingTreeDirty says nothing rather than guessing ────────────────
+{
+  assert.equal(await workingTreeDirty(undefined), null, 'no project dir: nothing to measure')
+  const plain = mkdtempSync(join(tmpdir(), 'gitfacts-norepo-'))
+  assert.equal(await workingTreeDirty(plain), null, 'not a git working tree: null, never []')
+  rmSync(plain, { recursive: true, force: true })
 }
 
 console.log('git facts: all checks passed')
