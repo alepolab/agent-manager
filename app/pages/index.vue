@@ -1,558 +1,148 @@
 <script setup lang="ts">
-import { getAgentColor } from "~/utils/colors";
-import { MODEL_IDS, getModelLabel, getModelColor, getModelBadgeClasses } from "~/utils/models";
+import type { WorkflowRun } from '~~/shared/types/run'
+import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 
-const { claudeDir } = useClaudeDir();
-const { agents, fetchAll: fetchAgents } = useAgents();
-const { commands, fetchAll: fetchCommands } = useCommands();
-const { plugins, fetchAll: fetchPlugins } = usePlugins();
-const { skills, fetchAll: fetchSkills } = useSkills();
-const { imports: githubImports, fetchImports } = useGithubImports();
-const { settings, load: loadSettings } = useSettings();
+/**
+ * Home answers "what needs me" first, then "what did I run", then "how is
+ * the team set up", and offers one primary action: start a run from a ticket.
+ */
+const { me } = useUser()
+const { agents, fetchAll: fetchAgents } = useAgents()
+const { commands, fetchAll: fetchCommands } = useCommands()
+const { skills, fetchAll: fetchSkills } = useSkills()
+const { workflows, fetchAll: fetchWorkflows } = useWorkflows()
+const toast = useToast()
 
+const runs = ref<WorkflowRun[]>([])
+const team = ref<{ pluginVersion: string | null, drifted: number, registry: { ok: boolean, products: number } } | null>(null)
+const loaded = ref(false)
 
-interface Suggestion {
-  type: string;
-  severity: "warning" | "info";
-  message: string;
-  target: { type: "agent" | "command" | "skill"; slug: string };
+async function refresh() {
+  const [r, t] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs'), $fetch<typeof team.value>('/api/team/status')])
+  if (r.status === 'fulfilled') runs.value = r.value
+  if (t.status === 'fulfilled') team.value = t.value
+  loaded.value = true
 }
-const suggestions = ref<Suggestion[]>([]);
+let timer: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  refresh()
+  if (!agents.value.length) fetchAgents()
+  if (!commands.value.length) fetchCommands()
+  if (!skills.value.length) fetchSkills()
+  if (!workflows.value.length) fetchWorkflows()
+  timer = setInterval(() => { if (runs.value.some(r => r.status === 'running' || r.status === 'paused')) refresh() }, 10_000)
+})
+onUnmounted(() => { if (timer) clearInterval(timer) })
 
-// Animated counters
-const animatedCounts = reactive({
-  agents: 0,
-  commands: 0,
-  skills: 0,
-  plugins: 0,
-});
+const hasContent = computed(() => agents.value.length > 0 || commands.value.length > 0 || skills.value.length > 0)
 
-function animateCounter(target: number, key: keyof typeof animatedCounts) {
-  if (target === 0) {
-    animatedCounts[key] = 0;
-    return;
-  }
-  const duration = 600;
-  const startTime = performance.now();
-  function tick(now: number) {
-    const elapsed = now - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    const eased = 1 - Math.pow(1 - progress, 3); // easeOutCubic
-    animatedCounts[key] = Math.round(eased * target);
-    if (progress < 1) requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-}
+const attention = computed(() => runs.value.filter(r =>
+  ['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
+const mine = computed(() => runs.value.filter(r => r.startedBy && r.startedBy === me.value?.login).slice(0, 8))
+const dayAgo = Date.now() - 86_400_000, weekAgo = Date.now() - 7 * 86_400_000
+const cost = computed(() => ({
+  today: runs.value.filter(r => r.startedAt >= dayAgo).reduce((a, r) => a + (r.usage?.usd ?? 0), 0),
+  week: runs.value.filter(r => r.startedAt >= weekAgo).reduce((a, r) => a + (r.usage?.usd ?? 0), 0),
+  runsWeek: runs.value.filter(r => r.startedAt >= weekAgo).length,
+}))
 
-onMounted(async () => {
-  await Promise.all([
-    loadSettings(), 
-    fetchPlugins(), 
-    fetchSkills(), 
-    fetchImports('skills'),
-    fetchImports('agents')
-  ]);
-
-  // Animate counters after data loads
-  nextTick(() => {
-    animateCounter(agents.value.length, "agents");
-    animateCounter(commands.value.length, "commands");
-    animateCounter(skills.value.length, "skills");
-    animateCounter(plugins.value.length, "plugins");
-  });
-
-  // Watch for data changes to re-animate
-  watch(
-    () => agents.value.length,
-    (v) => animateCounter(v, "agents"),
-  );
-  watch(
-    () => commands.value.length,
-    (v) => animateCounter(v, "commands"),
-  );
-  watch(
-    () => skills.value.length,
-    (v) => animateCounter(v, "skills"),
-  );
-  watch(
-    () => plugins.value.length,
-    (v) => animateCounter(v, "plugins"),
-  );
-
+const ticket = ref('')
+const starting = ref(false)
+const runbook = computed(() => workflows.value.find(w => w.slug.startsWith('runbook')) ?? workflows.value[0])
+async function startFromTicket() {
+  if (!ticket.value.trim() || !runbook.value) return
+  starting.value = true
   try {
-    suggestions.value = await $fetch<Suggestion[]>("/api/suggestions");
-  } catch {
-    // Non-critical
+    const run = await $fetch<WorkflowRun>(`/api/workflows/${runbook.value.slug}/runs`, { method: 'POST', body: { initialPrompt: ticket.value.trim(), autoRun: false } })
+    ticket.value = ''
+    await navigateTo(`/workflows/${run.workflowSlug}?run=${run.id}`)
+  } catch (e: any) {
+    if (e?.statusCode === 409 && e?.data?.data?.runId) await navigateTo(`/workflows/${runbook.value.slug}?run=${e.data.data.runId}`)
+    else toast.add({ title: 'Could not start the run', description: e.data?.message || e.message, color: 'error' })
+  } finally {
+    starting.value = false
   }
-});
+}
 
-
-const UNSET_KEY = 'unset';
-const modelBreakdown = computed(() => {
-  // Build initial counts from the canonical MODEL_IDS list — no hardcoded strings
-  const counts: Record<string, number> = Object.fromEntries(
-    [...MODEL_IDS, UNSET_KEY].map((k) => [k, 0])
-  );
-  for (const a of agents.value) {
-    const m = a.frontmatter.model;
-    const key = m && m in counts ? m : UNSET_KEY;
-    counts[key] = (counts[key] ?? 0) + 1;
-  }
-  return counts;
-});
-
-const totalAgents = computed(() => agents.value.length);
-const modelPercentages = computed(() => {
-  if (!totalAgents.value) return {};
-  const result: Record<string, number> = {};
-  for (const [model, count] of Object.entries(modelBreakdown.value)) {
-    if (count > 0) result[model] = (count / totalAgents.value) * 100;
-  }
-  return result;
-});
-
-
-const hasContent = computed(
-  () =>
-    agents.value.length > 0 ||
-    commands.value.length > 0 ||
-    skills.value.length > 0 ||
-    plugins.value.length > 0,
-);
-
-const statItems = computed(() => [
-  {
-    key: "agents" as const,
-    to: "/agents",
-    count: animatedCounts.agents,
-    label: "Agents",
-    icon: "i-lucide-cpu",
-  },
-  {
-    key: "commands" as const,
-    to: "/commands",
-    count: animatedCounts.commands,
-    label: "Commands",
-    icon: "i-lucide-terminal",
-  },
-  {
-    key: "skills" as const,
-    to: "/skills",
-    count: animatedCounts.skills,
-    label: "Skills",
-    icon: "i-lucide-sparkles",
-  },
-  {
-    key: "plugins" as const,
-    to: "/plugins",
-    count: animatedCounts.plugins,
-    label: "Plugins",
-    icon: "i-lucide-puzzle",
-  },
-]);
+const why = (r: WorkflowRun) => r.status === 'paused' ? `paused before ${r.steps.find(s => r.nextStepIds.includes(s.stepId))?.label ?? 'the next step'}`
+  : r.status === 'failed' ? (r.error || `failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`)
+  : r.status === 'interrupted' ? 'server restarted; resume it'
+  : r.ci?.status === 'failing' ? 'CI failing on the PR' : r.status
+const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago` }
 </script>
 
 <template>
   <div>
     <PageHeader title="Dashboard" />
+    <div class="px-6 py-4 space-y-6">
+      <WelcomeOnboarding v-if="loaded && !hasContent" @created="(agent) => navigateTo(`/agents/${agent.slug}`)" />
 
-    <div class="px-6 py-5 stagger-section space-y-5">
-      <!-- Hero stat bar -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <NuxtLink
-          v-for="item in statItems"
-          :key="item.to"
-          :to="item.to"
-          class="relative rounded-xl p-5 focus-ring hover-stat overflow-hidden group bg-card"
-        >
-          <!-- Subtle accent gradient on hover -->
-          <div
-            class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-            style="
-              background: radial-gradient(
-                ellipse at top left,
-                var(--accent-muted) 0%,
-                transparent 60%
-              );
-            "
-          />
-          <div class="relative">
-            <div class="flex items-center gap-2 mb-3">
-              <UIcon
-                :name="item.icon"
-                class="size-4 text-meta group-hover:text-[var(--accent)] transition-colors duration-200"
-              />
-              <span class="text-[12px] font-medium text-label">{{
-                item.label
-              }}</span>
-            </div>
-            <span class="stat-number counter-animate">{{ item.count }}</span>
-          </div>
-        </NuxtLink>
-      </div>
-
-      <!-- Model breakdown (visual bar) -->
-      <div
-        v-if="agents.length > 0"
-        class="rounded-xl px-5 py-4 bg-card"
-      >
-        <div class="flex items-center justify-between mb-3">
-          <span class="text-section-title">Model Distribution</span>
-          <span class="text-[11px] text-meta font-mono"
-            >{{ totalAgents }} agent{{ totalAgents === 1 ? "" : "s" }}</span
-          >
+      <!-- Primary action -->
+      <form class="rounded-xl p-4 flex flex-wrap items-end gap-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
+        <div class="flex-1 min-w-[16rem]">
+          <label class="field-label">Start a run from a ticket</label>
+          <input v-model="ticket" class="field-input w-full" placeholder="SCN-402, or paste the ticket text" :disabled="!runbook" />
+          <span class="field-hint">{{ runbook ? `Runs ${runbook.name}. A bare key is expanded from Jira when your profile has a token.` : 'Create a workflow first.' }}</span>
         </div>
+        <UButton type="submit" label="Start" icon="i-lucide-play" :loading="starting" :disabled="!ticket.trim() || !runbook" />
+      </form>
 
-        <!-- Proportional bar -->
-        <div class="proportion-bar mb-3">
-          <div
-            v-for="(pct, model) in modelPercentages"
-            :key="model"
-            class="proportion-bar__segment"
-            :style="{
-              flexGrow: pct,
-              background: getModelColor(model),
-            }"
-          />
-        </div>
-
-        <!-- Legend -->
-        <div class="flex items-center gap-5">
-          <div
-            v-for="(count, model) in modelBreakdown"
-            :key="model"
-            class="flex items-center gap-2"
-          >
-            <div
-              class="size-2 rounded-full"
-              :style="{ background: getModelColor(model) }"
-            />
-            <span
-              class="text-[11px] font-medium"
-              style="color: var(--text-secondary)"
-              >{{ getModelLabel(model) }}</span
-            >
-            <span class="font-mono text-[11px] tabular-nums text-meta">{{
-              count
-            }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Bento grid: Agents + Commands + Quick Actions -->
-      <div
-        v-if="hasContent"
-        class="grid grid-cols-1 md:grid-cols-3 gap-4"
-      >
-        <!-- Agents list (takes 2 cols) -->
-        <div
-          class="md:col-span-2 rounded-xl overflow-hidden"
-          style="border: 1px solid var(--border-subtle)"
-        >
-          <div
-            class="flex items-center justify-between px-4 py-3"
-            style="
-              background: var(--surface-raised);
-              border-bottom: 1px solid var(--border-subtle);
-            "
-          >
-            <h3 class="text-section-title flex items-center gap-2">
-              <UIcon
-                name="i-lucide-cpu"
-                class="size-4"
-                style="color: var(--accent)"
-              />
-              Agents
-            </h3>
-            <NuxtLink
-              to="/agents"
-              class="text-[12px] focus-ring rounded px-1.5 py-0.5 hover-bg transition-colors"
-              style="color: var(--accent)"
-              >View all</NuxtLink
-            >
-          </div>
-          <div
-            class="divide-y"
-            style="divide-color: var(--border-subtle)"
-          >
-            <NuxtLink
-              v-for="agent in agents.slice(0, 6)"
-              :key="agent.slug"
-              :to="`/agents/${agent.slug}`"
-              class="flex items-center gap-3 px-4 py-3 hover-bg group"
-            >
-              <div
-                class="size-8 rounded-lg flex items-center justify-center shrink-0 transition-transform duration-200 group-hover:scale-105"
-                :style="{
-                  background: getAgentColor(agent.frontmatter.color) + '18',
-                  border:
-                    '1px solid ' +
-                    getAgentColor(agent.frontmatter.color) +
-                    '25',
-                }"
-              >
-                <UIcon
-                  name="i-lucide-cpu"
-                  class="size-3.5"
-                  :style="{ color: getAgentColor(agent.frontmatter.color) }"
-                />
-              </div>
-              <div class="flex-1 min-w-0">
-                <span class="text-[13px] font-medium truncate block">
-                  {{ agent.frontmatter.name }}
-                </span>
-                <span
-                  v-if="agent.frontmatter.description"
-                  class="text-[11px] text-label truncate block"
-                >
-                  {{ agent.frontmatter.description }}
-                </span>
-              </div>
-              <span
-                v-if="
-                  agent.frontmatter.model &&
-                  getModelBadgeClasses(agent.frontmatter.model)
-                "
-                class="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full shrink-0"
-                :class="[
-                  getModelBadgeClasses(agent.frontmatter.model).bg,
-                  getModelBadgeClasses(agent.frontmatter.model).text,
-                ]"
-              >
-                {{ agent.frontmatter.model }}
-              </span>
-            </NuxtLink>
-          </div>
-        </div>
-
-        <!-- Right column: Commands + Quick Actions stacked -->
-        <div class="space-y-4">
-          <!-- Commands -->
-          <div
-            class="rounded-xl overflow-hidden"
-            style="border: 1px solid var(--border-subtle)"
-          >
-            <div
-              class="flex items-center justify-between px-4 py-3"
-              style="
-                background: var(--surface-raised);
-                border-bottom: 1px solid var(--border-subtle);
-              "
-            >
-              <h3 class="text-section-title flex items-center gap-2">
-                <UIcon
-                  name="i-lucide-terminal"
-                  class="size-4"
-                  style="color: var(--accent)"
-                />
-                Commands
-              </h3>
-              <NuxtLink
-                to="/commands"
-                class="text-[12px] focus-ring rounded px-1.5 py-0.5 hover-bg transition-colors"
-                style="color: var(--accent)"
-                >View all</NuxtLink
-              >
-            </div>
-            <div
-              class="divide-y"
-              style="divide-color: var(--border-subtle)"
-            >
-              <NuxtLink
-                v-for="cmd in commands.slice(0, 4)"
-                :key="cmd.slug"
-                :to="`/commands/${cmd.slug}`"
-                class="flex items-center gap-2.5 px-4 py-2.5 hover-bg"
-              >
-                <span
-                  class="font-mono text-[11px] shrink-0"
-                  style="color: var(--accent)"
-                  >/</span
-                >
-                <span class="text-[12px] truncate text-body flex-1">
-                  {{ cmd.frontmatter.name }}
-                </span>
-                <span class="text-[10px] shrink-0 text-meta font-mono">
-                  {{ cmd.directory }}
-                </span>
-              </NuxtLink>
-            </div>
-          </div>
-
-          <!-- Quick Actions -->
-          <div class="space-y-2">
-            <NuxtLink
-              to="/graph"
-              class="block rounded-xl p-4 focus-ring hover-card bg-card group"
-            >
-              <div class="flex items-center gap-3">
-                <div
-                  class="size-8 rounded-lg flex items-center justify-center shrink-0"
-                  style="
-                    background: var(--accent-muted);
-                    border: 1px solid rgba(229, 169, 62, 0.12);
-                  "
-                >
-                  <UIcon
-                    name="i-lucide-workflow"
-                    class="size-4"
-                    style="color: var(--accent)"
-                  />
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-[13px] font-medium">Relationship Graph</div>
-                  <div class="text-[11px] text-label">
-                    Visualize connections
-                  </div>
-                </div>
-                <UIcon
-                  name="i-lucide-arrow-right"
-                  class="size-4 text-meta opacity-0 group-hover:opacity-100 transition-all duration-200 group-hover:translate-x-0.5"
-                />
-              </div>
-            </NuxtLink>
-
-            <NuxtLink
-              to="/workflows"
-              class="block rounded-xl p-4 focus-ring hover-card bg-card group"
-            >
-              <div class="flex items-center gap-3">
-                <div
-                  class="size-8 rounded-lg flex items-center justify-center shrink-0"
-                  style="
-                    background: var(--accent-secondary-muted);
-                    border: 1px solid rgba(99, 102, 241, 0.12);
-                  "
-                >
-                  <UIcon
-                    name="i-lucide-git-branch"
-                    class="size-4"
-                    style="color: var(--accent-secondary)"
-                  />
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-[13px] font-medium">Create Workflow</div>
-                  <div class="text-[11px] text-label">Multi-step pipelines</div>
-                </div>
-                <UIcon
-                  name="i-lucide-arrow-right"
-                  class="size-4 text-meta opacity-0 group-hover:opacity-100 transition-all duration-200 group-hover:translate-x-0.5"
-                />
-              </div>
-            </NuxtLink>
-
-            <NuxtLink
-              to="/explore"
-              class="block rounded-xl p-4 focus-ring hover-card bg-card group"
-            >
-              <div class="flex items-center gap-3">
-                <div
-                  class="size-8 rounded-lg flex items-center justify-center shrink-0"
-                  style="
-                    background: var(--accent-muted);
-                    border: 1px solid rgba(229, 169, 62, 0.12);
-                  "
-                >
-                  <UIcon
-                    name="i-lucide-compass"
-                    class="size-4"
-                    style="color: var(--accent)"
-                  />
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-[13px] font-medium">Explore</div>
-                  <div class="text-[11px] text-label">Templates & extensions</div>
-                </div>
-                <UIcon
-                  name="i-lucide-arrow-right"
-                  class="size-4 text-meta opacity-0 group-hover:opacity-100 transition-all duration-200 group-hover:translate-x-0.5"
-                />
-              </div>
-            </NuxtLink>
-          </div>
-        </div>
-      </div>
-
-      <!-- Welcome onboarding (first-run) -->
-      <WelcomeOnboarding
-        v-if="!hasContent"
-        @created="(agent) => navigateTo(`/agents/${agent.slug}`)"
-      />
-
-      <!-- Suggestions -->
-      <div
-        v-if="suggestions.length && hasContent"
-        class="rounded-xl overflow-hidden"
-        style="border: 1px solid var(--border-subtle)"
-      >
-        <div
-          class="flex items-center justify-between px-4 py-3"
-          style="
-            background: var(--surface-raised);
-            border-bottom: 1px solid var(--border-subtle);
-          "
-        >
-          <h3 class="text-section-title flex items-center gap-2">
-            <UIcon
-              name="i-lucide-lightbulb"
-              class="size-4"
-              style="color: var(--accent)"
-            />
-            Suggestions
-          </h3>
-          <span class="font-mono text-[10px] text-meta">{{
-            suggestions.length
-          }}</span>
-        </div>
-        <div
-          class="divide-y"
-          style="divide-color: var(--border-subtle)"
-        >
-          <NuxtLink
-            v-for="(s, idx) in suggestions.slice(0, 5)"
-            :key="idx"
-            :to="`/${s.target.type}s/${s.target.slug}`"
-            class="flex items-center gap-3 px-4 py-3 hover-bg group"
-          >
-            <UIcon
-              :name="
-                s.severity === 'warning'
-                  ? 'i-lucide-alert-triangle'
-                  : 'i-lucide-info'
-              "
-              class="size-4 shrink-0"
-              :style="{
-                color:
-                  s.severity === 'warning'
-                    ? 'var(--warning, #eab308)'
-                    : 'var(--text-disabled)',
-              }"
-            />
-            <span class="text-[12px] text-label flex-1">{{ s.message }}</span>
-            <UIcon
-              name="i-lucide-chevron-right"
-              class="size-3.5 text-meta opacity-0 group-hover:opacity-100 transition-opacity"
-            />
+      <!-- Needs attention -->
+      <section>
+        <h2 class="text-section-label mb-2">Needs attention <span class="text-meta font-normal">{{ attention.length }}</span></h2>
+        <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
+        <p v-else-if="!attention.length" class="text-[13px] text-label">Nothing waiting on you.</p>
+        <div v-else class="space-y-1">
+          <NuxtLink v-for="r in attention" :key="r.id" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+            <span class="font-medium truncate" style="color: var(--text-primary);">{{ r.initialPrompt.split('\n')[0].slice(0, 60) }}</span>
+            <span class="text-label truncate">{{ why(r) }}</span>
+            <span class="ml-auto text-label whitespace-nowrap">{{ r.startedBy || '' }} · {{ ago(r.startedAt) }}</span>
           </NuxtLink>
         </div>
-      </div>
+      </section>
 
-      <!-- The configuration folder is fixed at boot (CLAUDE_DIR); a shared server must not let one user repoint it. -->
+      <div class="grid md:grid-cols-3 gap-4">
+        <!-- My runs -->
+        <section class="md:col-span-2">
+          <h2 class="text-section-label mb-2">My recent runs</h2>
+          <p v-if="loaded && !mine.length" class="text-[13px] text-label">No runs started by you yet.</p>
+          <div v-else class="space-y-1">
+            <NuxtLink v-for="r in mine" :key="r.id" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+              <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="truncate" style="color: var(--text-primary);">{{ r.initialPrompt.split('\n')[0].slice(0, 60) }}</span>
+              <div class="w-24 shrink-0"><RunProgressBar :steps="r.steps" /></div>
+              <span class="ml-auto text-label whitespace-nowrap">{{ r.usage ? '$' + r.usage.usd.toFixed(2) : '' }} · {{ ago(r.startedAt) }}</span>
+            </NuxtLink>
+          </div>
+        </section>
 
-      <!-- Keyboard shortcuts -->
-      <div class="flex items-center gap-4 px-2 text-meta">
-        <span class="text-[12px] flex items-center gap-1.5">
-          <kbd class="text-[10px] font-mono px-1 py-px rounded badge-subtle"
-            >&#x2318;K</kbd
-          >
-          Search
-        </span>
-        <span class="text-[12px] flex items-center gap-1.5">
-          <kbd class="text-[10px] font-mono px-1 py-px rounded badge-subtle"
-            >&#x2318;S</kbd
-          >
-          Save
-        </span>
+        <!-- Team + cost -->
+        <section class="space-y-3">
+          <div class="rounded-xl p-4 text-[12px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <div class="text-section-label mb-1">Cost</div>
+            <div class="flex justify-between"><span class="text-label">Today</span><span class="font-mono tabular-nums">${{ cost.today.toFixed(2) }}</span></div>
+            <div class="flex justify-between"><span class="text-label">This week</span><span class="font-mono tabular-nums">${{ cost.week.toFixed(2) }} · {{ cost.runsWeek }} runs</span></div>
+          </div>
+          <NuxtLink to="/team" class="block rounded-xl p-4 text-[12px] space-y-1 focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <div class="text-section-label mb-1">Team standards</div>
+            <template v-if="team">
+              <div class="flex justify-between"><span class="text-label">Plugin</span><span>{{ team.pluginVersion ?? 'not installed' }}</span></div>
+              <div class="flex justify-between"><span class="text-label">Registry</span><span>{{ team.registry.ok ? `${team.registry.products} products` : 'unreadable' }}</span></div>
+              <div class="flex justify-between"><span class="text-label">Drift</span><span :style="{ color: team.drifted ? 'var(--warning)' : 'var(--success)' }">{{ team.drifted ? `${team.drifted} item(s)` : 'in sync' }}</span></div>
+            </template>
+            <span v-else class="text-label">Checking…</span>
+          </NuxtLink>
+          <div class="rounded-xl p-4 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <div class="text-section-label mb-1">Setup</div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+              <NuxtLink to="/agents" class="flex justify-between focus-ring"><span class="text-label">Agents</span><span>{{ agents.length }}</span></NuxtLink>
+              <NuxtLink to="/commands" class="flex justify-between focus-ring"><span class="text-label">Commands</span><span>{{ commands.length }}</span></NuxtLink>
+              <NuxtLink to="/skills" class="flex justify-between focus-ring"><span class="text-label">Skills</span><span>{{ skills.length }}</span></NuxtLink>
+              <NuxtLink to="/workflows" class="flex justify-between focus-ring"><span class="text-label">Workflows</span><span>{{ workflows.length }}</span></NuxtLink>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   </div>

@@ -24,6 +24,17 @@
 
 <br/>
 
+## Shared team instance
+
+```
+AGENT_MANAGER_SECRET=$(openssl rand -hex 32) GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+AGENT_MANAGER_URL=http://<host>:3030 docker compose -f docker-compose.team.yml up -d --build
+```
+
+The instance keeps its own config, runs, user profiles and product checkouts on one volume under `/srv/agent-manager`; nothing from anyone's home directory is mounted. At boot it installs the team's agents, skills and workflow from the alepo-engineering plugin and the shipped templates (the Team page shows drift and re-applies it). Developers sign in with GitHub, add their Jira token on the Profile page, and start runs from a ticket key on the home page. Product checkouts are cloned into `AGENT_WORKSPACE_ROOT/<repo>` by the provisioning step the first time a product is needed.
+
+Register the GitHub OAuth app under the organisation with callback `<AGENT_MANAGER_URL>/api/auth/callback` before the first sign-in. The alepo-engineering plugin must be installed in the instance's config directory once: `claude plugin marketplace add <path to engineering/> && claude plugin install alepo-engineering@alepo-engineering --scope user` with `CLAUDE_DIR` pointing at the volume, or bake it into the image.
+
 ## Sign-in and identity
 
 On a shared instance every developer signs in with GitHub; membership of the `GITHUB_ORG` organisation (default `alepolab`) is required. The token from sign-in is stored encrypted and used for the pushes and pull requests of runs that developer starts. On the Profile page each developer adds their Atlassian email and a Jira API token, also stored encrypted, so ticket reads and outcome comments happen as them.

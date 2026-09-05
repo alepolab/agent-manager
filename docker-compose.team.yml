@@ -1,0 +1,47 @@
+# Shared team instance. Nothing from a developer's home directory is mounted:
+# the team config lives on its own volume and is seeded from the
+# alepo-engineering plugin at boot, product checkouts live on a workspace
+# volume the provisioner clones into, and every developer signs in.
+#
+#   AGENT_MANAGER_SECRET=... GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+#   AGENT_MANAGER_URL=http://<host>:3030 docker compose -f docker-compose.team.yml up -d --build
+services:
+  agents-ui:
+    build: { context: ., dockerfile: Dockerfile }
+    container_name: agents-ui-team
+    restart: unless-stopped
+    ports: ["3030:3030"]
+    group_add: ["${DOCKER_GID:-999}"]
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3030
+      - NODE_ENV=production
+      - HOME=/srv/agent-manager
+      - CLAUDE_DIR=/srv/agent-manager/claude
+      - AGENT_RUNS_DIR=/srv/agent-manager/runs
+      - AGENT_USERS_DIR=/srv/agent-manager/users
+      - AGENT_WORKSPACE_ROOT=/srv/agent-manager/workspace
+      - TEAM_SEED_ON_BOOT=1
+      - AGENT_MANAGER_SECRET=${AGENT_MANAGER_SECRET:?set a 32+ character secret}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:?register the GitHub OAuth app}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:?register the GitHub OAuth app}
+      - GITHUB_ORG=${GITHUB_ORG:-alepolab}
+      - AGENT_MANAGER_URL=${AGENT_MANAGER_URL:-http://localhost:3030}
+      - JIRA_TICKET_SOURCE=${JIRA_TICKET_SOURCE:-cli}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - AGENT_RUN_MAX_MINUTES=${AGENT_RUN_MAX_MINUTES:-180}
+      - AGENT_RUN_MAX_TOKENS=${AGENT_RUN_MAX_TOKENS:-8000000}
+    volumes:
+      - team-home:/srv/agent-manager
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3030/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  team-home:
