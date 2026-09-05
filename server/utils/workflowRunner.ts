@@ -476,9 +476,20 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // serializes those writes per run id so they can never race on disk.
   const results = await Promise.all(wave.map(id => executeNode(l, run, id)))
 
-  // A stop during the wave already published 'stopped'; the aborted steps'
-  // failures must not turn that into 'failed'.
-  if (l.stopped) { l.running = false; await publish(run); return run }
+  // A stop during the wave published 'stopped' from stopRun's own copy of the
+  // record. This object is the one the wave mutated and the one executeNode
+  // publishes, so it must carry the same facts or its next publish would
+  // resurrect 'running' on disk.
+  if (l.stopped) {
+    for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+    run.status = 'stopped'
+    run.endedAt ??= Date.now()
+    run.currentStepIds = []
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    return run
+  }
 
   if (results.some(ok => !ok)) {
     skipPending(l.state)
