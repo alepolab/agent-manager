@@ -29,7 +29,17 @@
 # `podman-restart.service` is enabled alongside it, which is what brings this
 # container back after a reboot given its `restart: unless-stopped`.
 #
-# Keep in step with docker-compose.team.yml by hand - nothing enforces it.
+# Keep in step with docker-compose.team.yml by hand - nothing enforces it, and
+# it has already drifted once: this file carried JIRA_TICKET_SOURCE, a variable
+# no code reads since the ticket source went back to REST, while MISSING the
+# four Jira variables that are actually live (JIRA_BASE_URL, JIRA_EMAIL,
+# JIRA_API_TOKEN, JIRA_POST_ENABLED). A podman deployment therefore had no Jira
+# configuration at all, and advertised a setting that does nothing.
+#
+# Diff the env blocks against docker-compose.team.yml before trusting this file:
+#   diff <(grep -oE '^\s+- [A-Z_]+=' docker-compose.team.yml | tr -d ' -' | sort) \
+#        <(grep -oE '^\s+- [A-Z_]+=' docker-compose.team.podman.yml | tr -d ' -' | sort)
+# DOCKER_HOST is the one intended difference.
 services:
   agents-ui:
     # Built from this tree by: docker build -t agent-manager:team -f Dockerfile .
@@ -53,7 +63,10 @@ services:
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:?register the GitHub OAuth app}
       - GITHUB_ORG=${GITHUB_ORG:-alepolab}
       - AGENT_MANAGER_URL=${AGENT_MANAGER_URL:-http://localhost:3030}
-      - JIRA_TICKET_SOURCE=${JIRA_TICKET_SOURCE:-cli}
+      - JIRA_BASE_URL=${JIRA_BASE_URL:-https://alepo.atlassian.net}
+      - JIRA_EMAIL=${JIRA_EMAIL:-}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN:-}
+      - JIRA_POST_ENABLED=${JIRA_POST_ENABLED:-0}
       - DOCKER_HOST=unix:///var/run/docker.sock
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
       - AGENT_RUN_MAX_MINUTES=${AGENT_RUN_MAX_MINUTES:-180}
