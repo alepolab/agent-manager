@@ -744,7 +744,14 @@ not happen.`,
       color: 'red',
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
       maxTurns: 30,
-      skills: ['claude-security', 'requesting-code-review', 'using-superpowers'],
+      // No `claude-security` here, though it is the obvious fit. That plugin is
+      // licensed "Copyright (c) 2026 Anthropic, PBC. All rights reserved.", so
+      // it cannot be vendored into this repo the way the MIT-licensed
+      // superpowers skills are - and a team container installs no plugins, so
+      // declaring it would resolve to nothing and silently strip this agent of
+      // instructions. Install the plugin on a machine that has a licence for
+      // it and add it back there.
+      skills: ['requesting-code-review', 'using-superpowers'],
     },
     body: `You review the change for security defects before anyone opens a pull request for it. You do not fix anything: a finding is your output, a patch is someone else's.
 

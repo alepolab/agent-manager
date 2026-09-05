@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile, cp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
 import { serializeFrontmatter } from './frontmatter.ts'
@@ -64,16 +64,45 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
   const workflowsDir = resolveClaudePath('workflows')
   if (apply) await Promise.all([mkdir(agentsDir, { recursive: true }), mkdir(skillsDir, { recursive: true }), mkdir(workflowsDir, { recursive: true })])
 
+  // Where the skills come from, and why there are two sources.
+  //
+  // Agents are seeded from `agentTemplates`, which ship inside the app, so they
+  // always arrive. Skills used to come only from the INSTALLED plugin - and a
+  // team container has no plugin installed, so a fresh instance booted with
+  // "9 agents, 0 skills" while every agent declared skills that could not
+  // resolve. That failure is silent by construction: buildAgentSystemPrompt
+  // catches a per-skill resolution failure so one typo cannot stop an agent,
+  // which means an unresolvable skill looks exactly like a working one and the
+  // agent simply runs without the instructions it was supposed to have.
+  //
+  // So the installed plugin stays the preferred source - it is the one an
+  // operator can update independently - and the copy shipped in the product
+  // (engineering/skills/, see its VENDORED.md) is the fallback. The product
+  // shipping its own skills is the whole point of vendoring them.
+  const shippedSkills = join(process.cwd(), 'engineering', 'skills')
+  const skillsSource = (plugin && existsSync(join(plugin.installPath, 'skills')))
+    ? join(plugin.installPath, 'skills')
+    : (existsSync(shippedSkills) ? shippedSkills : null)
+
   const skills: TeamStatus['skills'] = []
-  if (plugin && existsSync(join(plugin.installPath, 'skills'))) {
-    for (const name of await readdir(join(plugin.installPath, 'skills'))) {
-      const from = join(plugin.installPath, 'skills', name, 'SKILL.md')
+  if (skillsSource) {
+    for (const name of await readdir(skillsSource)) {
+      const from = join(skillsSource, name, 'SKILL.md')
       if (!existsSync(from)) continue
       const next = await readFile(from, 'utf-8')
       const to = join(skillsDir, name, 'SKILL.md')
       const current = await readOr(to)
       let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
-      if (apply && state !== 'ok') { await mkdir(join(skillsDir, name), { recursive: true }); await writeFile(to, next); state = 'ok' }
+      if (apply && state !== 'ok') {
+        // The WHOLE directory, not just SKILL.md. Several skills carry
+        // supporting files their body points at - systematic-debugging has ten
+        // (root-cause-tracing.md, find-polluter.sh and the rest), and
+        // requesting-code-review has code-reviewer.md. Copying only SKILL.md
+        // seeds a skill that resolves and then refers the agent to files that
+        // are not there.
+        await cp(join(skillsSource, name), join(skillsDir, name), { recursive: true })
+        state = 'ok'
+      }
       skills.push({ name, state })
     }
   }

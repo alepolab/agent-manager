@@ -25,6 +25,12 @@
     ".data",
     ".output",
     "docker",
+    // Vendored third-party skills (see engineering/skills/VENDORED.md). They
+    // carry supporting files of their own, including a TypeScript EXAMPLE that
+    // imports from a project that is not this one - four errors that are not
+    // ours to fix and that we may not edit, since these are copied verbatim
+    // and re-copied on refresh. Same reason `docker` is excluded above.
+    "engineering/skills",
     "node_modules"
   ]
 }

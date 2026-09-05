@@ -49,6 +49,15 @@ COPY --from=build /app/.output .output
 # volume from the image's contents on first creation, so these files become the
 # starting state and anything the app writes afterwards persists in the volume.
 # A bind mount would instead hide all of this.
+# The product's own skills. teamSync seeds a team instance's skills from the
+# INSTALLED alepo-engineering plugin when there is one, and falls back to these
+# when there is not - which is the normal case in a container. Without them a
+# fresh team instance boots "9 agents, 0 skills": every agent declares skills
+# that cannot resolve, and because buildAgentSystemPrompt swallows a per-skill
+# failure by design, each agent silently runs without the instructions it was
+# supposed to have. Measured on this image before this line existed.
+COPY engineering/skills ./engineering/skills
+
 COPY docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.

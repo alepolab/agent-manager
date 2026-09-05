@@ -38,3 +38,37 @@ maintained upstream, and a stale vendored fork of a process skill is worse than
 a missing one, because it keeps working while quietly diverging.
 `scripts/test-agent-skills.mjs` fails loudly if any of them stops resolving,
 which is the honest signal that the plugin needs installing.
+
+## superpowers
+
+- Source: the `superpowers` plugin, `claude-plugins-official` marketplace, v6.3.0
+- Licence: MIT (c) 2025 Jesse Vincent — full text in `SUPERPOWERS-LICENSE`
+- Skills: using-superpowers, using-git-worktrees, test-driven-development,
+  verification-before-completion, requesting-code-review, systematic-debugging,
+  finishing-a-development-branch
+
+Copied verbatim, whole directories including supporting files — several skills
+point at siblings (`systematic-debugging` has ten, `requesting-code-review` has
+`code-reviewer.md`), and seeding only `SKILL.md` produces a skill that resolves
+and then refers the agent to files that are not there.
+
+**This reverses the "not vendored" decision recorded below, and the reason it
+was wrong is worth keeping.** The argument — that these are maintained upstream
+and a stale fork is worse than a missing one — holds on a developer machine
+where the plugin is installed. It does not hold in a container, which installs
+no plugins at all: a team instance booted with nine of its thirteen declared
+skills simply absent, and because `buildAgentSystemPrompt` swallows a per-skill
+resolution failure by design, every agent ran without those instructions while
+reporting itself healthy. A stale skill is a worse skill; a missing one is no
+skill, and nothing says so.
+
+Refresh by re-copying from the plugin cache and updating the version above.
+
+## claude-security — deliberately NOT vendored
+
+`claude-security` is licensed "Copyright (c) 2026 Anthropic, PBC. All rights
+reserved." That is not a redistribution licence, so it cannot be copied into
+this repo the way the MIT-licensed skills above can. `sdlc-security-review`
+therefore does not declare it: declaring a skill a container can never resolve
+is exactly the silent failure this file exists to prevent. Install the plugin
+on a machine licensed for it and add the declaration there.
