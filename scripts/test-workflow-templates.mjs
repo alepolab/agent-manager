@@ -256,10 +256,18 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 {
   const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
   const intake = body('sdlc-ticket-intake')
-  assert.match(intake, /~\/\.claude\/plugins\//,
-    'the prompt must name the concrete search path for the installed plugin, not just "read it from the plugin"')
-  assert.match(intake, /\.claude-plugin\/plugin\.json/,
-    'the prompt must name the exact file to read the version field from')
+  // The agent has Read, Grep and Glob but no Bash: those tools do not expand ~
+  // and skip hidden directories, so the lookup must be an absolute path to a
+  // top-level, non-hidden file. installed_plugins.json is that file; the run
+  // header supplies the config directory it lives under.
+  assert.match(intake, /plugins\/installed_plugins\.json/,
+    'the prompt must name the exact file to read the version from')
+  assert.match(intake, /alepo-engineering@alepo-engineering/,
+    'the prompt must name the key to read under it')
+  assert.match(intake, /never \`~\`|never ~/,
+    'the prompt must warn that its tools do not expand ~')
+  assert.doesNotMatch(intake, /search under \`~\/\.claude\/plugins\/\` for an/,
+    'the old hidden-directory crawl instruction must be gone')
   assert.match(intake, /never a placeholder/i,
     'an unreadable plugin_version must halt the run, not fall back to a placeholder string')
 }
