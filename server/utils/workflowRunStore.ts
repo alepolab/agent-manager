@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
@@ -70,7 +70,13 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
 
 export async function saveRun(run: WorkflowRun): Promise<void> {
   await ensureDir()
-  await writeFile(runPath(run.id), JSON.stringify(run, null, 2), 'utf-8')
+  // Write-then-rename so a reader never sees a half-written record: getRun
+  // treats unparseable JSON as a missing run, which turned a concurrent read
+  // during publish into a spurious 404.
+  const path = runPath(run.id)
+  const tmp = `${path}.${process.pid}.tmp`
+  await writeFile(tmp, JSON.stringify(run, null, 2), 'utf-8')
+  await rename(tmp, path)
 }
 
 export async function getRun(id: string): Promise<WorkflowRun | null> {

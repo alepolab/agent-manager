@@ -25,7 +25,7 @@ import type { WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 // normalizeAgentResult() below is the one place that tells them apart.
 export type AgentCallOutput = string | { output: string, model: string | null, usage?: AgentUsage | null }
 export type AgentCaller =
-  (agentSlug: string, input: string, projectDir?: string) => Promise<AgentCallOutput>
+  (agentSlug: string, input: string, projectDir?: string, signal?: AbortSignal) => Promise<AgentCallOutput>
 
 // The real caller is imported and wired here directly, at module scope, in
 // the same file that reads it. Previously this defaulted to a throwing stub
@@ -72,6 +72,9 @@ interface Live {
   lastInputs: Record<string, string>
   retryFeedback: Record<string, string>
   stopped: boolean
+  /** One controller per step in flight, so stopRun can cancel the SDK call
+   *  itself rather than only marking the record. */
+  aborts: Map<string, AbortController>
   /** True while this run's wave loop is actually executing in the background - the
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
@@ -361,8 +364,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // single-step respondToRun call it already holds [id] from the prior pause.
   await publish(run)
 
+  const ac = new AbortController()
+  l.aborts.set(id, ac)
   try {
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir)
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir, ac.signal)
     const { output, model, usage } = normalizeAgentResult(raw)
 
     // A halt is a failure the agent raised deliberately. Checked before the
@@ -418,11 +423,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     markFailed(l.state, id)
     Object.assign(rec, {
       status: 'failed',
-      error: err instanceof Error ? err.message : 'Unknown error',
+      error: l.stopped ? 'Stopped by operator' : (err instanceof Error ? err.message : 'Unknown error'),
       completedAt: Date.now(),
     })
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return false
+  } finally {
+    l.aborts.delete(id)
   }
 }
 
@@ -468,6 +475,10 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // progresses (mirroring the client engine's parallel step execution). publish() (above)
   // serializes those writes per run id so they can never race on disk.
   const results = await Promise.all(wave.map(id => executeNode(l, run, id)))
+
+  // A stop during the wave already published 'stopped'; the aborted steps'
+  // failures must not turn that into 'failed'.
+  if (l.stopped) { l.running = false; await publish(run); return run }
 
   if (results.some(ok => !ok)) {
     skipPending(l.state)
@@ -531,7 +542,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false,
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
   }
   live.set(run.id, l)
   // Best-effort: a filesystem problem here must not stop the run. The run
@@ -574,6 +585,11 @@ export async function continueRun(runId: string): Promise<WorkflowRun | null> {
     l.running = false
     return run
   }
+  // Persist 'running' before returning, as restartRun and respondToRun do: a
+  // reader that lands between this return and the wave's first publish would
+  // otherwise see the old 'paused' record and treat the run as settled.
+  run.status = 'running'
+  await publish(run)
   // driveToSettlement (via runWave) clears l.running itself once the run is genuinely
   // settled again - see the C6 notes on runWave's pause branch for why that has to
   // happen there and not via a .finally() tacked on here.
@@ -653,7 +669,11 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   // C5: a run that already reached a real outcome is not "stopped" by stopping it again.
   if (TERMINAL_STATUSES.includes(run.status)) return run
   const l = live.get(runId)
-  if (l) { l.stopped = true; skipPending(l.state) }
+  if (l) {
+    l.stopped = true
+    skipPending(l.state)
+    for (const ac of l.aborts.values()) ac.abort()
+  }
   for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
   run.status = 'stopped'
   run.endedAt = Date.now()
@@ -694,7 +714,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false,
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
   }
   const header = artifactHeader(runArtifactsDir(run.id))
   for (const s of run.steps) {

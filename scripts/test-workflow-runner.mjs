@@ -633,6 +633,25 @@ assert.equal(capped.status, 'failed', 'exceeding the budget fails the run')
 assert.match(capped.error, /budget/i, 'the run says why')
 assert.ok(capped.steps.some(s => s.status === 'skipped'), 'later steps are skipped, not run')
 
+// ── 13. stopRun aborts the agent call in flight ───────────────────────────
+runner.setAgentCaller((agentSlug, input, projectDir, signal) => new Promise((resolve, reject) => {
+  const t = setTimeout(() => resolve(`late ${agentSlug}`), 4000)
+  signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')) })
+}))
+let inflight = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+await new Promise(r => setTimeout(r, 200))
+const t0 = Date.now()
+await runner.stopRun(inflight.id)
+inflight = await runner.waitForSettled(inflight.id, TIMEOUT)
+assert.ok(Date.now() - t0 < 2000, 'stop returns without waiting for the agent to finish on its own')
+assert.equal(inflight.status, 'stopped', 'an aborted wave leaves the run stopped, not failed')
+// The stop publishes first; the aborted step's own failure lands a moment later.
+for (let i = 0; i < 20 && (await store.getRun(inflight.id)).steps.find(s => s.stepId === 'a').status === 'running'; i++) await new Promise(r => setTimeout(r, 50))
+inflight = await store.getRun(inflight.id)
+assert.equal(inflight.status, 'stopped', 'the step failure does not turn a stopped run into a failed one')
+assert.equal(inflight.steps.find(s => s.stepId === 'a').status, 'failed', 'the aborted step records a failure, not a completion')
+assert.match(inflight.steps.find(s => s.stepId === 'a').error, /stopped/i)
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

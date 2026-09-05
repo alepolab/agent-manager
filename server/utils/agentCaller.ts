@@ -81,7 +81,11 @@ export interface AgentCallResult {
  * is never the request — it's what the SDK's own `system`/`init` message
  * reports it resolved to, captured below.
  */
-export async function callAgent(agentSlug: string, input: string, projectDir?: string): Promise<AgentCallResult> {
+export async function callAgent(agentSlug: string, input: string, projectDir?: string, signal?: AbortSignal): Promise<AgentCallResult> {
+  // The runner's stop aborts this controller; the SDK then ends the CLI process.
+  const abortController = new AbortController()
+  if (signal?.aborted) abortController.abort()
+  signal?.addEventListener('abort', () => abortController.abort())
   const claudeDir = getClaudeDir()
   const cwd = projectDir && existsSync(projectDir) ? projectDir : claudeDir
 
@@ -111,6 +115,7 @@ export async function callAgent(agentSlug: string, input: string, projectDir?: s
     prompt: input,
     options: {
       cwd,
+      abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       maxTurns: resolveMaxTurns(frontmatter),
