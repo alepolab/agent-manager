@@ -71,7 +71,7 @@ export function useWorkflowRun(slug: string) {
   return {
     run, runs, loading, error, attach, start, refreshRuns,
     continueRun: () => act('continue')(),
-    restart: (stepId: string) => act('restart')({ stepId }),
+    restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
     respond: async (reply: string) => {
       if (!run.value) return
       run.value = await $fetch<WorkflowRun>(`/api/runs/${run.value.id}/respond`, { method: 'POST', body: { reply } })

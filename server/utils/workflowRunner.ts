@@ -794,7 +794,7 @@ const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted'
  * step's output, under the same run id and artifacts directory. The previous
  * attempt of each reset step is snapshotted the way monitor retries are.
  */
-export async function restartRun(runId: string, stepId: string): Promise<WorkflowRun> {
+export async function restartRun(runId: string, stepId: string, note?: string): Promise<WorkflowRun> {
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
   if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
@@ -809,6 +809,7 @@ export async function restartRun(runId: string, stepId: string): Promise<Workflo
   if (l.running) throw new RestartError(409, 'This run is already running')
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
+  const previousOutput = recOf(run, stepId).output
   for (const id of reset) {
     const rec = recOf(run, id)
     // Only an attempt that actually ran is worth snapshotting; a skipped step has nothing to keep.
@@ -830,6 +831,13 @@ export async function restartRun(runId: string, stepId: string): Promise<Workflo
   if (l.graph.entries.includes(stepId)) armNode(l.state, stepId)
   else if ((l.graph.forwardPreds[stepId] ?? []).every(p => l.state.status[p] === 'completed')) armNode(l.state, stepId)
   else throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
+
+  // An operator note rides the same channel as a monitor's retry feedback, so
+  // the restarted step sees its previous attempt and the correction together.
+  if (note?.trim()) {
+    l.outputs[stepId] = previousOutput
+    l.retryFeedback[stepId] = `Operator note: ${note.trim()}`
+  }
 
   l.stopped = false
   l.running = true

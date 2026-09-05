@@ -652,6 +652,24 @@ assert.equal(inflight.status, 'stopped', 'the step failure does not turn a stopp
 assert.equal(inflight.steps.find(s => s.stepId === 'a').status, 'failed', 'the aborted step records a failure, not a completion')
 assert.match(inflight.steps.find(s => s.stepId === 'a').error, /stopped/i)
 
+// ── 14. a restart note reaches the restarted step's input ─────────────────
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+const inputsSeen = {}
+let cFailedOnce = false
+runner.setAgentCaller(async (agentSlug, input) => {
+  inputsSeen[agentSlug] = input
+  if (agentSlug === 'agent-c' && !cFailedOnce) { cFailedOnce = true; throw new Error('c failed once') }
+  return `out ${agentSlug}`
+})
+let noted = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+noted = await runner.waitForSettled(noted.id, TIMEOUT)
+assert.equal(noted.status, 'failed')
+noted = await runner.restartRun(noted.id, 'c', 'Use the staging CRM, not production')
+noted = await runner.waitForSettled(noted.id, TIMEOUT)
+assert.equal(noted.status, 'completed')
+assert.match(inputsSeen['agent-c'], /Operator note:\s*Use the staging CRM/, 'the note is in the restarted step input')
+assert.match(inputsSeen['agent-c'], /Your previous attempt/, 'the previous attempt travels with it, as a monitor retry would')
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

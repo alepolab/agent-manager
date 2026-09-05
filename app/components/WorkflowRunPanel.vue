@@ -3,7 +3,10 @@ import type { WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR } from '~/utils/runStatus'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[] }>()
-const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string], clone: [] }>()
+const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [] }>()
+
+/** Optional correction handed to whichever step is restarted next. */
+const note = ref('')
 
 /** Restart and clone only make sense once nothing is executing. */
 const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
@@ -51,6 +54,15 @@ const expanded = ref<string | null>(null)
       The process that was running this is gone. Its steps are frozen where they stopped.
     </p>
 
+    <textarea
+      v-if="settledRun"
+      v-model="note"
+      rows="2"
+      class="field-input w-full resize-none text-[12px]"
+      placeholder="Optional note for the step you restart, e.g. verify from inside the container only"
+      aria-label="Note for the restarted step"
+    />
+
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">
       <div v-for="step in run.steps" :key="step.stepId" class="text-[12px]">
@@ -72,7 +84,7 @@ const expanded = ref<string | null>(null)
             v-if="settledRun && stepSettled(step)"
             size="xs" variant="ghost" color="neutral" icon="i-lucide-rotate-ccw"
             :aria-label="`Restart from ${step.label}`" :title="`Restart from ${step.label}`"
-            @click="emit('restart', step.stepId)"
+            @click="emit('restart', step.stepId, note)"
           />
         </div>
         <div v-if="expanded === step.stepId" class="pl-4 pb-2 space-y-1">

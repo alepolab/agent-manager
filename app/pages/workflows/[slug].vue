@@ -558,7 +558,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           @continue="continueRun"
           @stop="stop"
           @attach="attachRun"
-          @restart="restart"
+          @restart="(stepId, note) => restart(stepId, note)"
           @clone="cloneRun"
         />
       </template>
