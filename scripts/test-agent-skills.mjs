@@ -22,7 +22,7 @@
  * the point — it is the same state a real agent would run in.
  */
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentTemplates } from '../app/utils/templates.ts'
 import { resolveSkillInvocation } from '../server/utils/resolveSkill.ts'
@@ -97,6 +97,42 @@ for (const name of vendored) {
   assert.ok(existsSync(path), `${name} must ship in engineering/skills/ so a fresh install gets it`)
 }
 
+// Shipped commands must be well-formed, or they install as files that do
+// nothing. This found three real ones: baseline.md, reproduce.md and
+// triage.md had been sitting in engineering/commands/ unseeded, so the
+// product shipped three commands nobody could invoke and nothing said so.
+const commandsDir = join(import.meta.dirname, '..', 'engineering', 'commands')
+const commandFiles = existsSync(commandsDir)
+  ? readdirSync(commandsDir).filter(f => f.endsWith('.md'))
+  : []
+assert.ok(commandFiles.length, 'engineering/commands/ must ship at least one command')
+
+for (const file of commandFiles) {
+  const raw = readFileSync(join(commandsDir, file), 'utf8')
+  assert.ok(raw.startsWith('---\n'), `${file} must open with YAML frontmatter`)
+  const end = raw.indexOf('\n---', 4)
+  assert.ok(end > 0, `${file} frontmatter must be closed`)
+  const fm = raw.slice(4, end)
+
+  // A command's name comes from its FILENAME, not a frontmatter field - which
+  // is why none of the commands shipped here declare one. If a file does
+  // declare `name:`, it must agree with the filename, or the two disagree
+  // about what "/x" invokes and the frontmatter is the one that loses.
+  const declared = /^name:\s*(\S+)/m.exec(fm)?.[1]
+  if (declared !== undefined) {
+    assert.equal(declared, file.replace(/\.md$/, ''),
+      `${file} declares a name that disagrees with its filename; the filename wins, so drop it or match it`)
+  }
+  assert.ok(/^description:\s*\S/m.test(fm),
+    `${file} needs a description: it is the only thing shown when picking a command`)
+}
+
+// sync-agents.mjs is what installs them. A command added to the repo but not
+// seeded is invisible, which is exactly the state the three above were in.
+const syncSource = readFileSync(join(import.meta.dirname, 'sync-agents.mjs'), 'utf8')
+assert.ok(syncSource.includes('seedCommands()'),
+  'sync-agents.mjs must call seedCommands(), or shipped commands never reach CLAUDE_DIR')
+
 console.log(
   `agent skills: ${checked} declared skills across ${sdlc.length} agents all resolve; `
-  + `${vendored.length} shipped in-repo`)
+  + `${vendored.length} shipped in-repo; ${commandFiles.length} commands well-formed`)

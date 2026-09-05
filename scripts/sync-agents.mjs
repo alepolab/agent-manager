@@ -55,7 +55,34 @@ function seedSkills() {
     if (!dryRun) { mkdirSync(toDir, { recursive: true }); writeFileSync(to, next) }
   }
 }
+/**
+ * Seed the commands this product ships into CLAUDE_DIR/commands/.
+ *
+ * Same reasoning as seedSkills: a command that lives only in the repo is a
+ * command nobody can invoke. Unlike skills there is no plugin fallback path
+ * for these at all - if the file is not in CLAUDE_DIR/commands, `/name` simply
+ * does not exist, with no error anywhere to explain why.
+ *
+ * Only files this repo ships are touched; anything else under
+ * CLAUDE_DIR/commands is the user's own and is never overwritten.
+ */
+function seedCommands() {
+  const src = join(import.meta.dirname, '..', 'engineering', 'commands')
+  if (!existsSync(src)) return
+  const dstDir = join(claudeDir, 'commands')
+  for (const name of readdirSync(src)) {
+    if (!name.endsWith('.md')) continue
+    const next = readFileSync(join(src, name), 'utf8')
+    const to = join(dstDir, name)
+    const current = existsSync(to) ? readFileSync(to, 'utf8') : null
+    if (current === next) { console.log(`  ok      command ${name}`); continue }
+    console.log(`  ${current === null ? 'missing' : 'drifted'} command ${name}`)
+    if (!dryRun) { mkdirSync(dstDir, { recursive: true }); writeFileSync(to, next) }
+  }
+}
+
 seedSkills()
+seedCommands()
 
 const sdlc = agentTemplates.filter(t => t.id.startsWith('sdlc-'))
 if (!sdlc.length) {
