@@ -51,7 +51,9 @@ The app uses a centralized CRUD pattern via `useCrud.ts` which provides standard
 - `useGithubImports.ts` - Import skills from GitHub repos
 - `useMarketplace.ts` - Browse and install plugins from marketplace
 - `useUser.ts` - Signed-in developer from `/api/me`
-- `useContextMonitor.ts` - Real-time context metrics tracking (tokens, cost, files, tools)
+- `useChatV2Handler.ts` - The `/cli` chat client: WebSocket, streaming, permission prompts
+- `useSessionStore.ts` - Session-keyed message store behind the chat
+- `useContextMonitor.ts` - Token and cost tracking for the chat
 
 **Chat/Studio System**:
 The Agent Studio (`/agents/[slug]` page with test panel) uses SSE (Server-Sent Events) for streaming responses. The backend (`server/api/chat.post.ts`) uses the `@anthropic-ai/claude-agent-sdk` to query agents and stream results back as `text_delta`, `thinking_delta`, `tool_progress` events.
@@ -156,31 +158,66 @@ The system automatically detects relationships between agents/commands/skills by
 5. Skills are copied to `~/.claude/skills/[name]/`
 6. Import metadata stored in `~/.claude/.imports.json` for update tracking
 
-**CLI page** (`/cli`): the chat interface (`ChatV2Interface`) against the global working directory. The former in-browser terminal, PTY sessions and context-monitor panel were removed on 2026-09-05; `useContextMonitor` survives as the chat's token and cost tracker.
-
 ---
 
-**Claude Code Chat Mode** (`/cli` page - Chat tab):
-The Chat mode provides a web-based chat interface that directly integrates with the Claude Code SDK for conversational interactions.
+**Claude Code chat** (the `/cli` page):
+A web chat that runs the Claude Code SDK against the working directory. There
+is no mode toggle and no agent selector: the in-browser terminal was removed on
+2026-09-05 and chat is now the whole page, so the "Terminal / Chat" tabs and the
+agent-aware / standalone split that used to live here are gone.
 
 ### Architecture
 
-**Frontend Components** (`app/components/cli/chat/`):
-- `ChatInterface.vue` - Main chat container with message list and input
-- `ChatMessages.vue` - Message list renderer
-- `MessageItem.vue` - Individual message component with markdown, tool rendering, thinking blocks
-- `ChatInput.vue` - Textarea input with auto-resize and keyboard shortcuts
+**Frontend components** (`app/components/cli/chatv2/` — the older
+`app/components/cli/chat/` set no longer exists):
+- `ChatV2Interface.vue` - the page itself: message list, input, sidebars, session CRUD
+- `ChatV2Messages.vue`, `ChatV2MessageItem.vue` - rendering: markdown, tool calls, thinking blocks
+- `ChatV2Input.vue`, `ChatV2CommandMenu.vue` - composer and slash-command menu
+- `ChatV2ProjectsSidebar.vue` - projects and their sessions
+- `ChatV2ContextDetails.vue`, `ChatV2FileTree.vue`, `ChatV2FileTreeNode.vue`, `ChatV2GitPanel.vue` - context panels
+- `ChatV2ModelSelector.vue`, `ChatV2PermissionModeSelector.vue`, `ChatV2PermissionBanner.vue` - model and permission-mode controls
 
-**Backend Infrastructure**:
-- `server/api/chat/ws.ts` - WebSocket handler for bidirectional chat communication
-- `server/utils/claudeSdk.ts` - Direct integration with `@anthropic-ai/claude-agent-sdk`
-- `server/utils/messageNormalizer.ts` - Converts SDK events to unified NormalizedMessage format
-- `server/utils/chatSessionStorage.ts` - JSONL-based session persistence
-- `server/api/chat/sessions/` - REST endpoints for session CRUD
+`app/pages/cli.vue` renders `ChatV2Interface`. The pages under
+`app/pages/cli/project/[projectName]/` are 6-7 lines each and render nothing —
+they exist only to register route params.
 
-**Frontend Composables**:
-- `useChatSessions.ts` - Session state management with message store
-- `useWebSocketChat.ts` - WebSocket client with auto-reconnect and streaming handling
+**Frontend composables**:
+- `useChatV2Handler.ts` - the live client: opens the WebSocket, streams, tracks permission prompts
+- `useSessionStore.ts` - session-keyed message store; switching session moves a pointer rather than clearing
+- `useContextMonitor.ts` - token and cost tracking
+
+`useWebSocketChat.ts` and `useChatSessions.ts` are the previous generation of
+the same two jobs. Nothing imports them. Treat them as dead until deleted; do
+not extend them.
+
+**Backend**:
+- `server/api/v2/chat/ws.ts` - the WebSocket the chat connects to
+- `server/api/chat-ws/sessions/` - REST session CRUD: list, get, create, delete, paginated messages
+- `server/api/v2/claude-code/projects*` - projects and their sessions, read from `~/.claude/projects`
+- `server/api/v2/permissions/respond.post.ts` - answers a permission prompt raised mid-stream
+- `server/api/v2/providers/index.get.ts` - available providers
+- `server/utils/providers/{registry,claudeProvider,types}.ts` - provider abstraction; `claude` is the only one registered
+- `server/utils/claudeSdk.ts` - `@anthropic-ai/claude-agent-sdk` integration
+- `server/utils/messageNormalizer.ts` - SDK events to `NormalizedMessage`
+- `server/utils/sdkSessionStorage.ts` - reads the SDK's own transcripts
+
+Note the two prefixes are not a typo: the WebSocket is under `/api/v2/`, the
+session REST routes are under `/api/chat-ws/`. `ChatV2Interface.vue` calls both.
+
+### Session storage
+
+Chat history is **the SDK's own transcripts**, not a store this app writes:
+`~/.claude/projects/{projectName}/*.jsonl`, one message per line, read by
+`sdkSessionStorage.ts` (files beginning `agent-` are skipped). The backend JSONL
+is the source of truth; the client store is a cache over it.
+
+`server/utils/chatSessionStorage.ts` still exists, but its write path is an
+explicit no-op — nothing writes `~/.claude/chat-sessions/` any more. Any
+documentation or code that expects to find a session file there is describing a
+version of this app that no longer runs.
+
+Pagination is server-side: `GET /api/chat-ws/sessions/[id]/messages` defaults to
+`limit=50` with an `offset`.
 
 ### Message System
 
@@ -199,44 +236,24 @@ All SDK events are normalized to a unified message type with different `kind` va
 ```
 User types message
   ↓
-WebSocket: { type: 'start', message, sessionId, agentSlug }
+WebSocket /api/v2/chat/ws
   ↓
-Backend calls query() from SDK
+Provider adapter calls query() from the SDK
   ↓
 SDK events normalized to NormalizedMessage
   ↓
 Sent via WebSocket to client
   ↓
-Frontend accumulates streaming text
+useSessionStore appends to the active session
   ↓
-Display in ChatMessages component
+Display in ChatV2Messages
   ↓
-Save to JSONL file (~/.claude/chat-sessions/{sessionId}.jsonl)
+The SDK writes the transcript to ~/.claude/projects/{projectName}/*.jsonl
 ```
 
-### Session Storage
-
-**Format**: JSONL (JSON Lines)
-- One message per line
-- Append-only for performance
-- Stored in `~/.claude/chat-sessions/{sessionId}.jsonl`
-
-**Pagination**:
-- Initial load: Last 50 messages
-- "Load more" button fetches older messages
-- Pagination managed by backend
-
-### Streaming Implementation
-
-**Buffered Updates**:
-- Stream deltas accumulated in `streamingText` ref
-- Real-time display with cursor animation
-- Finalized to permanent message on `stream_end`
-
-**Performance**:
-- No batching (immediate display)
-- Single streaming message at a time
-- Auto-scroll to bottom on new messages
+A permission prompt interrupts this flow: the stream pauses, the client shows
+`ChatV2PermissionBanner`, and the answer goes back through
+`POST /api/v2/permissions/respond`.
 
 ### UI Features
 
@@ -250,26 +267,11 @@ Save to JSONL file (~/.claude/chat-sessions/{sessionId}.jsonl)
 **Input Composer**:
 - Auto-resizing textarea (max 200px height)
 - Enter to send, Shift+Enter for newline
-- Character counter
 - Disabled during streaming
 
 **Status Indicators**:
 - Connected/Disconnected badge
 - "Generating..." indicator during streaming
-- Animated thinking dots before text appears
-
-### Agent Integration
-
-**Agent-Aware Mode**:
-- Agent selector in top bar
-- Agent instructions passed as `systemPrompt` to SDK
-- Agent slug saved with session
-- Sessions linked to agents in history
-
-**Standalone Mode**:
-- No agent selection required
-- Default SDK behavior
-- Quicker access for ad-hoc queries
 
 ### Identity and team
 
@@ -294,9 +296,12 @@ CLAUDE_DIR="~/.claude"  # Override default Claude config directory
 ## Component Organization
 
 Components in `app/components/` are auto-imported with special prefixing:
-- `chat/*` - Chat UI components (no prefix)
+- `chat/*` - Studio/panel chat UI components (no prefix)
 - `studio/*` - Agent Studio components (no prefix)
-- `cli/*` - Chat page components (no prefix)
+- `cli/chatv2/*` - The `/cli` chat page. These carry a `ChatV2` prefix in their
+  own filenames, so the component name is `ChatV2Interface`, not `Interface`.
+  `app/components/cli/` has no other subdirectory — the terminal components that
+  used to sit beside it were removed on 2026-09-05.
 - Everything else - Standard component naming
 
 ## Type Definitions
@@ -307,8 +312,16 @@ All TypeScript types are centralized in `app/types/index.ts`. Key types:
 - `ChatMessage`, `StreamActivity` - Studio chat
 - `GithubImport`, `Plugin` - External integrations
 - `ContextMetrics`, `TokenUsage`, `ToolCall` - Chat token and cost tracking
-- `NormalizedMessage`, `ChatSession`, `ChatSessionSummary` - Chat mode types
-- `ChatWebSocketMessage`, `ChatWebSocketEvent` - Chat WebSocket types
+- `NormalizedMessage` - The one message shape every SDK event is normalized to
+- `ChatSession`, `ChatSessionSummary`, `ChatWebSocketMessage`, `ChatWebSocketEvent` -
+  Session and WebSocket types, still used by the session REST routes
+
+`CliSession`, `FileChange` and `CliWebSocketEvent` are left over from the
+removed terminal — PTY sessions and its chokidar file watcher. Nothing on the
+server produces any of them now. `CliSession` is referenced nowhere outside this
+file; `FileChange` and `CliWebSocketEvent` are still imported by
+`useContextMonitor.ts`, which no longer receives either. Do not build anything
+new on them.
 
 ## Model Registry Design
 
