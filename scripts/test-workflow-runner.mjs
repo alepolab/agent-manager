@@ -614,6 +614,25 @@ intr = await runner.waitForSettled(intr.id, TIMEOUT)
 assert.ok(calls.includes('agent-b'), 'the step that was executing re-runs')
 assert.ok(!calls.includes('agent-a'), 'completed steps do not re-run')
 
+// ── 11. usage totals and cost are runner-owned facts on the run ───────────
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+runner.setAgentCaller(async (agentSlug) => ({ output: `out ${agentSlug}`, model: 'claude-sonnet-4-6', usage: { input_tokens: 1000, output_tokens: 100 } }))
+let costed = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+costed = await runner.waitForSettled(costed.id, TIMEOUT)
+assert.equal(costed.status, 'completed')
+assert.equal(costed.usage.input_tokens, 4000, 'input tokens summed over four steps')
+assert.equal(costed.usage.output_tokens, 400)
+assert.ok(costed.usage.usd > 0, 'a dollar estimate is computed from the model that ran')
+
+// ── 12. a token budget stops a run before the next wave ───────────────────
+process.env.AGENT_RUN_MAX_TOKENS = '1500'
+let capped = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+capped = await runner.waitForSettled(capped.id, TIMEOUT)
+delete process.env.AGENT_RUN_MAX_TOKENS
+assert.equal(capped.status, 'failed', 'exceeding the budget fails the run')
+assert.match(capped.error, /budget/i, 'the run says why')
+assert.ok(capped.steps.some(s => s.status === 'skipped'), 'later steps are skipped, not run')
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

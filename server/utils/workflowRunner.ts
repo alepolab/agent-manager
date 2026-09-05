@@ -8,12 +8,13 @@ import {
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun } from './workflowRunStore.ts'
 import { resolveProduct } from './registry.ts'
+import { getModelPricing } from './models.ts'
 import { callAgent, type AgentUsage } from './agentCaller.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable,
 } from './runArtifacts.ts'
-import type { WorkflowRun, RunStep } from '~~/shared/types/run'
+import type { WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 // Widened to a union rather than requiring every caller to return the
 // richer shape: dozens of test stubs across this file's own test suite
@@ -91,7 +92,33 @@ export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => 
  *  them keeps every write for a given run strictly ordered, one at a time. */
 const publishChains = new Map<string, Promise<void>>()
 
+function computeUsage(run: WorkflowRun): RunUsage {
+  let input = 0, output = 0, usd = 0
+  for (const s of run.steps) {
+    if (!s.usage) continue
+    input += s.usage.input_tokens
+    output += s.usage.output_tokens
+    const p = getModelPricing(s.model ?? undefined)
+    usd += (s.usage.input_tokens / 1_000_000) * p.input + (s.usage.output_tokens / 1_000_000) * p.output
+  }
+  return { input_tokens: input, output_tokens: output, usd: Math.round(usd * 10000) / 10000 }
+}
+
+/** A run over its time or token cap, with the reason; null while within budget. */
+function budgetExceeded(run: WorkflowRun): string | null {
+  const b = run.budget
+  const minutes = (Date.now() - run.startedAt) / 60000
+  if (minutes > b.maxMinutes) return `Budget exceeded: ${Math.round(minutes)} min over the ${b.maxMinutes} min cap`
+  // Computed here, not read from run.usage: that field is refreshed by publish(),
+  // and the wave loop recurses without publishing in between.
+  const u = computeUsage(run)
+  const tokens = u.input_tokens + u.output_tokens
+  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens} tokens over the ${b.maxTokens} token cap`
+  return null
+}
+
 async function publish(run: WorkflowRun) {
+  run.usage = computeUsage(run)
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
     await saveRun(run)
@@ -401,6 +428,22 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
 async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.stopped) { l.running = false; return run }
+
+  // Checked between waves: a single step is bounded by its own maxTurns, and
+  // the cap stops the next wave from starting rather than killing one mid-flight.
+  const over = budgetExceeded(run)
+  if (over) {
+    skipPending(l.state)
+    for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+    run.status = 'failed'
+    run.error = over
+    run.endedAt = Date.now()
+    run.currentStepIds = []
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    return run
+  }
 
   const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (!wave.length) {

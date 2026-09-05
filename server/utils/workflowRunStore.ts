@@ -3,7 +3,14 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
-import type { WorkflowRun, NewRunInput } from '~~/shared/types/run'
+import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
+
+export function defaultBudget(): RunBudget {
+  return {
+    maxMinutes: Number(process.env.AGENT_RUN_MAX_MINUTES) || 180,
+    maxTokens: Number(process.env.AGENT_RUN_MAX_TOKENS) || 8_000_000,
+  }
+}
 
 export const RUNS_DIR_NAME = 'workflow-runs'
 
@@ -30,6 +37,11 @@ function applyInterrupted(run: WorkflowRun): WorkflowRun {
   return run
 }
 
+/** Runs persisted before budgets existed get the defaults on read. */
+function applyDefaults(run: WorkflowRun): WorkflowRun {
+  return run.budget ? run : { ...run, budget: defaultBudget() }
+}
+
 export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
   await ensureDir()
   const run: WorkflowRun = {
@@ -50,6 +62,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     nextStepIds: [],
     startedAt: Date.now(),
     pid: process.pid,
+    budget: defaultBudget(),
   }
   await saveRun(run)
   return run
@@ -64,7 +77,7 @@ export async function getRun(id: string): Promise<WorkflowRun | null> {
   const path = runPath(id)
   if (!existsSync(path)) return null
   try {
-    return applyInterrupted(JSON.parse(await readFile(path, 'utf-8')) as WorkflowRun)
+    return applyInterrupted(applyDefaults(JSON.parse(await readFile(path, 'utf-8')) as WorkflowRun))
   } catch {
     // A half-written or corrupt record is a missing record, never a crash.
     return null

@@ -25,7 +25,12 @@ export interface RunStep {
    *  model. Never guessed either way, since a wrong value here is the kind
    *  of defect that produces no error. */
   model?: string | null
+  /** Tokens the agent call actually consumed, as the SDK reported them. */
+  usage?: { input_tokens: number, output_tokens: number } | null
 }
+
+export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
+export interface RunBudget { maxMinutes: number, maxTokens: number }
 
 /** The registry entry a run resolved to at start, or absent when nothing matched. */
 export interface ProductMatch {
@@ -56,6 +61,10 @@ export interface WorkflowRun {
   projectDir?: string
   product?: ProductMatch
   steps: RunStep[]
+  /** Runner-owned totals over every step, recomputed on each publish. */
+  usage?: RunUsage
+  /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
+  budget: RunBudget
   currentStepIds: string[]
   nextStepIds: string[]
   startedAt: number

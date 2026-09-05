@@ -70,6 +70,7 @@ function onStop() {
       <span class="text-[11px] text-label font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
       <span v-if="current" class="text-[11px] text-label truncate max-w-[16rem]">{{ current }}</span>
       <span class="text-[11px] text-label font-mono tabular-nums">{{ elapsed }}</span>
+      <span v-if="run.usage" class="text-[11px] text-label font-mono tabular-nums" :title="`${run.usage.input_tokens} in / ${run.usage.output_tokens} out`">${{ run.usage.usd.toFixed(2) }}</span>
       <div class="flex items-center gap-1 ml-auto">
         <UButton v-if="run.status === 'paused'" size="xs" icon="i-lucide-play" label="Continue" @click="emit('continue')" />
         <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
