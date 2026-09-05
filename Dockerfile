@@ -2,7 +2,7 @@ FROM oven/bun:1.3-slim AS build
 
 WORKDIR /app
 
-# Install build dependencies for node-pty (native module)
+# Build tools for any native dependency
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
@@ -15,11 +15,6 @@ COPY package.json bun.lockb* ./
 # Install dependencies
 RUN bun install --frozen-lockfile
 
-# Build node-pty from source for ARM64
-RUN bun add -g node-gyp
-RUN cd node_modules/node-pty && \
-    bun run install
-
 # Copy source files (excluding node_modules via .dockerignore)
 COPY . .
 
@@ -31,7 +26,7 @@ FROM oven/bun:1.3-slim
 
 WORKDIR /app
 
-# Install runtime dependencies for node-pty and the healthcheck
+# Runtime dependencies: python3 for agent scripts, curl for the healthcheck, git for pipeline steps
 RUN apt-get update && apt-get install -y \
     python3 \
     git \
@@ -40,9 +35,6 @@ RUN apt-get update && apt-get install -y \
 
 # Copy built application from build stage
 COPY --from=build /app/.output .output
-
-# Copy node-pty native bindings to production
-COPY --from=build /app/node_modules/node-pty/build /app/.output/server/node_modules/node-pty/build
 
 # Bake in a curated Claude config so the image is self-contained: plugins,
 # skills, agents and settings travel with it, and a fresh host needs no

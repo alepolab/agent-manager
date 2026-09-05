@@ -1,5 +1,8 @@
 <script setup lang="ts">
-const { executionOptions } = useCliExecution()
+// The chat runs against the global working directory; the removed terminal
+// subsystem used to own this option object.
+const { workingDir } = useWorkingDir()
+const executionOptions = computed(() => ({ agentSlug: undefined as string | undefined, workingDir: workingDir.value || undefined }))
 
 useHead({
   title: 'Claude Code',
