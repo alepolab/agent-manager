@@ -25,6 +25,19 @@ export interface RunStep {
    *  model. Never guessed either way, since a wrong value here is the kind
    *  of defect that produces no error. */
   model?: string | null
+  /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK
+   *  message loop while this step is still `running` — see
+   *  server/utils/agentCaller.ts's AgentProgress doc comment for exactly
+   *  what these mean and why they're capped to number/short-string. This is
+   *  diagnostic telemetry, not provenance: never asserted by
+   *  runArtifacts.ts's runnerOwned() and never written into a step's
+   *  persisted artifact JSON, so it can never be mistaken for a fact the
+   *  evidence bundle trusts. Absent — never a fabricated 0 — whenever the
+   *  agent caller never reported anything (a test stub, or a real call that
+   *  produced no assistant turn before failing). */
+  turnCount?: number
+  lastTool?: string
+  lastActivityAt?: number
 }
 
 export interface WorkflowRun {

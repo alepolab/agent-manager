@@ -4,8 +4,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { computeFixFacts } from './gitFacts.ts'
 import { resolveClaudePath } from './claudeDir.ts'
+import { createLogger } from './log.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
+
+const log = createLogger('artifacts')
 
 /** Extends RunStep with the one field this file needs that the shared type
  *  doesn't declare. Kept local rather than widening shared/types/run.ts:
@@ -181,6 +184,7 @@ export function resolveInstalledPluginVersion(pluginName = 'alepo-engineering'):
       /* an unparsable manifest asserts nothing */
     }
   }
+  log.debug('plugin version resolved', { pluginName, found: Boolean(best), version: best ?? '(none)' })
   return best
 }
 
@@ -260,6 +264,10 @@ async function reconcileFix(
   const computed = await computeFixFacts(run.projectDir, run.baseCommit).catch(() => null)
 
   if (computed) {
+    log.debug('fix facts computed from git', {
+      runId: run.id, repo: computed.repo, commits: computed.commits,
+      files_changed: computed.files_changed, lines_changed: computed.lines_changed,
+    })
     const priorRepos = Array.isArray(existingFix?.repos) ? existingFix!.repos as Array<Record<string, unknown>> : []
     const priorEntry = priorRepos.find(r => r && r.repo === computed.repo)
     const repoEntry: Record<string, unknown> = { repo: computed.repo, commits: computed.commits }
@@ -280,6 +288,11 @@ async function reconcileFix(
     const mergeOrderCoherent = repos.length > 1
       && priorMergeOrder !== undefined
       && priorMergeOrder.every(name => typeof name === 'string' && repoNames.has(name))
+    if (priorMergeOrder !== undefined && !mergeOrderCoherent) {
+      log.warn('merge_order dropped: incoherent with the repos git actually computed', {
+        runId: run.id, priorMergeOrder, repoNames: [...repoNames],
+      })
+    }
 
     return {
       ...restFix,
@@ -292,7 +305,13 @@ async function reconcileFix(
 
   // Nothing computable. If the agent wrote nothing at all either, leave
   // `fix` entirely absent rather than fabricating an empty object.
-  if (existingFix === undefined) return undefined
+  if (existingFix === undefined) {
+    log.debug('no fix facts computable and none reported; fix block stays absent', { runId: run.id })
+    return undefined
+  }
+  log.warn('fix facts not computable from git; repos/files_changed/lines_changed dropped from meta', {
+    runId: run.id,
+  })
   return restFix
 }
 
@@ -301,6 +320,7 @@ export async function initRunArtifacts(run: WorkflowRun, workflowName: string): 
   await mkdir(join(dir, 'steps'), { recursive: true })
   await writeFile(join(dir, 'meta.json'),
     JSON.stringify({ ...runnerOwned(run), workflow: workflowName }, null, 2))
+  log.debug('run artifacts initialized', { runId: run.id, dir })
 }
 
 /**
@@ -334,6 +354,10 @@ export async function writeStepArtifact(
     model: rec.model ?? null,
     usage: (rec as StepWithUsage).usage ?? null,
   }, null, 2))
+  log.debug('step artifact written', {
+    runId: run.id, name, status: rec.status,
+    inputLength: (rec.input ?? '').length, outputLength: (rec.output ?? '').length,
+  })
 }
 
 /**
@@ -359,6 +383,7 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   else merged.fix = fix
 
   await writeFile(path, JSON.stringify(merged, null, 2))
+  log.debug('meta.json reconciled with runner-owned facts', { runId: run.id, hasFix: fix !== undefined })
 }
 
 /**
@@ -379,6 +404,7 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
  */
 export async function markArtifactsUnusable(runId: string): Promise<void> {
   await rm(join(runArtifactsDir(runId), 'meta.json'), { force: true })
+  log.error('meta.json removed after a finalize failure; the assembler will see this run as absent', { runId })
 }
 
 /** Prepended to every step's input. The only channel an agent has for

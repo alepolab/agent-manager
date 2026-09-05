@@ -30,8 +30,11 @@ import {
 } from './watchStateStore.ts'
 import { getRun } from './workflowRunStore.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
+import { createLogger } from './log.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
+
+const log = createLogger('watcher')
 
 /** Run statuses that mean the ticket's attempt did not pan out. */
 const RUN_FAILURE_STATUSES = new Set(['failed', 'stopped', 'interrupted'])
@@ -95,14 +98,21 @@ export async function reconcile(watch: Watch): Promise<void> {
       // `escalated` at the cap) using the attempt already counted at
       // dispatch time, so it becomes eligible for a fresh, verifiable
       // attempt next cycle instead of sitting in limbo indefinitely.
+      log.warn('run record missing for a dispatched ticket; treating as failed', {
+        watchId: watch.id, ticketKey: ticket.key, runId: ticket.lastRunId,
+      })
       await recordFailure(watch.id, ticket.key, 'run record missing (lost or deleted)', MAX_ATTEMPTS)
       continue
     }
 
     if (run.status === 'completed') {
+      log.debug('ticket resolved: completed', { watchId: watch.id, ticketKey: ticket.key, runId: run.id })
       await recordSuccess(watch.id, ticket.key)
       await safeNotify(watch, ticket.key, run)
     } else if (RUN_FAILURE_STATUSES.has(run.status)) {
+      log.warn('ticket resolved: failed', {
+        watchId: watch.id, ticketKey: ticket.key, runId: run.id, runStatus: run.status,
+      })
       await recordFailure(
         watch.id,
         ticket.key,
@@ -152,6 +162,8 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
     return { dispatched, skipped, failed }
   }
 
+  log.debug('cycle starting', { watchId: watch.id })
+
   // Reconcile before fetching anything new: a run that finished (or died)
   // while the app was down must be accounted for before this cycle decides
   // what is eligible, or a ticket whose run actually completed hours ago
@@ -161,9 +173,12 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
   let tickets: TicketRef[]
   try {
     tickets = await getTicketSource().fetch(watch)
-  } catch {
+  } catch (err) {
     // A broken source degrades this one watch's cycle to empty; it must
     // never propagate and take the scheduler down with it.
+    log.warn('ticket source fetch failed; cycle degraded to empty', {
+      watchId: watch.id, error: err instanceof Error ? err.message : String(err),
+    })
     return { dispatched, skipped, failed }
   }
 
@@ -214,6 +229,9 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
       dispatched.push(ticket.key)
     } catch (err) {
       // Isolation: this ticket's failure costs this ticket, not the cycle.
+      log.warn('ticket dispatch failed', {
+        watchId: watch.id, ticketKey: ticket.key, error: err instanceof Error ? err.message : String(err),
+      })
       await recordFailure(
         watch.id,
         ticket.key,
@@ -224,6 +242,9 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
     }
   }
 
+  log.info('cycle complete', {
+    watchId: watch.id, dispatched: dispatched.length, skipped: skipped.length, failed: failed.length,
+  })
   return { dispatched, skipped, failed }
 }
 
@@ -273,9 +294,12 @@ export function setWatchSource(fn: WatchSource): void {
 async function tick(watch: Watch): Promise<void> {
   try {
     await runCycle(watch)
-  } catch {
+  } catch (err) {
     // runCycle already swallows its own failure modes; this is a last-resort
     // guard so a bug in the scheduler itself cannot take the process down.
+    log.error('scheduler tick threw unexpectedly', {
+      watchId: watch.id, error: err instanceof Error ? err.message : String(err),
+    })
   }
 }
 
@@ -351,6 +375,7 @@ export function startScheduler(supervisorIntervalMs = DEFAULT_SUPERVISOR_INTERVA
   stopScheduler()
   void reconcileTimers()
   supervisor = setInterval(() => { void reconcileTimers() }, supervisorIntervalMs)
+  log.info('watch scheduler started', { supervisorIntervalMs })
 }
 
 /** Stops every timer started by `startScheduler`, including the supervisor
@@ -361,5 +386,6 @@ export function stopScheduler(): void {
   if (supervisor) {
     clearInterval(supervisor)
     supervisor = null
+    log.info('watch scheduler stopped', {})
   }
 }

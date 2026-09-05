@@ -3,7 +3,7 @@
 # Run agent-manager directly on this machine, as you, rather than in a
 # container.
 #
-#   scripts/serve.sh start | stop | restart | status | logs
+#   scripts/serve.sh start | stop | restart | status | logs [n] [--debug]
 #
 # Why run it on the host at all: the app manages ~/.claude, and a container has
 # its own copy. That split caused real confusion — a workflow run started with
@@ -18,6 +18,27 @@
 # supervises with a pid file rather than a unit. That means the app does NOT
 # survive a reboot on its own — run `start` again, or call it from your shell
 # profile if you want it always up.
+#
+# ── Logging (server/utils/log.ts) ──────────────────────────────────────────
+#
+# Quiet by default: LOG_LEVEL defaults to 'warn', so today's output looks the
+# same as before this app had a real logger. To see more:
+#
+#   scripts/serve.sh start --debug          # shorthand for LOG_LEVEL=debug DEBUG=*
+#   scripts/serve.sh restart --debug
+#   LOG_LEVEL=debug DEBUG=runner,agent scripts/serve.sh start   # narrower, by hand
+#
+# `--debug` only fills in LOG_LEVEL/DEBUG that aren't already exported in your
+# shell — an explicit LOG_LEVEL or DEBUG you set yourself always wins.
+#
+# LOG_LEVEL: error | warn | info | debug (least to most verbose; each level
+# includes everything less verbose than it).
+# DEBUG: a comma-separated namespace filter for debug-level output only
+# (error/warn/info always show regardless) — 'runner', 'agent', 'artifacts',
+# 'watcher', 'jira', or '*' for all (the default when DEBUG is unset).
+#
+# Output goes to the same place either way: $RUN_DIR/server.log, tailed with
+# `scripts/serve.sh logs [n]`.
 
 set -euo pipefail
 
@@ -32,6 +53,24 @@ LOG_FILE="${AGENT_MANAGER_LOG:-$RUN_DIR/server.log}"
 ENTRY="$REPO_ROOT/.output/server/index.mjs"
 
 mkdir -p "$RUN_DIR"
+
+# True if "--debug" appears anywhere among the arguments given to this script
+# (after the subcommand). Scanned independently of positional parsing below so
+# `logs [n]` keeps working unchanged — this never consumes an argument.
+has_debug_flag() {
+  for arg in "$@"; do
+    [[ "$arg" == "--debug" ]] && return 0
+  done
+  return 1
+}
+
+# Fills in LOG_LEVEL/DEBUG for a debug-mode start, but only what the caller
+# didn't already set — an explicit LOG_LEVEL=info you exported yourself is not
+# overridden just because you also passed --debug.
+enable_debug_mode() {
+  export LOG_LEVEL="${LOG_LEVEL:-debug}"
+  export DEBUG="${DEBUG:-*}"
+}
 
 is_running() {
   [[ -f "$PID_FILE" ]] || return 1
@@ -72,6 +111,13 @@ start() {
   # app then reads the same ~/.claude and ~/.agent-manager this shell does, so
   # a run started from the CLI shows up in the UI. Overriding them here would
   # quietly reintroduce the split this deployment exists to remove.
+  echo "log level: ${LOG_LEVEL:-warn} (namespaces: ${DEBUG:-none at debug — error/warn/info always show})"
+
+  # LOG_LEVEL/DEBUG are deliberately NOT assigned on this command line: if
+  # enable_debug_mode (or the caller directly) already exported them, a bare
+  # `VAR=val cmd` prefix here would silently override that with an empty
+  # default. Leaving them off lets whatever is already exported flow through
+  # to the child via normal environment inheritance.
   HOST="$HOST_BIND" PORT="$PORT" NODE_ENV=production \
     setsid nohup node "$ENTRY" >>"$LOG_FILE" 2>&1 < /dev/null &
   echo $! > "$PID_FILE"
@@ -122,10 +168,10 @@ status() {
 }
 
 case "${1:-status}" in
-  start)   start ;;
+  start)   has_debug_flag "$@" && enable_debug_mode; start ;;
   stop)    stop ;;
-  restart) stop; start ;;
+  restart) stop; has_debug_flag "$@" && enable_debug_mode; start ;;
   status)  status ;;
   logs)    tail -n "${2:-50}" "$LOG_FILE" ;;
-  *) echo "usage: $0 {start|stop|restart|status|logs [n]}" >&2; exit 2 ;;
+  *) echo "usage: $0 {start|stop|restart|status|logs [n]} [--debug]" >&2; exit 2 ;;
 esac

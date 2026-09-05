@@ -17,6 +17,10 @@
  * booting and running the file-backed stub exactly as it does today.
  */
 
+import { createLogger, secretShape } from './log.ts'
+
+const log = createLogger('jira')
+
 export const JIRA_BASE_URL_VAR = 'JIRA_BASE_URL'
 export const JIRA_EMAIL_VAR = 'JIRA_EMAIL'
 export const JIRA_API_TOKEN_VAR = 'JIRA_API_TOKEN'
@@ -57,6 +61,9 @@ export function resolveJiraCredentials(): JiraCredentials {
   ].filter((v): v is string => Boolean(v))
 
   if (missing.length > 0) {
+    // Names only, never values — the missing list is exactly the set of env
+    // var NAMES above, which is safe to log as-is.
+    log.warn('jira credentials missing', { missing })
     throw new Error(
       `Jira credentials are not configured: missing ${missing.join(', ')}. ` +
       `Set ${missing.join(' and ')} in the environment to enable the Jira ticket source — ` +
@@ -64,6 +71,9 @@ export function resolveJiraCredentials(): JiraCredentials {
     )
   }
 
+  log.debug('jira credentials resolved', () => ({
+    baseUrlLength: baseUrl!.length, email: secretShape(email), apiToken: secretShape(apiToken),
+  }))
   return { baseUrl: baseUrl!.replace(/\/+$/, ''), email: email!, apiToken: apiToken! }
 }
 
@@ -95,5 +105,7 @@ export function jiraAuthHeader(creds: JiraCredentials): string {
  * off, which is in fact the required default. Must be exactly '1'.
  */
 export function isJiraPostingEnabled(): boolean {
-  return process.env[JIRA_POST_ENABLED_VAR] === '1'
+  const enabled = process.env[JIRA_POST_ENABLED_VAR] === '1'
+  log.debug('jira posting enabled check', { enabled })
+  return enabled
 }
