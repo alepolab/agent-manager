@@ -5,6 +5,7 @@ interface TeamStatus {
   pluginInstallPath: string | null
   agents: Item[]
   skills: Item[]
+  commands: Item[]
   workflow: { slug: string, state: Item['state'], steps: number }
   registry: { ok: boolean, products: number, path: string | null }
   drifted: number
@@ -55,7 +56,7 @@ const color = (s: Item['state']) => s === 'ok' ? 'var(--success)' : s === 'missi
           <div><div class="text-label">Workflow</div><div class="font-medium" :style="{ color: color(status.workflow.state) }">{{ status.workflow.state }} · {{ status.workflow.steps }} steps</div></div>
           <div><div class="text-label">Drift</div><div class="font-medium" :style="{ color: status.drifted ? 'var(--warning)' : 'var(--success)' }">{{ status.drifted ? `${status.drifted} item(s)` : 'in sync' }}</div></div>
         </div>
-        <div class="grid md:grid-cols-2 gap-4">
+        <div class="grid md:grid-cols-3 gap-4">
           <div class="rounded-xl p-4" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <div class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Agents</div>
             <div v-for="a in status.agents" :key="a.id" class="flex items-center justify-between text-[12px] py-0.5">
@@ -67,6 +68,13 @@ const color = (s: Item['state']) => s === 'ok' ? 'var(--success)' : s === 'missi
             <p v-if="!status.skills.length" class="text-[12px] text-label">None shipped by the plugin.</p>
             <div v-for="s in status.skills" :key="s.name" class="flex items-center justify-between text-[12px] py-0.5">
               <span class="font-mono">{{ s.name }}</span><span :style="{ color: color(s.state) }">{{ s.state }}</span>
+            </div>
+          </div>
+          <div class="rounded-xl p-4" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <div class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Commands</div>
+            <p v-if="!status.commands.length" class="text-[12px] text-label">None shipped by the plugin.</p>
+            <div v-for="c in status.commands" :key="c.name" class="flex items-center justify-between text-[12px] py-0.5">
+              <span class="font-mono">/{{ c.name }}</span><span :style="{ color: color(c.state) }">{{ c.state }}</span>
             </div>
           </div>
         </div>

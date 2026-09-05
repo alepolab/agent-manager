@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useClaudeCodeHistory } from '~/composables/useClaudeCodeHistory'
-import { formatRelativeTime } from '~/utils/messageFormatting'
 
 // Tick every 60s so isActiveSession stays live without a server round-trip
 const now = ref(Date.now())

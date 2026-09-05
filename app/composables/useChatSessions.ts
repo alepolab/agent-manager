@@ -153,7 +153,10 @@ export function useChatSessions() {
       if (currentSessionId.value === sessionId) {
         currentSessionId.value = null
         currentSession.value = null
-        messages.value = []
+        // `messages` is a computed derived from currentSessionId (it returns []
+        // when there is none), so it clears itself. The assignment that used to
+        // be here was a write to a read-only computed - Vue refuses it at
+        // runtime and warns; it never did anything.
       }
 
       return true

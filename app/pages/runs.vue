@@ -79,7 +79,7 @@ function stop(r: WorkflowRun) {
   act(r, 'stop')
 }
 
-async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: unknown) {
+async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<string, unknown>) {
   busy.value = r.id
   try {
     await $fetch(`/api/runs/${r.id}/${path}`, { method: 'POST', body })

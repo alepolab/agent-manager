@@ -1,0 +1,36 @@
+{
+  "_comment": "Copied into a target repo at onboarding as .claude/settings.json by scripts/install-repo-settings.mjs — see engineering/docs/managed-settings.md. Do not hand-edit the __ENGINEERING_HOOKS_DIR__ placeholders; the installer resolves them to this machine's actual engineering/hooks checkout path. Commit the resulting .claude/settings.json so every clone gets the plan gate and test lock with no install step — check the target repo's own .gitignore does not exclude .claude/ first, or the commit will silently do nothing.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__ENGINEERING_HOOKS_DIR__/plan-gate.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__ENGINEERING_HOOKS_DIR__/test-lock.mjs\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__ENGINEERING_HOOKS_DIR__/test-lock-arm.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

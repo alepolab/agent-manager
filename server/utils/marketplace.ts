@@ -130,8 +130,11 @@ export async function getInstalledPluginNames(): Promise<Set<string>> {
     const data = JSON.parse(raw) as { plugins: Record<string, unknown[]> }
     const names = new Set<string>()
     for (const id of Object.keys(data.plugins || {})) {
+      // `split` on a non-empty string always yields a first element, but the
+      // type system cannot express that; fall back to the whole id so a plugin
+      // recorded without an '@' is still counted rather than dropped.
       const [name] = id.split('@')
-      names.add(name)
+      names.add(name ?? id)
     }
     return names
   } catch {
@@ -156,7 +159,7 @@ export function resolvePluginInstallPath(pluginId: string, registeredPath: strin
   let resolved = registeredPath
   if (resolved.includes('.claude')) {
     const parts = resolved.split('.claude')
-    const relativePart = parts[parts.length - 1]
+    const relativePart = parts[parts.length - 1] ?? ''
     resolved = resolveClaudePath(relativePart.startsWith('/') ? relativePart.substring(1) : relativePart)
   }
 
@@ -167,7 +170,7 @@ export function resolvePluginInstallPath(pluginId: string, registeredPath: strin
 
   // 3. Fallback: try common pattern ~/.claude/plugins/cache/{name}
   const [pluginName] = pluginId.split('@')
-  const fallbackPath = resolveClaudePath('plugins', 'cache', pluginName)
+  const fallbackPath = resolveClaudePath('plugins', 'cache', pluginName ?? pluginId)
   if (existsSync(fallbackPath)) {
     return fallbackPath
   }

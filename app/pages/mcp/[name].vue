@@ -189,7 +189,7 @@ useUnsavedChanges(isDirty)
           variant="ghost"
           color="error"
           title="Delete server"
-          @click="showDeleteConfirm = true"
+          @click="() => { showDeleteConfirm = true }"
         />
       </div>
     </div>

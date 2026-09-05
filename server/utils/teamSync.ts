@@ -21,6 +21,7 @@ export interface TeamStatus {
   pluginInstallPath: string | null
   agents: { id: string, state: ItemState }[]
   skills: { name: string, state: ItemState }[]
+  commands: { name: string, state: ItemState }[]
   workflow: { slug: string, state: ItemState, steps: number }
   registry: { ok: boolean, products: number, path: string | null }
   drifted: number
@@ -78,6 +79,20 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
     }
   }
 
+  const commands: TeamStatus['commands'] = []
+  const commandsDir = resolveClaudePath('commands')
+  if (plugin && existsSync(join(plugin.installPath, 'commands'))) {
+    for (const name of await readdir(join(plugin.installPath, 'commands'))) {
+      if (!name.endsWith('.md')) continue
+      const next = await readFile(join(plugin.installPath, 'commands', name), 'utf-8')
+      const to = join(commandsDir, name)
+      const current = await readOr(to)
+      let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
+      if (apply && state !== 'ok') { await mkdir(commandsDir, { recursive: true }); await writeFile(to, next); state = 'ok' }
+      commands.push({ name: name.replace(/\.md$/, ''), state })
+    }
+  }
+
   const agents: TeamStatus['agents'] = []
   for (const t of agentTemplates.filter(t => t.id.startsWith('sdlc-'))) {
     const path = join(agentsDir, `${t.id}.md`)
@@ -105,12 +120,12 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
   }
 
   const reg = await loadRegistry()
-  if (apply) { invalidate('agents'); invalidate('skills'); invalidate('relationships') }
-  const drifted = [...agents, ...skills].filter(i => i.state !== 'ok').length + (wfState !== 'ok' ? 1 : 0)
+  if (apply) { invalidate('agents'); invalidate('skills'); invalidate('commands'); invalidate('relationships') }
+  const drifted = [...agents, ...skills, ...commands].filter(i => i.state !== 'ok').length + (wfState !== 'ok' ? 1 : 0)
   return {
     pluginVersion: plugin?.version ?? null,
     pluginInstallPath: plugin?.installPath ?? null,
-    agents, skills,
+    agents, skills, commands,
     workflow: { slug: RUNBOOK_SLUG, state: wfState, steps: stepCount },
     registry: { ok: !!reg, products: reg ? Object.keys(reg.products).length : 0, path: reg?.path ?? null },
     drifted,

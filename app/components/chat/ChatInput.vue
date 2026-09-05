@@ -46,7 +46,10 @@ function autoResize() {
   el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
 }
 
-function selectItem(item: { type: 'command' | 'skill'; name: string }) {
+// The autocomplete emits its own MenuItem shape, which is wider than what this
+// handler reads. Accept the wider type and take only `name` - narrowing in the
+// signature made the handler unassignable to the child's emit.
+function selectItem(item: { name: string }) {
   emit('update:modelValue', `/${item.name} `)
   isMenuOpen.value = false
   inputRef.value?.focus()

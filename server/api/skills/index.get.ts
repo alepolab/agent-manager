@@ -81,7 +81,7 @@ export default defineEventHandler(async (event) => {
 
       const skill: Skill = {
         slug,
-        frontmatter: { name: slug, ...frontmatter },
+        frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
         body,
         filePath: skillPath,
         source: 'local',
@@ -123,8 +123,8 @@ export default defineEventHandler(async (event) => {
         const skill: Skill = {
           slug,
           frontmatter: {
-            name: slug,
             ...frontmatter,
+            name: frontmatter.name ?? slug,
           },
           body,
           filePath: skillPath,
@@ -198,7 +198,7 @@ export default defineEventHandler(async (event) => {
 
             const skill: Skill = {
               slug: s.slug,
-              frontmatter: { name: s.slug, ...frontmatter },
+              frontmatter: { ...frontmatter, name: frontmatter.name ?? s.slug },
               body,
               filePath: localSkillFilePath,
               source: 'github',
@@ -259,7 +259,7 @@ export default defineEventHandler(async (event) => {
 
           const skill: Skill = {
             slug,
-            frontmatter: { name: slug, ...frontmatter },
+            frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
             body,
             filePath: fullPath,
             source: 'github',

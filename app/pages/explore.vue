@@ -146,8 +146,10 @@ const filteredAvailablePlugins = computed(() => {
 const availableGroupedByMarketplace = computed(() => {
   const groups: Record<string, typeof availablePlugins.value> = {};
   for (const plugin of filteredAvailablePlugins.value) {
-    if (!groups[plugin.marketplace]) groups[plugin.marketplace] = [];
-    groups[plugin.marketplace].push(plugin);
+    // Bind the bucket: assigning through `groups[k]` does not narrow a later
+    // read of `groups[k]` under noUncheckedIndexedAccess.
+    const bucket = (groups[plugin.marketplace] ??= []);
+    bucket.push(plugin);
   }
   return groups;
 });
@@ -430,14 +432,14 @@ function scrollToMarketplace(name: string) {
             icon="i-lucide-github"
             size="sm"
             variant="soft"
-            @click="showImportSkillsModal = true"
+            @click="() => { showImportSkillsModal = true }"
           />
           <UButton
             label="Import Agent"
             icon="i-lucide-users"
             size="sm"
             variant="soft"
-            @click="showImportAgentsModal = true"
+            @click="() => { showImportAgentsModal = true }"
           />
         </div>
       </template>
@@ -549,7 +551,7 @@ function scrollToMarketplace(name: string) {
             icon="i-lucide-plus"
             size="xs"
             variant="soft"
-            @click="showImportAgentsModal = true"
+            @click="() => { showImportAgentsModal = true }"
           />
         </div>
 
@@ -588,7 +590,7 @@ function scrollToMarketplace(name: string) {
           <UButton
             label="Import your first Agent"
             icon="i-lucide-plus"
-            @click="showImportAgentsModal = true"
+            @click="() => { showImportAgentsModal = true }"
           />
         </div>
       </template>
@@ -786,7 +788,7 @@ function scrollToMarketplace(name: string) {
             icon="i-lucide-plus"
             size="xs"
             variant="soft"
-            @click="showImportSkillsModal = true"
+            @click="() => { showImportSkillsModal = true }"
           />
         </div>
 
@@ -825,7 +827,7 @@ function scrollToMarketplace(name: string) {
           <UButton
             label="Import your first Skill"
             icon="i-lucide-plus"
-            @click="showImportSkillsModal = true"
+            @click="() => { showImportSkillsModal = true }"
           />
         </div>
       </template>
@@ -874,7 +876,7 @@ function scrollToMarketplace(name: string) {
               icon="i-lucide-plus"
               size="xs"
               variant="soft"
-              @click="showAddMarketplaceModal = true"
+              @click="() => { showAddMarketplaceModal = true }"
             />
           </div>
         </div>
@@ -1085,7 +1087,7 @@ function scrollToMarketplace(name: string) {
               variant="ghost"
               color="neutral"
               size="sm"
-              @click="showRemoveConfirm = false"
+              @click="() => { showRemoveConfirm = false }"
             />
             <UButton
               label="Confirm Delete"

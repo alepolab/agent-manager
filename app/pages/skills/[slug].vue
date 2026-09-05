@@ -60,7 +60,7 @@ onMounted(async () => {
       })
     }
     frontmatter.value = { ...skill.value.frontmatter }
-    body.value = skill.value.body
+    body.value = skill.value.body ?? ''
     clearStudioChat()
   } catch (err: any) {
     console.error('Skill load error:', err)
@@ -118,7 +118,7 @@ async function editCopy() {
   try {
     const copy = await create({
       frontmatter: { ...skill.value.frontmatter, name: skill.value.frontmatter.name + ' (copy)' },
-      body: skill.value.body,
+      body: skill.value.body ?? '',
     })
     toast.add({ title: 'Copy created', color: 'success' })
     router.push(`/skills/${copy.slug}`)
@@ -199,7 +199,7 @@ useUnsavedChanges(isDirty)
             size="sm"
             variant="ghost"
             color="error"
-            @click="showDeleteConfirm = true"
+            @click="() => { showDeleteConfirm = true }"
           />
           <UButton 
             label="Save" 
@@ -403,7 +403,7 @@ useUnsavedChanges(isDirty)
             Permanently delete <strong>{{ skill?.frontmatter.name }}</strong>? This action cannot be undone.
           </p>
           <div class="flex justify-end gap-2">
-            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="showDeleteConfirm = false" />
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showDeleteConfirm = false }" />
             <UButton label="Delete" color="error" size="sm" @click="deleteSkill" />
           </div>
         </div>

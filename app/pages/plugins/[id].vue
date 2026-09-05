@@ -25,7 +25,7 @@ onMounted(async () => {
     plugin.value = await fetchOne(id)
     for (const skill of plugin.value.skillDetails) {
       skillFrontmatters.value[skill.slug] = { ...skill.frontmatter }
-      skillBodies.value[skill.slug] = skill.body
+      skillBodies.value[skill.slug] = skill.body ?? ''
     }
   } catch {
     toast.add({ title: 'Plugin not found', color: 'error' })
@@ -35,6 +35,35 @@ onMounted(async () => {
   }
 })
 
+/**
+ * Editable state for one skill, created on demand.
+ *
+ * `skillFrontmatters` / `skillBodies` are keyed by slug, and under
+ * noUncheckedIndexedAccess every lookup is `T | undefined` - which the template
+ * cannot narrow, so eight bindings here read a possibly-undefined object. These
+ * accessors give the template a value that always exists, and seed the record
+ * the first time a skill is opened rather than relying on it having been
+ * pre-populated.
+ */
+function frontmatterFor(slug: string): SkillFrontmatter {
+  const existing = skillFrontmatters.value[slug]
+  if (existing) return existing
+  const seeded = { name: '', description: '' } as SkillFrontmatter
+  skillFrontmatters.value[slug] = seeded
+  return seeded
+}
+
+function bodyFor(slug: string): string {
+  return skillBodies.value[slug] ?? ''
+}
+
+/** Assignment expressions evaluate to the assigned value, so an inline
+ *  `@click="closeUninstallConfirm"` infers a handler returning boolean
+ *  where the typed emit requires void. A named function returns void. */
+function closeUninstallConfirm() {
+  showUninstallConfirm.value = false
+}
+
 function toggleSkillEditor(slug: string) {
   editingSkill.value = editingSkill.value === slug ? null : slug
 }
@@ -42,11 +71,11 @@ function toggleSkillEditor(slug: string) {
 async function saveSkill(slug: string) {
   savingSkill.value = true
   try {
-    await updateSkill(id, slug, skillFrontmatters.value[slug], skillBodies.value[slug])
+    await updateSkill(id, slug, frontmatterFor(slug), bodyFor(slug))
     const skill = plugin.value?.skillDetails.find(s => s.slug === slug)
     if (skill) {
-      skill.frontmatter = { ...skillFrontmatters.value[slug] }
-      skill.body = skillBodies.value[slug]
+      skill.frontmatter = { ...frontmatterFor(slug) }
+      skill.body = bodyFor(slug)
     }
     toast.add({ title: 'Skill saved', color: 'success' })
   } catch (e: any) {
@@ -239,7 +268,7 @@ if (import.meta.client) {
                 {{ skill.frontmatter.description }}
               </span>
               <span class="font-mono text-[10px] shrink-0 text-meta">
-                {{ Math.round(skill.body.length / 100) / 10 }}k chars
+                {{ Math.round((skill.body?.length ?? 0) / 100) / 10 }}k chars
               </span>
             </button>
 
@@ -251,19 +280,19 @@ if (import.meta.client) {
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div class="field-group">
                     <label class="field-label">Name</label>
-                    <input v-model="skillFrontmatters[skill.slug].name" class="field-input" />
+                    <input v-model="frontmatterFor(skill.slug).name" class="field-input" />
                   </div>
                   <div class="field-group">
                     <label class="field-label">Context</label>
-                    <input v-model="skillFrontmatters[skill.slug].context" class="field-input" placeholder="e.g. fork" />
+                    <input v-model="frontmatterFor(skill.slug).context" class="field-input" placeholder="e.g. fork" />
                   </div>
                   <div class="field-group sm:col-span-2">
                     <label class="field-label">Description</label>
-                    <input v-model="skillFrontmatters[skill.slug].description" class="field-input" />
+                    <input v-model="frontmatterFor(skill.slug).description" class="field-input" />
                   </div>
                   <div class="field-group">
                     <label class="field-label">Agent</label>
-                    <input v-model="skillFrontmatters[skill.slug].agent" class="field-input" placeholder="Optional agent name" />
+                    <input v-model="frontmatterFor(skill.slug).agent" class="field-input" placeholder="Optional agent name" />
                   </div>
                 </div>
               </div>
@@ -274,10 +303,10 @@ if (import.meta.client) {
                   <h4 class="text-section-label">Instructions</h4>
                   <div class="flex items-center gap-3">
                     <span class="font-mono text-[10px] text-meta">
-                      {{ skillBodies[skill.slug].split('\n').length }} lines
+                      {{ bodyFor(skill.slug).split('\n').length }} lines
                     </span>
                     <span class="font-mono text-[10px] text-meta">
-                      {{ skillBodies[skill.slug].length.toLocaleString() }} chars
+                      {{ bodyFor(skill.slug).length.toLocaleString() }} chars
                     </span>
                   </div>
                 </div>
@@ -329,7 +358,7 @@ if (import.meta.client) {
             Uninstall <strong>{{ plugin?.name }}</strong>? The plugin will be removed but its files will remain on your computer.
           </p>
           <div class="flex justify-end gap-2">
-            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="showUninstallConfirm = false" />
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="closeUninstallConfirm" />
             <UButton label="Uninstall" color="error" size="sm" :loading="uninstalling" @click="onUninstall" />
           </div>
         </div>

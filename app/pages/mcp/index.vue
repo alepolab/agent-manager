@@ -33,8 +33,8 @@ function testServer(name: string) {
         <span class="font-mono text-[12px] text-meta mr-4">{{ servers.length }}</span>
       </template>
       <template #right>
-        <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="showImportModal = true" />
-        <UButton label="New MCP Server" icon="i-lucide-plus" size="sm" @click="isAddModalOpen = true" />
+        <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
+        <UButton label="New MCP Server" icon="i-lucide-plus" size="sm" @click="() => { isAddModalOpen = true }" />
       </template>
     </PageHeader>
 
@@ -136,7 +136,7 @@ function testServer(name: string) {
             @imported="() => { showImportModal = false; fetchServers() }"
           />
           <div class="flex justify-end pt-2">
-            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="showImportModal = false" />
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showImportModal = false }" />
           </div>
         </div>
       </template>

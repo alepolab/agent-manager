@@ -1,52 +1,188 @@
 /**
- * Self-check for the jira-cli backed TicketSource, with the CLI stubbed.
+ * Self-check for server/utils/jiraTicketSource.ts — the Jira-backed
+ * TicketSource (B5, half one). Plain asserts, no framework, no network: a
+ * fake `fetch` stands in for Jira's REST API throughout.
  *
  *   node scripts/test-jira-ticket-source.mjs
+ *
+ * The one assertion this file exists to pin down: an auth/HTTP failure must
+ * REJECT, never resolve to `[]` — an empty result and a broken call must
+ * never be indistinguishable to a caller. See "6. Auth failure" below.
  */
 import assert from 'node:assert/strict'
 
-const J = await import('../server/utils/jiraTicketSource.ts')
+process.env.JIRA_BASE_URL = 'https://example.atlassian.net'
+process.env.JIRA_EMAIL = 'bot@example.com'
+process.env.JIRA_API_TOKEN = 'test-token'
 
-// ADF flattening keeps the words and the structure a reader needs.
-const adf = { type: 'doc', version: 1, content: [
-  { type: 'paragraph', content: [{ type: 'text', text: 'Issue Description:', marks: [{ type: 'strong' }] }, { type: 'text', text: ' upload fails' }] },
-  { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'JPEG, 2 MB' }] }] }] },
-  { type: 'codeBlock', content: [{ type: 'text', text: '{"errorCode":"500"}' }] },
-] }
-const text = J.adfToText(adf)
-assert.match(text, /Issue Description: upload fails\n/, 'paragraph text joined and terminated')
-assert.match(text, /- JPEG, 2 MB/, 'list items become bullets')
-assert.match(text, /```\n\{"errorCode":"500"\}\n```/, 'code blocks fenced')
-assert.equal(J.adfToText('plain'), 'plain', 'a v2 string description passes through')
+const { createJiraTicketSource, MAX_PAGES } = await import('../server/utils/jiraTicketSource.ts')
 
-// The CLI seam: list returns keys, view returns the raw issue.
-const calls = []
-J.setJiraExec(async (args) => {
-  calls.push(args)
-  if (args[0] === 'issue' && args[1] === 'list') return 'SCN-402\t2026-04-07 11:03:10\nSCN-401\t2026-04-01 09:00:00\nnot-a-key\tjunk\n'
-  if (args[0] === 'issue' && args[1] === 'view') {
-    const key = args[2]
-    if (key === 'SCN-401') throw new Error('permission denied')
-    return JSON.stringify({ key, self: 'https://alepo.atlassian.net/rest/api/3/issue/208311', fields: {
-      summary: 'Upload fails with 500', description: adf, labels: ['NEW_WEB_SELFCARE'], updated: '2026-04-07T11:03:10.186+0530' } })
+const watch = {
+  id: 'w1', name: 'Jira Watch', workflowSlug: 'demo', intervalSeconds: 60,
+  enabled: true, maxConcurrentRuns: 2, dailyDispatchCap: 10, autoRun: false,
+  query: 'project = CSUP AND status = "To Do"',
+}
+
+function jsonResponse(body, { ok = true, status = 200, statusText = 'OK' } = {}) {
+  return {
+    ok, status, statusText,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
   }
-  throw new Error('unexpected ' + args.join(' '))
-})
+}
 
-const keys = await J.listKeys('project = SCN AND labels = pipeline')
-assert.deepEqual(keys.map(k => k.key), ['SCN-401', 'SCN-402'], 'keys parsed, junk dropped, oldest update first')
-assert.deepEqual(calls[0], ['issue', 'list', '-q', 'project = SCN AND labels = pipeline', '--plain', '--no-headers', '--columns', 'key,updated'], 'JQL runs verbatim')
+// ── 1. A query returning issues maps every field, including ADF description ─
+{
+  let receivedBody
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, 'https://example.atlassian.net/rest/api/3/search/jql')
+    assert.equal(init.method, 'POST')
+    assert.match(init.headers.Authorization, /^Basic /)
+    receivedBody = JSON.parse(init.body)
+    return jsonResponse({
+      isLast: true,
+      issues: [{
+        key: 'CSUP-7435',
+        fields: {
+          summary: 'Portal 500s on login',
+          description: {
+            type: 'doc', version: 1,
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Users see a blank page.' }] }],
+          },
+          updated: '2026-09-01T12:00:00.000Z',
+          assignee: { displayName: 'Priya Nair' },
+          reporter: { displayName: 'Sam Ortiz' },
+        },
+      }],
+    })
+  }
 
-const src = J.createJiraTicketSource()
-const refs = await src.fetch({ id: 'w', name: 'w', workflowSlug: 's', intervalSeconds: 60, enabled: true, maxConcurrentRuns: 1, dailyDispatchCap: 5, query: 'project = SCN', autoRun: false })
-assert.equal(refs.length, 1, 'a ticket the CLI cannot view is skipped, not fatal')
-assert.equal(refs[0].key, 'SCN-402')
-assert.match(refs[0].description, /^SCN-402: Upload fails with 500\nURL: https:\/\/alepo\.atlassian\.net\/browse\/SCN-402\nLabels: NEW_WEB_SELFCARE\n\nIssue Description: upload fails/, 'the run prompt carries key, summary, url, labels and text')
-assert.deepEqual(await src.fetch({ id: 'w', name: 'w', workflowSlug: 's', intervalSeconds: 60, enabled: true, maxConcurrentRuns: 1, dailyDispatchCap: 5, autoRun: false }), [], 'no query, no tickets')
+  const src = createJiraTicketSource(fetchImpl)
+  const tickets = await src.fetch(watch)
 
-assert.equal(await J.expandTicketKey('not a key'), null, 'only a bare key is expanded')
-assert.match(await J.expandTicketKey('SCN-402'), /^SCN-402: Upload fails/, 'a bare key becomes the ticket text')
-J.setJiraExec(async () => { throw new Error('jira: not logged in') })
-assert.equal(await J.expandTicketKey('SCN-402'), null, 'a CLI failure leaves the prompt as typed')
+  assert.equal(receivedBody.jql, watch.query, 'the watch\'s own JQL is sent verbatim')
+  assert.equal(tickets.length, 1)
+  const [t] = tickets
+  assert.equal(t.key, 'CSUP-7435')
+  assert.equal(t.summary, 'Portal 500s on login')
+  assert.equal(t.description, 'Users see a blank page.', 'ADF is flattened to plain text')
+  assert.equal(t.updatedAt, Date.parse('2026-09-01T12:00:00.000Z'))
+  assert.equal(t.assignee, 'Priya Nair')
+  assert.equal(t.reporter, 'Sam Ortiz')
+  assert.equal(t.url, 'https://example.atlassian.net/browse/CSUP-7435')
+}
+
+// ── 2. An empty result is a real, distinguishable []  ───────────────────────
+{
+  const src = createJiraTicketSource(async () => jsonResponse({ isLast: true, issues: [] }))
+  const tickets = await src.fetch(watch)
+  assert.deepEqual(tickets, [], 'zero matches is a legitimate, empty result')
+}
+
+// ── 3. Pagination follows nextPageToken across pages ────────────────────────
+{
+  let call = 0
+  const fetchImpl = async (_url, init) => {
+    call += 1
+    const body = JSON.parse(init.body)
+    if (call === 1) {
+      assert.equal(body.nextPageToken, undefined, 'first page carries no token')
+      return jsonResponse({ isLast: false, nextPageToken: 'page-2', issues: [{ key: 'CSUP-1', fields: { summary: 'one' } }] })
+    }
+    assert.equal(body.nextPageToken, 'page-2', 'the token from page 1 is sent back for page 2')
+    return jsonResponse({ isLast: true, issues: [{ key: 'CSUP-2', fields: { summary: 'two' } }] })
+  }
+  const src = createJiraTicketSource(fetchImpl)
+  const tickets = await src.fetch(watch)
+  assert.equal(call, 2)
+  assert.deepEqual(tickets.map(t => t.key), ['CSUP-1', 'CSUP-2'])
+}
+
+// ── 4. A nextPageToken that never settles is bounded, not infinite ──────────
+{
+  let call = 0
+  const fetchImpl = async () => {
+    call += 1
+    return jsonResponse({ isLast: false, nextPageToken: `p${call}`, issues: [{ key: `T-${call}`, fields: {} }] })
+  }
+  const src = createJiraTicketSource(fetchImpl)
+  const tickets = await src.fetch(watch)
+  assert.equal(call, MAX_PAGES, 'a source that never reports isLast is still bounded by MAX_PAGES')
+  assert.equal(tickets.length, MAX_PAGES)
+}
+
+// ── 5. An issue missing a key is dropped, not fabricated ────────────────────
+{
+  const src = createJiraTicketSource(async () => jsonResponse({
+    isLast: true,
+    issues: [{ key: '', fields: { summary: 'no key' } }, { key: 'CSUP-9', fields: { summary: 'has key' } }],
+  }))
+  const tickets = await src.fetch(watch)
+  assert.deepEqual(tickets.map(t => t.key), ['CSUP-9'])
+}
+
+// ── 6. Auth failure REJECTS — never silently resolves to [] ────────────────
+// This is the exact defect shape the task calls out: an empty list and a
+// failed call must never be indistinguishable.
+{
+  const fetchImpl = async () => jsonResponse(
+    { errorMessages: ['You do not have permission to access this resource.'] },
+    { ok: false, status: 401, statusText: 'Unauthorized' },
+  )
+  const src = createJiraTicketSource(fetchImpl)
+  await assert.rejects(
+    () => src.fetch(watch),
+    (err) => {
+      assert.match(err.message, /401/)
+      return true
+    },
+    'an auth failure must reject the promise, not resolve to an empty array',
+  )
+}
+
+// ── 7. Missing credentials fail clearly, naming the exact env var ───────────
+{
+  const savedToken = process.env.JIRA_API_TOKEN
+  delete process.env.JIRA_API_TOKEN
+  try {
+    const src = createJiraTicketSource(async () => jsonResponse({ isLast: true, issues: [] }))
+    await assert.rejects(
+      () => src.fetch(watch),
+      (err) => {
+        assert.match(err.message, /JIRA_API_TOKEN/)
+        return true
+      },
+      'a missing credential must name itself, not degrade to an empty result',
+    )
+  } finally {
+    process.env.JIRA_API_TOKEN = savedToken
+  }
+}
+
+// ── 8. A watch with no JQL configured is a config error, not "0 matches" ────
+{
+  const noQueryWatch = { ...watch, query: undefined }
+  const src = createJiraTicketSource(async () => jsonResponse({ isLast: true, issues: [] }))
+  await assert.rejects(() => src.fetch(noQueryWatch), /no JQL query configured/)
+}
 
 console.log('jiraTicketSource: all assertions passed')
+
+// ── expandTicketKey: a bare key becomes the ticket text, under the starter's identity ──
+{
+  const { expandTicketKey } = await import('../server/utils/jiraTicketSource.ts')
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, auth: init.headers.Authorization })
+    return jsonResponse({ key: 'SCN-7', fields: { summary: 'Upload fails', labels: ['selfcare'], description: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Steps to reproduce.' }] }] } } })
+  }
+  const env = { JIRA_EMAIL: 'dev@example.com', JIRA_API_TOKEN: 'tok', JIRA_BASE_URL: 'https://jira.example.com' }
+  const text = await expandTicketKey('SCN-7', env, fetchImpl)
+  assert.match(text, /^SCN-7: Upload fails\nURL: https:\/\/jira.example.com\/browse\/SCN-7\nLabels: selfcare\n\nSteps to reproduce\./, 'key, summary, url, labels and description')
+  assert.equal(seen[0].auth, `Basic ${Buffer.from('dev@example.com:tok').toString('base64')}`, 'the starter\'s own credentials are used')
+  assert.equal(await expandTicketKey('not a key', env, fetchImpl), null, 'free text is left alone')
+  assert.equal(await expandTicketKey('SCN-8', env, async () => new Response('nope', { status: 404 })), null, 'an unreadable ticket yields null, never a throw')
+  delete process.env.JIRA_BASE_URL; delete process.env.JIRA_EMAIL; delete process.env.JIRA_API_TOKEN
+  assert.equal(await expandTicketKey('SCN-9', {}, fetchImpl), null, 'no credentials anywhere yields null')
+  console.log('expandTicketKey: ok')
+}

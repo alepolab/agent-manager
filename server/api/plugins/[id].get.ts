@@ -43,6 +43,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const entry = entries[0]
+  if (!entry) throw createError({ statusCode: 404, message: `Plugin not found: ${id}` })
   const [name, marketplace] = id.split('@')
   const installPath = resolvePluginInstallPath(id, entry.installPath)
   const pluginJsonPath = join(installPath, '.claude-plugin', 'plugin.json')
@@ -63,7 +64,11 @@ export default defineEventHandler(async (event) => {
       const { frontmatter, body } = parseFrontmatter<SkillFrontmatter>(raw)
       skillDetails.push({
         slug: dir.name,
-        frontmatter: { name: dir.name, ...frontmatter },
+        // Spread FIRST, then pin `name`: written the other way round a
+        // frontmatter carrying its own `name` overwrote the directory name
+        // (TS2783), and the directory is the skill's identity - the same rule
+        // that governs command filenames.
+        frontmatter: { ...frontmatter, name: frontmatter.name ?? dir.name },
         body,
         filePath: skillPath,
       })
@@ -72,7 +77,11 @@ export default defineEventHandler(async (event) => {
 
   return {
     id,
-    name: meta?.name ?? name,
+    // `id.split('@')[0]` is `string | undefined` under noUncheckedIndexedAccess
+    // even though a non-empty split always yields a first element; fall back to
+    // the id rather than assert, so a malformed id degrades to something
+    // readable instead of "undefined".
+    name: meta?.name ?? name ?? id,
     marketplace: marketplace ?? 'unknown',
     description: meta?.description ?? '',
     version: entry.version,

@@ -95,14 +95,18 @@ export async function envForUser(login: string | undefined): Promise<Record<stri
   }
   if (p.jiraToken && p.jiraEmail) {
     env.JIRA_API_TOKEN = decrypt(p.jiraToken)
+    env.JIRA_EMAIL = p.jiraEmail
+    env.JIRA_BASE_URL = jiraBaseUrl()
     env.JIRA_CONFIG_FILE = await jiraConfigFor(p)
   }
   return env
 }
 
 /** A jira-cli config naming this user's login; the token travels in JIRA_API_TOKEN. */
+const jiraBaseUrl = () => (process.env.JIRA_BASE_URL || process.env.JIRA_SERVER || 'https://alepo.atlassian.net').replace(/\/+$/, '')
+
 async function jiraConfigFor(p: UserProfile): Promise<string> {
-  const server = process.env.JIRA_SERVER || 'https://alepo.atlassian.net'
+  const server = jiraBaseUrl()
   const path = join(usersDir(), `${safe(p.login)}.jira.yml`)
   const body = [
     `installation: cloud`,

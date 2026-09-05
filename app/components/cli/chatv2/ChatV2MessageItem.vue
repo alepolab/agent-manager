@@ -196,8 +196,9 @@ function buildUpdatedInput(): any {
   const answers: Record<string, string> = {}
   for (let i = 0; i < questions.length; i++) {
     const selected = selectedAnswers.value.get(i)
-    if (selected && selected.size > 0) {
-      answers[questions[i].question] = Array.from(selected).join(', ')
+    const q = questions[i]
+    if (q && selected && selected.size > 0) {
+      answers[q.question] = Array.from(selected).join(', ')
     }
   }
 
@@ -1122,7 +1123,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
               :name="showAskUserHistory ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
               class="size-3 mt-0.5 shrink-0"
             />
-            <span class="font-medium flex-1 whitespace-normal">{{ askUserQuestions[0].question }}</span>
+            <span class="font-medium flex-1 whitespace-normal">{{ askUserQuestions[0]?.question }}</span>
             <span v-if="askUserQuestions.length > 1" class="text-[10px] shrink-0" style="color: var(--text-tertiary);">
               (+{{ askUserQuestions.length - 1 }} more)
             </span>
