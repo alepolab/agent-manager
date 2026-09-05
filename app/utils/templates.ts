@@ -747,6 +747,12 @@ not happen.`,
       color: 'red',
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
       maxTurns: 30,
+      // No `claude-security` here, though it is the obvious fit: that plugin is
+      // licensed "All rights reserved", so it cannot be vendored into this repo
+      // the way the MIT superpowers skills are - and a container installs no
+      // plugins, so declaring it would resolve to nothing and silently strip this
+      // agent of instructions.
+      skills: ['requesting-code-review', 'using-superpowers'],
     },
     body: `You review the change for security defects before anyone opens a pull request for it. You do not fix anything: a finding is your output, a patch is someone else's.
 
