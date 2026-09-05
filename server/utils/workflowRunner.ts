@@ -6,7 +6,7 @@ import {
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
-import { createRun, getRun, saveRun } from './workflowRunStore.ts'
+import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun } from './workflowRunStore.ts'
 import { callAgent, type AgentUsage } from './agentCaller.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -503,6 +503,18 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  */
 export async function continueRun(runId: string): Promise<WorkflowRun | null> {
   const l = live.get(runId)
+  // A run whose owning process died has no live record. Its currentStepIds
+  // name what was executing; restarting from those is the honest resume.
+  if (!l) {
+    const stored = await getRun(runId)
+    if (stored?.status === 'interrupted') {
+      const from = stored.currentStepIds[0]
+        ?? stored.steps.find(s => s.status === 'running' || s.status === 'pending')?.stepId
+      if (!from) return stored
+      return restartRun(runId, from)
+    }
+    return stored
+  }
   // Re-entrancy guard (C6), matching the client engine's isRunning check pattern. This has
   // to be set synchronously, before the first await below - otherwise two calls that both
   // arrive while a run is paused would each see the guard still clear and both go on to
@@ -600,5 +612,155 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   run.currentStepIds = []
   run.nextStepIds = []
   await publish(run)
+  return run
+}
+
+export class RestartError extends Error {
+  statusCode: number
+  data?: Record<string, unknown>
+  constructor(statusCode: number, message: string, data?: Record<string, unknown>) {
+    super(message)
+    this.statusCode = statusCode
+    this.data = data
+  }
+}
+
+/** Test seam: forget a run's in-memory record, as a server restart would. */
+export function _dropLive(runId: string) { live.delete(runId) }
+
+/**
+ * Rebuilds the in-memory scheduling record from the persisted run. Completed
+ * steps are re-marked in step order so the graph arms exactly what it would
+ * have armed live; their outputs and inputs come back from the record. Anything
+ * not completed stays pending and unarmed until a predecessor arms it.
+ */
+async function rehydrate(run: WorkflowRun): Promise<Live> {
+  const existing = live.get(run.id)
+  if (existing) return existing
+  const workflow = await loadWorkflowSteps(run.workflowSlug)
+  if (!workflow) {
+    throw new RestartError(409, `Workflow "${run.workflowSlug}" no longer exists, so this run cannot be rebuilt`)
+  }
+  const steps = alignStepIds(workflow.steps, run)
+  const aligned = { ...workflow, steps }
+  const graph = buildGraph(steps)
+  const state = initRunState(graph)
+  const l: Live = {
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false,
+  }
+  const header = artifactHeader(runArtifactsDir(run.id))
+  for (const s of run.steps) {
+    state.visits[s.stepId] = s.visits ?? 0
+    if (s.status !== 'completed') continue
+    markCompleted(graph, state, s.stepId)
+    l.outputs[s.stepId] = s.output
+    // Stored input carries the artifact header; computeInput's retry branch
+    // rebuilds from lastInputs, so strip it the way executeNode keeps it.
+    l.lastInputs[s.stepId] = s.input.startsWith(header) ? s.input.slice(header.length) : s.input
+  }
+  // A completed node has consumed its arming: live, markRunning clears it before
+  // the node executes. Without this an entry node stays armed and re-runs, and
+  // re-arms everything downstream with it.
+  for (const s of run.steps) if (s.status === 'completed') state.armed[s.stepId] = false
+  live.set(run.id, l)
+  return l
+}
+
+/**
+ * A workflow file re-saved since the run began (the template sync regenerates
+ * every step id) no longer shares ids with the run. When the agent sequence
+ * still matches position for position, the run's ids are authoritative and the
+ * file's edges are rewritten to them; anything else is a different workflow.
+ */
+function alignStepIds(steps: any[], run: WorkflowRun): any[] {
+  const known = new Set(steps.map(s => s.id))
+  const recorded = new Set(run.steps.map(s => s.stepId))
+  if (run.steps.every(s => known.has(s.stepId))) {
+    // Ids match, but a node the run never recorded would fail its wave silently.
+    if (steps.every(s => recorded.has(s.id))) return steps
+    throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
+  }
+  const sameShape = steps.length === run.steps.length
+    && steps.every((s, i) => s.agentSlug === run.steps[i].agentSlug)
+  if (!sameShape) {
+    throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
+  }
+  const idMap: Record<string, string> = {}
+  steps.forEach((s, i) => { idMap[s.id] = run.steps[i].stepId })
+  return steps.map(s => ({
+    ...s,
+    id: idMap[s.id],
+    next: Array.isArray(s.next) ? s.next.map((n: string) => idMap[n] ?? n) : s.next,
+  }))
+}
+
+function forwardDescendants(graph: WorkflowGraph, id: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>([id])
+  const stack = [id]
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const next of graph.succ[cur] ?? []) {
+      if (graph.backEdges.has(`${cur}->${next}`) || seen.has(next)) continue
+      seen.add(next); out.push(next); stack.push(next)
+    }
+  }
+  return out
+}
+
+const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted', 'completed']
+
+/**
+ * Re-runs `stepId` and everything downstream of it, keeping every other
+ * step's output, under the same run id and artifacts directory. The previous
+ * attempt of each reset step is snapshotted the way monitor retries are.
+ */
+export async function restartRun(runId: string, stepId: string): Promise<WorkflowRun> {
+  const run = await getRun(runId)
+  if (!run) throw new RestartError(404, 'Run not found')
+  if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
+  if (!RESTARTABLE.includes(run.status)) {
+    throw new RestartError(409, `A ${run.status} run cannot be restarted; ${run.status === 'paused' ? 'continue it instead' : 'wait for it to settle'}`)
+  }
+  const active = await findActiveRun(run.workflowSlug)
+  if (active && active.id !== run.id) {
+    throw new RestartError(409, 'This workflow already has a run in progress', { runId: active.id })
+  }
+  const l = await rehydrate(run)
+  if (l.running) throw new RestartError(409, 'This run is already running')
+
+  const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
+  for (const id of reset) {
+    const rec = recOf(run, id)
+    // Only an attempt that actually ran is worth snapshotting; a skipped step has nothing to keep.
+    if (rec.status !== 'pending' && rec.visits > 0) {
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `restart-${rec.visits}`) } catch { /* best effort */ }
+    }
+    Object.assign(rec, {
+      status: 'pending', output: '', error: undefined, startedAt: undefined, completedAt: undefined,
+      monitorVerdict: undefined, monitorNote: undefined, model: undefined,
+    })
+    l.state.status[id] = 'pending'
+    l.state.armed[id] = false
+    delete l.state.triggeredBy[id]
+    delete l.outputs[id]
+    delete l.retryFeedback[id]
+  }
+  // Arm the restart point the way its predecessors would have: an entry arms
+  // itself; otherwise every forward predecessor must still read completed.
+  if (l.graph.entries.includes(stepId)) armNode(l.state, stepId)
+  else if ((l.graph.forwardPreds[stepId] ?? []).every(p => l.state.status[p] === 'completed')) armNode(l.state, stepId)
+  else throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
+
+  l.stopped = false
+  l.running = true
+  run.status = 'running'
+  run.error = undefined
+  run.endedAt = undefined
+  run.pid = process.pid
+  run.currentStepIds = []
+  run.nextStepIds = [stepId]
+  await publish(run)
+  void driveToSettlement(l, run)
   return run
 }

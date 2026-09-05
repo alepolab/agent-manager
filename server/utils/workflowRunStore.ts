@@ -86,3 +86,16 @@ export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun |
   const runs = await listRuns(workflowSlug)
   return runs.find(r => r.status === 'running' || r.status === 'paused') ?? null
 }
+
+/** The workflow definition a run was started from, read from disk. The runner
+ *  needs it to rebuild scheduling state for a run it has never seen in memory. */
+export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, steps: any[] } | null> {
+  const path = resolveClaudePath('workflows', `${slug}.json`)
+  if (!existsSync(path)) return null
+  try {
+    const data = JSON.parse(await readFile(path, 'utf-8'))
+    return { slug, name: data.name ?? slug, steps: data.steps ?? [] }
+  } catch {
+    return null
+  }
+}
