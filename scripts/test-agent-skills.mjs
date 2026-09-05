@@ -22,6 +22,8 @@
  * the point — it is the same state a real agent would run in.
  */
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { agentTemplates } from '../app/utils/templates.ts'
 import { resolveSkillInvocation } from '../server/utils/resolveSkill.ts'
 
@@ -55,4 +57,46 @@ assert.ok(declaredBy('intent-template').includes('sdlc-ticket-intake'),
 assert.ok(declaredBy('regression-matrix').includes('sdlc-test-author'),
   'regression-matrix is the table-driven-test skill; sdlc-test-author must declare it')
 
-console.log(`agent skills: ${checked} declared skills across ${sdlc.length} agents all resolve`)
+// Each agent must carry the skill that describes the discipline its step is
+// FOR. A skill built and shipped but declared nowhere is the same defect as a
+// declared skill that does not resolve, one step earlier - and both are
+// invisible at runtime.
+const REQUIRED = {
+  'sdlc-ticket-intake': 'intent-template',
+  'sdlc-test-author': 'test-driven-development',
+  'sdlc-verifier': 'verification-before-completion',
+  'sdlc-fix-implementer': 'systematic-debugging',
+  'sdlc-evidence-and-pr': 'finishing-a-development-branch',
+  'sdlc-step-monitor': 'requesting-code-review',
+}
+for (const [agentId, skill] of Object.entries(REQUIRED)) {
+  const agent = sdlc.find(a => a.id === agentId)
+  assert.ok(agent, `${agentId} must exist`)
+  assert.ok((agent.frontmatter.skills ?? []).includes(skill),
+    `${agentId} performs the discipline "${skill}" describes; it must declare it`)
+}
+
+// ponytail is the minimal-solution skill. It belongs on the step that WRITES
+// the change, because "the smallest change the stated problem needs" is this
+// pipeline's standing rule and the one an implementer is most tempted to
+// exceed - and on the provisioner, which twice burned its whole turn budget
+// manufacturing work on a ticket that needed none.
+for (const agentId of ['sdlc-fix-implementer', 'sdlc-stack-provisioner']) {
+  const agent = sdlc.find(a => a.id === agentId)
+  assert.ok((agent.frontmatter.skills ?? []).includes('ponytail'),
+    `${agentId} must declare ponytail: doing the least that actually works is the point of this step`)
+}
+
+// The vendored skills must be IN the repo, not merely resolvable on this
+// machine. That is the whole claim of engineering/skills/VENDORED.md -
+// installing this product installs its skills, with no marketplace step to
+// forget. Resolution alone would pass on a box that happens to have them.
+const vendored = ['ponytail', 'ponytail-review', 'intent-template', 'regression-matrix']
+for (const name of vendored) {
+  const path = join(import.meta.dirname, '..', 'engineering', 'skills', name, 'SKILL.md')
+  assert.ok(existsSync(path), `${name} must ship in engineering/skills/ so a fresh install gets it`)
+}
+
+console.log(
+  `agent skills: ${checked} declared skills across ${sdlc.length} agents all resolve; `
+  + `${vendored.length} shipped in-repo`)

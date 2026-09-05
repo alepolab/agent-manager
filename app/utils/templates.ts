@@ -329,7 +329,7 @@ not happen.`,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
       maxTurns: 40,
-      skills: ['using-git-worktrees', 'using-superpowers'],
+      skills: ['ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You stand up the environment the rest of the pipeline tests against. Nothing downstream works if you get this wrong, and a stack you *believe* is up but is not produces a false FAIL that wastes the whole run.
 
@@ -404,7 +404,7 @@ not happen.`,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 30,
-      skills: ['regression-matrix', 'using-superpowers'],
+      skills: ['regression-matrix', 'test-driven-development', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
 
@@ -480,7 +480,7 @@ not happen.`,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 30,
-      skills: ['systematic-debugging', 'using-git-worktrees', 'using-superpowers'],
+      skills: ['systematic-debugging', 'ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You fix the cause, not the symptom. The failing test from the previous step defines done.
 
@@ -558,7 +558,7 @@ not happen.`,
       // which left the one step that runs everything with the smallest
       // allowance of any Bash-using agent.
       maxTurns: 40,
-      skills: ['regression-matrix', 'using-superpowers'],
+      skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
 
@@ -637,7 +637,7 @@ not happen.`,
       color: 'purple',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
       maxTurns: 20,
-      skills: ['agent-browser'],
+      skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You capture browser evidence for the change, against the stack the provisioning step brought up.
 
@@ -683,6 +683,7 @@ not happen.`,
       color: 'yellow',
       tools: ['Read'],
       maxTurns: 10,
+      skills: ['requesting-code-review', 'ponytail-review'],
     },
     body: `You review one step of an automated fix pipeline. You did not run the step; you see only its input and its output.
 
@@ -729,6 +730,7 @@ shape of the answer.`,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
       maxTurns: 15,
+      skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
 
