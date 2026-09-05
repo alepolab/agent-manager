@@ -38,6 +38,24 @@ assert.equal(posted.length, 2)
 assert.match(posted[1].body.text, /FAILED at Intake .* Budget exceeded/, 'a failure carries its reason')
 delete process.env.SLACK_WEBHOOK_URL
 
+// ── jira write-back: terminal statuses only, once each, with the PR when known ──
+const comments = []
+N.setCommenter(async (key, body) => { comments.push({ key, body }) })
+await N.commentTicket({ ...run, status: 'completed' })
+assert.equal(comments.length, 0, 'no comment unless the jira CLI is the ticket source')
+process.env.JIRA_TICKET_SOURCE = 'cli'
+await N.commentTicket({ ...run, status: 'paused' })
+assert.equal(comments.length, 0, 'a pause is not commented')
+await N.commentTicket({ ...run, status: 'completed' })
+await N.commentTicket({ ...run, status: 'completed' })
+assert.equal(comments.length, 1, 'one comment per terminal status')
+assert.equal(comments[0].key, 'SCN-1', 'the key comes from the run prompt')
+assert.match(comments[0].body, /run completed: Runbook/, 'the comment states the outcome')
+assert.match(comments[0].body, /Run: .*\/workflows\/w\?run=/, 'and links the run')
+await N.commentTicket({ ...run, initialPrompt: 'no key here', status: 'failed' })
+assert.equal(comments.length, 1, 'no key, no comment')
+delete process.env.JIRA_TICKET_SOURCE
+
 // ── ci poller: classification, persistence, and stopping when final ──────
 assert.equal(C.classify([]), 'pending')
 assert.equal(C.classify([{ bucket: 'pass' }, { bucket: 'skipping' }]), 'passing')

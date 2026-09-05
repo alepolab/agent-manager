@@ -194,9 +194,19 @@ async function reconcileFix(
   }
 
   // Nothing computable. If the agent wrote nothing at all either, leave
-  // `fix` entirely absent rather than fabricating an empty object.
+  // `fix` entirely absent rather than fabricating an empty object. When it
+  // did report repos, keep only what git could never have proved anyway and
+  // nothing here contradicts: the repo name and the PR link. Commit lists
+  // and line counts are dropped, exactly as a computed entry would replace
+  // them, because a self-reported count is a claim wearing a fact's shape.
+  // A run started without a project directory used to lose its PR URL here,
+  // which left the CI poller with nothing to check.
   if (existingFix === undefined) return undefined
-  return restFix
+  const priorRepos = Array.isArray(existingFix.repos) ? existingFix.repos as Array<Record<string, unknown>> : []
+  const kept = priorRepos
+    .filter(r => r && typeof r.repo === 'string')
+    .map(r => ({ repo: r.repo, ...(typeof r.pr === 'string' ? { pr: r.pr } : {}) }))
+  return kept.length ? { ...restFix, repos: kept } : restFix
 }
 
 export async function initRunArtifacts(run: WorkflowRun, workflowName: string): Promise<void> {

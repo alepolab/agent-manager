@@ -218,7 +218,11 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   }))
   await A.finalizeRunArtifacts(noProjectRun)
   const npMeta = JSON.parse(readFileSync(join(npDir, 'meta.json'), 'utf8'))
-  assert.ok(!('repos' in npMeta.fix), 'fix.repos is absent when git facts cannot be computed, not the agent claim')
+  // The repo name and PR link are kept: git could never prove a PR URL even
+  // with a project directory, and dropping it left the CI poller blind. The
+  // commit list and counts, which git would have replaced, are dropped.
+  assert.deepEqual(npMeta.fix.repos, [{ repo: 'agent-lied/again', pr: 'https://example.invalid/pr/1' }],
+    'fix.repos keeps repo and pr only when git facts cannot be computed')
   assert.ok(!('files_changed' in npMeta.fix), 'fix.files_changed is absent, not the agent claim')
   assert.ok(!('lines_changed' in npMeta.fix), 'fix.lines_changed is absent, not the agent claim')
   assert.equal(npMeta.fix.test_dirs_unlocked, false, 'unrelated agent-owned fix.* keys still survive')
