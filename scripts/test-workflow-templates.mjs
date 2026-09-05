@@ -256,12 +256,16 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 {
   const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
   const intake = body('sdlc-ticket-intake')
-  // The exact command, not just the path. A real run halted the pipeline having
-  // concluded the plugin was absent: plugin.json sits four levels down, so a
-  // shallow listing or a guessed glob misses it. Describing where to look was
-  // not enough; the prompt has to hand over the invocation.
-  assert.match(intake, /find ~\/\.claude\/plugins .*-name plugin\.json/,
-    'the prompt must give the exact find invocation for plugin.json, not merely describe where it lives')
+  // The exact pattern, and specifically one that names `.claude-plugin`.
+  // A `**` wildcard does not descend into a dot-directory even with dot
+  // matching on — measured — so `**/alepo-engineering/**/plugin.json` returns
+  // nothing and reads as "not installed". A real run halted the whole pipeline
+  // on that false conclusion. The prompt must hand over a pattern that works,
+  // and intake has no Bash, so it must be a Glob rather than a shell command.
+  assert.match(intake, /\*\*\/alepo-engineering\/\*\*\/\.claude-plugin\/plugin\.json/,
+    'intake must be given a glob that names .claude-plugin explicitly, since ** skips dot-directories')
+  assert.ok(!/find ~\/\.claude\/plugins/.test(intake),
+    'intake has no Bash tool, so it must not be told to run find')
   assert.match(intake, /\.claude-plugin\/plugin\.json/,
     'the prompt must name the exact file to read the version field from')
   assert.match(intake, /never a placeholder/i,

@@ -39,7 +39,7 @@ type StepWithUsage = RunStep & { usage?: AgentUsage | null }
  * anywhere in the path, not anchored to CLAUDE_DIR — moving the root changes
  * nothing for either of them.
  */
-function agentRunsRoot(): string {
+export function agentRunsRoot(): string {
   return process.env.AGENT_RUNS_DIR || join(homedir(), '.agent-manager', 'workflow-runs')
 }
 
