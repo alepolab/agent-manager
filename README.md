@@ -1,296 +1,159 @@
-<p align="center">
-  <img src="docs/assets/header.png" alt="agents-ui — visualize your Claude Code" width="720" />
-</p>
+# Agent Manager
 
-<h1 align="center">Claude Code CLI UI <br/>
-  (aka Claude Code Agents Management Studio)</h1>
+Alepo's shared control plane for agentic software delivery. It runs the ticket-to-PR pipeline (Runbook A), watches Jira queues, and gives every developer a browser UI over the team's Claude Code setup: agents, skills, commands, workflows, plugins and MCP servers.
 
-<p align="center">
-  <a href="#quickstart"><strong>Quickstart</strong></a> &middot;
-  <a href="https://github.com/Ngxba/claude-code-agents-ui/blob/main/CONTRIBUTING.md"><strong>Contributing</strong></a> &middot;
-  <a href="https://github.com/Ngxba/claude-code-agents-ui"><strong>GitHub</strong></a>
-</p>
+One instance serves the team. Developers sign in with GitHub, add a Jira token once, and start runs from a ticket key. Team standards ship in the `alepo-engineering` plugin and are re-applied from the Team page.
 
-<p align="center">
-  <a href="https://github.com/Ngxba/claude-code-agents-ui/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
-  <a href="https://github.com/Ngxba/claude-code-agents-ui/stargazers"><img src="https://img.shields.io/github/stars/Ngxba/claude-code-agents-ui" alt="Stars" /></a>
-</p>
+## What it does
 
-<br/>
+**Runbook A: ticket to evidence-backed PR.** Eight agent steps, each reviewed by a monitor that votes continue, retry or abort:
 
-<div align="center">
-  <video src="https://github.com/user-attachments/assets/734d933e-7a4f-48c0-ac0b-daaec05e5e3c" width="800" controls></video>
-</div>
+| Step | Agent | Output |
+|---|---|---|
+| Ticket Intake | `sdlc-ticket-intake` | Context packet: product, repo, branch, acceptance criteria |
+| Stand Up Stack | `sdlc-stack-provisioner` | The product stack running locally from the recipe |
+| Failing Test | `sdlc-test-author` | A parameterised test that reproduces the bug and fails |
+| Implement Fix | `sdlc-fix-implementer` | Minimal root-cause fix; tests are locked by the plugin hook |
+| Verify + Regression | `sdlc-verifier` | Every new test row passes, nothing that passed before breaks |
+| Browser Trace | `sdlc-trace-capture` | Screenshots and console for UI-facing changes |
+| Security Review | `sdlc-security-review` | Graded findings and a verdict on the diff |
+| Evidence Bundle + PR | `sdlc-evidence-and-pr` | PR carrying the evidence bundle; Jira comment with link and cost |
 
-<br/>
+Verify, Browser Trace and Security Review run in parallel after the fix. Runs are persisted, survive server restarts, can be paused, stopped, restarted from any step with a note, or cloned. Budgets cap minutes and tokens per run.
 
-## Shared team instance
+**Watches.** JQL queries in `engineering/registry/watches.yaml` feed tickets into the pipeline automatically. New watches start in shadow mode.
 
-```
-AGENT_MANAGER_SECRET=$(openssl rand -hex 32) GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
-AGENT_MANAGER_URL=http://<host>:3030 docker compose -f docker-compose.team.yml up -d --build
-```
+**Claude Code setup.** Create and edit agents, skills, commands, workflows and settings in the browser. Changes land in the instance's config directory as ordinary markdown and JSON.
 
-The instance keeps its own config, runs, user profiles and product checkouts on one volume under `/srv/agent-manager`; nothing from anyone's home directory is mounted. At boot it installs the team's agents, skills and workflow from the alepo-engineering plugin and the shipped templates (the Team page shows drift and re-applies it). Developers sign in with GitHub, add their Jira token on the Profile page, and start runs from a ticket key on the home page. Product checkouts are cloned into `AGENT_WORKSPACE_ROOT/<repo>` by the provisioning step the first time a product is needed.
+**Chat.** Talk to Claude from the browser against a chosen project directory, with or without an agent.
 
-Register the GitHub OAuth app under the organisation with callback `<AGENT_MANAGER_URL>/api/auth/callback` before the first sign-in. The alepo-engineering plugin must be installed in the instance's config directory once: `claude plugin marketplace add <path to engineering/> && claude plugin install alepo-engineering@alepo-engineering --scope user` with `CLAUDE_DIR` pointing at the volume, or bake it into the image.
+## Quick start
 
-## Sign-in and identity
-
-On a shared instance every developer signs in with GitHub; membership of the `GITHUB_ORG` organisation (default `alepolab`) is required. The token from sign-in is stored encrypted and used for the pushes and pull requests of runs that developer starts. On the Profile page each developer adds their Atlassian email and a Jira API token, also stored encrypted, so ticket reads and outcome comments happen as them.
-
-| Variable | Effect |
-|---|---|
-| `AUTH_DISABLED=1` | No sign-in; every request is `DEV_USER` (default `local`). For a single developer's machine or the pilot before the OAuth app exists. |
-| `AGENT_MANAGER_SECRET` | 32+ characters. Seals the session cookie and encrypts stored tokens. Required when auth is on. |
-| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app registered under the org, callback `<AGENT_MANAGER_URL>/api/auth/callback`. |
-| `GITHUB_ORG` | Organisation whose active members may sign in. |
-| `AGENT_USERS_DIR` | Where profiles live (default `~/.agent-manager/users`). Files are mode 600 and hold only sealed tokens. |
-| `LOCAL_DESKTOP=1` | Enables the folder picker and reveal-in-file-manager buttons, which only make sense when the browser and server share a desktop. |
-
-## Run configuration
-
-Environment variables read by the server. All optional; each feature is off until its variable is set.
-
-| Variable | Effect |
-|---|---|
-| `AGENT_RUN_MAX_MINUTES`, `AGENT_RUN_MAX_TOKENS` | Per-run caps checked between steps (defaults 180 and 8,000,000). A run over its cap fails with the reason. |
-| `AGENT_GH_TOKEN` | Becomes `GH_TOKEN` for every agent call, so pushes and PRs carry a bot identity instead of the server user's. |
-| `SLACK_WEBHOOK_URL` | Incoming webhook that receives one message per run transition to paused, completed, failed, stopped or interrupted. `AGENT_MANAGER_URL` sets the link base. |
-| `CI_POLL_SECONDS`, `CI_POLLER_DISABLED` | The poller that records `gh pr checks` outcomes on completed runs (default every 60s). |
-| `JIRA_TICKET_SOURCE=cli` | Watches read tickets through the authenticated `jira` CLI instead of the file stub. A manual run started with a bare ticket key is expanded to the ticket text whenever the CLI can serve it, and a completed, failed or stopped run is written back to the ticket as a comment with the PR link and cost. Pass `JIRA_API_TOKEN` through to the container. |
-| `AGENT_REGISTRY_PATH` | Overrides the product registry, otherwise read from the installed alepo-engineering plugin. |
-
-`bin/am.mjs` drives runs from a terminal: `am runs`, `am status <id>`, `am start <workflow> "<ticket>"`, `am restart <id> [step] --note "..."`, `am clone <id>`, `am stop <id>`.
-
-## What is agents-ui?
-
-# Open-source visual orchestration for Claude Code
-
-**If Claude Code is the _engine_, agents-ui is the _dashboard_**
-
-agents-ui is a Nuxt 3-based visual dashboard for managing Claude Code agents, commands, skills, workflows, and plugins. It provides a GUI layer on top of the `~/.claude` directory, allowing users to create, edit, and organize their Claude Code configuration without touching markdown files directly.
-
-It looks like a studio — but under the hood it has relationship graphs, real-time metrics, visual workflow builders, and terminal emulation.
-
-**Manage your agents visually, not through scattered markdown.**
-
-|        | Step            | Example                                                            |
-| ------ | --------------- | ------------------------------------------------------------------ |
-| **01** | Define the agent | Create a "Senior Frontend" agent with specific instructions.       |
-| **02** | Build skills    | Import or create custom tools and capabilities for your team.      |
-| **03** | Run & Monitor   | Execute commands in the terminal and watch real-time metrics.      |
-
-<br/>
-
-> **COMING SOON: Desktop App** — Run agents-ui as a standalone desktop application for even tighter integration with your local environment.
-
-<br/>
-
-<div align="center">
-<table>
-  <tr>
-    <td align="center"><strong>Works<br/>with</strong></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/anthropic.svg" width="32" alt="Claude Code" /><br/><sub>Claude Code</sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/anthropic.svg" width="32" alt="Anthropic SDK" /><br/><sub>Anthropic SDK</sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/bun.svg" width="32" alt="Bun" /><br/><sub>Bun</sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/nuxt.svg" width="32" alt="Nuxt 3" /><br/><sub>Nuxt 3</sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/tailwindcss.svg" width="32" alt="Tailwind CSS" /><br/><sub>Tailwind CSS</sub></td>
-    <td align="center"><img src="https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/gnometerminal.svg" width="32" alt="Bash" /><br/><sub>Bash</sub></td>
-  </tr>
-</table>
-
-<em>If it's in your `.claude` folder, it's here.</em>
-
-</div>
-
-<br/>
-
-## agents-ui is right for you if
-
-- ✅ You want a **visual way to manage** your Claude Code agents
-- ✅ You **coordinate many different commands and skills** and want to see how they connect
-- ✅ You want to **monitor token usage and costs** in real-time
-- ✅ You want to **build multi-step workflows** visually instead of manually chaining agents
-- ✅ You want a **clean, real-time chat interface** for testing agent behaviors
-- ✅ You find editing scattered `.claude` files **cumbersome or disorganized**
-
-<br/>
-
-## Features
-
-<table>
-<tr>
-<td align="center" width="33%">
-<h3>🤖 Agent Management</h3>
-Visual editor for <code>.claude/agents/*.md</code>. Configure models, instructions, and memory.
-</td>
-<td align="center" width="33%">
-<h3>🔗 Relationship Graph</h3>
-Visual map of agents, commands, and skills. Identify dependencies and gaps at a glance.
-</td>
-<td align="center" width="33%">
-<h3>⚡ Command Builder</h3>
-Create reusable slash commands with argument hints and safety configurations.
-</td>
-</tr>
-<tr>
-<td align="center">
-<h3>🧪 Agent Studio</h3>
-Iterate faster with live testing. Inspect execution and refine prompts in real time.
-</td>
-<td align="center">
-<h3>🔄 Workflow Builder</h3>
-Build multi-step AI pipelines visually. Chain agents and control execution order.
-</td>
-<td align="center">
-<h3>🧠 Skill Management</h3>
-Centralized skill management. Import skills from GitHub or create custom ones.
-</td>
-</tr>
-<tr>
-<td align="center">
-<h3>🖥️ CLI Terminal</h3>
-Full PTY terminal emulator with integrated context monitoring and WebSocket streaming.
-</td>
-<td align="center">
-<h3>📊 Real-time Metrics</h3>
-Live token counting, cost tracking, and file system change monitoring.
-</td>
-<td align="center">
-<h3>🌍 Explore & Templates</h3>
-Browse and import community agent templates and marketplace resources instantly.
-</td>
-</tr>
-</table>
-
-<br/>
-
-## Problems agents-ui solves
-
-| Without agents-ui                                                                                                                     | With agents-ui                                                                                                                         |
-| ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| ❌ You edit scattered markdown files in `~/.claude` and lose track of which agent uses which skill.                                    | ✅ A single visual control layer shows you exactly how everything connects with relationship graphs.                                  |
-| ❌ You have no visibility into how many tokens you're using or what the actual cost of a session is until it's over.                  | ✅ Real-time metrics surface token usage and costs as they happen, helping you stay within budget.                                     |
-| ❌ Chaining agents together requires manual coordination and jumping between multiple terminal windows.                               | ✅ Visual workflow builder lets you chain agents into pipelines and inspect intermediate results easily.                               |
-| ❌ Testing a new prompt or agent behavior requires re-running CLI commands and manually parsing output.                               | ✅ Agent Studio provides a clean chat interface with SSE streaming for instant feedback and debugging.                                |
-| ❌ Finding and importing community skills is a manual process of cloning repos and copying files.                                     | ✅ GitHub import flow lets you point to a repo and choose which skills to import directly into your setup.                            |
-
-<br/>
-
-## Why agents-ui is special
-
-agents-ui handles the visual orchestration of Claude Code correctly.
-
-|                                   |                                                                                                               |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Real-time Context Monitoring.** | Tracks tokens, costs, file changes, and tool calls as they happen in your terminal sessions.                  |
-| **Visual Relationship Mapping.**  | Automatically detects links between agents, commands, and skills to build a live dependency graph.            |
-| **Native Claude Code Integration.**| Built directly on top of the `@anthropic-ai/claude-agent-sdk` for authentic agent interactions.              |
-| **SSE-powered Agent Studio.**     | Streams agent thinking, tool use, and text deltas for a responsive, real-time testing experience.            |
-| **Workflow Visualization.**       | Models complex AI pipelines as nodes and edges, making multi-step processes easy to understand.               |
-| **Zero-Config Data Layer.**       | Directly reads and writes to your existing `~/.claude` directory—no new database or account required.         |
-
-<br/>
-
-## What agents-ui is not
-
-|                              |                                                                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Not a replacement for CLI.**| It's a GUI *companion*. You can still use the Claude CLI alongside it whenever you want.                             |
-| **Not an LLM provider.**     | We don't provide models. agents-ui uses your existing Anthropic API keys and Claude Code setup.                      |
-| **Not a general-purpose IDE.**| It's specifically optimized for the Claude Code ecosystem and `.claude` configurations.                              |
-| **Not a hosted service.**     | agents-ui runs locally on your machine for maximum privacy and access to your local files.                           |
-
-<br/>
-
-## Quickstart
-
-Open source. Self-hosted. Use your local Claude Code setup.
+### Team instance
 
 ```bash
-git clone https://github.com/Ngxba/claude-code-agents-ui.git
-cd claude-code-agents-ui
-bun install
-bun run dev
+AGENT_MANAGER_SECRET=$(openssl rand -hex 32) \
+GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+AGENT_MANAGER_URL=http://<host>:3030 \
+docker compose -f docker-compose.team.yml up -d --build
 ```
 
-Open **http://localhost:3000** — agents-ui will automatically load your `~/.claude` setup.
+Config, runs, user profiles and product checkouts live on one volume under `/srv/agent-manager`. Nothing from a developer's home directory is mounted. At boot the instance installs the team's agents, skills and workflow from the plugin and the shipped templates.
 
-> **Requirements:** [Bun](https://bun.sh) (recommended) or Node.js 18+
+Before the first sign-in:
 
-<br/>
+1. Register a GitHub OAuth app under the `alepolab` organisation with callback `<AGENT_MANAGER_URL>/api/auth/callback`.
+2. Install the plugin into the instance's config directory once: `claude plugin marketplace add <path to engineering/>` then `claude plugin install alepo-engineering@alepo-engineering --scope user`, with `CLAUDE_DIR` pointing at the volume.
 
-## FAQ
+### Your own machine
 
-**Where is my data stored?**
-Everything is stored in your standard `~/.claude` directory. agents-ui reads and writes directly to those files.
+`docker-compose.yml` bakes an allowlisted copy of `~/.claude` into the image (see `docs/baked-claude-config.md`). For a live setup, add a git-ignored `docker-compose.override.yml` that bind-mounts your home directory at the same path, runs as your uid, mounts the docker CLI and socket, and sets `AUTH_DISABLED=1`. Then:
 
-**Do I need a separate Anthropic API key?**
-agents-ui uses the same environment variables as your Claude Code setup. If `anthropic` is configured in your shell, agents-ui will find it.
+```bash
+docker compose up -d --build
+```
 
-**Can I still use the CLI?**
-Yes! agents-ui is a companion. Changes you make in the UI reflect in your `.claude` files immediately, and vice versa.
+Rebuilds take about five minutes and interrupt runs in memory. Interrupted runs show on the home page and can be resumed.
 
-**How does the relationship graph work?**
-It scans your agent, command, and skill files for references to each other (like `agent:` in frontmatter or `/command` in text) and builds the graph dynamically.
+### Dev server
 
-<br/>
+```bash
+bun install
+bun run dev        # http://localhost:3030
+```
+
+Requires Bun 1.3 and a working `claude` login on the host.
+
+## Daily use
+
+- **Home.** Type a ticket key such as `SCN-402` and press Start. A bare key is expanded from Jira when your profile holds a token. Below the form: runs that need you (paused, failed, interrupted, CI failing), your recent runs with cost, and team drift.
+- **Runs.** Every run with status, product, cost, CI result and who started it. Open one to see step output and artifacts, restart from a step with a note, clone, or stop.
+- **Profile.** Atlassian email and Jira API token, stored encrypted. Test connection checks them with the `jira` CLI.
+- **Team.** Drift between this instance and the plugin. Apply team standards rewrites only team-owned files.
+- **Settings.** Labs toggle exposes the retired Graph, Explore and Output styles pages.
+
+From a terminal:
+
+```
+am runs [--status s]
+am status <runId>
+am start <workflowSlug> "<ticket or prompt>" [--dir p] [--auto]
+am restart <runId> [stepId|label] [--note "..."]
+am clone <runId>
+am stop <runId>
+am open <runId>
+```
+
+`am` is `bin/am.mjs`; it reads `AGENT_MANAGER_URL`.
+
+## Configuration
+
+All values are environment variables. Never write them into files in this repo.
+
+### Identity
+
+| Variable | Effect |
+|---|---|
+| `AUTH_DISABLED=1` | No sign-in; every request is `DEV_USER` (default `local`). For a single developer's machine only. |
+| `AGENT_MANAGER_SECRET` | 32+ characters. Seals the session cookie and encrypts stored tokens. Required when auth is on. |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app. |
+| `GITHUB_ORG` | Organisation whose active members may sign in (default `alepolab`). |
+| `AGENT_USERS_DIR` | Where profiles live (default `~/.agent-manager/users`). Mode 600, sealed tokens only. |
+| `LOCAL_DESKTOP=1` | Enables the folder picker and reveal buttons, which only make sense when browser and server share a desktop. |
+
+### Runs
+
+| Variable | Effect |
+|---|---|
+| `CLAUDE_DIR` | Config directory the app manages (default `~/.claude`). |
+| `AGENT_RUNS_DIR`, `AGENT_WORKSPACE_ROOT` | Where run records live and where the provisioner clones product repos. |
+| `AGENT_RUN_MAX_MINUTES`, `AGENT_RUN_MAX_TOKENS` | Per-run caps checked between steps (defaults 180 and 8,000,000). |
+| `AGENT_GH_TOKEN` | Fallback `GH_TOKEN` for agent calls when the starting user has no GitHub token. |
+| `JIRA_TICKET_SOURCE=cli` | Read tickets and write outcome comments through the `jira` CLI. Default on the team compose. |
+| `JIRA_SERVER`, `JIRA_DEFAULT_PROJECT` | Server and default project for the per-user jira-cli config. |
+| `SLACK_WEBHOOK_URL` | One message per run transition to paused, completed, failed, stopped or interrupted. |
+| `CI_POLL_SECONDS`, `CI_POLLER_DISABLED` | Polling of `gh pr checks` on completed runs (default 60s). |
+| `AGENT_REGISTRY_PATH` | Override the product registry, otherwise read from the installed plugin. |
+| `TEAM_SEED_ON_BOOT=0` | Skip applying team standards at boot. |
+
+## The alepo-engineering plugin
+
+`engineering/` is a Claude Code plugin marketplace with one plugin. It carries what the pipeline enforces and what it needs to route work:
+
+- `hooks/`: plan gate (no edits before `.agent/plan.md`), test lock (tests freeze once source changes), secrets guard (denies reading credential files and env dumps).
+- `registry/products.yaml`: products grouped by suite, their repos, branches, stack profiles and test commands. Entries marked CONFIRM have unverified routing.
+- `registry/watches.yaml`: the Jira queues the triage loop reads.
+- `recipes/*.md`: per-product stand-up and verification recipes.
+- `skills/`, `commands/`: intent template, regression matrix, triage, reproduce, baseline.
+- `schemas/evidence-bundle.v0.1.schema.json`: what every agent-authored PR carries.
+
+After changing anything under `engineering/`, reinstall the plugin so the instance picks it up. Validate with `node engineering/scripts/validate-registry.mjs`.
 
 ## Development
 
 ```bash
-bun run dev          # Start dev server (Nuxt + SSE)
-bun run build        # Build for production
-bun run preview      # Preview production build
-bun run typecheck    # Run TypeScript type checking
+bun run dev          # dev server on 3030
+bun run build        # production build
+bun run typecheck    # nuxt typecheck
+for t in scripts/test-*.mjs engineering/scripts/test-*.mjs; do node "$t" || break; done
+node scripts/sync-agents.mjs   # push sdlc-* templates into a checkout's config dir
 ```
 
-<br/>
+Tests are plain Node scripts with no framework. `bun run test:e2e` needs a staged docker config and browser libs (`bun run e2e:libs`).
 
-## Roadmap
+Layout:
 
-- ✅ Visual Agent Editor
-- ✅ Relationship Graph
-- ✅ Workflow Builder
-- ✅ GitHub Skill Import
-- ✅ Real-time Metrics (Tokens/Cost)
-- ✅ Integrated Terminal Emulator
-- ✅ Chat-based Agent Studio
-- ✅ Marketplace & Plugin System
-- ⚪ Desktop Application
-- ⚪ Artifacts & Deployments
-- ⚪ Multiple Session History
+| Path | Holds |
+|---|---|
+| `app/` | Nuxt pages, components, composables; `app/utils/templates.ts` is the source of the sdlc-* agents |
+| `server/api/` | REST and WebSocket routes |
+| `server/utils/` | Workflow runner, registry, artifacts, notifications, CI poller, users, sessions, team sync |
+| `shared/types/` | Run and watch types shared by client and server |
+| `engineering/` | The plugin |
+| `docs/superpowers/specs`, `docs/superpowers/plans` | Design specs and implementation plans, by date |
+| `docs/roadmap/` | Capability roadmap and research notes |
+| `CLAUDE.md` | Conventions for Claude Code sessions in this repo, including the model registry rules |
 
-<br/>
+## Credits and license
 
-## Community & Contributing
-
-We welcome contributions! See the [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-- [GitHub Issues](https://github.com/Ngxba/claude-code-agents-ui/issues) — bugs and feature requests
-- [GitHub Discussions](https://github.com/Ngxba/claude-code-agents-ui/discussions) — ideas and RFC
-
-<br/>
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/image?repos=Ngxba/claude-code-agents-ui&type=date&legend=top-left)](https://star-history.com/#Ngxba/claude-code-agents-ui&Date)
-
-<br/>
-
-## License
-
-MIT &copy; 2026 Ngxba, agents-ui contributors
-
-<br/>
-
----
-
-<p align="center">
-  <img src="docs/assets/footer.png" alt="" width="720" />
-</p>
-
-<p align="center">
-  <sub>Open source under MIT. Built for developers who want to see their agents in action.</sub>
-</p>
+Started from [claude-code-agents-ui](https://github.com/Ngxba/claude-code-agents-ui) by Ngxba and contributors. MIT, see `LICENSE`.
