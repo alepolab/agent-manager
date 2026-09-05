@@ -33,3 +33,4 @@ docker/claude-config/
 # Playwright browser-test artifacts (e2e/*.smoke.mjs), if ever produced
 test-results/
 playwright-report/
+docker-compose.override.yml

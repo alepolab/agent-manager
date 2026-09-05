@@ -104,9 +104,32 @@ if (import.meta.client) {
 
 onMounted(async () => {
   await loadConfig()
-  await Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers()])
+  if (!settings.value) void loadSettings()
+  // Render first, fill later: every list page owns its own loading state, and
+  // waiting for all six lists here made each route show a blank spinner until
+  // the slowest of them (skills, several MB) had arrived.
   initialized.value = true
+  void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers()])
 })
+
+const { settings, load: loadSettings } = useSettings()
+const { me, signOut } = useUser()
+// Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
+const labs = computed(() => settings.value?.agentManager?.labs === true)
+const navTopAll = [
+  { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
+  { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
+  { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
+  { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
+  { label: 'Team', icon: 'i-lucide-users', to: '/team' },
+  { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
+  { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },
+  { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins' },
+  { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp' },
+  { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
+]
+
+const navTop = computed(() => navTopAll.filter(l => labs.value || l.to !== '/output-styles'))
 
 /** Reload everything the sidebar counts after onboarding finishes.
  *  Written as a named handler rather than inline: a template expression
@@ -121,28 +144,17 @@ async function onOnboardingComplete() {
   ])
 }
 
-const navTop = [
-  { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
-  { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
-  { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
-  { label: 'Run History', icon: 'i-lucide-history', to: '/runs' },
-  { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
-  { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },
-  { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins' },
-  { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp' },
-  { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
-]
-
 const navMid = [
   { key: 'artifacts', label: 'Artifacts', icon: 'i-lucide-folder-root', to: '/project-artifacts' },
   { key: 'cli', label: 'CLI', icon: 'i-lucide-terminal-square', to: '/cli' },
 ]
 
-const navBottom = [
+const navBottomAll = [
   { label: 'Explore', icon: 'i-lucide-compass', to: '/explore' },
   { label: 'Graph', icon: 'i-lucide-workflow', to: '/graph' },
   { label: 'Settings', icon: 'i-lucide-settings', to: '/settings' },
 ]
+const navBottom = computed(() => navBottomAll.filter(l => labs.value || !['/explore', '/graph'].includes(l.to)))
 
 function isActive(to: string) {
   if (to === '/') return route.path === '/'
@@ -359,6 +371,24 @@ function badgeFor(to: string) {
             </template>
           </button>
         </div>
+
+        <!-- Signed-in developer -->
+        <ClientOnly>
+          <div v-if="me" :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
+            <NuxtLink
+              to="/profile"
+              class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring"
+              :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
+              style="color: var(--text-tertiary);"
+              :title="`${me.name || me.login} · profile`"
+            >
+              <img v-if="me.avatar" :src="me.avatar" alt="" class="size-5 rounded-full" />
+              <UIcon v-else name="i-lucide-user" class="size-4" />
+              <span v-if="!sidebarCollapsed" class="text-[12px] truncate flex-1 text-left" style="font-family: var(--font-sans);">{{ me.name || me.login }}</span>
+              <button v-if="!sidebarCollapsed && !me.authDisabled" class="text-[10px] underline" @click.prevent="signOut">Sign out</button>
+            </NuxtLink>
+          </div>
+        </ClientOnly>
 
         <!-- Theme toggle -->
         <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">

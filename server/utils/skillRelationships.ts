@@ -2,8 +2,8 @@ import { readdir, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { resolveClaudePath } from './claudeDir'
-import { parseFrontmatter } from './frontmatter'
+import { resolveClaudePath } from './claudeDir.ts'
+import { parseFrontmatter } from './frontmatter.ts'
 
 export async function getPreloadingAgents(skillSlug: string): Promise<{ name: string; slug: string }[]> {
   const agentsDir = resolveClaudePath('agents')
@@ -32,13 +32,16 @@ export async function getPreloadingAgents(skillSlug: string): Promise<{ name: st
   return preloadingAgents
 }
 
-export async function getMcpServerForSkill(
-  skillSlug: string,
-  frontmatter: Record<string, any>,
-  body: string,
-  workingDir?: string
-): Promise<{ name: string; scope: string } | undefined> {
-  const servers: { name: string; scope: string }[] = []
+export type McpServerRef = { name: string; scope: string }
+
+/**
+ * The MCP servers a skill could refer to: global ones from ~/.claude.json and
+ * project ones from <workingDir>/.mcp.json. Read once per request and passed
+ * to matchMcpServer; reading it per skill re-parsed a half-megabyte file
+ * hundreds of times and made the skills list take ten seconds.
+ */
+export async function loadMcpServers(workingDir?: string): Promise<McpServerRef[]> {
+  const servers: McpServerRef[] = []
 
   // Read global servers
   const globalPath = join(homedir(), '.claude.json')
@@ -74,6 +77,16 @@ export async function getMcpServerForSkill(
     }
   }
 
+  return servers
+}
+
+/** Pure: which of the loaded servers a skill points at, if any. */
+export function matchMcpServer(
+  servers: McpServerRef[],
+  skillSlug: string,
+  frontmatter: Record<string, any>,
+  body: string,
+): McpServerRef | undefined {
   // 1. Explicitly defined in frontmatter
   const mcpRef = frontmatter.mcp as string | undefined
   if (mcpRef) {
@@ -104,4 +117,14 @@ export async function getMcpServerForSkill(
   }
 
   return undefined
+}
+
+/** Kept for the single-skill routes; the list handler loads servers once instead. */
+export async function getMcpServerForSkill(
+  skillSlug: string,
+  frontmatter: Record<string, any>,
+  body: string,
+  workingDir?: string
+): Promise<McpServerRef | undefined> {
+  return matchMcpServer(await loadMcpServers(workingDir), skillSlug, frontmatter, body)
 }

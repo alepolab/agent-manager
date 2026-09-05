@@ -10,6 +10,7 @@ const { prefillSkill } = useChat()
 const { agents } = useAgents()
 const { workingDir } = useWorkingDir()
 const { reveal } = useReveal()
+const { localDesktop } = useClaudeDir()
 const { clearChat: clearStudioChat, toolCalls, isStreaming: studioStreaming } = useStudioChat()
 
 const slug = route.params.slug as string
@@ -18,6 +19,7 @@ const queryFilePath = route.query.filePath as string | undefined
 const skill = ref<Skill | null>(null)
 const isImported = computed(() => skill.value?.source === 'github')
 const saving = ref(false)
+const lastModified = ref<number | null>(null)
 
 const frontmatter = ref<SkillFrontmatter>({ name: '', description: '' })
 const body = ref('')
@@ -58,7 +60,7 @@ onMounted(async () => {
       })
     }
     frontmatter.value = { ...skill.value.frontmatter }
-    body.value = skill.value.body
+    body.value = skill.value.body ?? ''
     clearStudioChat()
   } catch (err: any) {
     console.error('Skill load error:', err)
@@ -83,13 +85,16 @@ async function save() {
     if (frontmatter.value.context?.trim()) fm.context = frontmatter.value.context.trim()
     if (frontmatter.value.agent?.trim()) fm.agent = frontmatter.value.agent.trim()
 
-    const updated = await update(slug, { frontmatter: fm, body: body.value })
+    const updated = await update(slug, { frontmatter: fm, body: body.value, lastModified: lastModified.value ?? undefined } as any)
     skill.value = updated
+    lastModified.value = (updated as any).lastModified ?? null
+    lastModified.value = (updated as any).lastModified ?? null
     clearDraft()
     toast.add({ title: 'Saved', color: 'success' })
     if (updated.slug !== slug) router.replace(`/skills/${updated.slug}`)
   } catch (e: any) {
-    toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
+    if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
+    else toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
   } finally {
     saving.value = false
   }
@@ -113,7 +118,7 @@ async function editCopy() {
   try {
     const copy = await create({
       frontmatter: { ...skill.value.frontmatter, name: skill.value.frontmatter.name + ' (copy)' },
-      body: skill.value.body,
+      body: skill.value.body ?? '',
     })
     toast.add({ title: 'Copy created', color: 'success' })
     router.push(`/skills/${copy.slug}`)
@@ -179,7 +184,7 @@ useUnsavedChanges(isDirty)
           @click="prefillSkill(skill!.frontmatter.name)"
         />
         <UButton
-          v-if="skill?.filePath"
+          v-if="localDesktop && skill?.filePath"
           icon="i-lucide-folder-open"
           size="sm"
           variant="ghost"

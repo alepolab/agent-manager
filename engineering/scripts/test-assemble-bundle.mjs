@@ -404,4 +404,30 @@ await check('a truncated meta.json is reported as a problem, not thrown', async 
     }
   })
 
+// ── security and deployment: optional, carried verbatim from meta.json when present
+await check('security and deployment pass through from meta.json and validate', async () => {
+  const dir = runDir(({ files }) => {
+    files['meta.json'] = JSON.stringify({ ...META,
+      security: { verdict: 'PASS', high: 0, medium: 1, low: 2 },
+      deployment: { migration_changed: false, rollback: 'revert the PR' },
+    }, null, 2)
+  })
+  try {
+    const { bundle, problems } = await assembleBundle(dir)
+    assert.deepEqual(problems, [])
+    assert.deepEqual(bundle.security, { verdict: 'PASS', high: 0, medium: 1, low: 2 })
+    assert.deepEqual(bundle.deployment, { migration_changed: false, rollback: 'revert the PR' })
+    assert.deepEqual(validateBundle(bundle), [], 'the schema accepts both sections')
+    assert.ok(validateBundle({ ...bundle, security: { verdict: 'MAYBE', high: 0, medium: 0, low: 0 } }).some(p => /security/.test(p)), 'an invented verdict is rejected')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+await check('a bundle without security or deployment is still valid', async () => {
+  const dir = runDir()
+  try {
+    const { bundle } = await assembleBundle(dir)
+    assert.ok(!('security' in bundle) && !('deployment' in bundle))
+    assert.deepEqual(validateBundle(bundle), [])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 console.log(`\n✓ all ${passed} assemble-bundle tests passed\n`)

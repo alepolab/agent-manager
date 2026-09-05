@@ -1,11 +1,22 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
-import type { WorkflowRun, NewRunInput } from '~~/shared/types/run'
+import { summarizeRunCost } from './costReport.ts'
+import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
+
+export function defaultBudget(): RunBudget {
+  return {
+    maxMinutes: Number(process.env.AGENT_RUN_MAX_MINUTES) || 180,
+    maxTokens: Number(process.env.AGENT_RUN_MAX_TOKENS) || 8_000_000,
+  }
+}
 
 export const RUNS_DIR_NAME = 'workflow-runs'
+
+/** This process's identity for run ownership; see WorkflowRun.bootId. */
+export const BOOT_ID = randomUUID()
 
 const runsDir = () => resolveClaudePath(RUNS_DIR_NAME)
 const runPath = (id: string) => join(runsDir(), `${id}.json`)
@@ -48,7 +59,11 @@ const STEP_SETTLED = new Set<string>(['completed', 'failed', 'skipped'])
  */
 function applyInterrupted(run: WorkflowRun): WorkflowRun {
   const live = run.status === 'running' || run.status === 'paused'
-  if (!live || processAlive(run.pid)) return run
+  // Either signal means the owner is gone: a boot id from another process, or
+  // a pid nothing answers on. Inside a container every server is pid 1, which
+  // is why the boot id exists at all.
+  const replaced = (!!run.bootId && run.bootId !== BOOT_ID) || !processAlive(run.pid)
+  if (!live || !replaced) return run
 
   const steps = run.steps ?? []
   const allSettled = steps.length > 0 && steps.every(s => STEP_SETTLED.has(s.status))
@@ -68,6 +83,16 @@ function applyInterrupted(run: WorkflowRun): WorkflowRun {
   return { ...run, status: 'interrupted' }
 }
 
+/** Runs persisted before budgets existed get the defaults on read. */
+function applyDefaults(run: WorkflowRun): WorkflowRun {
+  const out = run.budget ? run : { ...run, budget: defaultBudget() }
+  if (out.usage) return out
+  // Runs recorded before run.usage existed still have per-step usage; the
+  // cost report is the one place that prices it, so the lists agree with it.
+  const t = summarizeRunCost(out).totals
+  return { ...out, usage: { input_tokens: t.input_tokens, output_tokens: t.output_tokens, usd: Math.round(t.cost_usd * 10000) / 10000 } }
+}
+
 export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
   await ensureDir()
   const run: WorkflowRun = {
@@ -80,6 +105,8 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     watch: input.watch,
     ticketKey: input.ticketKey,
     projectDir: input.projectDir,
+    product: input.product,
+    startedBy: input.startedBy,
     baseCommit: input.baseCommit,
     steps: input.steps.map(s => ({
       stepId: s.stepId, label: s.label, agentSlug: s.agentSlug,
@@ -89,6 +116,8 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     nextStepIds: [],
     startedAt: Date.now(),
     pid: process.pid,
+    bootId: BOOT_ID,
+    budget: defaultBudget(),
   }
   await saveRun(run)
   return run
@@ -96,14 +125,20 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
 
 export async function saveRun(run: WorkflowRun): Promise<void> {
   await ensureDir()
-  await writeFile(runPath(run.id), JSON.stringify(run, null, 2), 'utf-8')
+  // Write-then-rename so a reader never sees a half-written record: getRun
+  // treats unparseable JSON as a missing run, which turned a concurrent read
+  // during publish into a spurious 404.
+  const path = runPath(run.id)
+  const tmp = `${path}.${process.pid}.tmp`
+  await writeFile(tmp, JSON.stringify(run, null, 2), 'utf-8')
+  await rename(tmp, path)
 }
 
 export async function getRun(id: string): Promise<WorkflowRun | null> {
   const path = runPath(id)
   if (!existsSync(path)) return null
   try {
-    return applyInterrupted(JSON.parse(await readFile(path, 'utf-8')) as WorkflowRun)
+    return applyInterrupted(applyDefaults(JSON.parse(await readFile(path, 'utf-8')) as WorkflowRun))
   } catch {
     // A half-written or corrupt record is a missing record, never a crash.
     return null
@@ -125,4 +160,17 @@ export async function listRuns(workflowSlug?: string): Promise<WorkflowRun[]> {
 export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun | null> {
   const runs = await listRuns(workflowSlug)
   return runs.find(r => r.status === 'running' || r.status === 'paused') ?? null
+}
+
+/** The workflow definition a run was started from, read from disk. The runner
+ *  needs it to rebuild scheduling state for a run it has never seen in memory. */
+export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, steps: any[] } | null> {
+  const path = resolveClaudePath('workflows', `${slug}.json`)
+  if (!existsSync(path)) return null
+  try {
+    const data = JSON.parse(await readFile(path, 'utf-8'))
+    return { slug, name: data.name ?? slug, steps: data.steps ?? [] }
+  } catch {
+    return null
+  }
 }

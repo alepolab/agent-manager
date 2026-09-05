@@ -152,3 +152,58 @@ export function createJiraTicketSource(fetchImpl: FetchLike = fetch): TicketSour
     },
   }
 }
+
+/**
+ * Credentials for one request: the starter's own Jira identity when their
+ * profile carries one (server/utils/users.ts puts it in `env`), else the
+ * instance's. `JIRA_BASE_URL` is instance-wide either way.
+ */
+function credentialsFrom(env: Record<string, string>) {
+  if (env.JIRA_EMAIL && env.JIRA_API_TOKEN) {
+    const baseUrl = (env.JIRA_BASE_URL || process.env.JIRA_BASE_URL || '').replace(/\/+$/, '')
+    if (baseUrl) return { baseUrl, email: env.JIRA_EMAIL, apiToken: env.JIRA_API_TOKEN }
+  }
+  return resolveJiraCredentials()
+}
+
+export interface JiraIssueView { key: string, summary: string, description: string, labels: string[], url: string }
+
+/** One issue by key, as the pipeline wants to read it. Throws on any HTTP or credential failure. */
+export async function viewIssue(key: string, env: Record<string, string> = {}, fetchImpl: FetchLike = fetch): Promise<JiraIssueView> {
+  const creds = credentialsFrom(env)
+  const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,labels`, {
+    headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' },
+  })
+  if (!res.ok) throw new Error(`Jira issue ${key} failed (HTTP ${res.status}): ${await describeError(res)}`)
+  const issue = await res.json() as JiraIssue & { fields?: { labels?: string[] } }
+  const f = issue.fields ?? {}
+  return {
+    key: issue.key ?? key,
+    summary: f.summary ?? '',
+    description: adfToPlainText(f.description).trim(),
+    labels: Array.isArray(f.labels) ? f.labels.map(String) : [],
+    url: `${creds.baseUrl}/browse/${issue.key ?? key}`,
+  }
+}
+
+/** The text a run should start from for one ticket: key, summary, labels and description. */
+export function ticketText(issue: JiraIssueView): string {
+  return [
+    `${issue.key}: ${issue.summary}`,
+    `URL: ${issue.url}`,
+    issue.labels.length ? `Labels: ${issue.labels.join(', ')}` : '',
+    '',
+    issue.description,
+  ].filter((l, i) => l !== '' || i === 3).join('\n')
+}
+
+/** For a manual run started with only a key: the ticket text, or null when Jira cannot serve it. */
+export async function expandTicketKey(prompt: string, env: Record<string, string> = {}, fetchImpl: FetchLike = fetch): Promise<string | null> {
+  const key = prompt.trim()
+  if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) return null
+  try {
+    return ticketText(await viewIssue(key, env, fetchImpl))
+  } catch {
+    return null
+  }
+}

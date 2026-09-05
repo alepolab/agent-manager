@@ -6,5 +6,9 @@ export default defineEventHandler(() => {
   return {
     claudeDir,
     exists: existsSync(claudeDir),
+    // Host-only actions (folder picker, reveal in file manager) only make
+    // sense when the browser and the server share a desktop.
+    localDesktop: process.env.LOCAL_DESKTOP === '1',
+    authDisabled: process.env.AUTH_DISABLED === '1',
   }
 })

@@ -45,7 +45,7 @@ function workflow(slug) {
 // ── a caller reporting progress produces a rising turn count, a recorded
 //    tool name, and an advancing lastActivityAt ─────────────────────────────
 {
-  runner.setAgentCaller(async (_agentSlug, _input, _projectDir, onProgress) => {
+  runner.setAgentCaller(async (_agentSlug, _input, _projectDir, { onProgress } = {}) => {
     onProgress?.({ turn: 1, lastTool: 'Read', lastActivityAt: 1000 })
     onProgress?.({ turn: 2, lastTool: 'Bash', lastActivityAt: 2000 })
     return 'final output'

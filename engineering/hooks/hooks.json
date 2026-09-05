@@ -1,5 +1,5 @@
 {
-  "description": "alepo-engineering plugin hooks — the plan gate (B2) and the test lock (B3, deny + PostToolUse arm).",
+  "description": "alepo-engineering plugin hooks \u2014 the plan gate (B2), the test lock (B3, deny + PostToolUse arm), and the secrets guard (S1).",
   "hooks": {
     "PreToolUse": [
       {
@@ -17,6 +17,15 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/test-lock.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/secrets-guard.mjs\""
           }
         ]
       }

@@ -1,3 +1,4 @@
+import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
@@ -6,7 +7,7 @@ import { computeFixFacts } from './gitFacts.ts'
 import { resolveClaudePath } from './claudeDir.ts'
 import { createLogger } from './log.ts'
 import type { AgentUsage } from './agentCaller.ts'
-import type { WorkflowRun, RunStep } from '~~/shared/types/run'
+import type { WorkflowRun, RunStep, ProductMatch } from '~~/shared/types/run'
 
 const log = createLogger('artifacts')
 
@@ -193,7 +194,7 @@ export function resolveInstalledPluginVersion(pluginName = 'alepo-engineering'):
 function runnerOwned(run: WorkflowRun) {
   const ended = run.endedAt ?? Date.now()
   return {
-    identity: run.workflowSlug,
+    identity: run.startedBy ?? run.workflowSlug,
     // The runner's own fact for what dispatched this run — set once at
     // startRun and carried on the run record ever since (never inferred
     // from, or trusted from, an agent's self-report), same as identity.
@@ -304,15 +305,27 @@ async function reconcileFix(
   }
 
   // Nothing computable. If the agent wrote nothing at all either, leave
-  // `fix` entirely absent rather than fabricating an empty object.
+  // `fix` entirely absent rather than fabricating an empty object. When it
+  // did report repos, keep only what git could never have proved anyway and
+  // nothing here contradicts: the repo name and the PR link. Commit lists
+  // and line counts are dropped, exactly as a computed entry would replace
+  // them, because a self-reported count is a claim wearing a fact's shape;
+  // an entry with no PR link is dropped whole, since a bare repo name is
+  // exactly the fabrication a run that made no commits must not attest to.
+  // A run started without a project directory used to lose its PR URL here,
+  // which left the CI poller with nothing to check.
   if (existingFix === undefined) {
     log.debug('no fix facts computable and none reported; fix block stays absent', { runId: run.id })
     return undefined
   }
-  log.warn('fix facts not computable from git; repos/files_changed/lines_changed dropped from meta', {
+  log.warn('fix facts not computable from git; commits/files_changed/lines_changed dropped from meta, repo names and PR links kept', {
     runId: run.id,
   })
-  return restFix
+  const priorRepos = Array.isArray(existingFix.repos) ? existingFix.repos as Array<Record<string, unknown>> : []
+  const kept = priorRepos
+    .filter(r => r && typeof r.repo === 'string' && typeof r.pr === 'string' && r.pr.startsWith('http'))
+    .map(r => ({ repo: r.repo, pr: r.pr }))
+  return kept.length ? { ...restFix, repos: kept } : restFix
 }
 
 export async function initRunArtifacts(run: WorkflowRun, workflowName: string): Promise<void> {
@@ -455,17 +468,37 @@ export async function publishEvidenceToProject(
 
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string): string {
-  return [
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string): string {
+  const lines = [
     '## Run artifacts directory',
     '',
     `Write every artifact you produce into: ${dir}`,
     '',
+    `Claude config directory: ${getClaudeDir()}`,
+    '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
     'writing it, and never write a placeholder in place of a real result.',
-    '',
-    '---',
-    '',
-  ].join('\n')
+    'End your output with the verbatim `ls -la` of this directory: the step monitor',
+    'sees only your output, and a file it cannot see in it is a file that does not exist.',
+  ]
+  if (product) {
+    lines.push(
+      '',
+      '## Product (from the registry)',
+      '',
+      `Product: ${product.name}${product.suite ? ` (suite: ${product.suite})` : ''}`,
+      `Repos: ${product.repos.join(', ')}`,
+      `Checkouts: ${process.env.AGENT_WORKSPACE_ROOT || '~/alepo-workspace'}/<repo name>; confirm each with git remote -v, and clone git@github.com:<repo>.git there if it is missing.`,
+      ...(product.multiRepo ? ['Multi-repo: yes. Every repo listed gets its own branch, commit and PR; plan.md must give a merge order and nothing merges until every PR in the set is approved.'] : []),
+      `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
+      `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
+      `Tests: ${Object.entries(product.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,
+      ...(product.recipe ? [`Recipe: ${product.recipe}`] : []),
+      'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
+    )
+  }
+  if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
+  lines.push('', '---', '')
+  return lines.join('\n')
 }

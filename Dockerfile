@@ -1,8 +1,8 @@
-FROM oven/bun:1.1-slim AS build
+FROM oven/bun:1.3-slim AS build
 
 WORKDIR /app
 
-# Install build dependencies for node-pty (native module)
+# Build tools for any native dependency
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
@@ -13,12 +13,7 @@ RUN apt-get update && apt-get install -y \
 COPY package.json bun.lockb* ./
 
 # Install dependencies
-RUN bun install
-
-# Build node-pty from source for ARM64
-RUN bun add -g node-gyp
-RUN cd node_modules/node-pty && \
-    bun run install
+RUN bun install --frozen-lockfile
 
 # Copy source files (excluding node_modules via .dockerignore)
 COPY . .
@@ -27,21 +22,19 @@ COPY . .
 RUN bun run build
 
 # Production stage
-FROM oven/bun:1.1-slim
+FROM oven/bun:1.3-slim
 
 WORKDIR /app
 
-# Install runtime dependencies for node-pty and the healthcheck
+# Runtime dependencies: python3 for agent scripts, curl for the healthcheck, git for pipeline steps
 RUN apt-get update && apt-get install -y \
     python3 \
+    git \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built application from build stage
 COPY --from=build /app/.output .output
-
-# Copy node-pty native bindings to production
-COPY --from=build /app/node_modules/node-pty/build /app/.output/server/node_modules/node-pty/build
 
 # Bake in a curated Claude config so the image is self-contained: plugins,
 # skills, agents and settings travel with it, and a fresh host needs no
@@ -56,6 +49,21 @@ COPY --from=build /app/node_modules/node-pty/build /app/.output/server/node_modu
 # volume from the image's contents on first creation, so these files become the
 # starting state and anything the app writes afterwards persists in the volume.
 # A bind mount would instead hide all of this.
+# The product's own skills. teamSync seeds a team instance from the INSTALLED
+# alepo-engineering plugin when there is one and falls back to these when there
+# is not - the normal case in a container. Without them a fresh team instance
+# boots "9 agents, 0 skills": every agent declares skills that cannot resolve,
+# and because buildAgentSystemPrompt swallows a per-skill failure by design,
+# each agent silently runs without the instructions it was supposed to have.
+COPY engineering/skills ./engineering/skills
+
+# And its commands, for the same reason one level down. teamSync falls back to
+# these when no plugin is installed. Without this COPY the fallback finds
+# nothing and a container seeds zero commands - which is what shipped, because
+# the staged ~/.claude payload below happened to carry the operator's own
+# commands and made the gap look filled on the one box that built the image.
+COPY engineering/commands ./engineering/commands
+
 COPY docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.

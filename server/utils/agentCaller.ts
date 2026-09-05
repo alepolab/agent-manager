@@ -71,6 +71,9 @@ export interface AgentProgress {
 }
 export type OnAgentProgress = (progress: AgentProgress) => void
 
+/** Per-call extras: the runner's abort signal, the starter's identity env, and a progress sink. */
+export interface AgentCallOptions { signal?: AbortSignal, env?: Record<string, string>, onProgress?: OnAgentProgress }
+
 /** Floor between successive progress emissions when the active tool hasn't
  *  changed — publishing on every SDK message would be far too chatty (a
  *  single turn can emit several messages: assistant text, tool_use,
@@ -135,8 +138,13 @@ export function shouldEmitProgress(
  * reports it resolved to, captured below.
  */
 export async function callAgent(
-  agentSlug: string, input: string, projectDir?: string, onProgress?: OnAgentProgress,
+  agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
+  const { signal, env: userEnv = {}, onProgress } = opts
+  // The runner's stop aborts this controller; the SDK then ends the CLI process.
+  const abortController = new AbortController()
+  if (signal?.aborted) abortController.abort()
+  signal?.addEventListener('abort', () => abortController.abort())
   const claudeDir = getClaudeDir()
   const cwd = projectDir && existsSync(projectDir) ? projectDir : claudeDir
 
@@ -196,6 +204,14 @@ export async function callAgent(
     prompt: input,
     options: {
       cwd,
+      // A bot identity for git and gh, when one is configured, so agent pushes
+      // and PRs are not attributed to whoever runs the server.
+      // Identity for git, gh and jira: the starter's own tokens when they have
+      // a profile, else the bot token, else whatever the host holds.
+      ...((process.env.AGENT_GH_TOKEN || Object.keys(userEnv).length)
+        ? { env: { ...process.env, ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}), ...userEnv } }
+        : {}),
+      abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       maxTurns,

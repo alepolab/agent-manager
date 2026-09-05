@@ -20,28 +20,31 @@ function timeAgo(iso: string): string {
 </script>
 
 <template>
-  <NuxtLink
-    :to="`/workflows/${workflow.slug}`"
-    class="block rounded-xl p-4 transition-all duration-150 focus-ring group"
+  <!-- The link wraps only the content; the footer with its own button sits
+       beside it, so no interactive element is nested inside the anchor. -->
+  <div
+    class="rounded-xl transition-all duration-150 group"
     style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
     @mouseenter="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-default)'"
     @mouseleave="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-subtle)'"
   >
-    <div class="flex items-start gap-3">
-      <div
-        class="size-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
-        style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.15);"
-      >
-        <UIcon name="i-lucide-git-branch" class="size-4" style="color: var(--accent);" />
-      </div>
-      <div class="flex-1 min-w-0">
-        <div class="text-[13px] font-medium truncate" style="color: var(--text-primary);">{{ workflow.name }}</div>
-        <div class="text-[11px] mt-0.5 line-clamp-2" style="color: var(--text-tertiary);">
-          {{ workflow.description || 'No description' }}
+    <NuxtLink :to="`/workflows/${workflow.slug}`" class="block p-4 pb-3 focus-ring rounded-t-xl">
+      <div class="flex items-start gap-3">
+        <div
+          class="size-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
+          style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.15);"
+        >
+          <UIcon name="i-lucide-git-branch" class="size-4" style="color: var(--accent);" />
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[13px] font-medium truncate" style="color: var(--text-primary);">{{ workflow.name }}</div>
+          <div class="text-[11px] mt-0.5 line-clamp-2" style="color: var(--text-tertiary);">
+            {{ workflow.description || 'No description' }}
+          </div>
         </div>
       </div>
-    </div>
-    <div class="flex items-center gap-2 mt-3 pt-3" style="border-top: 1px solid var(--border-subtle);">
+    </NuxtLink>
+    <div class="flex items-center gap-2 mx-4 pt-3 pb-4" style="border-top: 1px solid var(--border-subtle);">
       <div class="flex -space-x-1">
         <div
           v-for="(agent, idx) in stepAgents.slice(0, 4)"
@@ -54,8 +57,15 @@ function timeAgo(iso: string): string {
       </div>
       <span class="text-[10px]" style="color: var(--text-disabled);">{{ workflow.steps.length }} step{{ workflow.steps.length === 1 ? '' : 's' }}</span>
       <ClientOnly>
-        <span v-if="workflow.lastRunAt" class="text-[10px] ml-auto" style="color: var(--text-disabled);">{{ timeAgo(workflow.lastRunAt) }}</span>
+        <span v-if="workflow.lastRunAt" class="text-[10px] ml-2" style="color: var(--text-disabled);">{{ timeAgo(workflow.lastRunAt) }}</span>
       </ClientOnly>
+      <UButton
+        size="xs" variant="soft" icon="i-lucide-play" label="Run"
+        class="ml-auto"
+        :disabled="workflow.steps.length === 0"
+        :title="workflow.steps.length === 0 ? 'Add a step before running' : 'Run this workflow'"
+        :to="workflow.steps.length ? `/workflows/${workflow.slug}?start=1` : undefined"
+      />
     </div>
-  </NuxtLink>
+  </div>
 </template>

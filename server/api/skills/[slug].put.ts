@@ -1,4 +1,5 @@
-import { writeFile, mkdir, rename, readFile, readdir } from 'node:fs/promises'
+import { invalidate } from '../../utils/memo'
+import { writeFile, mkdir, rename, readFile, readdir, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { resolveClaudePath } from '../../utils/claudeDir'
@@ -106,6 +107,7 @@ async function findSkillPath(slug: string): Promise<string | null> {
 }
 
 export default defineEventHandler(async (event) => {
+  invalidate('skills'); invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const skillPath = await findSkillPath(slug)
 
@@ -113,7 +115,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: `Skill not found: ${slug}` })
   }
 
-  const payload = await readBody<SkillPayload>(event)
+  const payload = await readBody<SkillPayload & { lastModified?: number }>(event)
   const content = serializeFrontmatter(payload.frontmatter, payload.body)
 
   // For standalone skills, support rename
@@ -128,6 +130,12 @@ export default defineEventHandler(async (event) => {
     }
     await rename(skillDir, newSkillDir)
     const newSkillPath = join(newSkillDir, 'SKILL.md')
+    if (typeof payload.lastModified === 'number' && existsSync(skillPath)) {
+      const current = (await stat(skillPath)).mtimeMs
+      if (Math.abs(current - payload.lastModified) > 1000) {
+        throw createError({ statusCode: 409, message: 'This skill changed on disk since you opened it. Reload to see the latest version.', data: { lastModified: current } })
+      }
+    }
     await writeFile(newSkillPath, content, 'utf-8')
     return { slug: newSlug, frontmatter: payload.frontmatter, body: payload.body, filePath: newSkillPath }
   }

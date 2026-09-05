@@ -1,8 +1,10 @@
+import { invalidate } from '../../utils/memo'
 import { rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
 
 export default defineEventHandler(async (event) => {
+  invalidate('skills'); invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const skillDir = resolveClaudePath('skills', slug)
 

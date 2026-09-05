@@ -23,6 +23,9 @@ const toast = useToast()
 
 const rawJson = ref('')
 const saving = ref(false)
+async function toggleLabs(on: boolean) {
+  await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), labs: on } } as any)
+}
 const viewMode = ref<'structured' | 'raw'>('structured')
 const showRemoveConfirm = ref(false)
 const repoToRemove = ref<{ owner: string; repo: string; type: 'skills' | 'agents'; count: number } | null>(null)
@@ -307,6 +310,24 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
         <div class="space-y-4">
           <!-- Always Thinking toggle -->
+          <div class="flex items-start justify-between gap-4 py-3">
+            <div>
+              <div class="text-[13px] font-medium">Labs pages</div>
+              <div class="text-[12px] mt-0.5 text-label">
+                Show Graph, Explore and Output styles in the sidebar. They work, but are not part of the daily set yet.
+              </div>
+            </div>
+            <label class="field-toggle">
+              <input
+                type="checkbox"
+                :checked="settings?.agentManager?.labs === true"
+                @change="toggleLabs(($event.target as HTMLInputElement).checked)"
+              />
+              <span class="field-toggle__track">
+                <span class="field-toggle__thumb" />
+              </span>
+            </label>
+          </div>
           <div class="flex items-center justify-between">
             <div>
               <div class="text-[13px] font-medium">Always Thinking</div>

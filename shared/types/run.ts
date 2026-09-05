@@ -25,6 +25,35 @@ export interface RunStep {
    *  model. Never guessed either way, since a wrong value here is the kind
    *  of defect that produces no error. */
   model?: string | null
+  /** Tokens the agent call actually consumed, as the SDK reported them. */
+  usage?: { input_tokens: number, output_tokens: number } | null
+}
+
+/** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
+export interface RunCi {
+  pr: string
+  status: 'pending' | 'passing' | 'failing' | 'unknown'
+  checks: { name: string, bucket: string }[]
+  checkedAt: number
+  /** True once the checks reached a final state; the poller stops looking. */
+  final: boolean
+  error?: string
+}
+
+export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
+export interface RunBudget { maxMinutes: number, maxTokens: number }
+
+/** The registry entry a run resolved to at start, or absent when nothing matched. */
+export interface ProductMatch {
+  name: string
+  suite?: string
+  /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
+  multiRepo?: boolean
+  repos: string[]
+  branches: Record<string, string>
+  stack: { compose: string, topology_default: string, liquibase?: boolean }
+  tests: Record<string, string>
+  recipe?: string
   /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK
    *  message loop while this step is still `running` — see
    *  server/utils/agentCaller.ts's AgentProgress doc comment for exactly
@@ -77,6 +106,9 @@ export interface WorkflowRun {
    *  issue to comment on when the run finishes with a pull request. */
   ticketKey?: string
   projectDir?: string
+  product?: ProductMatch
+  /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
+  startedBy?: string
   /** `projectDir`'s HEAD sha, captured by the runner (startRun, via
    *  gitFacts.ts's captureBaseline) the instant this run started, before any
    *  step ran. gitFacts.ts's computeFixFacts diffs the CURRENT HEAD against
@@ -90,6 +122,11 @@ export interface WorkflowRun {
    *  field exists to prevent. */
   baseCommit?: string
   steps: RunStep[]
+  /** Runner-owned totals over every step, recomputed on each publish. */
+  usage?: RunUsage
+  ci?: RunCi
+  /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
+  budget: RunBudget
   currentStepIds: string[]
   nextStepIds: string[]
   startedAt: number
@@ -97,6 +134,9 @@ export interface WorkflowRun {
   error?: string
   /** The process that owns this run. A live status from a dead pid is a lie. */
   pid: number
+  /** Random id of the server process that owns this run. In a container every
+   *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
+  bootId?: string
 }
 
 /**
@@ -189,6 +229,8 @@ export interface NewRunInput {
    *  straight onto the persisted run, unmodified. */
   ticketKey?: string
   projectDir?: string
+  product?: ProductMatch
+  startedBy?: string
   /** See WorkflowRun.baseCommit — startRun captures it via
    *  gitFacts.ts's captureBaseline and passes it straight through; createRun
    *  carries it onto the persisted run, unmodified. */

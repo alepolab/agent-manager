@@ -1,3 +1,4 @@
+import { invalidate } from '../../utils/memo'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
@@ -5,6 +6,7 @@ import { parseFrontmatter, serializeFrontmatter } from '../../utils/frontmatter'
 import type { AgentFrontmatter } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  invalidate('agents'); invalidate('relationships')
   const { content } = await readBody<{ content: string }>(event)
 
   if (!content?.trim()) {

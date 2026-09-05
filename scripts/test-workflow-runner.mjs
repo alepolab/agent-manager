@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -602,6 +602,185 @@ assert.ok(cStart < bEnd,
   assert.ok(r.endedAt, 'the empty-wave branch still records when the run ended')
 }
 
+
+// ── 9. restartRun re-runs a failed step and its descendants only ──────────
+// The runner loads the workflow from disk to rehydrate, so write it there.
+mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'),
+  JSON.stringify({ name: workflow.name, description: '', steps: workflow.steps }))
+
+// Earlier cases leave paused runs of this workflow behind; restart honours the
+// one-active-run rule, so settle them first.
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+
+let explode = true
+runner.setAgentCaller(async (agentSlug, input) => {
+  calls.push(agentSlug)
+  if (agentSlug === 'agent-b' && explode) throw new Error('agent-b exploded')
+  return `output of ${agentSlug} <- ${input.slice(-40).replace(/\n/g, ' ')}`
+})
+calls.length = 0
+let rst = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+rst = await runner.waitForSettled(rst.id, TIMEOUT)
+assert.equal(rst.status, 'failed')
+const aOutput = rst.steps.find(s => s.stepId === 'a').output
+
+// A restart while nothing is live is the realistic case: simulate a server
+// restart by forgetting the in-memory record before restarting.
+runner._dropLive(rst.id)
+explode = false
+calls.length = 0
+// The template sync rewrites the workflow file with fresh step ids. A restart
+// must still find its way: same agents in the same order means the same run.
+writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
+  name: workflow.name, description: '',
+  steps: workflow.steps.map(s => ({ ...s, id: `new-${s.id}`, next: s.next.map(n => `new-${n}`) })),
+}))
+await assert.rejects(runner.restartRun(rst.id, 'nope'), /nope/, 'unknown step id is refused')
+rst = await runner.restartRun(rst.id, 'b')
+assert.equal(rst.status, 'running', 'restart drives the run immediately')
+rst = await runner.waitForSettled(rst.id, TIMEOUT)
+assert.equal(rst.status, 'completed', 'restart from b runs b and d to completion')
+assert.deepEqual(calls.sort(), ['agent-b', 'agent-d'], 'only the failed step and its descendants re-run')
+assert.equal(rst.steps.find(s => s.stepId === 'a').output, aOutput, 'a kept its output')
+assert.equal(rst.steps.find(s => s.stepId === 'c').status, 'completed', 'c, not downstream of b, is untouched')
+assert.equal(rst.steps.find(s => s.stepId === 'b').visits, 2, 'visits keep counting across a restart')
+const stepFiles = readdirSync(join(process.env.AGENT_RUNS_DIR, rst.id, 'artifacts', 'steps'))
+assert.ok(stepFiles.some(f => /step-02-.*-restart-1\.json$/.test(f)), 'the failed attempt is snapshotted before the restart')
+
+// A genuinely different workflow (extra step) is refused, not guessed at.
+writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
+  name: workflow.name, description: '',
+  steps: [...workflow.steps, { id: 'e', agentSlug: 'agent-e', label: 'E', next: [] }],
+}))
+runner._dropLive(rst.id)
+await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/, 'a reshaped workflow refuses restart')
+writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'),
+  JSON.stringify({ name: workflow.name, description: '', steps: workflow.steps }))
+
+// Refused while running.
+runner.setAgentCaller(async (agentSlug) => { await new Promise(r => setTimeout(r, 300)); return `slow ${agentSlug}` })
+let busy = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+await assert.rejects(runner.restartRun(busy.id, 'a'), /running/, 'restart refused while the run is running')
+await runner.waitForSettled(busy.id, TIMEOUT)
+
+// ── 10. continueRun resumes an interrupted run from the executing step ────
+runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `output of ${agentSlug}` })
+calls.length = 0
+let intr = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
+intr = await runner.waitForSettled(intr.id, TIMEOUT)          // paused after a
+// Fake a dead owner: rewrite the record with a pid that cannot exist and a
+// step frozen as running, then forget the live record.
+{
+  const p = join(process.env.CLAUDE_DIR, 'workflow-runs', `${intr.id}.json`)
+  const rec = JSON.parse(readFileSync(p, 'utf8'))
+  rec.status = 'running'; rec.pid = 2 ** 22 + 7
+  rec.currentStepIds = ['b']
+  rec.steps.find(s => s.stepId === 'b').status = 'running'
+  writeFileSync(p, JSON.stringify(rec))
+  runner._dropLive(intr.id)
+}
+assert.equal((await store.getRun(intr.id)).status, 'interrupted', 'a dead pid reads as interrupted')
+calls.length = 0
+intr = await runner.continueRun(intr.id)
+assert.equal(intr.status, 'running', 'continue on an interrupted run restarts it')
+intr = await runner.waitForSettled(intr.id, TIMEOUT)
+assert.ok(calls.includes('agent-b'), 'the step that was executing re-runs')
+assert.ok(!calls.includes('agent-a'), 'completed steps do not re-run')
+
+// ── 11. usage totals and cost are runner-owned facts on the run ───────────
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+runner.setAgentCaller(async (agentSlug) => ({ output: `out ${agentSlug}`, model: 'claude-sonnet-4-6', usage: { input_tokens: 1000, output_tokens: 100 } }))
+let costed = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+costed = await runner.waitForSettled(costed.id, TIMEOUT)
+assert.equal(costed.status, 'completed')
+assert.equal(costed.usage.input_tokens, 4000, 'input tokens summed over four steps')
+assert.equal(costed.usage.output_tokens, 400)
+assert.ok(costed.usage.usd > 0, 'a dollar estimate is computed from the model that ran')
+
+// ── 12. a token budget stops a run before the next wave ───────────────────
+process.env.AGENT_RUN_MAX_TOKENS = '1500'
+let capped = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+capped = await runner.waitForSettled(capped.id, TIMEOUT)
+delete process.env.AGENT_RUN_MAX_TOKENS
+assert.equal(capped.status, 'failed', 'exceeding the budget fails the run')
+assert.match(capped.error, /budget/i, 'the run says why')
+assert.ok(capped.steps.some(s => s.status === 'skipped'), 'later steps are skipped, not run')
+
+// ── 13. stopRun aborts the agent call in flight ───────────────────────────
+runner.setAgentCaller((agentSlug, input, projectDir, { signal } = {}) => new Promise((resolve, reject) => {
+  const t = setTimeout(() => resolve(`late ${agentSlug}`), 4000)
+  signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')) })
+}))
+let inflight = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+await new Promise(r => setTimeout(r, 200))
+const t0 = Date.now()
+await runner.stopRun(inflight.id)
+inflight = await runner.waitForSettled(inflight.id, TIMEOUT)
+assert.ok(Date.now() - t0 < 2000, 'stop returns without waiting for the agent to finish on its own')
+assert.equal(inflight.status, 'stopped', 'an aborted wave leaves the run stopped, not failed')
+// The stop publishes first; the aborted step's own failure lands a moment later.
+for (let i = 0; i < 20 && (await store.getRun(inflight.id)).steps.find(s => s.stepId === 'a').status === 'running'; i++) await new Promise(r => setTimeout(r, 50))
+inflight = await store.getRun(inflight.id)
+assert.equal(inflight.status, 'stopped', 'the step failure does not turn a stopped run into a failed one')
+assert.equal(inflight.steps.find(s => s.stepId === 'a').status, 'failed', 'the aborted step records a failure, not a completion')
+assert.match(inflight.steps.find(s => s.stepId === 'a').error, /stopped/i)
+
+// ── 14. a restart note reaches the restarted step's input ─────────────────
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+const inputsSeen = {}
+let cFailedOnce = false
+runner.setAgentCaller(async (agentSlug, input) => {
+  inputsSeen[agentSlug] = input
+  if (agentSlug === 'agent-c' && !cFailedOnce) { cFailedOnce = true; throw new Error('c failed once') }
+  return `out ${agentSlug}`
+})
+let noted = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+noted = await runner.waitForSettled(noted.id, TIMEOUT)
+assert.equal(noted.status, 'failed')
+noted = await runner.restartRun(noted.id, 'c', 'Use the staging CRM, not production')
+noted = await runner.waitForSettled(noted.id, TIMEOUT)
+assert.equal(noted.status, 'completed')
+assert.match(inputsSeen['agent-c'], /Operator note:\s*Use the staging CRM/, 'the note is in the restarted step input')
+assert.match(inputsSeen['agent-c'], /Your previous attempt/, 'the previous attempt travels with it, as a monitor retry would')
+
+// ── 15. a paused run whose process was replaced continues from disk ───────
+// In a container every server is pid 1, so a dead owner cannot be told apart
+// by pid. The run must still continue once nothing in memory knows it.
+runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `out ${agentSlug}` })
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+let orphan = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false })
+orphan = await runner.waitForSettled(orphan.id, TIMEOUT)
+assert.equal(orphan.status, 'paused')
+runner._dropLive(orphan.id)
+calls.length = 0
+orphan = await runner.continueRun(orphan.id)
+assert.equal(orphan.status, 'running', 'a paused run with no live record is rehydrated and continued')
+orphan = await runner.waitForSettled(orphan.id, TIMEOUT)
+assert.deepEqual(calls.sort(), ['agent-b', 'agent-c'], 'the queued wave ran once')
+{
+  const p = join(process.env.CLAUDE_DIR, 'workflow-runs', `${orphan.id}.json`)
+  const rec = JSON.parse(readFileSync(p, 'utf8'))
+  rec.status = 'running'; rec.bootId = 'some-other-process'; rec.currentStepIds = ['d']
+  rec.steps.find(s => s.stepId === 'd').status = 'running'
+  writeFileSync(p, JSON.stringify(rec))
+  runner._dropLive(orphan.id)
+}
+assert.equal((await store.getRun(orphan.id)).status, 'interrupted', 'a different boot id reads as interrupted even when the pid is alive')
+
+// ── 16. the starter's environment reaches every agent call ────────────────
+for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+runner.setEnvResolver(async (login) => (login === 'sandeep' ? { GH_TOKEN: 'gh-for-sandeep', JIRA_API_TOKEN: 'jira-for-sandeep' } : {}))
+const envsSeen = []
+runner.setAgentCaller(async (agentSlug, input, projectDir, { env } = {}) => { envsSeen.push(env); return `out ${agentSlug}` })
+let owned = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'sandeep' })
+owned = await runner.waitForSettled(owned.id, TIMEOUT)
+assert.equal(owned.startedBy, 'sandeep', 'the run records who started it')
+assert.equal(envsSeen.length, 4)
+assert.ok(envsSeen.every(e => e?.GH_TOKEN === 'gh-for-sandeep' && e?.JIRA_API_TOKEN === 'jira-for-sandeep'), 'every agent call carries the starter identity')
+let anon = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+anon = await runner.waitForSettled(anon.id, TIMEOUT)
+assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not

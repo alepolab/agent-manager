@@ -114,6 +114,7 @@ export async function realRunStarter(watch: Watch, ticket: TicketRef): Promise<{
     watch: watch.id,
     autoRun: watch.autoRun,
     projectDir: watch.projectDir,
+    startedBy: watch.createdBy,
   })
   return { runId: run.id }
 }

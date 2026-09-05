@@ -5,7 +5,7 @@
  *   node scripts/test-workflow-run-store.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -148,6 +148,20 @@ rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
     JSON.stringify({ ...stale, id: 'stale-hanging', steps: hangingSteps }, null, 2))
   assert.equal((await store.getRun('stale-hanging')).status, 'interrupted',
     'steps still running or pending with a dead owner is exactly what interrupted means - do not report success')
+}
+
+// A run written before run.usage existed still prices its steps on read.
+{
+  const legacy = await store.createRun({ workflowSlug: 'w', workflowName: 'W', initialPrompt: 'p', watch: 'direct-invocation', steps: [{ stepId: 'a', agentSlug: 'x', label: 'A' }], autoRun: false })
+  const p = join(process.env.CLAUDE_DIR, 'workflow-runs', `${legacy.id}.json`)
+  const rec = JSON.parse(readFileSync(p, 'utf8'))
+  delete rec.usage
+  rec.status = 'completed'
+  rec.steps[0] = { ...rec.steps[0], status: 'completed', model: 'claude-sonnet-4-6', usage: { input_tokens: 1_000_000, output_tokens: 0 } }
+  writeFileSync(p, JSON.stringify(rec))
+  const read = await store.getRun(legacy.id)
+  assert.equal(read.usage.input_tokens, 1_000_000, 'legacy run gets usage from its steps')
+  assert.ok(read.usage.usd > 0, 'and a price from the cost report')
 }
 
 console.log('workflowRunStore: all assertions passed')

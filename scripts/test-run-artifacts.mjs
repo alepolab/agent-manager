@@ -33,6 +33,8 @@ function makeProjectRepo() {
   git(dir, ['init', '-q', '-b', 'main'])
   git(dir, ['config', 'user.email', 'test@example.invalid'])
   git(dir, ['config', 'user.name', 'Test'])
+  // A developer's global commit.gpgsign must not make the fixture depend on a gpg agent.
+  git(dir, ['config', 'commit.gpgsign', 'false'])
   writeFileSync(join(dir, 'a.txt'), 'line1\nline2\n')
   git(dir, ['add', '.'])
   git(dir, ['commit', '-q', '-m', 'initial'])
@@ -163,6 +165,7 @@ assert.equal(recovered.identity, 'runbook-a', 'unparseable meta.json is rebuilt 
 // 5. the header names the directory
 const header = A.artifactHeader(dir)
 assert.ok(header.includes(dir), 'the header carries the real path')
+assert.ok(/^Claude config directory: \/.+$/m.test(header), 'the header names the absolute Claude config directory, so agents without Bash can Read installed_plugins.json')
 
 // 6. a slug with path separators cannot escape the directory
 await A.writeStepArtifact(run, { ...rec, agentSlug: '../../etc/passwd' }, 1)
@@ -231,7 +234,11 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   }))
   await A.finalizeRunArtifacts(noProjectRun)
   const npMeta = JSON.parse(readFileSync(join(npDir, 'meta.json'), 'utf8'))
-  assert.ok(!('repos' in npMeta.fix), 'fix.repos is absent when git facts cannot be computed, not the agent claim')
+  // The repo name and PR link are kept: git could never prove a PR URL even
+  // with a project directory, and dropping it left the CI poller blind. The
+  // commit list and counts, which git would have replaced, are dropped.
+  assert.deepEqual(npMeta.fix.repos, [{ repo: 'agent-lied/again', pr: 'https://example.invalid/pr/1' }],
+    'fix.repos keeps repo and pr only when git facts cannot be computed')
   assert.ok(!('files_changed' in npMeta.fix), 'fix.files_changed is absent, not the agent claim')
   assert.ok(!('lines_changed' in npMeta.fix), 'fix.lines_changed is absent, not the agent claim')
   assert.equal(npMeta.fix.test_dirs_unlocked, false, 'unrelated agent-owned fix.* keys still survive')

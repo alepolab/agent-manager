@@ -16,7 +16,31 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
-const { run, runs, attach, start, continueRun, stop } = useWorkflowRun(slug)
+const { run, runs, attach, start, continueRun, stop, restart } = useWorkflowRun(slug)
+const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
+
+/** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
+ *  Consumed then removed from the URL so a reload does not repeat them. */
+function applyQueryIntent() {
+  const q = route.query
+  if (typeof q.run === 'string') {
+    const found = runs.value.find(r => r.id === q.run)
+    if (found) run.value = found
+  }
+  if (typeof q.clone === 'string') {
+    const src = runs.value.find(r => r.id === q.clone)
+    runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun } : undefined
+    showRunModal.value = true
+  }
+  if (q.start === '1') { runInitial.value = undefined; showRunModal.value = true }
+  if (q.run || q.clone || q.start) router.replace({ path: route.path })
+}
+const showRunDetails = ref(false)
+function cloneRun() {
+  if (!run.value) return
+  runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun }
+  showRunModal.value = true
+}
 
 // The panel and the canvas nodes both read per-step status off the server-owned run.
 // These mirror the shape the old client-side engine exposed, so the rest of the page
@@ -44,6 +68,7 @@ const workflowSteps = ref<WorkflowStep[]>([])
 const name = ref('')
 const description = ref('')
 const saving = ref(false)
+const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
 const showMobileAgentPicker = ref(false)
 const paletteSearch = ref('')
@@ -56,6 +81,7 @@ onMounted(async () => {
   try {
     const data = await fetchOne(slug)
     workflow.value = data
+    lastModified.value = (data as any).lastModified ?? null
     workflowSteps.value = [...data.steps]
     name.value = data.name
     description.value = data.description
@@ -64,8 +90,10 @@ onMounted(async () => {
     router.push('/workflows')
   }
   // Attach to whatever the server is already running for this workflow, if anything -
-  // a run outlives this tab, so a reload must not lose it.
-  attach()
+  // a run outlives this tab, so a reload must not lose it. Then honour any
+  // one-shot intent in the URL, which may point at a finished run instead.
+  await attach()
+  applyQueryIntent()
 })
 
 const graph = computed(() => buildGraph(workflowSteps.value))
@@ -267,14 +295,17 @@ async function save() {
   if (!workflow.value) return
   saving.value = true
   try {
-    await update(slug, {
+    const saved = await update(slug, {
       name: name.value,
       description: description.value,
       steps: workflowSteps.value,
-    })
+      lastModified: lastModified.value ?? undefined,
+    } as any)
+    lastModified.value = (saved as any).lastModified ?? null
     toast.add({ title: 'Workflow saved', color: 'success' })
   } catch (e: any) {
-    toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
+    if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
+    else toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
   } finally {
     saving.value = false
   }
@@ -449,6 +480,17 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
 
       <!-- Canvas -->
       <div class="flex-1 flex flex-col min-w-0">
+        <!-- Run controls stay in view; per-step detail opens in a slide-over. -->
+        <WorkflowRunBar
+          :run="run"
+          :runs="runs"
+          @continue="continueRun"
+          @stop="stop"
+          @restart="restart"
+          @clone="cloneRun"
+          @close="closeRun"
+          @details="showRunDetails = true"
+        />
         <div class="flex-1 min-h-[300px]">
           <VueFlow
             :nodes="nodes"
@@ -518,23 +560,29 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           <span class="text-[12px] font-medium" style="color: var(--success, #22c55e);">Workflow complete</span>
         </div>
 
-        <!-- Run status: live per-agent rows while a run is active, run history otherwise -->
-        <div v-if="run || runs.length" class="p-4">
-          <WorkflowRunPanel
-            :run="run"
-            :runs="runs"
-            @continue="continueRun"
-            @stop="stop"
-            @attach="attachRun"
-            @close="closeRun"
-          />
-        </div>
       </div>
     </div>
+
+    <!-- Run detail: live per-agent rows while a run is active, run history otherwise -->
+    <USlideover v-model:open="showRunDetails" title="Run details">
+      <template #body>
+        <WorkflowRunPanel
+          :run="run"
+          :runs="runs"
+          @continue="continueRun"
+          @stop="stop"
+          @attach="attachRun"
+          @restart="(stepId, note) => restart(stepId, note)"
+          @clone="cloneRun"
+          @close="closeRun"
+        />
+      </template>
+    </USlideover>
 
     <!-- Run modal -->
     <WorkflowRunModal
       :open="showRunModal"
+      :initial="runInitial"
       @update:open="showRunModal = $event"
       @start="startRun"
     />

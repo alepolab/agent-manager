@@ -49,4 +49,6 @@ export interface Watch {
   query?: string
   projectDir?: string
   autoRun: boolean
+  /** Runs this watch dispatches are attributed to, and use the identity of, this developer. */
+  createdBy?: string
 }

@@ -167,3 +167,22 @@ function jsonResponse(body, { ok = true, status = 200, statusText = 'OK' } = {})
 }
 
 console.log('jiraTicketSource: all assertions passed')
+
+// ── expandTicketKey: a bare key becomes the ticket text, under the starter's identity ──
+{
+  const { expandTicketKey } = await import('../server/utils/jiraTicketSource.ts')
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, auth: init.headers.Authorization })
+    return jsonResponse({ key: 'SCN-7', fields: { summary: 'Upload fails', labels: ['selfcare'], description: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Steps to reproduce.' }] }] } } })
+  }
+  const env = { JIRA_EMAIL: 'dev@example.com', JIRA_API_TOKEN: 'tok', JIRA_BASE_URL: 'https://jira.example.com' }
+  const text = await expandTicketKey('SCN-7', env, fetchImpl)
+  assert.match(text, /^SCN-7: Upload fails\nURL: https:\/\/jira.example.com\/browse\/SCN-7\nLabels: selfcare\n\nSteps to reproduce\./, 'key, summary, url, labels and description')
+  assert.equal(seen[0].auth, `Basic ${Buffer.from('dev@example.com:tok').toString('base64')}`, 'the starter\'s own credentials are used')
+  assert.equal(await expandTicketKey('not a key', env, fetchImpl), null, 'free text is left alone')
+  assert.equal(await expandTicketKey('SCN-8', env, async () => new Response('nope', { status: 404 })), null, 'an unreadable ticket yields null, never a throw')
+  delete process.env.JIRA_BASE_URL; delete process.env.JIRA_EMAIL; delete process.env.JIRA_API_TOKEN
+  assert.equal(await expandTicketKey('SCN-9', {}, fetchImpl), null, 'no credentials anywhere yields null')
+  console.log('expandTicketKey: ok')
+}

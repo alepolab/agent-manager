@@ -6,8 +6,12 @@ import {
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
-import { createRun, getRun, saveRun } from './workflowRunStore.ts'
-import { callAgent, type AgentUsage, type AgentProgress } from './agentCaller.ts'
+import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, BOOT_ID } from './workflowRunStore.ts'
+import { resolveProduct } from './registry.ts'
+import { getModelPricing } from './models.ts'
+import { onRunTransition } from './notify.ts'
+import { envForUser } from './users.ts'
+import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -16,7 +20,7 @@ import {
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
-import type { WorkflowRun, RunStep } from '~~/shared/types/run'
+import type { WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 const log = createLogger('runner')
 
@@ -29,10 +33,15 @@ const log = createLogger('runner')
 // normalizeAgentResult() below is the one place that tells them apart.
 export type AgentCallOutput = string | { output: string, model: string | null, usage?: AgentUsage | null }
 export type AgentCaller =
-  // onProgress is optional and additive: every existing test stub (2- or
-  // 3-arg functions registered via setAgentCaller) remains a valid AgentCaller
-  // under TS's structural typing, and simply never receives it.
-  (agentSlug: string, input: string, projectDir?: string, onProgress?: (p: AgentProgress) => void) => Promise<AgentCallOutput>
+  // The options bag is additive: every existing test stub (2- or 3-arg
+  // functions registered via setAgentCaller) remains a valid AgentCaller under
+  // TS's structural typing, and simply never receives it.
+  (agentSlug: string, input: string, projectDir?: string, opts?: AgentCallOptions) => Promise<AgentCallOutput>
+
+/** Resolves the environment a run's starter should run agents with. Test seam. */
+export type EnvResolver = (login: string | undefined) => Promise<Record<string, string>>
+let envResolver: EnvResolver = (login) => envForUser(login)
+export function setEnvResolver(fn: EnvResolver) { envResolver = fn }
 
 // The real caller is imported and wired here directly, at module scope, in
 // the same file that reads it. Previously this defaulted to a throwing stub
@@ -69,6 +78,7 @@ export interface StartRunOpts {
   ticketKey?: string
   autoRun: boolean
   projectDir?: string
+  startedBy?: string
 }
 
 /** In-memory scheduling state, keyed by run id. Lost on restart — which is
@@ -81,6 +91,9 @@ interface Live {
   lastInputs: Record<string, string>
   retryFeedback: Record<string, string>
   stopped: boolean
+  /** One controller per step in flight, so stopRun can cancel the SDK call
+   *  itself rather than only marking the record. */
+  aborts: Map<string, AbortController>
   /** True while this run's wave loop is actually executing in the background - the
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
@@ -101,7 +114,33 @@ export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => 
  *  them keeps every write for a given run strictly ordered, one at a time. */
 const publishChains = new Map<string, Promise<void>>()
 
+function computeUsage(run: WorkflowRun): RunUsage {
+  let input = 0, output = 0, usd = 0
+  for (const s of run.steps) {
+    if (!s.usage) continue
+    input += s.usage.input_tokens
+    output += s.usage.output_tokens
+    const p = getModelPricing(s.model ?? undefined)
+    usd += (s.usage.input_tokens / 1_000_000) * p.input + (s.usage.output_tokens / 1_000_000) * p.output
+  }
+  return { input_tokens: input, output_tokens: output, usd: Math.round(usd * 10000) / 10000 }
+}
+
+/** A run over its time or token cap, with the reason; null while within budget. */
+function budgetExceeded(run: WorkflowRun): string | null {
+  const b = run.budget
+  const minutes = (Date.now() - run.startedAt) / 60000
+  if (minutes > b.maxMinutes) return `Budget exceeded: ${Math.round(minutes)} min over the ${b.maxMinutes} min cap`
+  // Computed here, not read from run.usage: that field is refreshed by publish(),
+  // and the wave loop recurses without publishing in between.
+  const u = computeUsage(run)
+  const tokens = u.input_tokens + u.output_tokens
+  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens} tokens over the ${b.maxTokens} token cap`
+  return null
+}
+
 async function publish(run: WorkflowRun) {
+  run.usage = computeUsage(run)
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
     await saveRun(run)
@@ -167,6 +206,7 @@ async function publish(run: WorkflowRun) {
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
+    onRunTransition(run)
   })
   publishChains.set(run.id, next)
   await next
@@ -378,7 +418,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const input = artifactHeader(runArtifactsDir(run.id)) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy) + body
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
@@ -398,8 +438,11 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // single-step respondToRun call it already holds [id] from the prior pause.
   await publish(run)
 
+  const ac = new AbortController()
+  l.aborts.set(id, ac)
   try {
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, (progress: AgentProgress) => {
+    const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onProgress: (progress: AgentProgress) => {
       // Diagnostic only (see AgentProgress's doc comment) - mutated directly
       // onto the live rec and republished so the SSE stream carries it, but
       // never written to the step's persisted artifact JSON and never
@@ -408,7 +451,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         assistantMessages: progress.turn, lastTool: progress.lastTool, lastActivityAt: progress.lastActivityAt,
       })
       void publish(run)
-    })
+    } })
     const { output, model, usage } = normalizeAgentResult(raw)
     const durationMs = Date.now() - (rec.startedAt ?? Date.now())
 
@@ -486,7 +529,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     markFailed(l.state, id)
     Object.assign(rec, {
       status: 'failed',
-      error: err instanceof Error ? err.message : 'Unknown error',
+      error: l.stopped ? 'Stopped by operator' : (err instanceof Error ? err.message : 'Unknown error'),
       completedAt: Date.now(),
     })
     log.error('step call threw', {
@@ -495,11 +538,29 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     })
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return false
+  } finally {
+    l.aborts.delete(id)
   }
 }
 
 async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.stopped) { l.running = false; return run }
+
+  // Checked between waves: a single step is bounded by its own maxTurns, and
+  // the cap stops the next wave from starting rather than killing one mid-flight.
+  const over = budgetExceeded(run)
+  if (over) {
+    skipPending(l.state)
+    for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+    run.status = 'failed'
+    run.error = over
+    run.endedAt = Date.now()
+    run.currentStepIds = []
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    return run
+  }
 
   const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (!wave.length) {
@@ -526,6 +587,21 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // progresses (mirroring the client engine's parallel step execution). publish() (above)
   // serializes those writes per run id so they can never race on disk.
   const results = await Promise.all(wave.map(id => executeNode(l, run, id)))
+
+  // A stop during the wave published 'stopped' from stopRun's own copy of the
+  // record. This object is the one the wave mutated and the one executeNode
+  // publishes, so it must carry the same facts or its next publish would
+  // resurrect 'running' on disk.
+  if (l.stopped) {
+    for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+    run.status = 'stopped'
+    run.endedAt ??= Date.now()
+    run.currentStepIds = []
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    return run
+  }
 
   if (results.some(ok => !ok)) {
     skipPending(l.state)
@@ -574,6 +650,9 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  // Resolved once, before any agent runs, and carried on the run: agents are
+  // handed registry facts rather than asked to guess which product this is.
+  const product = await resolveProduct(opts.initialPrompt).catch(() => undefined)
   // Captured BEFORE createRun, so the baseline is the project directory's
   // HEAD at the true moment execution begins — before any step, and so any
   // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
@@ -583,6 +662,8 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   // attributing that branch's whole history to this run.
   const baseCommit = await captureBaseline(opts.projectDir)
   const run = await createRun({
+    product,
+    startedBy: opts.startedBy,
     workflowSlug: opts.workflow.slug,
     workflowName: opts.workflow.name,
     autoRun: opts.autoRun,
@@ -596,7 +677,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false,
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
   }
   live.set(run.id, l)
   // Best-effort: a filesystem problem here must not stop the run. The run
@@ -615,18 +696,42 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * the whole run. Callers await waitForSettled(runId) for the outcome.
  */
 export async function continueRun(runId: string): Promise<WorkflowRun | null> {
-  const l = live.get(runId)
+  let l = live.get(runId)
+  // A run whose owning process died has no live record. Its currentStepIds
+  // name what was executing; restarting from those is the honest resume.
+  if (!l) {
+    const stored = await getRun(runId)
+    if (stored?.status === 'interrupted') {
+      const from = stored.currentStepIds[0]
+        ?? stored.steps.find(s => s.status === 'running' || s.status === 'pending')?.stepId
+      if (!from) return stored
+      return restartRun(runId, from)
+    }
+    // Paused with nothing in memory: the process that paused it is gone (a
+    // container restart leaves pid 1 in place, so only the record tells).
+    // Rebuild the scheduling state from disk and take ownership.
+    if (stored?.status !== 'paused') return stored
+    l = await rehydrate(stored)
+    stored.pid = process.pid
+    stored.bootId = BOOT_ID
+    await saveRun(stored)
+  }
   // Re-entrancy guard (C6), matching the client engine's isRunning check pattern. This has
   // to be set synchronously, before the first await below - otherwise two calls that both
   // arrive while a run is paused would each see the guard still clear and both go on to
   // drive the same run's wave loop concurrently.
-  if (!l || l.running) return getRun(runId)
+  if (l.running) return getRun(runId)
   l.running = true
   const run = await getRun(runId)
   if (!run || run.status !== 'paused') {
     l.running = false
     return run
   }
+  // Persist 'running' before returning, as restartRun and respondToRun do: a
+  // reader that lands between this return and the wave's first publish would
+  // otherwise see the old 'paused' record and treat the run as settled.
+  run.status = 'running'
+  await publish(run)
   // driveToSettlement (via runWave) clears l.running itself once the run is genuinely
   // settled again - see the C6 notes on runWave's pause branch for why that has to
   // happen there and not via a .finally() tacked on here.
@@ -706,7 +811,11 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   // C5: a run that already reached a real outcome is not "stopped" by stopping it again.
   if (TERMINAL_STATUSES.includes(run.status)) return run
   const l = live.get(runId)
-  if (l) { l.stopped = true; skipPending(l.state) }
+  if (l) {
+    l.stopped = true
+    skipPending(l.state)
+    for (const ac of l.aborts.values()) ac.abort()
+  }
   for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
   run.status = 'stopped'
   run.endedAt = Date.now()
@@ -714,5 +823,165 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   run.nextStepIds = []
   log.info('run stopped', { runId: run.id })
   await publish(run)
+  return run
+}
+
+export class RestartError extends Error {
+  statusCode: number
+  data?: Record<string, unknown>
+  constructor(statusCode: number, message: string, data?: Record<string, unknown>) {
+    super(message)
+    this.statusCode = statusCode
+    this.data = data
+  }
+}
+
+/** Test seam: forget a run's in-memory record, as a server restart would. */
+export function _dropLive(runId: string) { live.delete(runId) }
+
+/**
+ * Rebuilds the in-memory scheduling record from the persisted run. Completed
+ * steps are re-marked in step order so the graph arms exactly what it would
+ * have armed live; their outputs and inputs come back from the record. Anything
+ * not completed stays pending and unarmed until a predecessor arms it.
+ */
+async function rehydrate(run: WorkflowRun): Promise<Live> {
+  const existing = live.get(run.id)
+  if (existing) return existing
+  const workflow = await loadWorkflowSteps(run.workflowSlug)
+  if (!workflow) {
+    throw new RestartError(409, `Workflow "${run.workflowSlug}" no longer exists, so this run cannot be rebuilt`)
+  }
+  const steps = alignStepIds(workflow.steps, run)
+  const aligned = { ...workflow, steps }
+  const graph = buildGraph(steps)
+  const state = initRunState(graph)
+  const l: Live = {
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
+  }
+  const header = artifactHeader(runArtifactsDir(run.id))
+  for (const s of run.steps) {
+    state.visits[s.stepId] = s.visits ?? 0
+    if (s.status !== 'completed') continue
+    markCompleted(graph, state, s.stepId)
+    l.outputs[s.stepId] = s.output
+    // Stored input carries the artifact header; computeInput's retry branch
+    // rebuilds from lastInputs, so strip it the way executeNode keeps it.
+    l.lastInputs[s.stepId] = s.input.startsWith(header) ? s.input.slice(header.length) : s.input
+  }
+  // A completed node has consumed its arming: live, markRunning clears it before
+  // the node executes. Without this an entry node stays armed and re-runs, and
+  // re-arms everything downstream with it.
+  for (const s of run.steps) if (s.status === 'completed') state.armed[s.stepId] = false
+  live.set(run.id, l)
+  return l
+}
+
+/**
+ * A workflow file re-saved since the run began (the template sync regenerates
+ * every step id) no longer shares ids with the run. When the agent sequence
+ * still matches position for position, the run's ids are authoritative and the
+ * file's edges are rewritten to them; anything else is a different workflow.
+ */
+function alignStepIds(steps: any[], run: WorkflowRun): any[] {
+  const known = new Set(steps.map(s => s.id))
+  const recorded = new Set(run.steps.map(s => s.stepId))
+  if (run.steps.every(s => known.has(s.stepId))) {
+    // Ids match, but a node the run never recorded would fail its wave silently.
+    if (steps.every(s => recorded.has(s.id))) return steps
+    throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
+  }
+  const sameShape = steps.length === run.steps.length
+    && steps.every((s, i) => s.agentSlug === run.steps[i]?.agentSlug)
+  if (!sameShape) {
+    throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
+  }
+  const idMap: Record<string, string> = {}
+  steps.forEach((s, i) => { idMap[s.id] = run.steps[i]!.stepId })
+  return steps.map(s => ({
+    ...s,
+    id: idMap[s.id],
+    next: Array.isArray(s.next) ? s.next.map((n: string) => idMap[n] ?? n) : s.next,
+  }))
+}
+
+function forwardDescendants(graph: WorkflowGraph, id: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>([id])
+  const stack = [id]
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const next of graph.succ[cur] ?? []) {
+      if (graph.backEdges.has(`${cur}->${next}`) || seen.has(next)) continue
+      seen.add(next); out.push(next); stack.push(next)
+    }
+  }
+  return out
+}
+
+const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted', 'completed']
+
+/**
+ * Re-runs `stepId` and everything downstream of it, keeping every other
+ * step's output, under the same run id and artifacts directory. The previous
+ * attempt of each reset step is snapshotted the way monitor retries are.
+ */
+export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string): Promise<WorkflowRun> {
+  const run = await getRun(runId)
+  if (!run) throw new RestartError(404, 'Run not found')
+  if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
+  if (!RESTARTABLE.includes(run.status)) {
+    throw new RestartError(409, `A ${run.status} run cannot be restarted; ${run.status === 'paused' ? 'continue it instead' : 'wait for it to settle'}`)
+  }
+  const active = await findActiveRun(run.workflowSlug)
+  if (active && active.id !== run.id) {
+    throw new RestartError(409, 'This workflow already has a run in progress', { runId: active.id })
+  }
+  const l = await rehydrate(run)
+  if (l.running) throw new RestartError(409, 'This run is already running')
+
+  const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
+  const previousOutput = recOf(run, stepId).output
+  for (const id of reset) {
+    const rec = recOf(run, id)
+    // Only an attempt that actually ran is worth snapshotting; a skipped step has nothing to keep.
+    if (rec.status !== 'pending' && rec.visits > 0) {
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `restart-${rec.visits}`) } catch { /* best effort */ }
+    }
+    Object.assign(rec, {
+      status: 'pending', output: '', error: undefined, startedAt: undefined, completedAt: undefined,
+      monitorVerdict: undefined, monitorNote: undefined, model: undefined,
+    })
+    l.state.status[id] = 'pending'
+    l.state.armed[id] = false
+    delete l.state.triggeredBy[id]
+    delete l.outputs[id]
+    delete l.retryFeedback[id]
+  }
+  // Arm the restart point the way its predecessors would have: an entry arms
+  // itself; otherwise every forward predecessor must still read completed.
+  if (l.graph.entries.includes(stepId)) armNode(l.state, stepId)
+  else if ((l.graph.forwardPreds[stepId] ?? []).every(p => l.state.status[p] === 'completed')) armNode(l.state, stepId)
+  else throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
+
+  // An operator note rides the same channel as a monitor's retry feedback, so
+  // the restarted step sees its previous attempt and the correction together.
+  if (note?.trim()) {
+    l.outputs[stepId] = previousOutput
+    l.retryFeedback[stepId] = `Operator note: ${note.trim()}`
+  }
+
+  l.stopped = false
+  l.running = true
+  run.status = 'running'
+  run.error = undefined
+  run.endedAt = undefined
+  run.pid = process.pid
+  run.bootId = BOOT_ID
+  if (startedBy) run.startedBy = startedBy
+  run.currentStepIds = []
+  run.nextStepIds = [stepId]
+  await publish(run)
+  void driveToSettlement(l, run)
   return run
 }

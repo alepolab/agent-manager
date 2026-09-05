@@ -1,6 +1,6 @@
 # CI
 #
-# Five independent jobs on every pull_request and every push to main. There is
+# Four independent jobs on every pull_request and every push to main. There is
 # no test framework in this repo — every suite is a plain Node script using
 # node:assert/strict — so each job below is a thin, deliberately unclever
 # wrapper around commands you can run yourself on a laptop. See the bottom of
@@ -33,10 +33,27 @@
 #     workflow may not touch (scripts/test-workflow-graph.mjs). See the
 #     step's own comment for how it's handled and why.
 #
-#   build
-#     `npm run build` (nuxt build) must exit 0. Typecheck alone does not
-#     catch an import that resolves under Node's resolver but not Vite's —
-#     this repo has shipped exactly that defect once already.
+#   (no standalone `build` job — see docker-image)
+#     There used to be one running `npm run build` on the runner. It was
+#     removed because docker-image already runs `bun run build` inside the
+#     image on every pull request, and a Nuxt build that fails there fails
+#     that job. Its stated purpose — catching an import that resolves under
+#     Node's resolver but not Vite's — is covered, because the Docker build
+#     runs the same Vite build.
+#
+#     What the removal DOES give up: the npm/Node 24 toolchain is no longer
+#     exercised by a build. That is deliberate. Nothing ships on it — the
+#     image installs with `bun install --frozen-lockfile` from bun.lockb —
+#     so the removed job was gating merges on a toolchain no deployment uses
+#     while the one that ships was gated by a job nobody thought of as the
+#     build gate. Now the build gate is the build that ships.
+#
+#     The real hazard this leaves standing: the repo carries BOTH
+#     package-lock.json and bun.lockb, and nothing checks they agree.
+#     test-suites and typecheck still install with `npm ci`, so the two
+#     dependency graphs can drift and the first symptom would be an image
+#     that behaves differently from a green CI run. Converging on one
+#     package manager is the fix; it is not this change.
 #
 #   validate-registry
 #     `node engineering/scripts/validate-registry.mjs` — schema + semantic
@@ -266,27 +283,6 @@ jobs:
           # fix the errors, not to re-add one.
           echo "::error::typecheck failed (see log above)"
           exit 1
-
-  build:
-    name: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      # Catches what typecheck cannot: an import that resolves under Node's
-      # resolver but not Vite's. This repo has shipped exactly that defect.
-      - name: Build
-        run: npm run build
 
   validate-registry:
     name: validate-registry

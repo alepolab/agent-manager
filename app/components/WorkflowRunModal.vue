@@ -1,6 +1,8 @@
 <script setup lang="ts">
 const props = defineProps<{
   open: boolean
+  /** Prefill from an existing run (clone). Absent means a blank modal. */
+  initial?: { prompt: string, projectDir?: string, autoRun: boolean }
 }>()
 
 const emit = defineEmits<{
@@ -28,9 +30,12 @@ function onCancel() {
   autoRun.value = false
 }
 
-// Sync project dir from global working dir when modal opens
+// On open: prefill from `initial` when cloning, else the global working dir.
 watch(() => props.open, (val) => {
-  if (val) projectDir.value = workingDir.value
+  if (!val) return
+  prompt.value = props.initial?.prompt ?? ''
+  projectDir.value = props.initial?.projectDir ?? workingDir.value
+  autoRun.value = props.initial?.autoRun ?? false
 })
 </script>
 

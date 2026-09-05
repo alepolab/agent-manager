@@ -1,8 +1,9 @@
 <script setup lang="ts">
-defineProps<{
+const props = defineProps<{
   title: string
   subtitle?: string
 }>()
+useHead({ title: computed(() => `${props.title} | Agent Manager`) })
 </script>
 
 <template>

@@ -41,9 +41,13 @@ function readFrontmatter(path) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
   if (!m) return null
   const fm = {}
+  let block = null
   for (const rawLine of m[1].split('\n')) {
     const line = rawLine.replace(/\r$/, '')
     if (!line.trim() || line.trim().startsWith('#')) continue
+    // A `key: >` or `key: |` block scalar continues on indented lines.
+    if (block && /^\s/.test(line)) { fm[block] = (fm[block] ? fm[block] + ' ' : '') + line.trim(); continue }
+    block = null
     const kv = line.match(/^([A-Za-z0-9_-]+):\s?(.*)$/)
     assert.ok(kv, `${path}: frontmatter line is not "key: value": "${line}"`)
     let [, key, value] = kv
@@ -52,6 +56,7 @@ function readFrontmatter(path) {
         (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1)
     }
+    if (/^[>|][-+]?$/.test(value)) { block = key; value = '' }
     fm[key] = value
   }
   return fm

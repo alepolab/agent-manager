@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { resolveClaudePath } from '../utils/claudeDir'
 import { parseFrontmatter } from '../utils/frontmatter'
 import { extractRelationships } from '../utils/relationships'
+import { memo } from '../utils/memo'
 
 async function loadAgents() {
   const dir = resolveClaudePath('agents')
@@ -133,6 +134,7 @@ async function loadGithubSkillSlugs(): Promise<string[]> {
 }
 
 export default defineEventHandler(async (event) => {
+  return memo(`relationships:${resolveClaudePath('agents')}`, 30_000, async () => {
   const { workingDir } = getQuery(event) as { workingDir?: string }
   const [agents, commands, skills, plugins, mcpServers, githubSkillSlugs] = await Promise.all([
     loadAgents(),
@@ -143,4 +145,5 @@ export default defineEventHandler(async (event) => {
     loadGithubSkillSlugs(),
   ])
   return extractRelationships(agents, commands, skills, plugins, mcpServers, githubSkillSlugs)
+  })
 })
