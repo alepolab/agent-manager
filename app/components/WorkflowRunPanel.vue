@@ -8,6 +8,22 @@ const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart
 /** Optional correction handed to whichever step is restarted next. */
 const note = ref('')
 
+/** Evidence: the run's artifact files, listed on demand and opened one at a time. */
+const artifacts = ref<{ name: string, size: number }[] | null>(null)
+const openFile = ref<string | null>(null)
+const fileText = ref('')
+async function loadArtifacts() {
+  if (!props.run) return
+  artifacts.value = await $fetch<{ name: string, size: number }[]>(`/api/runs/${props.run.id}/artifacts`)
+}
+async function showFile(name: string) {
+  if (!props.run) return
+  if (openFile.value === name) { openFile.value = null; return }
+  openFile.value = name
+  fileText.value = await $fetch<string>(`/api/runs/${props.run.id}/artifacts/${name.split('/').map(encodeURIComponent).join('/')}`, { responseType: 'text' })
+}
+watch(() => props.run?.id, () => { artifacts.value = null; openFile.value = null })
+
 /** Restart and clone only make sense once nothing is executing. */
 const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
 const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
@@ -91,6 +107,20 @@ const expanded = ref<string | null>(null)
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
           <pre v-if="step.output" class="text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
           <p v-else class="text-[11px] text-label">No output yet.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="space-y-1">
+      <button class="text-[11px] text-label underline" @click="artifacts ? (artifacts = null) : loadArtifacts()">
+        {{ artifacts ? 'Hide evidence files' : 'Show evidence files' }}
+      </button>
+      <div v-if="artifacts" class="space-y-0.5">
+        <p v-if="!artifacts.length" class="text-[11px] text-label">No files yet.</p>
+        <div v-for="f in artifacts" :key="f.name" class="text-[11px]">
+          <button class="font-mono underline" :aria-expanded="openFile === f.name" @click="showFile(f.name)">{{ f.name }}</button>
+          <span class="text-label ml-1">{{ f.size < 1024 ? f.size + ' B' : Math.round(f.size / 1024) + ' KB' }}</span>
+          <pre v-if="openFile === f.name" class="whitespace-pre-wrap max-h-72 overflow-auto mt-1 p-2 rounded" style="background: var(--surface-raised);">{{ fileText }}</pre>
         </div>
       </div>
     </div>

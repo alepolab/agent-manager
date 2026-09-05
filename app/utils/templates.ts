@@ -330,7 +330,7 @@ The deployment repo is \`alepo-dev-team-infra\`: one \`docker-compose.<product>.
 
 Not every product has a \`docker-compose.<product>.yml\` in \`alepo-dev-team-infra\` yet. When the affected product has none, do not halt on that alone: use the product's own compose from its checkout under \`~/alepo-workspace/<product>/\` and record in your report that the stack came from the product repo, not the deployment repo. Never copy a developer's \`.env\` into the run; generate every secret the compose marks required with \`openssl\` and pass secrets as shell environment for the \`up\` command, not files. Put any compose override you need in the run artifacts directory, never in a repo checkout.
 
-You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
+You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. When you render a compose file for evidence, use \`docker compose ... config --no-interpolate\`: the interpolated form prints every secret the environment holds into your output, and your output is kept as evidence. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
 
 Known recipes live as files: when your input's product block names a \`Recipe:\` path, read it first and follow it. It carries the product-specific quirks (image tag policy, port overrides, healthcheck, which variables to pass through). If there is no recipe and no compose in the deployment repo, fall back to the product checkout's own compose as described above, and write what you learned into your stack report so a recipe can be made from it.
 
@@ -735,7 +735,7 @@ Verbatim PASS output for every row, plus the regression suite and lint/typecheck
 The trace path and result, or \`n/a\` and why.
 
 ## Provenance
-The agents that ran, the model each used, and the working directory. State plainly that this change was produced by an automated pipeline and needs human review before merge.
+The agents that ran, the model each used, the working directory, and the run artifacts directory path from the top of your input, so a reviewer can open the run in Agent Manager. State plainly that this change was produced by an automated pipeline and needs human review before merge.
 
 ## Which commit to ship
 

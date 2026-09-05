@@ -145,7 +145,10 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: unknown) {
           <tbody aria-live="polite">
             <tr v-for="r in shown" :key="r.id" style="border-top: 1px solid var(--border-subtle);">
               <td class="px-3 py-2 font-medium">{{ r.workflowName }}</td>
-              <td class="px-3 py-2 font-mono uppercase text-[11px]" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</td>
+              <td class="px-3 py-2 font-mono uppercase text-[11px]" :style="{ color: RUN_STATUS_COLOR[r.status] }">
+                {{ r.status }}
+                <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans text-[10px] underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
+              </td>
               <td class="px-3 py-2 text-label whitespace-nowrap">{{ new Date(r.startedAt).toLocaleString() }}</td>
               <td class="px-3 py-2 text-label whitespace-nowrap">{{ duration(r) }}</td>
               <td class="px-3 py-2 text-label whitespace-nowrap font-mono tabular-nums" :title="r.usage ? `${r.usage.input_tokens} in / ${r.usage.output_tokens} out` : ''">{{ r.usage ? '$' + r.usage.usd.toFixed(2) : '' }}</td>
