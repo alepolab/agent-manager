@@ -1,17 +1,10 @@
-import { readFile, stat } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { resolveClaudePath } from '../../utils/claudeDir'
-import type { Workflow } from '~/types'
+import { readWorkflow } from '../../utils/workflows'
 
 export default defineEventHandler(async (event) => {
-  const slug = getRouterParam(event, 'slug')
-  const filePath = resolveClaudePath('workflows', `${slug}.json`)
-
-  if (!existsSync(filePath)) {
+  const slug = getRouterParam(event, 'slug')!
+  const workflow = await readWorkflow(slug)
+  if (!workflow) {
     throw createError({ statusCode: 404, message: 'Workflow not found' })
   }
-
-  const raw = await readFile(filePath, 'utf-8')
-  const data = JSON.parse(raw)
-  return { slug, filePath, ...data, lastModified: (await stat(filePath)).mtimeMs } as Workflow
+  return workflow
 })

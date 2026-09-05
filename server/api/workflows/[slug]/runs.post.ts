@@ -1,4 +1,5 @@
 import { startRun } from '../../../utils/workflowRunner'
+import { readWorkflow } from '../../../utils/workflows'
 import { findActiveRun } from '../../../utils/workflowRunStore'
 import { expandTicketKey } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
@@ -22,8 +23,16 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const workflow = await $fetch<{ slug: string, name: string, steps: any[] }>(`/api/workflows/${slug}`)
-  if (!workflow?.steps?.length) {
+  // Read from disk, never over our own HTTP API: a server-to-self $fetch sends
+  // no cookies, so the auth middleware answered this with 401 "Sign in
+  // required" and every run start in team mode died on an unhandled
+  // FetchError. Standalone mode hid it because AUTH_DISABLED makes the
+  // middleware a no-op.
+  const workflow = await readWorkflow(slug)
+  if (!workflow) {
+    throw createError({ statusCode: 404, message: 'Workflow not found' })
+  }
+  if (!workflow.steps?.length) {
     throw createError({ statusCode: 400, message: 'This workflow has no steps' })
   }
 
