@@ -1,6 +1,6 @@
 # CI
 #
-# Four independent jobs on every pull_request and every push to main. There is
+# Five independent jobs on every pull_request and every push to main. There is
 # no test framework in this repo — every suite is a plain Node script using
 # node:assert/strict — so each job below is a thin, deliberately unclever
 # wrapper around commands you can run yourself on a laptop. See the bottom of
@@ -44,6 +44,86 @@
 #     and credential-free by design (see the script's own header); this job
 #     does not change that, and never passes `--repos` (which would clone
 #     every registered repo — out of place in an offline PR gate).
+#
+#   docker-image
+#     Builds the actual deployable artifact (`Dockerfile` — this is what
+#     `docker-compose.yml` runs) on every PR and push to main; PUSHES it to
+#     `ghcr.io/alepolab/agent-manager` only on push to main (see "When this
+#     pushes" below).
+#
+#     THE BAKED-CONFIG COPY: `Dockerfile` does
+#     `COPY docker/claude-config /root/.claude` — a curated snapshot of a
+#     real operator's `~/.claude`, produced by `scripts/stage-claude-config.sh`
+#     and deliberately git-ignored (it can hold plugin bodies and, if
+#     mis-curated, worse). A checkout on a bare runner does not have this
+#     directory at all, and does not have a `~/.claude` to stage one from
+#     either — there is no OAuth session, no installed plugins, nothing.
+#     `COPY` fails the whole build if its source path does not exist, so
+#     this job runs `mkdir -p docker/claude-config` immediately after
+#     checkout to guarantee an (empty) directory is there. This is a
+#     DELIBERATE, DOCUMENTED trade-off, not a workaround:
+#       - The image this job builds and pushes ships with NO baked Claude
+#         config — `/root/.claude` is empty in the image. Nothing here
+#         reconstructs plugins/skills/agents/settings.json; the repo has no
+#         source for most of that (plugins are pulled from a marketplace at
+#         install time, on a real machine, by a human).
+#       - Because `docker-compose.yml` mounts a NAMED volume over that path,
+#         and a named volume seeds ONLY from the image on first creation
+#         (see docs/baked-claude-config.md), a fresh deployment from THIS
+#         image starts with an empty `~/.claude` until something writes to
+#         it (through the UI, or via `HOST_CLAUDE_DIR`) — it does NOT
+#         silently ship stale or wrong config; it ships none.
+#       - A production deploy that wants the curated, self-contained image
+#         docs/baked-claude-config.md describes still needs a human to run
+#         `./scripts/stage-claude-config.sh` locally and build from that —
+#         CI cannot do this step because it has nothing to stage from. This
+#         job answers "does the Dockerfile still build, and is there a
+#         pushed image to pull for a quick look" — not "here is the curated
+#         production artifact."
+#     This is a judgment call, flagged for confirmation rather than assumed:
+#     an alternative is to skip pushing entirely until staging can happen
+#     in CI (e.g. from a secret-backed config bundle), which would need a
+#     source of truth for that config that does not exist today.
+#
+#     TAGGING (github.com/alepolab CLAUDE.md is explicit and firm on this):
+#     `<branch>-<yyyymmdd>-<shortsha>`, e.g. `main-20260905-8799ff9`. No bare
+#     `latest` (this workflow never pushes one, on main or anywhere else). No
+#     bare `sha-<shortsha>` (the branch always appears alongside it, one
+#     value in the `tags:` input, not two separate tags). The estate has two
+#     repos violating these rules already (`pms-billing`: bare `latest` +
+#     bare `sha-<sha>`; `pc`: a double-hyphen `ci-release--20260903-…` from
+#     an un-sanitized branch name) — neither pattern is copied here. Branch
+#     names can contain `/` (`fix/JIRA-1234`) and, on a fork PR, arbitrary
+#     characters (`github.head_ref` is untrusted input), so the branch
+#     component is read via `env:` (never templated directly into a `run:`
+#     body) and passed through `tr -c 'A-Za-z0-9_.-' '-'` before it becomes
+#     part of an image tag.
+#
+#     IMAGE NAME: `ghcr.io/alepolab/agent-manager`, chosen from the repo name
+#     (`alepolab/agent-manager` — confirmed via `git remote -v` and the
+#     existing `agent-manager_claude-config` compose volume name), NOT from
+#     `package.json`'s `"name": "agents-ui"`. CLAUDE.md warns "repo name ≠
+#     image name" for repos with an established GHCR package already; this
+#     repo has never published one, so there is no existing convention to
+#     preserve or contradict. Flagged in the PR/commit description for
+#     explicit confirmation rather than assumed silently.
+#
+#     WHEN THIS PUSHES, and why: build (validate the Dockerfile) on every
+#     pull_request; build AND push only on push to main. Pushing an image
+#     for every PR fills the registry with disposable, never-deployed tags —
+#     noise with no consumer. Building on every PR still catches a broken
+#     Dockerfile (a `COPY` of a path that stopped existing, a `bun install`
+#     that stopped resolving) before merge, which is the useful half of "one
+#     package per repo": this workflow never creates more than the one
+#     `ghcr.io/alepolab/agent-manager` package, and only writes to it from
+#     `main`.
+#
+#     AUTH: the built-in `GITHUB_TOKEN` via `docker/login-action`, scoped by
+#     a job-level (not workflow-level) `permissions: packages: write` — no
+#     secret to add, and `contents: read`/`packages: write` here does not
+#     leak to the other four jobs, which stay at the workflow-level
+#     `contents: read` only. The login step itself only runs on push (no
+#     credential is requested for a build-only PR run at all).
 #
 # Deliberately NOT included:
 #
@@ -237,3 +317,98 @@ jobs:
       # every registered repo and turn an offline check into a networked one.
       - name: Validate registry
         run: node engineering/scripts/validate-registry.mjs
+
+  docker-image:
+    name: docker-image
+    runs-on: ubuntu-latest
+    # Job-scoped, not workflow-scoped: only this job talks to GHCR, so only
+    # this job gets packages: write. The other four jobs stay at the
+    # workflow-level `contents: read` above.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # docker/claude-config is git-ignored (it's a curated snapshot of a
+      # real ~/.claude, produced locally by scripts/stage-claude-config.sh)
+      # and does not exist on a fresh checkout. Dockerfile's
+      # `COPY docker/claude-config /root/.claude` fails the entire build if
+      # its source path is missing — not just an empty image, an outright
+      # build failure — so this guarantees the path exists before Docker
+      # ever sees it. The image this job builds therefore ships with an
+      # EMPTY /root/.claude: no plugins, skills, agents, or settings.json
+      # baked in. See the long comment at the top of this file for why that
+      # is a deliberate trade-off rather than an oversight, and what it
+      # means for a real deploy.
+      - name: Ensure the baked-config COPY has a source (CI has no ~/.claude to stage from)
+        run: mkdir -p docker/claude-config
+
+      # Branch name is untrusted on a fork PR (github.head_ref) and can
+      # contain '/', so it is read via env: (never templated into the run:
+      # body — see the security note this repo's own tooling flags on
+      # workflow edits) and sanitized to Docker's tag charset before use.
+      - name: Compute image tag (<branch>-<yyyymmdd>-<shortsha>)
+        id: tag
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF_NAME: ${{ github.ref_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          branch="${HEAD_REF:-$REF_NAME}"
+          sha="${PR_HEAD_SHA:-$PUSH_SHA}"
+
+          # Docker tag components allow only [A-Za-z0-9_.-]; a branch like
+          # "fix/JIRA-1234" or a crafted fork branch name must not produce an
+          # invalid tag or, worse, a double-hyphen artifact (see pc's
+          # ci-release--20260903-… bug, which this sanitization avoids: any
+          # run of invalid characters collapses to a single '-', and leading/
+          # trailing '-'/'.' are trimmed so a branch starting or ending in a
+          # slash doesn't leave one behind).
+          safe_branch="$(printf '%s' "$branch" | tr -c 'A-Za-z0-9_.-' '-')"
+          safe_branch="$(printf '%s' "$safe_branch" | sed -E 's/^[-.]+//; s/[-.]+$//')"
+          if [ -z "$safe_branch" ]; then
+            safe_branch="unknown"
+          fi
+
+          date="$(date -u +%Y%m%d)"
+          short_sha="${sha:0:7}"
+          tag="${safe_branch}-${date}-${short_sha}"
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "computed image tag: ${tag}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # Only push on a push-to-main event (the only push trigger this
+      # workflow has — see `on:` above), never for a pull_request build. No
+      # secret to add: GITHUB_TOKEN is minted per-run by Actions.
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build on every pull_request (catches a broken Dockerfile before
+      # merge); push only on push to main. A single tag, never `latest`,
+      # never a bare sha — see the top-of-file comment for the reasoning and
+      # the two known-bad patterns elsewhere in the estate this deliberately
+      # does not copy.
+      - name: Build image (push only on main)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/alepolab/agent-manager:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
