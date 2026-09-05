@@ -5,7 +5,7 @@
  *   node scripts/test-team-sync.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -22,6 +22,7 @@ writeFileSync(join(cache, 'commands', 'triage.md'), '# triage\n')
 writeFileSync(join(process.env.CLAUDE_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'alepo-engineering@alepo-engineering': [{ installPath: cache, version: '0.1.0' }] } }))
 
 const T = await import('../server/utils/teamSync.ts')
+const D = await import('../server/utils/claudeDir.ts')
 
 let s = await T.teamStatus()
 assert.equal(s.pluginVersion, '0.1.0')
@@ -57,6 +58,43 @@ s = await T.teamSync()
 assert.equal(s.drifted, 0)
 const wf2 = JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'runbook-a-ticket-to-evidence-backed-pr.json'), 'utf8'))
 assert.deepEqual(wf2.steps.map(x => x.id), ids, 'step ids survive a re-apply')
+
+// ── No plugin installed: the container's normal case ──────────────────────
+//
+// A team container installs no plugins. Skills already fall back to the copy
+// shipped in engineering/skills; commands did not, so a container seeded zero
+// of them and /baseline, /reproduce, /triage and /tasks-picker-infra reached
+// nobody. Nothing said so: the boot line prints "0 commands" and 0 is a
+// legitimate count when the repo genuinely ships none.
+//
+// This asserts the seeded RESULT, not that the files exist in the repo. The
+// existing check in test-agent-skills.mjs asserts the latter, and it passed
+// throughout the whole time commands were unreachable.
+const bare = mkdtempSync(join(tmpdir(), 'team-bare-'))
+D.setClaudeDir(bare)
+
+const shipped = readdirSync(join(import.meta.dirname, '..', 'engineering', 'commands'))
+  .filter(f => f.endsWith('.md'))
+assert.ok(shipped.length, 'engineering/commands must ship commands for this to mean anything')
+
+s = await T.teamStatus()
+assert.equal(s.pluginVersion, null, 'no plugin is installed in this scenario')
+assert.deepEqual(
+  s.commands.map(c => c.name).sort(),
+  shipped.map(f => f.replace(/\.md$/, '')).sort(),
+  'with no plugin installed, commands come from the shipped copy',
+)
+
+s = await T.teamSync()
+for (const file of shipped) {
+  assert.ok(
+    existsSync(join(bare, 'commands', file)),
+    `${file} must be seeded from engineering/commands when no plugin is installed`,
+  )
+}
+assert.equal(s.drifted, 0, 'apply leaves nothing drifted in the bare case')
+
+rmSync(bare, { recursive: true, force: true })
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('teamSync: all assertions passed')

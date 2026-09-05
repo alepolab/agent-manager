@@ -57,6 +57,13 @@ COPY --from=build /app/.output .output
 # each agent silently runs without the instructions it was supposed to have.
 COPY engineering/skills ./engineering/skills
 
+# And its commands, for the same reason one level down. teamSync falls back to
+# these when no plugin is installed. Without this COPY the fallback finds
+# nothing and a container seeds zero commands - which is what shipped, because
+# the staged ~/.claude payload below happened to carry the operator's own
+# commands and made the gap look filled on the one box that built the image.
+COPY engineering/commands ./engineering/commands
+
 COPY docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.
