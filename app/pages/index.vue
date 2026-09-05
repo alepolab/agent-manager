@@ -2,7 +2,7 @@
 import { getAgentColor } from "~/utils/colors";
 import { MODEL_IDS, getModelLabel, getModelColor, getModelBadgeClasses } from "~/utils/models";
 
-const { claudeDir, set: setDir } = useClaudeDir();
+const { claudeDir } = useClaudeDir();
 const { agents, fetchAll: fetchAgents } = useAgents();
 const { commands, fetchAll: fetchCommands } = useCommands();
 const { plugins, fetchAll: fetchPlugins } = usePlugins();
@@ -10,8 +10,6 @@ const { skills, fetchAll: fetchSkills } = useSkills();
 const { imports: githubImports, fetchImports } = useGithubImports();
 const { settings, load: loadSettings } = useSettings();
 
-const dirInput = ref("");
-const settingDir = ref(false);
 
 interface Suggestion {
   type: string;
@@ -47,7 +45,6 @@ function animateCounter(target: number, key: keyof typeof animatedCounts) {
 }
 
 onMounted(async () => {
-  dirInput.value = claudeDir.value || "";
   await Promise.all([
     loadSettings(), 
     fetchPlugins(), 
@@ -89,21 +86,6 @@ onMounted(async () => {
   }
 });
 
-async function changeDir() {
-  settingDir.value = true;
-  try {
-    await setDir(dirInput.value);
-    await Promise.all([
-      fetchAgents(),
-      fetchCommands(),
-      fetchPlugins(),
-      fetchSkills(),
-      loadSettings(),
-    ]);
-  } finally {
-    settingDir.value = false;
-  }
-}
 
 const UNSET_KEY = 'unset';
 const modelBreakdown = computed(() => {
@@ -555,47 +537,7 @@ const statItems = computed(() => [
         </div>
       </div>
 
-      <!-- Advanced: directory picker -->
-      <details>
-        <summary
-          class="text-[12px] flex items-center gap-1.5 text-meta cursor-pointer"
-        >
-          <UIcon
-            name="i-lucide-settings"
-            class="size-3"
-          />
-          Advanced: Configuration folder
-        </summary>
-        <div class="rounded-xl p-4 mt-2 bg-card">
-          <p class="text-[12px] mb-3 text-label">
-            This is where Claude Code stores your agents, commands, and
-            settings. The default is ~/.claude.
-          </p>
-          <div class="flex items-center gap-3">
-            <UIcon
-              name="i-lucide-folder"
-              class="size-4 shrink-0 text-meta"
-            />
-            <form
-              class="flex-1 flex gap-2"
-              @submit.prevent="changeDir"
-            >
-              <input
-                v-model="dirInput"
-                placeholder="~/.claude"
-                class="field-input flex-1"
-              />
-              <UButton
-                type="submit"
-                :loading="settingDir"
-                label="Load"
-                size="sm"
-                variant="soft"
-              />
-            </form>
-          </div>
-        </div>
-      </details>
+      <!-- The configuration folder is fixed at boot (CLAUDE_DIR); a shared server must not let one user repoint it. -->
 
       <!-- Keyboard shortcuts -->
       <div class="flex items-center gap-4 px-2 text-meta">

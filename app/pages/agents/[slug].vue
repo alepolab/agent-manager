@@ -10,6 +10,7 @@ const queryWorkingDir = route.query.workingDir as string | undefined
 const { fetchOne, remove } = useAgents()
 const { clearChat: clearStudioChat, toolCalls, isStreaming: studioStreaming } = useStudioChat()
 const { reveal } = useReveal()
+const { localDesktop } = useClaudeDir()
 
 const frontmatter = ref<AgentFrontmatter>({ name: '', description: '', tools: [] })
 const body = ref('')
@@ -173,7 +174,7 @@ useUnsavedChanges(isDirty)
           @click="isTestPanelOpen = !isTestPanelOpen"
         />
         <UButton
-          v-if="filePath"
+          v-if="localDesktop && filePath"
           icon="i-lucide-folder-open"
           size="sm"
           variant="ghost"

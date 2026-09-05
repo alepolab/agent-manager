@@ -10,6 +10,7 @@ const newPath = ref('')
 const newDisplayName = ref('')
 const adding = ref(false)
 const browsing = ref(false)
+const { localDesktop } = useClaudeDir()
 
 async function browseFolder() {
   browsing.value = true
@@ -131,6 +132,7 @@ useHead({
                   class="px-3 py-2 rounded-xl text-[13px] font-medium transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
                   style="background: var(--surface-raised); border: 1px solid var(--border-subtle); color: var(--text-secondary);"
                   :disabled="browsing"
+                  v-if="localDesktop"
                   @click="browseFolder"
                 >
                   <UIcon v-if="browsing" name="i-lucide-loader-2" class="size-4 animate-spin" />

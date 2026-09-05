@@ -6,6 +6,8 @@ import { existsSync } from 'node:fs'
 const execAsync = promisify(exec)
 
 export default defineEventHandler(async (event) => {
+  // Only meaningful when the browser and the server share a desktop.
+  if (process.env.LOCAL_DESKTOP !== '1') throw createError({ statusCode: 404, message: 'Not available on a shared server' })
   const { path } = await readBody<{ path: string }>(event)
 
   if (!path) {

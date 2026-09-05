@@ -4,6 +4,8 @@ import { promisify } from 'node:util'
 const execAsync = promisify(exec)
 
 export default defineEventHandler(async () => {
+  // Only meaningful when the browser and the server share a desktop.
+  if (process.env.LOCAL_DESKTOP !== '1') throw createError({ statusCode: 404, message: 'Not available on a shared server' })
   const platform = process.platform
 
   if (platform === 'darwin') {

@@ -7,11 +7,13 @@ const router = useRouter()
 const toast = useToast()
 const { fetchOne, update, remove } = useCommands()
 const { reveal } = useReveal()
+const { localDesktop } = useClaudeDir()
 const { prefillSkill } = useChat()
 
 const slug = route.params.slug as string
 const command = ref<Command | null>(null)
 const saving = ref(false)
+const lastModified = ref<number | null>(null)
 
 const frontmatter = ref<CommandFrontmatter>({
   name: '',
@@ -66,8 +68,10 @@ async function save() {
       },
       body: body.value,
     }
-    const updated = await update(slug, payload)
+    const updated = await update(slug, { ...payload, lastModified: lastModified.value ?? undefined } as any)
     command.value = updated
+    lastModified.value = (updated as any).lastModified ?? null
+    lastModified.value = (updated as any).lastModified ?? null
     clearDraft()
     toast.add({ title: 'Saved', color: 'success' })
 
@@ -75,7 +79,8 @@ async function save() {
       router.push(`/commands/${updated.slug}`)
     }
   } catch (e: any) {
-    toast.add({ title: 'Failed to save', description: e.message, color: 'error' })
+    if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: e.data?.message || 'Reload to see the latest version before saving again.', color: 'warning' })
+    else toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
   } finally {
     saving.value = false
   }
@@ -150,7 +155,7 @@ useUnsavedChanges(isDirty)
           @click="prefillSkill(command!.frontmatter.name)"
         />
         <UButton
-          v-if="command?.filePath"
+          v-if="localDesktop && command?.filePath"
           icon="i-lucide-folder-open"
           size="sm"
           variant="ghost"
