@@ -90,14 +90,15 @@ if (!runbook) { console.error('Runbook A workflow template not found.'); process
     slugs[s.agentTemplateId] = s.agentTemplateId
     if (s.monitorSlug) slugs[s.monitorSlug] = s.monitorSlug
   }
-  const steps = materializeTemplateSteps(runbook, slugs)
   const wfPath = join(claudeDir, 'workflows', 'runbook-a-ticket-to-evidence-backed-pr.json')
+  const existing = existsSync(wfPath) ? JSON.parse(readFileSync(wfPath, 'utf8')) : null
+  const steps = materializeTemplateSteps(runbook, slugs, existing?.steps?.map(s => s.id))
   if (!dryRun) {
     writeFileSync(wfPath, JSON.stringify({
       name: runbook.name,
       description: runbook.description,
       steps,
-      createdAt: new Date().toISOString(),
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
     }, null, 2))
   }
   console.log('\nworkflow steps:')

@@ -38,6 +38,7 @@ export interface WorkflowTemplate {
 export function materializeTemplateSteps(
   template: WorkflowTemplate,
   agentSlugByTemplateId: Record<string, string>,
+  existingIds?: string[],
 ): WorkflowStep[] {
   // The global crypto, not node:crypto - this module is bundled for the browser too.
   //
@@ -45,7 +46,10 @@ export function materializeTemplateSteps(
   // same agent template in two steps must not collapse them onto the same generated
   // id, or the repeated step becomes unreachable (stepById()/indexOf() only ever
   // resolve the first match).
-  const stepIds = template.steps.map(() => crypto.randomUUID())
+  // Keep ids by position when a saved workflow of the same shape exists: a
+  // re-sync that renamed every step would orphan every run recorded against it.
+  const reuse = existingIds && existingIds.length === template.steps.length
+  const stepIds = template.steps.map((_, i) => (reuse ? existingIds![i] : crypto.randomUUID()))
 
   // Still keyed by `agentTemplateId`, because that's what a `next` entry names.
   // If an `agentTemplateId` repeats, the last step wins as the translation target -
@@ -127,17 +131,17 @@ export const workflowTemplates: WorkflowTemplate[] = [
     description: 'Paste a support ticket: stands up the stack, writes a failing parameterised test, fixes the cause, verifies, and opens a PR carrying the evidence bundle.',
     icon: 'i-lucide-git-pull-request-arrow',
     steps: [
-      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'] },
+      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack',
         next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'] },
+      { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'], monitorSlug: 'sdlc-step-monitor' },
       // Verification and browser evidence are independent of each other - one wave.
-      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture'] },
+      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression',
         next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'] },
+      { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR',
-        next: [], contextMode: 'ancestors' },
+        next: [], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
     ],
   },
 ]

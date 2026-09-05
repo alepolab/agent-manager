@@ -340,4 +340,17 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
 }
 
+// ── Runbook A: every step monitored, ids stable across syncs ─────────────
+{
+  const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
+  assert.ok(runbook.steps.every(s => s.monitorSlug === 'sdlc-step-monitor'), 'every Runbook A step is monitored')
+  const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
+  const first = materializeTemplateSteps(runbook, slugs)
+  const again = materializeTemplateSteps(runbook, slugs, first.map(s => s.id))
+  assert.deepEqual(again.map(s => s.id), first.map(s => s.id), 'existing ids are kept by position')
+  assert.deepEqual(again.map(s => s.next), first.map(s => s.next), 'edges follow the kept ids')
+  const fresh = materializeTemplateSteps(runbook, slugs, first.slice(0, 3).map(s => s.id))
+  assert.notDeepEqual(fresh.map(s => s.id), first.map(s => s.id), 'a length mismatch regenerates rather than half-reusing')
+}
+
 console.log('workflowTemplates: all assertions passed')
