@@ -1,0 +1,94 @@
+# Where a pipeline step is actually running, and the facts that differ
+# between those places.
+#
+# A step that assumes the wrong environment produces confident nonsense: a
+# package-manager command that doesn't exist, a firewall tool that isn't
+# installed, a healthcheck aimed at a host port that times out instead of
+# refusing (because it silently routed through the host IP instead of the
+# container's own service name). This file names the environments in play and
+# the facts a step needs before it acts, so it can ask instead of guess.
+#
+# Validated by: node scripts/validate-environments.mjs
+# Schema:       registry/schemas/environments.schema.json
+# Consumed by:  node scripts/resolve-environment.mjs
+#
+# Source: the user's own ~/.claude/CLAUDE.md, "Where I work" and "Lab hosts —
+# I have shell, you do not" sections, and the "Deployment topology" section
+# for the container-addressing facts. Nothing here is invented — a fact not
+# stated there is left out of `facts` rather than guessed, and
+# resolve-environment.mjs reports that absence loudly rather than defaulting
+# to another environment's value.
+#
+# Deliberately NOT included: a fourth "customer-shaped topology" environment.
+# The task brief that asked for this file used it as an illustrative example
+# of an environment *category*, but no customer topology is named anywhere in
+# the source material above — inventing facts for one here would violate the
+# same rule this file exists to enforce.
+
+environments:
+  wsl-ubuntu:
+    kind: workstation
+    description: >-
+      XO-LAP-031, Ubuntu WSL2 box. Used for dev and devops work. One of two
+      boxes with checkouts under /home/alepo.
+    detect:
+      os_release_id: ubuntu
+      wsl: true
+    facts:
+      package_manager: apt
+      package_manager_secondary: dpkg
+      firewall: ufw
+      selinux: absent
+      auth_log: /var/log/auth.log
+      ssh_unit: ssh
+      shell_access: local
+      is_production_shaped: false
+
+  wsl-oraclelinux:
+    kind: workstation
+    description: >-
+      XO-LAP-031, OracleLinux_9_5 WSL2 box. Used for dev and devops work.
+      Production targets are RHEL-family, so a step validated only on
+      wsl-ubuntu is not validated for this estate.
+    detect:
+      os_release_id: ol
+      wsl: true
+    facts:
+      package_manager: dnf
+      package_manager_secondary: rpm
+      package_manager_extras_need: epel-release
+      firewall: firewalld
+      selinux: present
+      auth_log: /var/log/secure
+      ssh_unit: sshd
+      shell_access: local
+      is_production_shaped: true
+
+  lab-ffmhost1:
+    kind: lab_docker_host
+    description: >-
+      FFMhost1, 172.16.115.61 — the main docker stack (sso, database, pms,
+      pcrf, ffm, ...), shared with other teams. The user has shell there;
+      an agent session does not.
+    # No `detect` block: this is a remote lab host, not something a local
+    # session can ever auto-detect from its own /etc/os-release or WSL
+    # state. It is only ever reachable by naming it explicitly
+    # (`--env lab-ffmhost1`) — never inferred, never defaulted.
+    facts:
+      address: 172.16.115.61
+      shell_access: none
+      shell_access_note: >-
+        Never assume a docker ps / oc get / docker exec can run here. Hand
+        the operator a copy-pasteable command; they run it and paste the
+        output back.
+      network_name: alepo-shared
+      network_subnet: 10.20.23.0/24
+      container_addressing: service_name_and_internal_port_only
+      host_ip_routing_signature: timeout_not_connection_refused
+      docker_dns_resolves: compose_service_names_and_aliases_not_container_name
+      timezone: Asia/Kolkata
+      image_registry_deploy: ghcr.io/alepolab
+      image_registry_test: 10.79.4.80:8443/devops
+      sso_stack_shared_with: ffm,crm,pcrf,vms
+      cp_alias_warning: cp is aliased interactively in lab shells; use /bin/cp
+      is_production_shaped: true
