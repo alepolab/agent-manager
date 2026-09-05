@@ -60,7 +60,7 @@ export function useWorkflowRun(slug: string) {
 
   // listen() again after every action: a finished run has no open stream, so
   // without it a restart's progress would never reach the page.
-  const act = (path: string) => async (body?: unknown) => {
+  const act = (path: string) => async (body?: Record<string, unknown>) => {
     if (!run.value) return
     run.value = await $fetch<WorkflowRun>(`/api/runs/${run.value.id}/${path}`, { method: 'POST', body })
     listen(run.value.id)

@@ -60,7 +60,7 @@ onMounted(async () => {
       })
     }
     frontmatter.value = { ...skill.value.frontmatter }
-    body.value = skill.value.body
+    body.value = skill.value.body ?? ''
     clearStudioChat()
   } catch (err: any) {
     console.error('Skill load error:', err)
@@ -118,7 +118,7 @@ async function editCopy() {
   try {
     const copy = await create({
       frontmatter: { ...skill.value.frontmatter, name: skill.value.frontmatter.name + ' (copy)' },
-      body: skill.value.body,
+      body: skill.value.body ?? '',
     })
     toast.add({ title: 'Copy created', color: 'success' })
     router.push(`/skills/${copy.slug}`)

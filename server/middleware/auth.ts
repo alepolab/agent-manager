@@ -7,7 +7,7 @@ import { currentUser, isPublicApiPath, authDisabled } from '../utils/session'
  */
 export default defineEventHandler(async (event) => {
   if (authDisabled()) return
-  const path = event.path.split('?')[0]
+  const path = event.path.split('?')[0] ?? event.path
   if (!path.startsWith('/api/')) return
   if (isPublicApiPath(path)) return
   const user = await currentUser(event)

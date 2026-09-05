@@ -25,7 +25,7 @@ onMounted(async () => {
     plugin.value = await fetchOne(id)
     for (const skill of plugin.value.skillDetails) {
       skillFrontmatters.value[skill.slug] = { ...skill.frontmatter }
-      skillBodies.value[skill.slug] = skill.body
+      skillBodies.value[skill.slug] = skill.body ?? ''
     }
   } catch {
     toast.add({ title: 'Plugin not found', color: 'error' })
@@ -268,7 +268,7 @@ if (import.meta.client) {
                 {{ skill.frontmatter.description }}
               </span>
               <span class="font-mono text-[10px] shrink-0 text-meta">
-                {{ Math.round(skill.body.length / 100) / 10 }}k chars
+                {{ Math.round((skill.body?.length ?? 0) / 100) / 10 }}k chars
               </span>
             </button>
 

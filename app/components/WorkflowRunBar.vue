@@ -86,7 +86,7 @@ function onStop() {
     </template>
     <template v-else>
       <span class="text-[11px] text-label">
-        Last run {{ runs[0].status }}, {{ new Date(runs[0].startedAt).toLocaleString() }}
+        Last run {{ runs[0]?.status }}, {{ runs[0] ? new Date(runs[0].startedAt).toLocaleString() : '' }}
       </span>
       <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-panel-right" label="Previous runs" class="ml-auto" @click="emit('details')" />
     </template>

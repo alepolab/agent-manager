@@ -28,7 +28,21 @@ import { join } from 'node:path'
 import { plainTextToAdf } from './adf.ts'
 import { isJiraPostingEnabled, jiraAuthHeader, resolveJiraCredentials } from './jiraCredentials.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
-import type { FetchLike } from './jiraTicketSource.ts'
+/**
+ * Declared here rather than imported from jiraTicketSource.ts.
+ *
+ * That module was rewritten on feature/team-ready-agent-manager to drive
+ * `jira-cli` through an `Exec` seam instead of REST through `fetch`, and it no
+ * longer exports `FetchLike` - so this import broke on merge even though this
+ * file was not itself conflicted. The type is one line, and owning it here
+ * removes the coupling entirely.
+ *
+ * FLAG FOR REVIEW, not resolved here: reads now go through jira-cli while this
+ * notifier still POSTs its comment over REST with its own credentials. Both
+ * work, but they are two different auth paths to the same Jira, and which one
+ * survives is an architectural call for the branch author.
+ */
+export type FetchLike = typeof fetch
 import type { Watch } from '../../shared/types/watch.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 

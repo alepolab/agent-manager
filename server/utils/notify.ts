@@ -83,7 +83,7 @@ export function runMessage(run: WorkflowRun, baseUrl: string): string {
   const step = run.steps.find(s => s.status === 'failed')?.label
     ?? run.steps.find(s => run.currentStepIds.includes(s.stepId))?.label
     ?? run.steps.find(s => run.nextStepIds.includes(s.stepId))?.label
-  const what = run.initialPrompt.split('\n')[0].slice(0, 80)
+  const what = (run.initialPrompt.split('\n')[0] ?? '').slice(0, 80)
   const cost = run.usage ? ` · $${run.usage.usd.toFixed(2)}` : ''
   const why = run.error ? ` — ${run.error.slice(0, 160)}` : ''
   return `${run.workflowName}: ${run.status.toUpperCase()}${step ? ` at ${step}` : ''} — ${what}${cost}${why}\n${baseUrl}/workflows/${run.workflowSlug}?run=${run.id}`

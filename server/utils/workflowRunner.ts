@@ -17,6 +17,7 @@ import {
   publishEvidenceToProject,
   markArtifactsUnusable,
 } from './runArtifacts.ts'
+import { captureBaseline } from './gitFacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import type { WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
@@ -891,12 +892,14 @@ function alignStepIds(steps: any[], run: WorkflowRun): any[] {
     throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
   }
   const sameShape = steps.length === run.steps.length
-    && steps.every((s, i) => s.agentSlug === run.steps[i].agentSlug)
+    && steps.every((s, i) => s.agentSlug === run.steps[i]?.agentSlug)
   if (!sameShape) {
     throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
   }
   const idMap: Record<string, string> = {}
-  steps.forEach((s, i) => { idMap[s.id] = run.steps[i].stepId })
+  // `sameShape` above already proved the lengths match, but the type system
+  // cannot carry that to the index here.
+  steps.forEach((s, i) => { const prior = run.steps[i]; if (prior) idMap[s.id] = prior.stepId })
   return steps.map(s => ({
     ...s,
     id: idMap[s.id],

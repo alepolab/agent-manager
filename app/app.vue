@@ -116,6 +116,18 @@ const { settings, load: loadSettings } = useSettings()
 const { me, signOut } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
 const labs = computed(() => settings.value?.agentManager?.labs === true)
+/** Reload everything the sidebar counts after onboarding finishes.
+ *  A named handler, not an inline expression: a template expression resolves
+ *  bare identifiers against the component instance, so `Promise.all` was being
+ *  looked up as a property of the component rather than the global. */
+async function onOnboardingComplete() {
+  await loadConfig()
+  await Promise.all([
+    fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(),
+    fetchWorkflows(), fetchServers(), fetchStyles(),
+  ])
+}
+
 const navTopAll = [
   { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
   { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
@@ -397,7 +409,7 @@ function badgeFor(to: string) {
 
         <!-- Footer: working directory -->
         <div :class="sidebarCollapsed ? 'px-1.5 pb-2.5' : 'px-2.5 pb-2.5'" style="border-top: 1px solid var(--border-subtle); padding-top: 0.75rem;">
-          <UPopover v-model:open="showWorkingDirPopover" :ui="{ width: 'w-[280px]' }">
+          <UPopover v-model:open="showWorkingDirPopover" :ui="{ content: 'w-[280px]' }">
             <button
               class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
               :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2 text-left'"
@@ -492,7 +504,7 @@ function badgeFor(to: string) {
         <!-- Setup wizard when directory doesn't exist -->
         <SetupWizard
           v-if="initialized && !claudeDirExists"
-          @complete="async () => { await loadConfig(); await Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers(), fetchStyles()]) }"
+          @complete="onOnboardingComplete"
         />
 
         <div v-show="initialized && claudeDirExists" class="h-full">

@@ -101,7 +101,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
         <div v-else class="space-y-1">
           <NuxtLink v-for="r in attention" :key="r.id" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
-            <span class="font-medium truncate" style="color: var(--text-primary);">{{ r.initialPrompt.split('\n')[0].slice(0, 60) }}</span>
+            <span class="font-medium truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
             <span class="text-label truncate">{{ why(r) }}</span>
             <span class="ml-auto text-label whitespace-nowrap">{{ r.startedBy || '' }} · {{ ago(r.startedAt) }}</span>
           </NuxtLink>
@@ -122,7 +122,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
           <div v-else class="space-y-1">
             <NuxtLink v-for="r in mine" :key="r.id" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
               <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
-              <span class="truncate" style="color: var(--text-primary);">{{ r.initialPrompt.split('\n')[0].slice(0, 60) }}</span>
+              <span class="truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
               <div class="w-24 shrink-0"><RunProgressBar :steps="r.steps" /></div>
               <span class="ml-auto text-label whitespace-nowrap">{{ r.usage ? '$' + r.usage.usd.toFixed(2) : '' }} · {{ ago(r.startedAt) }}</span>
             </NuxtLink>
