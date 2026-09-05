@@ -41,6 +41,8 @@ export interface Command {
 }
 
 export interface Settings {
+  /** Agent Manager's own switches, kept under one key so Claude Code ignores them. */
+  agentManager?: { labs?: boolean }
   hooks?: Record<string, unknown[]>
   enabledPlugins?: Record<string, boolean>
   statusLine?: { type: string; command: string }
@@ -102,7 +104,8 @@ export interface SkillFrontmatter {
 export interface Skill {
   slug: string
   frontmatter: SkillFrontmatter
-  body: string
+  /** Present on the detail route only; the list omits it for size. */
+  body?: string
   filePath: string
   source?: 'local' | 'github' | 'plugin'
   githubRepo?: string

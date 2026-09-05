@@ -1,3 +1,4 @@
+import { invalidate } from '../../utils/memo'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
@@ -6,6 +7,7 @@ import { getPreloadingAgents, getMcpServerForSkill } from '../../utils/skillRela
 import type { SkillFrontmatter } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  invalidate('skills'); invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const body = await readBody<{ filePath: string }>(event)
   const { workingDir } = getQuery(event) as { workingDir?: string }

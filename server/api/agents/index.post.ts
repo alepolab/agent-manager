@@ -1,3 +1,4 @@
+import { invalidate } from '../../utils/memo'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
@@ -6,6 +7,7 @@ import { encodeAgentSlug, resolveAgentFilePath } from '../../utils/agentUtils'
 import type { AgentPayload } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  invalidate('agents'); invalidate('relationships')
   const payload = await readBody<AgentPayload>(event)
   const directory = payload.directory ?? ''
   const name = payload.frontmatter.name

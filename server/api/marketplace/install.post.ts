@@ -1,4 +1,6 @@
+import { invalidate } from '../../utils/memo'
 export default defineEventHandler(async (event) => {
+  invalidate('skills'); invalidate('relationships')
   const { marketplace, plugin } = await readBody<{ marketplace: string; plugin: string }>(event)
 
   if (!marketplace || !plugin) {

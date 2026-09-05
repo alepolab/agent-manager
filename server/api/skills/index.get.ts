@@ -4,7 +4,8 @@ import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import { parseFrontmatter } from '../../utils/frontmatter'
 import { resolvePluginInstallPath } from '../../utils/marketplace'
-import { getPreloadingAgents, getMcpServerForSkill } from '../../utils/skillRelationships'
+import { loadMcpServers, matchMcpServer } from '../../utils/skillRelationships'
+import { memo } from '../../utils/memo'
 import type { Skill, SkillFrontmatter } from '~/types'
 
 interface InstalledEntry {
@@ -24,6 +25,7 @@ async function readJson<T>(path: string): Promise<T | null> {
 
 export default defineEventHandler(async (event) => {
   const { workingDir } = getQuery(event) as { workingDir?: string }
+  return memo(`skills:list:${resolveClaudePath('skills')}:${workingDir ?? ''}`, 30_000, async () => {
   const skills: Skill[] = []
 
   // Load all agents to find preloading associations
@@ -51,10 +53,12 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // Helper to attach agents and MCP server to a skill
+  // Helper to attach agents and MCP server to a skill. Servers are loaded
+  // once for the whole list; the match itself is pure.
+  const mcpServers = await loadMcpServers(workingDir)
   const attachMetadata = async (skill: Skill) => {
     skill.agents = agentPreloads.get(skill.slug) || []
-    skill.mcpServer = await getMcpServerForSkill(skill.slug, skill.frontmatter, skill.body, workingDir)
+    skill.mcpServer = matchMcpServer(mcpServers, skill.slug, skill.frontmatter, skill.body ?? '')
   }
 
   // 1. Standalone skills from ~/.claude/skills/
@@ -271,5 +275,8 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  return skills.sort((a, b) => a.slug.localeCompare(b.slug))
+  // The list never renders a body and shipping every one of them made the
+  // response several megabytes; the detail route still returns it.
+  return skills.sort((a, b) => a.slug.localeCompare(b.slug)).map(({ body: _body, ...rest }) => rest)
+  })
 })

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import { parseFrontmatter } from '../../utils/frontmatter'
+import { memo } from '../../utils/memo'
 import type { SkillFrontmatter } from '~/types'
 
 interface InstalledEntry {
@@ -20,7 +21,7 @@ async function readJson<T>(path: string): Promise<T | null> {
   }
 }
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(async () => memo(`skills:counts:${resolveClaudePath('skills')}`, 30_000, async () => {
   const counts: Record<string, number> = {}
 
   function increment(agent: string | undefined) {
@@ -67,4 +68,4 @@ export default defineEventHandler(async () => {
   }
 
   return counts
-})
+}))

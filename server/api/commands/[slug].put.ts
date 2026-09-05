@@ -1,4 +1,5 @@
-import { writeFile, rename } from 'node:fs/promises'
+import { invalidate } from '../../utils/memo'
+import { writeFile, rename, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import { serializeFrontmatter } from '../../utils/frontmatter'
@@ -6,6 +7,7 @@ import { slugToPath, pathToSlug } from '../../utils/slugUtils'
 import type { CommandPayload } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const { directory, filename } = slugToPath(slug)
   const filePath = directory
@@ -16,7 +18,15 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: `Command not found: ${slug}` })
   }
 
-  const payload = await readBody<CommandPayload>(event)
+  const payload = await readBody<CommandPayload & { lastModified?: number }>(event)
+  // Stale-write protection: the editor sends the mtime it loaded; a newer
+  // file on disk means someone else saved meanwhile.
+  if (typeof payload.lastModified === 'number') {
+    const current = (await stat(filePath)).mtimeMs
+    if (Math.abs(current - payload.lastModified) > 1000) {
+      throw createError({ statusCode: 409, message: 'This command changed on disk since you opened it. Reload to see the latest version.', data: { lastModified: current } })
+    }
+  }
   const content = serializeFrontmatter(payload.frontmatter, payload.body)
 
   let finalFilePath = filePath
@@ -50,5 +60,6 @@ export default defineEventHandler(async (event) => {
     frontmatter: payload.frontmatter,
     body: payload.body,
     filePath: finalFilePath,
+    lastModified: (await stat(finalFilePath)).mtimeMs,
   }
 })

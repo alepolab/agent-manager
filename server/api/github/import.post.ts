@@ -1,3 +1,4 @@
+import { invalidate } from '../../utils/memo'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import { 
   readImportsRegistry, 
@@ -12,6 +13,7 @@ import {
 import { syncGithubImportSymlinks } from '../../utils/githubSkillSymlinks'
 
 export default defineEventHandler(async (event) => {
+  invalidate('skills'); invalidate('relationships')
   const { owner, repo, url, targetPath, selectedItems, totalItems, type } = await readBody<{
     owner: string
     repo: string

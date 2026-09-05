@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import { parseFrontmatter } from '../../utils/frontmatter'
 import { encodeAgentSlug } from '../../utils/agentUtils'
+import { memo } from '../../utils/memo'
 import type { Agent, AgentFrontmatter } from '~/types'
 
 async function scanDir(dir: string, relDir: string): Promise<Agent[]> {
@@ -41,6 +42,8 @@ async function scanDir(dir: string, relDir: string): Promise<Agent[]> {
 
 export default defineEventHandler(async () => {
   const agentsDir = resolveClaudePath('agents')
-  const agents = await scanDir(agentsDir, '')
-  return agents.sort((a, b) => a.slug.localeCompare(b.slug))
+  return memo(`agents:${agentsDir}`, 30_000, async () => {
+    const agents = await scanDir(agentsDir, '')
+    return agents.sort((a, b) => a.slug.localeCompare(b.slug))
+  })
 })
