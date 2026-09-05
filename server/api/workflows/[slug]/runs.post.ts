@@ -1,5 +1,6 @@
 import { startRun } from '../../../utils/workflowRunner'
 import { findActiveRun } from '../../../utils/workflowRunStore'
+import { expandTicketKey } from '../../../utils/jiraTicketSource'
 
 export default defineEventHandler(async (event) => {
   const slug = getRouterParam(event, 'slug')!
@@ -26,9 +27,13 @@ export default defineEventHandler(async (event) => {
 
   // Deliberately not awaited to completion: the HTTP response returns as soon
   // as the run exists, and the run continues server-side. That is the feature.
+  // A bare ticket key becomes the ticket itself when the jira CLI can serve
+  // it; otherwise the key is passed through and the intake step works from it.
+  const initialPrompt = (await expandTicketKey(body.initialPrompt)) ?? body.initialPrompt
+
   const run = await startRun({
     workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
-    initialPrompt: body.initialPrompt,
+    initialPrompt,
     // This route is the manual/API start path, never a watch dispatch — the
     // reserved literal is the honest answer to "what triggered this?".
     watch: 'direct-invocation',

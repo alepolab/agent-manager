@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "agents-ui": "./bin/start.mjs"
+    "agents-ui": "./bin/start.mjs",
+    "am": "./bin/am.mjs"
   },
   "scripts": {
     "build": "nuxt build",
