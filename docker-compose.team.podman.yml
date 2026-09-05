@@ -20,10 +20,14 @@
 #   group_add DOCKER_GID   -> dropped. There is no docker group here; the
 #                             rootless socket is owned by the invoking user.
 #
-# WARNING: that podman socket is served by a `podman system service` PROCESS,
-# not a system unit. It does not survive a reboot, and when it dies the stack
-# provisioner silently loses the ability to start anything while the app keeps
-# reporting healthy. Make the socket durable before anyone else relies on this.
+# The socket is durable: `podman.socket` is a systemd USER UNIT, enabled with
+# lingering on, so it comes up at boot and outlives every shell. It replaced a
+# `podman system service` process that died with its shell and was gone after a
+# reboot - taking the provisioner's ability to start anything with it, silently,
+# while the app carried on reporting healthy.
+#
+# `podman-restart.service` is enabled alongside it, which is what brings this
+# container back after a reboot given its `restart: unless-stopped`.
 #
 # Keep in step with docker-compose.team.yml by hand - nothing enforces it.
 services:
@@ -56,7 +60,7 @@ services:
       - AGENT_RUN_MAX_TOKENS=${AGENT_RUN_MAX_TOKENS:-8000000}
     volumes:
       - team-home:/srv/agent-manager
-      - /tmp/podman-run-9870/podman/podman.sock:/var/run/docker.sock
+      - ${PODMAN_SOCK:-/run/user/9870/podman/podman.sock}:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/api/health"]
       interval: 30s
