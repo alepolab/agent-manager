@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { WorkflowRun } from '~~/shared/types/run'
+import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[] }>()
 const emit = defineEmits<{ continue: [], stop: [], attach: [id: string] }>()
@@ -35,6 +35,26 @@ const progress = computed(() => {
 })
 
 const expanded = ref<string | null>(null)
+
+// Cost is fetched separately from the run record itself (GET /api/runs/[id]/cost,
+// server/utils/costReport.ts) rather than computed here: pricing lives in
+// server/utils/models.ts only, and this component has no business re-deriving
+// it from raw token counts. Re-fetched on the run's id (a different run
+// entirely) AND on how many of its steps have settled - a live run's cost
+// only grows when a step actually finishes reporting usage, not on every
+// intermediate SSE status frame in between.
+const cost = ref<RunCostSummary | null>(null)
+const costError = ref(false)
+watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
+  costError.value = false
+  if (!id) { cost.value = null; return }
+  try {
+    cost.value = await $fetch<RunCostSummary>(`/api/runs/${id}/cost`)
+  } catch {
+    costError.value = true
+  }
+}, { immediate: true })
+const money = (n: number) => `$${n.toFixed(4)}`
 </script>
 
 <template>
@@ -64,6 +84,26 @@ const expanded = ref<string | null>(null)
     <p v-if="run.status === 'interrupted'" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">
       The process that was running this is gone. Its steps are frozen where they stopped.
     </p>
+
+    <!-- One honest number: the run's cost so far, from server/utils/costReport.ts.
+         Never fabricated - a step that hasn't reported usage, or ran on a model
+         with no pricing entry, makes this a stated PARTIAL total, not a silent
+         one. See RunCostSummary's `note` (title on the badge) for the caveats. -->
+    <div v-if="cost" class="flex items-center gap-2 text-[11px]" data-testid="run-cost-summary">
+      <span class="font-mono tabular-nums" style="color: var(--text-primary);" :title="cost.note">
+        {{ money(cost.totals.cost_usd) }}
+      </span>
+      <span class="text-label">{{ (cost.totals.input_tokens + cost.totals.output_tokens).toLocaleString() }} tokens</span>
+      <span
+        v-if="!cost.totals.complete"
+        class="text-[10px] px-1.5 py-0.5 rounded"
+        :style="{ color: STATUS_COLOR.failed, background: 'rgba(239, 68, 68, 0.1)' }"
+        :title="`${cost.totals.unmeasured_step_count} step(s) with no observed usage, ${cost.totals.unpriced_step_count} on an unpriced model - excluded from this total`"
+      >
+        partial: {{ cost.totals.unmeasured_step_count + cost.totals.unpriced_step_count }} step(s) excluded
+      </span>
+    </div>
+    <p v-else-if="costError" class="text-[11px] text-label">Cost unavailable.</p>
 
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">

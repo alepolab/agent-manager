@@ -65,6 +65,84 @@ export interface WorkflowRun {
   pid: number
 }
 
+/**
+ * One step's contribution to a run's cost, as computed by
+ * server/utils/costReport.ts — never fabricated. `input_tokens`/`output_tokens`
+ * are `null` when the step never reported usage at all (see RunStep.model's
+ * doc comment for the same never-guessed rule). `cost_usd` is `null` when it
+ * cannot be honestly computed — either no usage was observed, or usage WAS
+ * observed but the model it ran on has no entry in
+ * server/utils/models.ts's SERVER_MODEL_META — `excludedReason` says which.
+ * A step can have real, counted tokens and still have `cost_usd: null` (an
+ * unpriced model) — the two are tracked separately on purpose.
+ */
+export interface StepCost {
+  stepId: string
+  label: string
+  agentSlug: string
+  status: RunStepStatus
+  /** The model this step actually ran, exactly as RunStep.model records it. */
+  model: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  cost_usd: number | null
+  excludedReason?: 'no-usage' | 'unpriced-model'
+  visits: number
+}
+
+/**
+ * A single run's cost, built from its own `steps` — never re-derived from an
+ * assumed default. `totals.input_tokens`/`output_tokens` sum every step that
+ * reported usage, regardless of whether its model could be priced (a real
+ * token spend is real even when its price is unknown). `totals.cost_usd`
+ * sums only the steps that were BOTH measured and priced; it is a genuine
+ * partial total, not the whole run's spend, whenever `totals.complete` is
+ * false. `note` restates the two caveats every reader needs to draw a
+ * correct comparison: (1) `input_tokens` folds fresh, cache-creation and
+ * cache-read tokens into one figure (agentCaller.ts's usageFrom), so
+ * `cost_usd` prices that whole figure at the model's plain input rate — an
+ * upper bound, since cache reads actually bill lower and the SDK's usage
+ * object does not preserve the split needed to compute the exact number;
+ * (2) unmeasured or unpriced steps are excluded from `cost_usd`, not
+ * assumed free.
+ */
+export interface RunCostSummary {
+  runId: string
+  workflowSlug: string
+  workflowName: string
+  status: WorkflowRunStatus
+  startedAt: number
+  endedAt?: number
+  wall_clock_min: number
+  attempts: number
+  steps: StepCost[]
+  totals: {
+    input_tokens: number
+    output_tokens: number
+    cost_usd: number
+    measured_step_count: number
+    /** Steps that never reported usage at all. */
+    unmeasured_step_count: number
+    /** Steps that reported usage but ran on a model absent from SERVER_MODEL_META. */
+    unpriced_step_count: number
+    /** True only when every step's tokens made it into cost_usd — false means
+     *  cost_usd is a real but PARTIAL total, not the run's whole spend. */
+    complete: boolean
+  }
+  note: string
+}
+
+/** Cost summed over several runs — a week's spend, a workflow's spend, etc.
+ *  Never a re-estimate: it is exactly the sum of each run's own
+ *  RunCostSummary, so the same "never fabricate, exclude what wasn't
+ *  measured or priced" rules apply at this level too. */
+export interface CostAggregate {
+  run_count: number
+  totals: RunCostSummary['totals']
+  runs: RunCostSummary[]
+  note: string
+}
+
 export interface NewRunInput {
   workflowSlug: string
   workflowName: string

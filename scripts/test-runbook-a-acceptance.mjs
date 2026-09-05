@@ -20,12 +20,26 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'acceptance-'))
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'acceptance-artifacts-'))
+
+// plugin_version is runner-owned (server/utils/runArtifacts.ts's
+// resolveInstalledPluginVersion), read from the real installed plugin's own
+// plugin.json — never the agent's self-report (see mergeMeta below, which
+// still writes one; finalize now overwrites it). This fixture is that
+// "installed plugin", laid out exactly like the real
+// ~/.claude/plugins/cache/... tree, so every scenario's bundle gets a real
+// plugin_version instead of finalize honestly dropping it.
+const pluginDir = join(
+  process.env.CLAUDE_DIR, 'plugins', 'cache', 'alepo-engineering', 'alepo-engineering', '0.1.0', '.claude-plugin',
+)
+mkdirSync(pluginDir, { recursive: true })
+writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({ name: 'alepo-engineering', version: '0.1.0' }))
+
 const runner = await import('../server/utils/workflowRunner.ts')
 const { assembleBundle } = await import('../engineering/scripts/assemble-bundle.mjs')
 

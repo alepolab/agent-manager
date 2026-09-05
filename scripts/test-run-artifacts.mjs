@@ -6,11 +6,16 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'artifacts-'))
+// A CLAUDE_DIR of our own, isolated from whatever plugins are actually
+// installed on this machine — plugin_version tests below need to control
+// exactly what's "installed" (nothing, one version, several versions), and
+// must not depend on, or perturb, the real ~/.claude/plugins.
+process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'artifacts-claudedir-'))
 const A = await import('../server/utils/runArtifacts.ts')
 
 function git(cwd, args) {
@@ -60,6 +65,8 @@ assert.equal(seeded.watch, 'direct-invocation', 'watch is seeded from the run\'s
 // behaviour this whole fix removes). A run whose every step later throws
 // would otherwise write a fabricated model as if it were fact.
 assert.ok(!('model' in seeded), 'model is absent until a step reports one — never a fallback default')
+assert.ok(!('plugin_version' in seeded),
+  'plugin_version is absent when no plugin is installed under this CLAUDE_DIR — never a placeholder')
 assert.equal(seeded.cost.input_tokens, 0,
   'token counts start at 0 — no step has reported real usage yet')
 assert.ok(!('ticket' in seeded), 'the runner does not claim agent-owned fields')
@@ -92,6 +99,7 @@ writeFileSync(join(dir, 'meta.json'), JSON.stringify({
   identity: 'i-promoted-myself',
   watch: 'sa-bugs', // an agent claiming a watch dispatched this run at all
   model: 'agent-picked-a-fancy-model',
+  plugin_version: 'agent-invented-9.9.9',
   cost: { input_tokens: 999999, output_tokens: 999999, attempts: 1, wall_clock_min: 0 },
 }))
 run.endedAt = run.startedAt + 120000
@@ -103,6 +111,8 @@ assert.equal(final.watch, 'direct-invocation',
   'watch is re-asserted from the run\'s own record — the agent cannot promote itself to watcher-dispatched')
 assert.ok(!('model' in final),
   'model is asserted absent over the agent\'s claim — still no step has actually reported one')
+assert.ok(!('plugin_version' in final),
+  'plugin_version is asserted absent over the agent\'s invented value — still nothing installed under this CLAUDE_DIR')
 assert.equal(final.cost.wall_clock_min, 2, 'wall clock comes from the runner clock')
 
 // 3a-model. once a step DOES report a model, it wins — over both the
@@ -435,5 +445,60 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
     'meta.json is removed — the assembler must see an absent run, not fabricated evidence')
 }
 
+// 11. plugin_version: a runner-owned fact read from the installed plugin's
+// own plugin.json (server/utils/runArtifacts.ts's resolveInstalledPluginVersion),
+// never the sdlc-ticket-intake agent's self-report. That agent's own Glob-based
+// search can never find this file (its cwd is the target repo, not
+// ~/.claude, and `**` doesn't descend into a dot-directory like
+// `.claude-plugin` regardless) — see DEVOPS-15's real halt this closes.
+{
+  // 11a. Nothing installed at all (the state every earlier assertion in this
+  // file already ran under): resolveInstalledPluginVersion reports absence,
+  // never a placeholder.
+  assert.equal(A.resolveInstalledPluginVersion(), undefined,
+    'no plugin installed under this CLAUDE_DIR: undefined, not a placeholder')
+
+  // 11b. The exact real installed layout the coordinator measured:
+  // plugins/cache/alepo-engineering/alepo-engineering/0.1.0/.claude-plugin/plugin.json —
+  // note the dot-directory segment a `**` glob cannot descend into.
+  const pluginDir = join(
+    process.env.CLAUDE_DIR, 'plugins', 'cache', 'alepo-engineering', 'alepo-engineering', '0.1.0', '.claude-plugin',
+  )
+  mkdirSync(pluginDir, { recursive: true })
+  writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({ name: 'alepo-engineering', version: '0.1.0' }))
+  assert.equal(A.resolveInstalledPluginVersion(), '0.1.0',
+    'the real installed layout, dot-directory included, is found by walking rather than globbing')
+
+  // 11c. Two cached versions: the higher one wins, not whichever the walk
+  // happens to visit first.
+  const olderDir = join(
+    process.env.CLAUDE_DIR, 'plugins', 'cache', 'alepo-engineering', 'alepo-engineering', '0.0.9', '.claude-plugin',
+  )
+  mkdirSync(olderDir, { recursive: true })
+  writeFileSync(join(olderDir, 'plugin.json'), JSON.stringify({ name: 'alepo-engineering', version: '0.0.9' }))
+  assert.equal(A.resolveInstalledPluginVersion(), '0.1.0',
+    'with two cached versions present, the higher version wins')
+
+  // 11d. finalizeRunArtifacts asserts plugin_version over an agent's
+  // self-report, exactly like identity/watch/model/cost already do.
+  const pluginRun = {
+    id: 'run-plugin-version', workflowSlug: 'runbook-a', status: 'running', watch: 'direct-invocation',
+    initialPrompt: 'fix SA-1', startedAt: Date.now(), endedAt: Date.now() + 1000,
+    currentStepIds: [], nextStepIds: [], steps: [],
+  }
+  const pluginRunDir = A.runArtifactsDir(pluginRun.id)
+  await A.initRunArtifacts(pluginRun, 'Runbook A')
+  const seededPlugin = JSON.parse(readFileSync(join(pluginRunDir, 'meta.json'), 'utf8'))
+  assert.equal(seededPlugin.plugin_version, '0.1.0', 'init seeds plugin_version from the real installed plugin')
+  writeFileSync(join(pluginRunDir, 'meta.json'), JSON.stringify({
+    ...seededPlugin, plugin_version: 'unknown',
+  }))
+  await A.finalizeRunArtifacts(pluginRun)
+  const finalPlugin = JSON.parse(readFileSync(join(pluginRunDir, 'meta.json'), 'utf8'))
+  assert.equal(finalPlugin.plugin_version, '0.1.0',
+    'finalize re-asserts the real installed version over the agent\'s placeholder self-report')
+}
+
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
+rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('run artifacts: all checks passed')

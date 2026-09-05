@@ -1,7 +1,9 @@
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { computeFixFacts } from './gitFacts.ts'
+import { resolveClaudePath } from './claudeDir.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 
@@ -101,6 +103,87 @@ function tokenTotals(run: WorkflowRun): { input_tokens: number, output_tokens: n
   return { input_tokens, output_tokens }
 }
 
+/**
+ * Recursively finds every `plugin.json` under `dir` whose full path both
+ * contains `pluginName` and ends in `.claude-plugin/plugin.json`. Walked by
+ * hand with `readdirSync` rather than a glob library on purpose: `**` glob
+ * patterns do not descend into a dot-directory, and `.claude-plugin` is
+ * exactly that — the reason the sdlc-ticket-intake agent's own Glob-based
+ * search for this file (app/utils/templates.ts's prompt) can never find it
+ * no matter how the pattern is written, even before accounting for that
+ * agent's cwd being the target repo, not `~/.claude`. `maxDepth` bounds the
+ * walk against a pathological tree or a symlink cycle; the real installed
+ * layout (`plugins/cache/<name>/<name>/<version>/.claude-plugin/plugin.json`)
+ * is 5 levels deep, so 8 leaves real headroom without being unbounded.
+ */
+function findPluginManifests(dir: string, pluginName: string, depth = 0, maxDepth = 8): string[] {
+  if (depth > maxDepth) return []
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return [] // unreadable directory: nothing found here, not a crash
+  }
+  const found: string[] = []
+  for (const entry of entries) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      found.push(...findPluginManifests(full, pluginName, depth + 1, maxDepth))
+    } else if (
+      entry.isFile() && entry.name === 'plugin.json'
+      && full.includes(pluginName) && full.endsWith(join('.claude-plugin', 'plugin.json'))
+    ) {
+      found.push(full)
+    }
+  }
+  return found
+}
+
+/** Numeric, dot-segment comparison — good enough to pick the higher of two
+ *  real semver strings (the shape plugin.json actually carries) without
+ *  pulling in a semver library for one comparison. Never used to validate
+ *  that a string IS a semver — that is the bundle schema's job downstream. */
+function higherVersion(a: string, b: string): string {
+  const partsOf = (v: string) => v.split('.').map(p => Number.parseInt(p, 10) || 0)
+  const [pa, pb] = [partsOf(a), partsOf(b)]
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff > 0 ? a : b
+  }
+  return a
+}
+
+/**
+ * The installed plugin's version, read directly from its own `plugin.json`
+ * by the server process — a runner-owned fact, never the intake agent's
+ * self-report (see findPluginManifests's doc comment for exactly why that
+ * agent structurally cannot find this file itself: three consecutive real
+ * runs halted at step one on this, and two earlier "fixes" to the agent's
+ * search pattern were both wrong for the same reason — the search was never
+ * the problem). Returns `undefined` — never a placeholder like "unknown" —
+ * when `~/.claude/plugins` doesn't exist, no manifest under it names the
+ * plugin, or every manifest found fails to parse to an object with a string
+ * `version`. When more than one matching manifest exists (multiple cached
+ * versions of the same plugin), the highest version wins rather than an
+ * arbitrary first-found pick.
+ */
+export function resolveInstalledPluginVersion(pluginName = 'alepo-engineering'): string | undefined {
+  const root = resolveClaudePath('plugins')
+  if (!existsSync(root)) return undefined
+  let best: string | undefined
+  for (const path of findPluginManifests(root, pluginName)) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'))
+      if (parsed && typeof parsed === 'object' && typeof parsed.version === 'string' && parsed.version) {
+        best = best ? higherVersion(best, parsed.version) : parsed.version
+      }
+    } catch {
+      /* an unparsable manifest asserts nothing */
+    }
+  }
+  return best
+}
+
 /** Keys the RUNNER owns. An agent may write them; finalize overwrites them.
  *  Split out so there is exactly one list, used by both seed and finalize. */
 function runnerOwned(run: WorkflowRun) {
@@ -112,6 +195,11 @@ function runnerOwned(run: WorkflowRun) {
     // from, or trusted from, an agent's self-report), same as identity.
     watch: run.watch,
     model: modelsUsed(run),
+    // Same class of fact as identity/watch/model: something the runner can
+    // verify directly and an agent must not be trusted to self-report. See
+    // resolveInstalledPluginVersion's doc comment for why the agent could
+    // never compute this correctly itself.
+    plugin_version: resolveInstalledPluginVersion(),
     cost: {
       ...tokenTotals(run),
       attempts: Math.max(1, ...run.steps.map(s => s.visits ?? 1)),
