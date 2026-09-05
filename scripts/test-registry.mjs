@@ -30,6 +30,7 @@ products:
     tests: { unit: 'pnpm test' }
     owners: { protocol: selfcare-leads }
   pcrf:
+    multi_repo: true
     match:
       components: [PCRF]
       projects: [PCRFV]
@@ -52,6 +53,11 @@ assert.equal(byLabel?.name, 'selfcarenow', 'a label in pasted text resolves')
 const byComponent = await R.resolveProduct('PCRF session drops after rekey')
 assert.equal(byComponent?.name, 'pcrf', 'a component word resolves')
 assert.equal(byComponent?.recipe, undefined, 'no recipe file, no recipe path')
+assert.equal(byComponent?.multiRepo, true, 'multi_repo flag is carried')
+assert.equal(byKey?.multiRepo, undefined, 'absent flag stays absent')
+assert.match(A.artifactHeader('/tmp/x', byComponent), /Multi-repo: yes/, 'header states the multi-repo rule')
+assert.doesNotMatch(A.artifactHeader('/tmp/x', byKey), /Multi-repo/, 'single-repo products get no multi-repo line')
+assert.match(A.artifactHeader('/tmp/x', byKey), /Checkouts: ~\/alepo-workspace/, 'header states the checkout convention')
 assert.equal(await R.resolveProduct('nothing here'), undefined, 'no match is undefined, never a guess')
 
 const header = A.artifactHeader('/tmp/x', byKey)

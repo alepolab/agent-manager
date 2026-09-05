@@ -63,6 +63,7 @@ export async function resolveProduct(text: string): Promise<ProductMatch | undef
   return {
     name,
     ...(p.suite ? { suite: String(p.suite) } : {}),
+    ...(p.multi_repo === true ? { multiRepo: true } : {}),
     repos: p.repos ?? [],
     branches: p.branches ?? {},
     stack: p.stack,

@@ -784,6 +784,9 @@ The trace path and result, or \`n/a\` and why.
 ## Security review
 The verdict and findings table from \`security-review.md\`, or the reason there is none.
 
+## Deployment
+The stack profile and topology the change was verified on, whether any schema migration file changed (liquibase changelogs, prisma or alembic migrations), and the rollback path: \`rollbackToTag\` where the product's stack supports it, otherwise reverting this PR. Merge \`deployment: { migration_changed, rollback }\` into \`meta.json\` the same way earlier steps merged their keys.
+
 ## Provenance
 The agents that ran, the model each used, the working directory, and the run artifacts directory path from the top of your input, so a reviewer can open the run in Agent Manager. State plainly that this change was produced by an automated pipeline and needs human review before merge.
 
@@ -799,6 +802,10 @@ The agents that ran, the model each used, the working directory, and the run art
 - Write the bundle to a file and pass it with \`gh pr create --body-file\`, so nothing is lost to shell quoting.
 
 If \`gh\` is not authenticated, stop after pushing the branch and report that the PR still needs opening — the work is not lost, it just is not a PR yet.
+
+## More than one repo
+
+When \`meta.json\`'s \`fix.repos\` lists more than one repository, or the product block says multi-repo: open one PR per repository, each on its own \`fix/<TICKET-KEY>\` branch, in the \`merge_order\` the fix-implementer recorded. Every PR body carries the same bundle plus a line naming the other PRs in the set and their order, and none of them may merge until all are approved. Record every PR URL in its own \`fix.repos[]\` entry; a set with one URL missing is not done.
 
 ## Report
 

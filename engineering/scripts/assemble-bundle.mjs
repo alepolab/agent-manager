@@ -331,6 +331,8 @@ export async function assembleBundle(runDir) {
   setIfDefined(bundle, 'oracle', buildOracleRun(meta.oracle, oracleBeforeText, 'oracle-before.xml', 'oracle', assemblyProblems))
 
   setIfDefined(bundle, 'fix', meta.fix)
+  setIfDefined(bundle, 'security', meta.security)
+  setIfDefined(bundle, 'deployment', meta.deployment)
 
   setIfDefined(bundle, 'oracle_after', buildOracleRun(meta.oracle_after, oracleAfterText, 'oracle-after.xml', 'oracle_after', assemblyProblems))
 

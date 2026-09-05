@@ -25,6 +25,8 @@ function makeProjectRepo() {
   git(dir, ['init', '-q', '-b', 'main'])
   git(dir, ['config', 'user.email', 'test@example.invalid'])
   git(dir, ['config', 'user.name', 'Test'])
+  // A developer's global commit.gpgsign must not make the fixture depend on a gpg agent.
+  git(dir, ['config', 'commit.gpgsign', 'false'])
   writeFileSync(join(dir, 'a.txt'), 'line1\nline2\n')
   git(dir, ['add', '.'])
   git(dir, ['commit', '-q', '-m', 'initial'])

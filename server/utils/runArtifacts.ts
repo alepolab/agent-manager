@@ -317,6 +317,8 @@ export function artifactHeader(dir: string, product?: ProductMatch): string {
       '',
       `Product: ${product.name}${product.suite ? ` (suite: ${product.suite})` : ''}`,
       `Repos: ${product.repos.join(', ')}`,
+      `Checkouts: ~/alepo-workspace/<repo name> by convention; confirm each with git remote -v before touching it.`,
+      ...(product.multiRepo ? ['Multi-repo: yes. Every repo listed gets its own branch, commit and PR; plan.md must give a merge order and nothing merges until every PR in the set is approved.'] : []),
       `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
       `Tests: ${Object.entries(product.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,

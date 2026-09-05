@@ -47,6 +47,8 @@ export interface RunBudget { maxMinutes: number, maxTokens: number }
 export interface ProductMatch {
   name: string
   suite?: string
+  /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
+  multiRepo?: boolean
   repos: string[]
   branches: Record<string, string>
   stack: { compose: string, topology_default: string, liquibase?: boolean }
