@@ -109,8 +109,11 @@ export function useGithubImports() {
   async function getAvailableItems(owner: string, repo: string, type: 'skills' | 'agents') {
     const data = await $fetch<{
       entry: GithubImport
-      availableSkills: { slug: string; name: string; description: string; selected: boolean }[]
-      availableAgents?: { slug: string; name: string; description: string; selected: boolean }[]
+      // `category` is optional on the wire (older imports predate it) but the
+      // consumer groups by it, so it belongs in the declared shape rather than
+      // being cast in at the call site.
+      availableSkills: { slug: string; name: string; description: string; selected: boolean; category?: string | null }[]
+      availableAgents?: { slug: string; name: string; description: string; selected: boolean; category?: string | null }[]
     }>('/api/github/edit-selection', {
       method: 'POST',
       body: { owner, repo, type },

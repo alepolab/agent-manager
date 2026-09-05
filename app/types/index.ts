@@ -47,6 +47,13 @@ export interface Settings {
   enabledPlugins?: Record<string, boolean>
   statusLine?: { type: string; command: string }
   alwaysThinkingEnabled?: boolean
+  /** Lookback window, in seconds, for the /tasks-picker-infra command: how
+   *  far back on the DEVOPS board it treats an issue as newly raised.
+   *  Defaults to 60 when unset. Note JQL cannot express a sub-minute
+   *  relative date, so the command queries the window rounded UP to whole
+   *  minutes and then filters by each issue's real created timestamp - the
+   *  seconds resolution is applied client-side, not by Jira. */
+  tasksPickerWindowSeconds?: number
   onboardingCompleted?: boolean
   guidanceSeen?: {
     agentDetail?: boolean

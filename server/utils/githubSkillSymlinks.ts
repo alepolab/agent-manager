@@ -147,7 +147,7 @@ export async function resolveGithubImportAgentFiles(entry: GithubImport): Promis
         const fileName = parts.pop()!
         let slug = fileName.replace(/\.md$/, '')
         if (slug.toLowerCase() === 'agent' && parts.length > 0) {
-          slug = parts[parts.length - 1]
+          slug = parts[parts.length - 1] ?? ''
         }
         if (!slug) continue
         if (!out.has(slug)) out.set(slug, fullPath)

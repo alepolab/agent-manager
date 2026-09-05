@@ -61,7 +61,10 @@ export function resolveTools(frontmatter?: Pick<AgentFrontmatter, 'tools'>): str
  */
 export function resolveModel(frontmatter?: Pick<AgentFrontmatter, 'model'>): { alias: string, id: string } {
   const alias = frontmatter?.model ?? DEFAULT_MODEL_ALIAS
-  return { alias, id: MODEL_ALIAS[alias] }
+  // An agent may declare a model this registry does not know. Fall back to the
+  // default's id rather than handing the SDK `undefined`, which it rejects -
+  // and which would fail the step for a reason unrelated to its work.
+  return { alias, id: MODEL_ALIAS[alias] ?? MODEL_ALIAS[DEFAULT_MODEL_ALIAS] ?? DEFAULT_MODEL_ALIAS }
 }
 
 /** An agent's turn budget. Only a positive integer overrides the default. */

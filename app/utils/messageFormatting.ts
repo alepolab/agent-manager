@@ -68,7 +68,9 @@ export function restoreMathBlocks(text: string, blocks: string[]): string {
 
   let result = text
   for (let i = 0; i < blocks.length; i++) {
-    result = result.replace(`%%MATH_BLOCK_${i}%%`, blocks[i])
+    const block = blocks[i]
+    if (block === undefined) continue
+    result = result.replace(`%%MATH_BLOCK_${i}%%`, block)
   }
   return result
 }
@@ -161,7 +163,7 @@ export function truncateText(text: string, maxLength: number, ellipsis = '...'):
 export function getFirstLine(text: string, maxLength = 100): string {
   if (!text) return ''
 
-  const firstLine = text.split('\n')[0].trim()
+  const firstLine = (text.split('\n')[0] ?? '').trim()
   return truncateText(firstLine, maxLength)
 }
 
@@ -206,7 +208,7 @@ export function extractCodeBlocks(text: string): Array<{ language: string; code:
   while ((match = regex.exec(text)) !== null) {
     blocks.push({
       language: match[1] || 'text',
-      code: match[2].trim(),
+      code: (match[2] ?? '').trim(),
     })
   }
 

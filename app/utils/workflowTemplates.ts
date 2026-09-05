@@ -56,11 +56,19 @@ export function materializeTemplateSteps(
   // an inherent ambiguity of naming a step by its agent rather than by index, not
   // something this function can resolve on the template author's behalf.
   const stepIdByTemplateId: Record<string, string> = {}
-  template.steps.forEach((step, i) => { stepIdByTemplateId[step.agentTemplateId] = stepIds[i] })
+  // stepIds is generated with exactly one id per step just above, so indexing
+  // always hits - but indexing is `T | undefined` to the checker, and a
+  // silently-undefined step id would produce a workflow whose edges reference
+  // nothing. Assert the invariant rather than paper over it.
+  template.steps.forEach((step, i) => {
+    const id = stepIds[i]
+    if (!id) throw new Error(`materializeTemplateSteps: no id generated for step ${i}`)
+    stepIdByTemplateId[step.agentTemplateId] = id
+  })
 
   return template.steps.map((step, i) => {
     const materialized: WorkflowStep = {
-      id: stepIds[i],
+      id: stepIds[i]!,
       agentSlug: agentSlugByTemplateId[step.agentTemplateId]!,
       label: step.label,
     }

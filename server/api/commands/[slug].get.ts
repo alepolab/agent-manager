@@ -23,7 +23,7 @@ async function loadCommand(event: any) {
     slug,
     filename,
     directory,
-    frontmatter: { name: slug, ...frontmatter },
+    frontmatter: { ...frontmatter, name: frontmatter.name ?? slug },
     body,
     filePath,
   }

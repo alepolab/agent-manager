@@ -77,6 +77,7 @@ export function extractRelationships(
     const subagentMatches = cmd.body.matchAll(/subagent_type\s*[:=]\s*["']?([a-z][\w-]*)["']?/gi)
     for (const m of subagentMatches) {
       const name = m[1]
+      if (!name) continue
       if (agentNames.has(name)) {
         add({
           sourceType: 'command',
@@ -108,6 +109,7 @@ export function extractRelationships(
     const spawnMatches = cmd.body.matchAll(/[Ss]pawn(?:s|ed)?\s+(?:the\s+)?["']?([a-z][\w-]*)["']?/g)
     for (const m of spawnMatches) {
       const name = m[1]
+      if (!name) continue
       if (agentNames.has(name)) {
         add({
           sourceType: 'command',
@@ -142,6 +144,7 @@ export function extractRelationships(
     const cmdMatches = agent.body.matchAll(/\/(\w+[:\-]\w[\w-]*)/g)
     for (const m of cmdMatches) {
       const cmdName = m[1]
+      if (!cmdName) continue
       const matchingCmd = commands.find(c =>
         c.frontmatter.name === cmdName || c.slug === cmdName.replace(/:/g, '--')
       )

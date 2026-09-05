@@ -29,8 +29,10 @@ export function useVersionHistory(key: string) {
       body,
     }
     // Don't save if identical to last version
-    if (versions.value.length > 0) {
-      const last = versions.value[0]
+    // Bind and test the element itself rather than the length: the type system
+    // cannot connect `length > 0` to `[0]` being present.
+    const last = versions.value[0]
+    if (last) {
       if (JSON.stringify(last.frontmatter) === JSON.stringify(snapshot.frontmatter)
         && last.body === snapshot.body) {
         return

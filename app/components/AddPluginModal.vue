@@ -56,12 +56,12 @@ async function onManualInstall() {
   
   if (input.includes('/')) {
     const parts = input.split('/')
-    marketplace = parts[0]
+    marketplace = parts[0] ?? ''
     plugin = parts.slice(1).join('/')
   } else if (input.includes('@')) {
     const parts = input.split('@')
-    plugin = parts[0]
-    marketplace = parts[1]
+    plugin = parts[0] ?? ''
+    marketplace = parts[1] ?? ''
   } else {
     toast.add({ 
       title: 'Invalid format', 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Agent, AgentFrontmatter, AgentMemory } from '~/types'
+import type { Agent, AgentFrontmatter, AgentMemory, AgentTool } from '~/types'
 import { MODEL_OPTIONS, DEFAULT_MODEL } from '~/utils/models'
 
 const emit = defineEmits<{

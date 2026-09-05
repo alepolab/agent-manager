@@ -304,6 +304,33 @@ export function parseHalt(text: string | undefined | null): string | null {
   return last ? last[1]!.trim() : null
 }
 
+/**
+ * The last `PIPELINE-SKIP: <reason>` a step declared, or null.
+ *
+ * A skip is the third honest outcome, alongside a result and a halt, and it
+ * exists because two real runs died without it. `sdlc-stack-provisioner` was
+ * handed an infra ticket whose acceptance criteria are settled by how compose
+ * *renders* - nothing to stand up - and its prompt offered only "evidence or
+ * halt". Having no way to say "this step does not apply here", it ground
+ * through its entire turn budget issuing Bash commands and died on
+ * `error_max_turns` with empty output. Halting would have been wrong too: the
+ * pipeline was not blocked, and a halt stops every downstream step.
+ *
+ * So a skip schedules exactly like a completed step - downstream nodes run,
+ * and the reasoning is published to them - while recording that no work was
+ * performed. That distinction is the whole point: a reviewer reading the
+ * evidence bundle must be able to tell "verified, nothing needed" apart from
+ * "verified and fixed", and neither may be silently reported as the other.
+ *
+ * Checked AFTER parseHalt: a step emitting both is in trouble, not idle, and
+ * the blocking outcome is the safe one to honour.
+ */
+export function parseSkip(text: string | undefined | null): string | null {
+  const matches = [...(text ?? '').matchAll(/^PIPELINE-SKIP:[^\S\n]*(\S.*)$/gm)]
+  const last = matches[matches.length - 1]
+  return last ? last[1]!.trim() : null
+}
+
 const CLIP = 4000
 const clip = (text: string): string =>
   text.length > CLIP ? `${text.slice(0, CLIP)}\n...[truncated]` : text

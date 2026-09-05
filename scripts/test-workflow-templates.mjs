@@ -269,8 +269,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.doesNotMatch(intake, /search under \`~\/\.claude\/plugins\/\` for an/,
     'the old hidden-directory crawl instruction must be gone')
   assert.match(intake, /never a placeholder/i,
-    'an unreadable plugin_version must halt the run, not fall back to a placeholder string')
-}
+    'an unreadable plugin_version must halt the run, not fall back to a placeholder string')}
 
 // A directly-invoked run has no watch, but the schema requires the field as a
 // non-nullable string. The reserved literal is the only honest value, and the
@@ -360,5 +359,107 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   const fresh = materializeTemplateSteps(runbook, slugs, first.slice(0, 3).map(s => s.id))
   assert.notDeepEqual(fresh.map(s => s.id), first.map(s => s.id), 'a length mismatch regenerates rather than half-reusing')
 }
+
+// Every sdlc agent must declare its own turn budget. Omitting it silently
+// inherits DEFAULT_MAX_TURNS (10) — and a real DEVOPS-15 run died with
+// `error_max_turns` because sdlc-ticket-intake, the step that reads the ticket
+// AND explores an unfamiliar repo AND writes three artifacts, had the smallest
+// budget of any step purely by accident of omission. An inherited default is
+// invisible in the template; an explicit number is not.
+{
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-'))) {
+    const mt = a.frontmatter.maxTurns
+    assert.ok(typeof mt === 'number' && Number.isInteger(mt) && mt > 0,
+      `${a.id} must declare maxTurns explicitly rather than inheriting the default`)
+  }
+}
+
+// Absence must be as hard to claim as presence. A real DEVOPS-15 run halted the
+// whole pipeline on "plugin not installed" when the plugin was installed four
+// directories deeper than it looked — the reasoning was right, the search was
+// not, and nothing told it to widen before concluding.
+{
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
+    assert.match(a.frontmatter ? a.body : '', /negative result is a failed search/i,
+      `${a.id} must carry the standing rule that a negative result is a failed search until widened`)
+  }
+}
+
+// A brief describes the whole run, so it carries instructions addressed to
+// other stages. A real run died on exactly that: intake read a "write the PR
+// body" instruction meant for the seventh step, wrote a PR body describing a
+// fix that had not happened, and exhausted its entire turn budget before
+// finishing its own work.
+{
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
+    assert.ok(a.body.includes("Do only your own step's work"),
+      `${a.id} must carry the standing rule that instructions for other stages are not its to act on`)
+  }
+}
+
+// Every working step must know that "already done / not applicable" is a real
+// outcome it may declare. Without it, sdlc-stack-provisioner met an infra
+// ticket with nothing to stand up, had no way to say so, and burned its whole
+// turn budget to error_max_turns with empty output.
+{
+  const workers = AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')
+  assert.ok(workers.length >= 7, `expected the sdlc worker agents, found ${workers.length}`)
+  for (const a of workers) {
+    assert.ok(a.body.includes('PIPELINE-SKIP:'),
+      `${a.id} must be told it can declare a skip instead of manufacturing work`)
+    assert.ok(/never skip to avoid difficulty/i.test(a.body),
+      `${a.id} must also be told the limit of that permission, or a skip becomes a way out of hard work`)
+  }
+
+  // The monitor never skips - it votes - but it reviews steps that do. If it
+  // does not know a skip is legitimate it votes ABORT on one, which would kill
+  // exactly the runs this outcome exists to rescue.
+  const monitor = AGENT_TEMPLATES.find(t => t.id === 'sdlc-step-monitor')
+  assert.ok(monitor.body.includes('PIPELINE-SKIP'),
+    'the monitor must know a declared skip is a legitimate outcome, not a failure to abort on')
+  assert.ok(!monitor.body.includes('never skip to avoid difficulty'),
+    'the monitor is not a worker and must not be given the worker rule')
+}
+
+// A remote is shared and a push cannot be quietly undone. A real run pushed its
+// branch to the shared repository despite the brief forbidding it in words; a
+// later run then fetched that branch and rebased onto it, and the repository
+// ended up carrying the same capability twice under two names, each with its
+// own passing test. Nothing failed and the run reported success.
+{
+  const workers = AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')
+  for (const a of workers) {
+    assert.ok(a.body.includes('Never touch a remote'),
+      `${a.id} must be told not to push, fetch, pull, rebase or open a PR unbidden`)
+    assert.ok(/already exists before you add it/i.test(a.body),
+      `${a.id} must be told to look for the capability under another name before adding it`)
+  }
+
+  // The evidence step is the one most likely to push, because opening a PR
+  // sounds like its job - and it is the only step that can commit the evidence
+  // CI reads from the checkout.
+  const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
+  assert.ok(evidence.body.includes('git add .agent/evidence-run'),
+    'the evidence step must commit .agent/evidence-run, or CI checks out a branch with no evidence in it')
+  assert.ok(evidence.body.includes('Git: local only'),
+    'the evidence step needs its own explicit local-only git mandate')
+}
+
+// Anything stood up to test gets removed, and the PR enters the promotion chain
+// at develop rather than jumping to main.
+{
+  const prov = AGENT_TEMPLATES.find(t => t.id === 'sdlc-stack-provisioner')
+  assert.ok(prov.body.includes('Tear down what you brought up'),
+    'the provisioner must be told to decommission what it started; a leaked stack collides with the next run')
+  assert.ok(/never use a volume-destroying\s+teardown/i.test(prov.body),
+    'teardown must exclude volume destruction it did not create - that deletes seeded data other runs depend on')
+  assert.ok(/never remove anything you did not\s+start/i.test(prov.body),
+    'teardown must not touch stacks this run did not bring up - the sso stack is shared')
+
+  const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
+  assert.ok(evidence.body.includes('Which branch the pull request targets'),
+    'the evidence step must know which branch to target')
+  assert.ok(/targets \*\*develop\*\*,\s+never main/.test(evidence.body),
+    'a defect present on main, ci-release and develop enters at develop; landing on main is reverted by the next promotion')}
 
 console.log('workflowTemplates: all assertions passed')

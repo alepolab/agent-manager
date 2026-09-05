@@ -5,7 +5,10 @@ import { getClaudeDir, resolveClaudePath } from './claudeDir.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import { resolveTools, resolveMaxTurns } from './agentToolPolicy.ts'
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
+import { createLogger, preview } from './log.ts'
 import type { AgentFrontmatter } from '~/types'
+
+const log = createLogger('agent')
 
 /**
  * Token usage for one agent turn, as the SDK's own `result` message reported
@@ -45,6 +48,56 @@ export interface AgentCallResult {
   usage: AgentUsage | null
 }
 
+/**
+ * Lightweight, diagnostic-only progress telemetry surfaced from the SDK's
+ * message stream WHILE a step is still running — the thing a run record
+ * could not show before: a step sat at `status: 'running'` with nothing
+ * else until it terminated, sometimes 100-430s later. `turn` counts
+ * assistant turns observed so far; `lastTool` is the name of the most
+ * recently invoked tool (never its arguments — those can carry ticket text
+ * or file contents, exactly what runArtifacts.ts's truncation policy exists
+ * to keep out of persisted evidence); `lastActivityAt` is when either was
+ * last observed, and is the one field that actually distinguishes "still
+ * working" from "wedged". This is NOT provenance: never asserted by
+ * runnerOwned() (runArtifacts.ts) and never written into a step's persisted
+ * artifact — it exists only on the live RunStep record for the UI/SSE
+ * stream to poll, and is allowed to be silently wrong or stale (a crash
+ * mid-turn just leaves it at its last value) without that being a defect.
+ */
+export interface AgentProgress {
+  turn: number
+  lastTool?: string
+  lastActivityAt: number
+}
+export type OnAgentProgress = (progress: AgentProgress) => void
+
+/** Floor between successive progress emissions when the active tool hasn't
+ *  changed — publishing on every SDK message would be far too chatty (a
+ *  single turn can emit several messages: assistant text, tool_use,
+ *  tool_result echoes) for a signal whose entire job is "did anything
+ *  happen since I last looked". A tool-name CHANGE always emits immediately
+ *  regardless of this floor: that transition (Read -> Bash, say) is itself
+ *  the interesting event, worth surfacing right away rather than batched
+ *  into the next tick. */
+export const PROGRESS_MIN_INTERVAL_MS = 2000
+
+/**
+ * Pure throttle decision, pulled out specifically so the policy is
+ * unit-testable without a live SDK call (see scripts/test-agent-progress.mjs):
+ * given when the last emission happened and whether the active tool just
+ * changed, should THIS observation be emitted now?
+ */
+export function shouldEmitProgress(
+  now: number,
+  lastEmitAt: number | undefined,
+  toolChanged: boolean,
+  minIntervalMs: number = PROGRESS_MIN_INTERVAL_MS,
+): boolean {
+  if (lastEmitAt === undefined) return true
+  if (toolChanged) return true
+  return now - lastEmitAt >= minIntervalMs
+}
+
 // Exported and imported directly by workflowRunner.ts (module scope, not a
 // side-effect import) so the real caller is wired the instant that module
 // loads — see the comment on `agentCaller` there. Do NOT import
@@ -81,7 +134,16 @@ export interface AgentCallResult {
  * is never the request — it's what the SDK's own `system`/`init` message
  * reports it resolved to, captured below.
  */
-export async function callAgent(agentSlug: string, input: string, projectDir?: string, signal?: AbortSignal, userEnv: Record<string, string> = {}): Promise<AgentCallResult> {
+export async function callAgent(
+  agentSlug: string,
+  input: string,
+  projectDir?: string,
+  signal?: AbortSignal,
+  userEnv: Record<string, string> = {},
+  // Appended last, after his parameters, so every existing call site keeps
+  // working unchanged. Diagnostic progress telemetry - see AgentProgress.
+  onProgress?: OnAgentProgress,
+): Promise<AgentCallResult> {
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -106,11 +168,41 @@ export async function callAgent(agentSlug: string, input: string, projectDir?: s
   }
 
   const declaredModel = frontmatter?.model
-
   const toolsOption = resolveTools(frontmatter)
+  const maxTurns = resolveMaxTurns(frontmatter)
+
+  const startedAt = Date.now()
+  log.debug('agent call starting', () => ({
+    agentSlug,
+    cwd,
+    modelRequested: declaredModel ?? '(sdk default)',
+    toolCount: toolsOption ? toolsOption.length : '(sdk default)',
+    maxTurns,
+    inputLength: input.length,
+    inputPreview: preview(input),
+  }))
+
   let result = ''
   let modelRan: string | null = null
   let usage: AgentUsage | null = null
+
+  // ── progress telemetry (diagnostic only — see AgentProgress's doc comment) ──
+  let turn = 0
+  let lastTool: string | undefined
+  let lastEmitAt: number | undefined
+  let lastEmittedTool: string | undefined
+  const emitProgress = (force = false) => {
+    if (!onProgress) return
+    const now = Date.now()
+    const toolChanged = lastTool !== lastEmittedTool
+    if (!force && !shouldEmitProgress(now, lastEmitAt, toolChanged)) return
+    lastEmitAt = now
+    lastEmittedTool = lastTool
+    const progress: AgentProgress = { turn, lastTool, lastActivityAt: now }
+    log.debug('agent progress', () => ({ agentSlug, turn: progress.turn, lastTool: progress.lastTool ?? '(none yet)' }))
+    onProgress(progress)
+  }
+
   for await (const message of query({
     prompt: input,
     options: {
@@ -125,20 +217,60 @@ export async function callAgent(agentSlug: string, input: string, projectDir?: s
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
-      maxTurns: resolveMaxTurns(frontmatter),
+      maxTurns,
       ...(declaredModel ? { model: declaredModel } : {}),
       ...(toolsOption ? { tools: toolsOption } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     },
   })) {
     // The one place the real, observed model comes from - never the request.
-    if (message.type === 'system' && message.subtype === 'init') modelRan = message.model
+    if (message.type === 'system' && message.subtype === 'init') {
+      modelRan = message.model
+      log.debug('agent model resolved', { agentSlug, modelRequested: declaredModel ?? '(sdk default)', modelRan })
+    }
+    if (message.type === 'assistant') {
+      turn += 1
+      // Duck-typed on purpose: the SDK's BetaMessage content-block union is
+      // deep and version-sensitive (see the doc comment on AgentProgress),
+      // and all this needs is "was one of this turn's blocks a tool_use, and
+      // what was its name" - never its `input`, which can carry ticket text
+      // or file contents.
+      const content = (message as { message?: { content?: unknown } }).message?.content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use'
+            && typeof (block as { name?: unknown }).name === 'string'
+          ) {
+            lastTool = (block as { name: string }).name
+          }
+        }
+      }
+      emitProgress()
+    }
     if (message.type === 'result') {
-      const interpreted = interpretResultMessage(message)
+      const interpreted = interpretResultMessage(message, maxTurns)
       result = interpreted.output
       usage = interpreted.usage
     }
   }
+  // Final flush so the last observed turn/tool is never lost to the
+  // throttle floor - only when there was ever anything to report (see
+  // shouldEmitProgress's caller: "absent when nothing informative" holds
+  // because emitProgress/onProgress are never called at all when turn stays 0).
+  if (turn > 0) emitProgress(true)
+
+  log.info('agent call completed', () => ({
+    agentSlug,
+    modelRequested: declaredModel ?? '(sdk default)',
+    modelRan,
+    turns: turn,
+    durationMs: Date.now() - startedAt,
+    outputLength: result.length,
+    inputTokens: usage?.input_tokens ?? '(none reported)',
+    outputTokens: usage?.output_tokens ?? '(none reported)',
+  }))
+
   return { output: result, model: modelRan, usage }
 }
 
@@ -162,15 +294,31 @@ export async function callAgent(agentSlug: string, input: string, projectDir?: s
  */
 export function interpretResultMessage(
   message: { subtype: string, is_error?: boolean, result?: string, usage?: unknown, errors?: string[] },
+  /** The budget this call ran under, folded into the thrown message. The SDK
+   *  reports `error_max_turns` with an empty `errors` array, so the bare error
+   *  read "no further detail" and said nothing about WHICH limit was hit -
+   *  diagnosing one meant grepping the agent templates for the number. It also
+   *  invited the wrong conclusion: progress telemetry counts assistant
+   *  messages, not SDK turns, so a step showing 87 messages against a budget of
+   *  40 looks like a broken limit when the limit worked correctly. */
+  maxTurns?: number,
 ): { output: string, usage: AgentUsage | null } {
   if (message.subtype === 'success' && !message.is_error) {
     return { output: String(message.result ?? ''), usage: usageFrom(message.usage) }
   }
   const errors = 'errors' in message ? message.errors : undefined
+  log.warn('agent call returned an error result', () => ({
+    subtype: message.subtype,
+    isError: Boolean(message.is_error),
+    errorsPreview: errors?.length ? preview(errors.join('; ')) : '(none)',
+  }))
+  const budget = message.subtype === 'error_max_turns' && maxTurns
+    ? ` (turn budget: ${maxTurns} - raise this agent's maxTurns if the step legitimately needs more work)`
+    : ''
   throw new Error(
     `Claude Code returned an error result (${message.subtype}` +
     `${message.is_error ? ', is_error' : ''}): ` +
-    `${errors?.join('; ') || 'no further detail'}`,
+    `${errors?.join('; ') || 'no further detail'}${budget}`,
   )
 }
 

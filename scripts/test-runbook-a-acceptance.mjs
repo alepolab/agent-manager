@@ -20,23 +20,45 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'acceptance-'))
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'acceptance-artifacts-'))
+
+// plugin_version is runner-owned (server/utils/runArtifacts.ts's
+// resolveInstalledPluginVersion), read from the real installed plugin's own
+// plugin.json — never the agent's self-report (see mergeMeta below, which
+// still writes one; finalize now overwrites it). This fixture is that
+// "installed plugin", laid out exactly like the real
+// ~/.claude/plugins/cache/... tree, so every scenario's bundle gets a real
+// plugin_version instead of finalize honestly dropping it.
+const pluginDir = join(
+  process.env.CLAUDE_DIR, 'plugins', 'cache', 'alepo-engineering', 'alepo-engineering', '0.1.0', '.claude-plugin',
+)
+mkdirSync(pluginDir, { recursive: true })
+writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({ name: 'alepo-engineering', version: '0.1.0' }))
+
 const runner = await import('../server/utils/workflowRunner.ts')
 const { assembleBundle } = await import('../engineering/scripts/assemble-bundle.mjs')
 
 // fix.repos/files_changed/lines_changed are now COMPUTED from git at finalize
 // time (server/utils/gitFacts.ts), not trusted from the agent's self-report —
 // see runArtifacts.ts's reconcileFix. Every scenario below needs a run with a
-// real projectDir so `fix` is even present in the assembled bundle. Scenario
-// 1 asserts the assembled bundle's fix.* against these SAME facts, computed
-// independently below rather than by re-calling gitFacts.ts, so a broken
-// reconciliation (a swallowed finalizeRunArtifacts failure, a stale
-// self-report surviving) fails this test instead of passing silently.
+// real projectDir so `fix` is even present in the assembled bundle.
+//
+// gitFacts.ts now measures each run against ITS OWN baseline
+// (WorkflowRun.baseCommit, captured by startRun the instant the run began —
+// see shared/types/run.ts), never against `main`. So the "fix" commit can no
+// longer be made before startRun is called (that was the exact fabrication
+// bug this whole change exists to close: a commit that predates the run
+// would misreport as this run's own work). Instead, the sdlc-fix-implementer
+// writer below makes the commit for real, DURING the run, and each scenario
+// computes its own ground truth from the run's own `baseCommit` afterward —
+// independently of gitFacts.ts / reconcileFix, so a broken reconciliation (a
+// swallowed finalizeRunArtifacts failure, a stale self-report surviving)
+// fails this test instead of passing silently.
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 }
@@ -49,22 +71,35 @@ git(projectDir, ['add', '.'])
 git(projectDir, ['commit', '-q', '-m', 'initial'])
 git(projectDir, ['remote', 'add', 'origin', 'git@github.com:alepolab/ocs_cpp14.git'])
 git(projectDir, ['checkout', '-q', '-b', 'fix/SA-1203'])
-writeFileSync(join(projectDir, 'avp_parser.c'), 'int parse(void) { return 1; /* fixed */ }\n')
-git(projectDir, ['add', '.'])
-git(projectDir, ['commit', '-q', '-m', 'fix the AVP loop bound'])
 
-// The ground truth scenario 1 checks the assembled bundle against — computed
-// straight from git, independently of gitFacts.ts / reconcileFix.
-const expectedCommits = git(
-  projectDir, ['rev-list', '--reverse', '--abbrev-commit', '--abbrev=12', 'main..HEAD'],
-).split('\n').map(s => s.trim()).filter(Boolean)
-const expectedNumstat = git(projectDir, ['diff', '--numstat', 'main..HEAD'])
-  .split('\n').map(s => s.trim()).filter(Boolean)
-const expectedFilesChanged = expectedNumstat.length
-const expectedLinesChanged = expectedNumstat.reduce((sum, line) => {
-  const [added, removed] = line.split('\t')
-  return sum + (Number(added) || 0) + (Number(removed) || 0)
-}, 0)
+/** The one commit each scenario's sdlc-fix-implementer writer makes for
+ *  real, against the run's OWN baseline — never before startRun captures it.
+ *  Content differs per call (the counter) so each scenario's commit is a
+ *  genuine, non-empty diff even though the three scenarios share one repo. */
+let fixCommitCounter = 0
+function makeFixCommit() {
+  fixCommitCounter += 1
+  writeFileSync(join(projectDir, 'avp_parser.c'),
+    `int parse(void) { return 1; /* fixed, attempt ${fixCommitCounter} */ }\n`)
+  git(projectDir, ['add', '.'])
+  git(projectDir, ['commit', '-q', '-m', `fix the AVP loop bound (attempt ${fixCommitCounter})`])
+}
+
+/** Ground truth for one scenario's run, computed from git independently of
+ *  gitFacts.ts — against that RUN's OWN recorded baseline, not `main`. */
+function expectedFactsSince(baseCommit) {
+  const commits = git(
+    projectDir, ['rev-list', '--reverse', '--abbrev-commit', '--abbrev=12', `${baseCommit}..HEAD`],
+  ).split('\n').map(s => s.trim()).filter(Boolean)
+  const numstat = git(projectDir, ['diff', '--numstat', `${baseCommit}..HEAD`])
+    .split('\n').map(s => s.trim()).filter(Boolean)
+  const filesChanged = numstat.length
+  const linesChanged = numstat.reduce((sum, line) => {
+    const [added, removed] = line.split('\t')
+    return sum + (Number(added) || 0) + (Number(removed) || 0)
+  }, 0)
+  return { commits, filesChanged, linesChanged }
+}
 
 const xunit = failures => `<testsuite tests="4" failures="${failures}" errors="0" skipped="0"/>`
 
@@ -103,6 +138,13 @@ const makeWriters = ({ blastRadius, repos, mergeOrder, adversarial }) => ({
   },
   'sdlc-fix-implementer': (dir) => {
     writeFileSync(join(dir, 'plan.md'), '# Plan\n\nFix the loop bound.\n')
+    // The real commit this scenario's run makes, against its OWN baseline —
+    // captured by startRun before this step (or any step) ran. `repos` below
+    // is still the agent's SELF-REPORTED (and deliberately wrong) commit
+    // list/counts — reconciliation must overwrite them with what this commit
+    // actually did, for the one repo (ocs_cpp14) git can verify from this
+    // run's projectDir.
+    makeFixCommit()
     const fix = {
       repos, files_changed: 2, lines_changed: 18, test_dirs_unlocked: false, unlock_reason: null,
     }
@@ -204,16 +246,20 @@ async function runScenario(writers) {
     'watch is the runner-owned fact for a directly-invoked run, never left to the agent')
 
   // The end-to-end assertion: compare the assembled bundle's fix.* against
-  // what git actually reports for this branch, computed independently above.
-  // A finalizeRunArtifacts that silently failed (see workflowRunner.ts's
-  // publish()) would leave the agent's uncomputed self-report in meta.json
-  // instead — this catches that even if the bundle still "validates".
+  // what git actually reports SINCE THIS RUN'S OWN BASELINE, computed
+  // independently above — never against `main`. A finalizeRunArtifacts that
+  // silently failed (see workflowRunner.ts's publish()) would leave the
+  // agent's uncomputed self-report in meta.json instead — this catches that
+  // even if the bundle still "validates".
+  assert.ok(run.baseCommit, 'startRun captured a baseline for this run')
+  const expected1 = expectedFactsSince(run.baseCommit)
+  assert.equal(expected1.commits.length, 1, 'sanity: this scenario made exactly one real commit')
   assert.equal(bundle.fix.repos.length, 1)
-  assert.deepEqual(bundle.fix.repos[0].commits, expectedCommits,
-    'fix.repos[0].commits is exactly what git reports, not the agent\'s self-report of ["abcdef1"]')
-  assert.equal(bundle.fix.files_changed, expectedFilesChanged,
+  assert.deepEqual(bundle.fix.repos[0].commits, expected1.commits,
+    'fix.repos[0].commits is exactly what git reports since the run\'s baseline, not the agent\'s self-report of ["abcdef1"]')
+  assert.equal(bundle.fix.files_changed, expected1.filesChanged,
     'fix.files_changed matches git, independently computed')
-  assert.equal(bundle.fix.lines_changed, expectedLinesChanged,
+  assert.equal(bundle.fix.lines_changed, expected1.linesChanged,
     'fix.lines_changed matches git, independently computed')
   console.log('  ok  scenario 1: ui_parsing happy path validates')
 }
@@ -235,7 +281,7 @@ async function runScenario(writers) {
       mutation_score: 0.82,
     },
   })
-  const { bundle, problems } = await runScenario(writers)
+  const { run, bundle, problems } = await runScenario(writers)
 
   assert.deepEqual(problems, [],
     `the money-path bundle with a real adversarial report must validate. Problems: ${JSON.stringify(problems, null, 2)}`)
@@ -262,8 +308,10 @@ async function runScenario(writers) {
   const ocsEntry = bundle.fix.repos.find(r => r.repo === 'alepolab/ocs_cpp14')
   assert.deepEqual(billingEntry.commits, ['1111111'],
     'a repo git cannot verify from this run\'s projectDir survives as the agent\'s self-report')
-  assert.deepEqual(ocsEntry.commits, expectedCommits,
-    'the repo git CAN verify is git\'s own commit list, never the agent\'s claim of ["2222222"]')
+  const expected2 = expectedFactsSince(run.baseCommit)
+  assert.equal(expected2.commits.length, 1, 'sanity: this scenario made exactly one real commit')
+  assert.deepEqual(ocsEntry.commits, expected2.commits,
+    'the repo git CAN verify is git\'s own commit list since THIS run\'s baseline, never the agent\'s claim of ["2222222"]')
   console.log('  ok  scenario 2: money path with a real adversarial report validates')
 }
 

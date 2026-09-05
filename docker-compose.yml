@@ -20,16 +20,64 @@ services:
       # image content), and it let the container write directly into the
       # operator's live Claude configuration.
       #
-      # To pick up newly baked config after a rebuild, remove the volume:
+      # A named volume is seeded ONLY ON CREATION, not on every `up`. Rebuilding
+      # the image (`--build`) does NOT refresh a deployed instance's baked
+      # config — the volume already exists and is left alone. To pick up newly
+      # baked config after a rebuild, the volume must be removed so it reseeds:
       #   docker compose down && docker volume rm agent-manager_claude-config
       # That discards anything created through the UI, which is why it is not
-      # the default.
-      - claude-config:/root/.claude
+      # the default. See docs/baked-claude-config.md for the full redeploy
+      # sequence (stage -> build -> remove volume -> up) — skipping any one
+      # step is how a rebuild has twice shipped a stale image before.
+      #
+      # Escape hatch: set HOST_CLAUDE_DIR to an absolute host path (e.g.
+      # $HOME/.claude) to bind-mount it here INSTEAD of the named volume, so
+      # this container reads and writes the exact same `~/.claude` a workflow
+      # started on the host with `node scripts/run-ticket.mjs` used — that is
+      # the only way this container will ever see a run written by the host
+      # CLI, since the two stores are otherwise unrelated filesystems. Doing
+      # so SHADOWS the image's baked config entirely (a bind mount hides
+      # whatever the image put at this path) — the curated agents/skills/
+      # plugins this image ships with will NOT appear unless the host
+      # directory already has them. This is exactly the trade-off the project
+      # moved away from by switching to a named volume; opt in only when you
+      # specifically want this container sharing state with a host directory,
+      # and expect it to shadow the baked config while you do. Leave unset for
+      # the default, self-contained behaviour (nothing changes for existing
+      # deployments).
+      - ${HOST_CLAUDE_DIR:-claude-config}:/root/.claude
+      # Run ARTIFACTS (server/utils/runArtifacts.ts, AGENT_RUNS_DIR) live
+      # outside CLAUDE_DIR on purpose (see that file's doc comment) and so
+      # need their own volume — without one, a deployed run's artifacts sit on
+      # the container's writable layer and are lost the moment the container
+      # is recreated, silently, with no error. This volume is new and has no
+      # prior data to preserve, so there is no seeding concern here the way
+      # there is for claude-config above.
+      #
+      # Same escape hatch as above: set HOST_AGENT_RUNS_DIR to an absolute
+      # host path (e.g. $HOME/.agent-manager/workflow-runs) to bind-mount the
+      # exact directory `run-ticket.mjs` on the host writes artifacts into.
+      # The run RECORD (workflowRunStore.ts) is under CLAUDE_DIR above, so
+      # seeing a full host-started run in this container's UI requires both
+      # HOST_CLAUDE_DIR and HOST_AGENT_RUNS_DIR set consistently, together.
+      - ${HOST_AGENT_RUNS_DIR:-agent-runs}:/root/.agent-manager/workflow-runs
     environment:
       - CLAUDE_DIR=/root/.claude
+      - AGENT_RUNS_DIR=/root/.agent-manager/workflow-runs
       - HOST=0.0.0.0
       - PORT=3030
       - NODE_ENV=production
+      # Optional. Supplies credentials for importing PRIVATE GitHub repos.
+      # Absent or empty means unauthenticated git, and public imports still
+      # work — so leaving this unset is a supported configuration, not a
+      # broken one. Populate it from your own login rather than minting a
+      # long-lived secret:
+      #
+      #   GITHUB_TOKEN=$(gh auth token) docker compose up -d
+      #
+      # The token is passed through the environment only; it is never written
+      # into the image, the volume, or any file the container keeps.
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/api/health"]
       interval: 30s
@@ -39,3 +87,4 @@ services:
 
 volumes:
   claude-config:
+  agent-runs:
