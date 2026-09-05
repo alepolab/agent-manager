@@ -149,6 +149,7 @@ assert.equal(recovered.identity, 'runbook-a', 'unparseable meta.json is rebuilt 
 // 5. the header names the directory
 const header = A.artifactHeader(dir)
 assert.ok(header.includes(dir), 'the header carries the real path')
+assert.ok(/^Claude config directory: \/.+$/m.test(header), 'the header names the absolute Claude config directory, so agents without Bash can Read installed_plugins.json')
 
 // 6. a slug with path separators cannot escape the directory
 await A.writeStepArtifact(run, { ...rec, agentSlug: '../../etc/passwd' }, 1)

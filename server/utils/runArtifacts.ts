@@ -1,3 +1,4 @@
+import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -291,9 +292,13 @@ export function artifactHeader(dir: string): string {
     '',
     `Write every artifact you produce into: ${dir}`,
     '',
+    `Claude config directory: ${getClaudeDir()}`,
+    '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
     'writing it, and never write a placeholder in place of a real result.',
+    'End your output with the verbatim `ls -la` of this directory: the step monitor',
+    'sees only your output, and a file it cannot see in it is a file that does not exist.',
     '',
     '---',
     '',

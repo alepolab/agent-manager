@@ -284,7 +284,7 @@ Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\`, \`blast
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
 
-\`plugin_version\` is the installed version of the \`alepo-engineering\` plugin. Find it yourself: search under \`~/.claude/plugins/\` for an \`alepo-engineering\` directory containing a \`.claude-plugin/plugin.json\`, read that file, and use its \`version\` field verbatim — never guess a version number and never construct one from a directory or path name. If that search genuinely turns up nothing — the plugin is not installed here — the correct action is \`PIPELINE-HALT\`, never a placeholder. \`unknown\` is a string, so it passes the bundle schema's type check silently; a value that passes validation without being verifiable is worse than a step that stops, because a reviewer trusts it exactly as much as a real version and has no way to tell the difference. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
+\`plugin_version\` is the installed version of the \`alepo-engineering\` plugin. Find it yourself: Read \`<Claude config directory>/plugins/installed_plugins.json\` — the config directory is stated at the top of your input; use that absolute path, never \`~\`, which Read, Glob and Grep do not expand. Under its \`plugins\` object the key \`alepo-engineering@alepo-engineering\` holds a list; use the first entry's \`version\` field verbatim. Do not search the plugin cache instead: the manifest lives in a hidden \`.claude-plugin/\` directory that Glob and Grep skip, which is how a previous run wrongly concluded the plugin was absent — never guess a version number and never construct one from a directory or path name. If that key is genuinely absent — the plugin is not installed here — the correct action is \`PIPELINE-HALT\`, never a placeholder. \`unknown\` is a string, so it passes the bundle schema's type check silently; a value that passes validation without being verifiable is worse than a step that stops, because a reviewer trusts it exactly as much as a real version and has no way to tell the difference. \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it; a later step's keys, and the runner's own \`identity\`/\`model\`/\`cost\` fields, must survive your write.
 
 ## Absent beats invented
 
@@ -325,6 +325,14 @@ The deployment repo is \`alepo-dev-team-infra\`: one \`docker-compose.<product>.
 - Bring up **only** the profile(s) the context packet's affected system needs. Databases (MongoDB, MariaDB) and Keycloak come from the \`database\` and \`sso\` stacks, not from a product's own file, and compose cannot express \`depends_on\` across files — start those first if the product needs them.
 - Address services by their **container-internal service name and port**, never the host-published port. Routing container-to-container via a host IP hits the host firewall and produces a *timeout*, not a connection refused — that signature means you used the wrong address, not that the service is down.
 - Work on the host you are running on. Do not attempt to reach a shared lab host over SSH.
+
+## Product-owned stacks (not yet in the deployment repo)
+
+Not every product has a \`docker-compose.<product>.yml\` in \`alepo-dev-team-infra\` yet. When the affected product has none, do not halt on that alone: use the product's own compose from its checkout under \`~/alepo-workspace/<product>/\` and record in your report that the stack came from the product repo, not the deployment repo. Never copy a developer's \`.env\` into the run; generate every secret the compose marks required with \`openssl\` and pass secrets as shell environment for the \`up\` command, not files. Put any compose override you need in the run artifacts directory, never in a repo checkout.
+
+You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
+
+Known recipe — \`selfcarenow\` (label \`NEW_WEB_SELFCARE\`, checkout \`~/alepo-workspace/selfcarenow\`): its \`docker-compose.yml\` bundles its own MongoDB replica set. The \`latest\` image tag is stale and crash-loops on a \`pnpm install\` at start; use the newest \`develop-*\` tag from GHCR instead. Host port 3000 is usually taken on this host, so publish on 3100 with a compose override using \`ports: !override\`. Set \`CI=true\`. The compose does not pass CRM settings through; add \`CRM_BASE_URL\`, \`CRM_OAUTH_CLIENT_ID\` and \`CRM_OAUTH_CLIENT_SECRET\` to the app environment as \`\${VAR}\` references so compose interpolates them from the checkout's \`.env\` without you reading the values. The build's \`/api/health\` is auth-gated and returns 401, so the shipped healthcheck never passes; override it to \`GET /login\` and treat a 200 there plus "Server ready" in the logs as up. Run it with \`--project-directory\` set to the checkout so compose finds that \`.env\`.
 
 ## What "up" means
 
@@ -388,7 +396,7 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 30,
+      maxTurns: 60,
       skills: ['regression-matrix', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
@@ -464,7 +472,7 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 30,
+      maxTurns: 60,
       skills: ['systematic-debugging', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You fix the cause, not the symptom. The failing test from the previous step defines done.
@@ -534,10 +542,14 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 20,
+      maxTurns: 40,
       skills: ['regression-matrix', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
+
+## Read the run artifacts before you touch the filesystem
+
+The run artifacts directory named at the top of your input already tells you where everything is: \`stack-report.md\` names the product checkout path and how the stack is published, \`plan.md\` names the files under change, and \`meta.json\` carries \`fix.repos\` and the blast radius. Read those first and work in that checkout. Never search the filesystem for the repository — a previous run burned its whole turn budget crawling the home directory for a file the artifacts had already located.
 
 ## What to run
 
@@ -622,6 +634,10 @@ Follow the \`agent-browser\` skill. In short: confirm the app is actually servin
 
 If the repo has no Playwright setup, or the change has no UI surface, report \`n/a\` with a one-line reason. That is a successful outcome — a backend fix must not be blocked on a browser step with nothing to test. Do not install Playwright to avoid saying \`n/a\`.
 
+## Read the run artifacts before you touch the filesystem
+
+The run artifacts directory named at the top of your input already tells you where everything is: \`stack-report.md\` names the product checkout path and how the stack is published, \`plan.md\` names the files under change, and \`meta.json\` carries \`fix.repos\` and the blast radius. Read those first and work in that checkout. Never search the filesystem for the repository — a previous run burned its whole turn budget crawling the home directory for a file the artifacts had already located.
+
 ## Report
 
 Either the captured evidence (command, exit code, counts, trace path, screenshot-diff result if a baseline exists), or \`n/a\` and why.
@@ -687,7 +703,7 @@ request built on evidence that was never gathered is not.`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
-      maxTurns: 15,
+      maxTurns: 40,
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
 
@@ -712,6 +728,10 @@ The trace path and result, or \`n/a\` and why.
 
 ## Provenance
 The agents that ran, the model each used, and the working directory. State plainly that this change was produced by an automated pipeline and needs human review before merge.
+
+## Which commit to ship
+
+\`meta.json\`'s \`fix.repos[].commits\` names the commit the fix-implementer made; that is the change you ship. Do not compare it against other local branches or earlier runs' commits, and do not investigate history — a previous run spent its whole budget on that and never opened the PR. Untracked files the run produced in the checkout (the test file named in \`plan.md\`, and \`.agent/plan.md\`) must be committed on your branch together with the fix, or the PR ships a fix without its oracle.
 
 ## Open the PR
 
