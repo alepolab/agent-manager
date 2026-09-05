@@ -1,4 +1,4 @@
-FROM oven/bun:1.1-slim AS build
+FROM oven/bun:1.3-slim AS build
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
 COPY package.json bun.lockb* ./
 
 # Install dependencies
-RUN bun install
+RUN bun install --frozen-lockfile
 
 # Build node-pty from source for ARM64
 RUN bun add -g node-gyp
@@ -27,13 +27,14 @@ COPY . .
 RUN bun run build
 
 # Production stage
-FROM oven/bun:1.1-slim
+FROM oven/bun:1.3-slim
 
 WORKDIR /app
 
 # Install runtime dependencies for node-pty and the healthcheck
 RUN apt-get update && apt-get install -y \
     python3 \
+    git \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
