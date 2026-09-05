@@ -4,7 +4,25 @@
  *
  * Run: node scripts/test-sdk.mjs
  */
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { query } from '@anthropic-ai/claude-agent-sdk'
+
+// This makes a REAL API call, so it needs the ambient Claude credentials a
+// developer machine has and a CI runner does not. Skip rather than fail there:
+// a suite that is red for a reason unrelated to the code teaches everyone to
+// ignore it, and then a genuine failure hides in the noise.
+//
+// Exit 0 with a clear notice — "cannot run here" is not "the code is broken".
+const hasCredentials = !!process.env.ANTHROPIC_API_KEY
+  || existsSync(join(homedir(), '.claude', '.credentials.json'))
+  || existsSync(join(homedir(), '.claude', '.credentials'))
+if (!hasCredentials) {
+  console.log('SKIP scripts/test-sdk.mjs — no ambient Claude credentials (expected on CI).')
+  console.log('     This probe makes a real API call; run it on a machine that is signed in.')
+  process.exit(0)
+}
 
 async function main() {
   console.log('Starting Claude Agent SDK test...\n')
