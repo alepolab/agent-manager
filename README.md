@@ -24,6 +24,21 @@
 
 <br/>
 
+## Run configuration
+
+Environment variables read by the server. All optional; each feature is off until its variable is set.
+
+| Variable | Effect |
+|---|---|
+| `AGENT_RUN_MAX_MINUTES`, `AGENT_RUN_MAX_TOKENS` | Per-run caps checked between steps (defaults 180 and 8,000,000). A run over its cap fails with the reason. |
+| `AGENT_GH_TOKEN` | Becomes `GH_TOKEN` for every agent call, so pushes and PRs carry a bot identity instead of the server user's. |
+| `SLACK_WEBHOOK_URL` | Incoming webhook that receives one message per run transition to paused, completed, failed, stopped or interrupted. `AGENT_MANAGER_URL` sets the link base. |
+| `CI_POLL_SECONDS`, `CI_POLLER_DISABLED` | The poller that records `gh pr checks` outcomes on completed runs (default every 60s). |
+| `JIRA_TICKET_SOURCE=cli` | Watches read tickets through the authenticated `jira` CLI instead of the file stub. A manual run started with a bare ticket key is expanded to the ticket text whenever the CLI can serve it. |
+| `AGENT_REGISTRY_PATH` | Overrides the product registry, otherwise read from the installed alepo-engineering plugin. |
+
+`bin/am.mjs` drives runs from a terminal: `am runs`, `am status <id>`, `am start <workflow> "<ticket>"`, `am restart <id> [step] --note "..."`, `am clone <id>`, `am stop <id>`.
+
 ## What is agents-ui?
 
 # Open-source visual orchestration for Claude Code
