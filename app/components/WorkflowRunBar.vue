@@ -21,6 +21,11 @@ const restartPoint = computed(() => {
 })
 const canRestart = computed(() => settled.value && props.run!.status !== 'completed' && !!restartPoint.value)
 
+const settledSet = new Set(['completed', 'failed', 'skipped', 'stopped'])
+const progress = computed(() => {
+  const steps = props.run?.steps ?? []
+  return { done: steps.filter(s => settledSet.has(s.status)).length, total: steps.length }
+})
 const elapsed = computed(() => {
   const r = props.run
   if (!r) return ''
@@ -62,6 +67,7 @@ function onStop() {
         {{ run.status }}
       </span>
       <div class="w-40"><RunProgressBar :steps="run.steps" /></div>
+      <span class="text-[11px] text-label font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
       <span v-if="current" class="text-[11px] text-label truncate max-w-[16rem]">{{ current }}</span>
       <span class="text-[11px] text-label font-mono tabular-nums">{{ elapsed }}</span>
       <div class="flex items-center gap-1 ml-auto">
