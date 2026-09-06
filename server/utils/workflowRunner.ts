@@ -13,6 +13,7 @@ import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
+import { AgentResultError } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -526,10 +527,15 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return true
   } catch (err) {
     markFailed(l.state, id)
+    // A failed step still spent tokens. Recording them is what keeps the run's
+    // cost honest and makes an expensive failure visible in the cost report
+    // rather than showing as free.
+    const failedUsage = err instanceof AgentResultError ? err.usage : null
     Object.assign(rec, {
       status: 'failed',
       error: l.stopped ? 'Stopped by operator' : (err instanceof Error ? err.message : 'Unknown error'),
       completedAt: Date.now(),
+      ...(failedUsage ? { usage: failedUsage } : {}),
     })
     log.error('step call threw', {
       runId: run.id, stepId: id, agentSlug: step.agentSlug,
