@@ -513,41 +513,35 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
 // and this pipeline runs on an engineer's machine, so nothing could ever
 // upload `evidence-run-<sha>` and the check could only fail with "no artifact
 // found". Committing the directory is the path that works.
+// Evidence must NOT reach a repository. It used to be copied to
+// `<projectDir>/.agent/evidence-run/` so it could travel with the pull request,
+// which put a run's logs, step outputs and oracle XML into someone else's
+// product repo as commits a reviewer has to read past to reach the diff.
+//
+// The app serves the run directory instead, so the evidence is reachable
+// without being committed anywhere. What follows asserts the writer is gone and
+// the artifacts stay where the app can serve them.
 {
-  const runId = 'publish-evidence-run'
+  const runId = 'evidence-stays-put'
   const src = A.runArtifactsDir(runId)
   mkdirSync(src, { recursive: true })
   writeFileSync(join(src, 'meta.json'), JSON.stringify({ identity: 'x' }))
-  writeFileSync(join(src, 'oracle-before.xml'), '<testsuite/>')
   mkdirSync(join(src, 'steps'), { recursive: true })
   writeFileSync(join(src, 'steps', 'step-01.json'), '{}')
 
-  const project = mkdtempSync(join(tmpdir(), 'evidence-project-'))
-  const dest = await A.publishEvidenceToProject(runId, project)
-  assert.equal(dest, join(project, '.agent', 'evidence-run'),
-    'the destination is the path CI reads from the checkout')
-  assert.ok(existsSync(join(dest, 'meta.json')), 'meta.json travels')
-  assert.ok(existsSync(join(dest, 'oracle-before.xml')), 'the oracle evidence travels')
-  assert.ok(existsSync(join(dest, 'steps', 'step-01.json')),
-    'nested step artifacts travel too - the copy must be recursive')
+  assert.equal(typeof A.publishEvidenceToProject, 'undefined',
+    'the writer that copied evidence into a project tree must not exist at all')
 
-  // Replace, never merge. A file left behind by an earlier run would be
-  // assembled into THIS run's bundle as though it belonged to it, which is
-  // exactly the fabrication this module exists to prevent.
-  writeFileSync(join(dest, 'stale-from-a-previous-run.xml'), '<testsuite/>')
-  await A.publishEvidenceToProject(runId, project)
-  assert.ok(!existsSync(join(dest, 'stale-from-a-previous-run.xml')),
-    'a stale file from a previous run must not survive into this run\'s evidence')
-  assert.ok(existsSync(join(dest, 'meta.json')), 'the real evidence is still there after the replace')
+  // The artifacts remain where the app reads them from.
+  assert.ok(existsSync(join(src, 'meta.json')), 'the bundle stays in the run directory')
+  assert.ok(existsSync(join(src, 'steps', 'step-01.json')), 'nested step artifacts stay too')
 
-  // Best effort: no project dir is not an error, it is a run with nowhere to
-  // publish. A run that did real work must never be failed by this step.
-  assert.equal(await A.publishEvidenceToProject(runId, undefined), null,
-    'no project dir: nothing to do, and no throw')
-  assert.equal(await A.publishEvidenceToProject('no-such-run-id', project), null,
-    'a missing source directory is swallowed and reported as null, never thrown')
-
-  rmSync(project, { recursive: true, force: true })
+  // And an agent is told where that is, so it links rather than copies.
+  const header = A.artifactHeader(src, undefined, undefined, runId)
+  assert.ok(header.includes(`/api/runs/${runId}/artifacts`),
+    'the artifact header must name the URL the app serves this run at')
+  assert.ok(/never copy artifacts into the repository/i.test(header),
+    'the header must say plainly that artifacts are not copied into a repo')
 }
 
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
