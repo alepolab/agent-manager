@@ -28,7 +28,9 @@ export interface CommandFrontmatter {
   name: string
   description: string
   'argument-hint'?: string
-  'allowed-tools'?: string[]
+  // Claude Code writes this either as a YAML list or as one comma-separated
+  // string ("Bash, Read, Grep"). Both forms are valid; normalise before use.
+  'allowed-tools'?: string[] | string
 }
 
 export interface Command {

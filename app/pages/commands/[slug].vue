@@ -22,6 +22,11 @@ const frontmatter = ref<CommandFrontmatter>({
 const body = ref('')
 const allowedToolsStr = ref('')
 
+function toolsToText(tools: CommandFrontmatter['allowed-tools']): string {
+  if (Array.isArray(tools)) return tools.join(', ')
+  return tools?.trim() ?? ''
+}
+
 const { hasDraft, draftAge, loadDraft, clearDraft, scheduleSave } = useDraftRecovery(`command:${slug}`)
 
 watch([frontmatter, body], () => {
@@ -43,7 +48,7 @@ onMounted(async () => {
     command.value = await fetchOne(slug)
     frontmatter.value = { ...command.value.frontmatter }
     body.value = command.value.body
-    allowedToolsStr.value = (command.value.frontmatter['allowed-tools'] || []).join(', ')
+    allowedToolsStr.value = toolsToText(command.value.frontmatter['allowed-tools'])
   } catch {
     toast.add({ title: 'Command not found', color: 'error' })
     router.push('/commands')
@@ -61,10 +66,12 @@ async function save() {
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
+    // Write back the shape the file already used, so saving doesn't reformat it
+    const wasString = typeof command.value?.frontmatter['allowed-tools'] === 'string'
     const payload = {
       frontmatter: {
         ...frontmatter.value,
-        'allowed-tools': tools.length > 0 ? tools : undefined,
+        'allowed-tools': tools.length === 0 ? undefined : wasString ? tools.join(', ') : tools,
       },
       body: body.value,
     }
@@ -117,7 +124,7 @@ const isDirty = computed(() => {
   if (!command.value) return false
   return JSON.stringify(frontmatter.value) !== JSON.stringify(command.value.frontmatter)
     || body.value !== command.value.body
-    || allowedToolsStr.value !== (command.value.frontmatter['allowed-tools'] || []).join(', ')
+    || allowedToolsStr.value !== toolsToText(command.value.frontmatter['allowed-tools'])
 })
 
 const isDraftComputed = computed(() => {

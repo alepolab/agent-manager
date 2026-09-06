@@ -14,6 +14,9 @@
 :root {
   /* ---- Light mode (default) ---- */
 
+  /* Native controls (select popups, scrollbars, checkboxes) follow the theme */
+  color-scheme: light;
+
   /* Surfaces */
   --surface-base: #f5f6f8;
   --surface-raised: #ffffff;
@@ -89,6 +92,8 @@
 
 .dark {
   /* ---- Dark mode ---- */
+
+  color-scheme: dark;
 
   /* Surfaces — deeper with warm tinting */
   --surface-base: #09090b;
@@ -512,6 +517,14 @@ body {
   background-repeat: no-repeat;
   background-position: right 10px center;
   background-size: 14px;
+}
+
+/* Native dropdown items: some platforms paint the popup from author colors,
+   so pin them to the theme surface instead of inheriting text-on-white. */
+option,
+optgroup {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
 }
 
 /* Textarea */
