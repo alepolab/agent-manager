@@ -10,6 +10,8 @@ const { fetchServers, servers: mcpServers } = useMCP()
 const { styles, fetchStyles } = useOutputStyles()
 
 const initialized = ref(false)
+// Signed-out visitors see only the login page: no sidebar, no list fetches that would 401.
+const isLogin = computed(() => route.path === '/login')
 const showSearch = ref(false)
 const sidebarCollapsed = useState('sidebar-collapsed', () => false)
 const { isPanelOpen: chatOpen } = useChat()
@@ -104,11 +106,12 @@ if (import.meta.client) {
 
 onMounted(async () => {
   await loadConfig()
-  if (!settings.value) void loadSettings()
   // Render first, fill later: every list page owns its own loading state, and
   // waiting for all six lists here made each route show a blank spinner until
   // the slowest of them (skills, several MB) had arrived.
   initialized.value = true
+  if (isLogin.value) return
+  if (!settings.value) void loadSettings()
   void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers()])
 })
 
@@ -175,7 +178,8 @@ function badgeFor(to: string) {
 
 <template>
   <UApp>
-    <div class="flex h-screen overflow-hidden" style="background: var(--surface-base);">
+    <NuxtPage v-if="isLogin" />
+    <div v-else class="flex h-screen overflow-hidden" style="background: var(--surface-base);">
       <!-- Sidebar -->
       <aside
         class="sidebar shrink-0 flex flex-col relative h-full overflow-hidden transition-all duration-300"
@@ -224,6 +228,25 @@ function badgeFor(to: string) {
             @click="sidebarCollapsed = !sidebarCollapsed"
           >
             <UIcon :name="sidebarCollapsed ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="size-4" />
+          </button>
+        </div>
+
+        <!-- Search shortcut -->
+        <div :class="sidebarCollapsed ? 'px-1.5 pt-1 pb-1.5' : 'px-2.5 pt-1 pb-1.5'">
+          <button
+            class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
+            :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
+            style="color: var(--text-disabled); background: var(--input-bg); border: 1px solid var(--border-subtle);"
+            :title="sidebarCollapsed ? 'Search (⌘K)' : undefined"
+            @mouseenter="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-default)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-tertiary)'"
+            @mouseleave="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-subtle)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-disabled)'"
+            @click="showSearch = true"
+          >
+            <UIcon name="i-lucide-search" class="size-3.5" />
+            <template v-if="!sidebarCollapsed">
+              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
+              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
+            </template>
           </button>
         </div>
 
@@ -325,25 +348,6 @@ function badgeFor(to: string) {
             <span v-if="!sidebarCollapsed" style="font-family: var(--font-sans);">{{ link.label }}</span>
           </NuxtLink>
         </nav>
-
-        <!-- Search shortcut -->
-        <div :class="sidebarCollapsed ? 'px-1.5 pb-2.5' : 'px-2.5 pb-2.5'">
-          <button
-            class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
-            :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
-            style="color: var(--text-disabled); background: var(--input-bg); border: 1px solid var(--border-subtle);"
-            :title="sidebarCollapsed ? 'Search (⌘K)' : undefined"
-            @mouseenter="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-default)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-tertiary)'"
-            @mouseleave="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-subtle)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-disabled)'"
-            @click="showSearch = true"
-          >
-            <UIcon name="i-lucide-search" class="size-3.5" />
-            <template v-if="!sidebarCollapsed">
-              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
-              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
-            </template>
-          </button>
-        </div>
 
         <!-- Chat with Claude -->
         <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
@@ -516,9 +520,11 @@ function badgeFor(to: string) {
         </div>
       </main>
     </div>
-    <GlobalSearch />
-    <ChatPanel v-model:open="chatOpen" />
-    <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
+    <template v-if="!isLogin">
+      <GlobalSearch />
+      <ChatPanel v-model:open="chatOpen" />
+      <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
+    </template>
   </UApp>
 </template>
 
