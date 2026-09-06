@@ -1,6 +1,6 @@
 ---
 description: Deploy one Alepo application to one host through the deploy/ansible automation — dry run first, then apply on your say-so.
-argument-hint: <app> <env> [host-or-ip]
+argument-hint: <app> <target>
 allowed-tools: Bash, Read, Grep, Glob
 ---
 
@@ -13,7 +13,7 @@ directly, never edits a role, and never invents a flag. If something can't be
 expressed as a `deploy.sh` invocation, stop and say so rather than working
 around it.
 
-Input: `$ARGUMENTS` — `<app> <env> [host-or-ip]`, e.g. `cm dev dev-app-02`.
+Input: `$ARGUMENTS` — `<app> <target>`, e.g. `cm dev-app-02`.
 
 ## 0. Where the automation lives
 
@@ -43,21 +43,32 @@ step; if the app is not in that directory it is not deployable, so stop and
 print what is. (`pcrf` is the one alias: it means `pcrf-server`, and the EMS
 web tier is `pcrf-ems`.)
 
-**Env.** One of `dev`, `staging`, `prod` — these are the inventory groups.
+**Target.** One argument, not two: `deploy.sh` needs an `--env` because every
+playbook is `hosts: "{{ target_env }}"` and the group_vars come from group
+membership — but you should not have to type what the inventory already
+knows. Read `inventory/hosts.yml` and resolve:
 
-**Host.** Optional but strongly preferred: **one host per run.** Two runs
-against the same host race each other's containers and both fail. Resolve it
-against `inventory/hosts.yml`:
+- **A host name** (`dev-app-02`) → the env is the group that host sits under.
+  Pass both: `--env <that group> -- --limit <host>`.
+- **An IP** that some host's `ansible_host` carries → use that host, and say
+  which one you matched and in which group.
+- **An env name** (`dev`, `staging`, `prod`) → the whole group, every host in
+  it. Say so explicitly and get confirmation first; **one host per run** is
+  the rule, because two runs against the same host race each other's
+  containers and both fail.
+- **An IP nowhere in the inventory** → **stop and ask.** Adding it means
+  editing a version-controlled file the whole team shares, and the entry needs
+  a name as well as an address. Propose the exact YAML and let the operator
+  confirm or add it themselves. Never write it silently.
+- **Nothing at all** → the env falls back to **`prod`**. Never to dev: an
+  unqualified deploy must not quietly land somewhere harmless-looking and be
+  mistaken for the real thing. Say plainly that you are falling back to
+  production and get confirmation before anything else happens.
 
-- Matches a host name under that env group → pass `--limit <name>`.
-- Is an IP that some host's `ansible_host` already carries → use that host's
-  name and say which one you matched.
-- Is an IP nowhere in the inventory → **stop and ask.** Adding it means
-  editing a version-controlled file that the whole team shares, and the entry
-  needs a name as well as an address. Propose the exact YAML and let the
-  operator confirm or add it themselves. Never write it silently.
-- Omitted → the run targets every host in the group. Say so explicitly and
-  get confirmation before proceeding.
+A host whose `ansible_host` is still a placeholder — the `192.0.2.0/24`
+documentation range, or an entry marked `TODO` — is not a deployable target.
+Stop and say which entry needs a real address, rather than handing the
+operator an SSH timeout to diagnose.
 
 ## 2. Secrets
 
