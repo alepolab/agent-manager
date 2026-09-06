@@ -72,3 +72,42 @@ this repo the way the MIT-licensed skills above can. `sdlc-security-review`
 therefore does not declare it: declaring a skill a container can never resolve
 is exactly the silent failure this file exists to prevent. Install the plugin
 on a machine licensed for it and add the declaration there.
+
+## superpowers — the rest of the set
+
+- Source: the `superpowers` plugin, claude-plugins-official
+- Revision: 6.3.0
+- Licence: MIT (c) 2025 Jesse Vincent — full text in `SUPERPOWERS-LICENSE`
+- Skills added: brainstorming, dispatching-parallel-agents, executing-plans,
+  receiving-code-review, subagent-driven-development, writing-plans,
+  writing-skills
+
+The seven that were not vendored with the first seven. No agent declares them
+today; they are here so one *can*, and so a developer working in a container
+has them. A skill an agent declares but the image does not ship resolves to
+nothing, silently — which is the failure this repo has now hit three times.
+
+## frontend-design
+
+- Source: the `frontend-design` plugin, claude-plugins-official
+- Revision: 85cce0381e78
+- Licence: Apache 2.0 — full text in `FRONTEND-DESIGN-LICENSE`
+- Skills: frontend-design
+
+## Not vendored: amplitude and ui5-modernization
+
+Both plugins ship 36 and 19 skills respectively, and **neither carries a
+licence** — no LICENSE, COPYING or NOTICE in the package, and none elsewhere in
+it. With no licence, no permission to redistribute has been granted, and this
+repository is public: committing them would publish them.
+
+That is the whole reason they are absent. Using them locally is what installing
+the plugin is for; republishing is a different act. If they are ever wanted
+here, the routes are to make this repository private first, or to ask whoever
+publishes those plugins to add a licence.
+
+One thing found while evaluating them, worth reporting upstream: amplitude's
+`analyze-experiment/` directory declares `name: analyze-experiments`. Claude
+Code resolves a skill by DIRECTORY and anything reading frontmatter resolves it
+by NAME, so it exists under two strings and one of them always misses.
+`engineering/scripts/test-skills.mjs` catches exactly this.

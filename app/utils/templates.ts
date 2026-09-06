@@ -485,7 +485,10 @@ not happen.`,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 60,
-      skills: ['regression-matrix', 'test-driven-development', 'using-superpowers'],
+      // writing-plans because the plan gate (B2) stops this step before its test
+      // lands unless .agent/plan.md exists with five specific headings. Writing
+      // that well is a skill this agent was expected to have and did not.
+      skills: ['regression-matrix', 'test-driven-development', 'writing-plans', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
 
@@ -565,7 +568,12 @@ not happen.`,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 60,
-      skills: ['systematic-debugging', 'ponytail', 'using-git-worktrees', 'using-superpowers'],
+      // receiving-code-review is here because this step is the one that gets sent
+      // back: a monitor voting RETRY hands it a review to act on, and a real run
+      // returned "the agent claims all 6 tests pass but provides zero test
+      // output". Acting well on unclear feedback is the difference between a
+      // second attempt and a second identical attempt.
+      skills: ['systematic-debugging', 'receiving-code-review', 'ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You fix the cause, not the symptom. The failing test from the previous step defines done.
 
