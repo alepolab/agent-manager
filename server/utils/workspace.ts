@@ -19,6 +19,9 @@
  * start a second run over their own checkout.
  */
 
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+
 /** Login sanitiser, matching users.ts: a login becomes one safe path segment. */
 const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_')
 
@@ -46,4 +49,22 @@ export function workspaceRootFor(login: string | undefined): string {
  */
 export function runWorkspace(run: { projectDir?: string, startedBy?: string }): string {
   return (run.projectDir?.trim()) || workspaceRootFor(run.startedBy)
+}
+
+/**
+ * Whether a workspace holds a git checkout — the side effect a restart cannot
+ * recreate on its own.
+ *
+ * The directory itself is either the checkout (an explicit projectDir) or the
+ * root the provisioner clones repositories into, so both shapes count: a `.git`
+ * here, or a `.git` one level down.
+ */
+export function hasCheckout(workspace: string): boolean {
+  if (!existsSync(workspace)) return false
+  if (existsSync(join(workspace, '.git'))) return true
+  try {
+    return readdirSync(workspace, { withFileTypes: true })
+      .some(e => e.isDirectory() && existsSync(join(workspace, e.name, '.git')))
+  }
+  catch { return false }
 }

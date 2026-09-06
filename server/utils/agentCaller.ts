@@ -293,6 +293,23 @@ export async function callAgent(
  * An agent call that reached the model and came back an error, carrying what it
  * spent. Distinct from a transport failure, which has no usage to report.
  */
+/**
+ * The model an agent DECLARES, read from its seeded file.
+ *
+ * Used when a call fails before the SDK reports the model it resolved: without
+ * it a failed step is priced at the default, and a failed opus step showed
+ * $10.07 against a true $50.35. A declared model is not proof of what ran, but
+ * it is the closest honest answer available and far better than the default.
+ */
+export async function declaredModelOf(agentSlug: string): Promise<string | undefined> {
+  const agentPath = resolveClaudePath('agents', `${agentSlug}.md`)
+  if (!existsSync(agentPath)) return undefined
+  try {
+    return parseFrontmatter<AgentFrontmatter>(await readFile(agentPath, 'utf-8')).frontmatter?.model
+  }
+  catch { return undefined }
+}
+
 export class AgentResultError extends Error {
   // Declared and assigned explicitly, not as constructor parameter properties:
   // those are TypeScript syntax that has to be COMPILED rather than stripped,
