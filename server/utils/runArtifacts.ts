@@ -459,6 +459,18 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       : []),
     `Claude config directory: ${getClaudeDir()}`,
     '',
+    // Unconditional, because it used to live inside the product block below and
+    // a run that resolved no product told its agents nothing about where to
+    // work. They improvised, and improvised differently: one cloned to
+    // ~/alepo-workspace, another to ~/repos, neither to the configured root.
+    // git facts are computed against the run's workspace, so `meta.json` lost
+    // commits, files_changed and lines_changed for work that had actually been
+    // done and committed — in a directory nothing else knew about.
+    `Work in: ${workspaceRootFor(startedBy)}`,
+    'Clone into that directory and work there. Do not invent a checkout path and',
+    'do not search the filesystem for one — anything you leave elsewhere is',
+    'invisible to every later step and to the evidence bundle.',
+    '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
     'writing it, and never write a placeholder in place of a real result.',
