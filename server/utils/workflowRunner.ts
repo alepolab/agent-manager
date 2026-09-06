@@ -7,13 +7,13 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
-import { runWorkspace } from './workspace.ts'
+import { runWorkspace, hasCheckout } from './workspace.ts'
 import { resolveProduct } from './registry.ts'
 import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
-import { AgentResultError } from './agentCaller.ts'
+import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -531,11 +531,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // cost honest and makes an expensive failure visible in the cost report
     // rather than showing as free.
     const failedUsage = err instanceof AgentResultError ? err.usage : null
+    // The MODEL as well as the usage. Recording tokens without the model that
+    // burned them made the cost report price a failed opus step at sonnet
+    // rates: one error_max_turns step showed $10.07 against a true $50.35, a
+    // $40 understatement in the direction that never prompts anyone to look.
+    // The declared model is the honest fallback when the call died before the
+    // SDK reported the one it actually resolved.
+    const failedModel = await declaredModelOf(step.agentSlug)
     Object.assign(rec, {
       status: 'failed',
       error: l.stopped ? 'Stopped by operator' : (err instanceof Error ? err.message : 'Unknown error'),
       completedAt: Date.now(),
       ...(failedUsage ? { usage: failedUsage } : {}),
+      ...(rec.model ? {} : failedModel ? { model: failedModel } : {}),
     })
     log.error('step call threw', {
       runId: run.id, stepId: id, agentSlug: step.agentSlug,
@@ -951,6 +959,30 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (l.running) throw new RestartError(409, 'This run is already running')
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
+
+  // A restart re-runs steps; it does not re-create what earlier steps left on
+  // disk. Restarting a downstream step into a workspace with no checkout is how
+  // one run spent 3.26M tokens - $50 - searching a directory with no code in
+  // it, twice, because the provisioning step had already settled as `skipped`
+  // and a partial restart never re-ran it.
+  //
+  // Deliberately not keyed on any agent slug: the runner does not know which
+  // step owns the checkout, only that SOME earlier step was supposed to leave
+  // one. If it is missing, no partial restart is sound - so the reset must
+  // start from the first step, which re-runs whatever creates it.
+  // Scoped to runs that actually route to repositories. A workflow with no
+  // product resolved has no checkout to be missing, and blocking those would
+  // turn a real guard into a nuisance that gets deleted.
+  const expectsCheckout = (run.product?.repos?.length ?? 0) > 0
+  if (expectsCheckout && !hasCheckout(runWorkspace(run)) && ancestorsOf(l.graph, stepId).length > 0) {
+    throw new RestartError(
+      409,
+      `This run targets ${run.product?.repos?.join(', ')}, but there is no checkout in ${runWorkspace(run)} — `
+      + `restarting this step would run it against an empty directory. Restart from the first step so whatever `
+      + `creates the checkout runs again, or start a new run.`,
+    )
+  }
+
   const previousOutput = recOf(run, stepId).output
   for (const id of reset) {
     const rec = recOf(run, id)
