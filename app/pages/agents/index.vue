@@ -165,8 +165,21 @@ async function useTemplate(templateId: string) {
                 {{ agent.frontmatter.description }}
               </p>
 
-              <!-- Skill count badge -->
-              <div v-if="skillCounts[agent.slug]" class="mt-3 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
+              <!-- Attached skills, named -->
+              <div v-if="agent.frontmatter.skills?.length" class="mt-3 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
+                <div class="flex flex-wrap items-center gap-1">
+                  <UIcon name="i-lucide-sparkles" class="size-3 shrink-0 mr-0.5" style="color: var(--accent);" />
+                  <span
+                    v-for="skill in agent.frontmatter.skills"
+                    :key="skill"
+                    class="text-[10px] font-mono px-1.5 py-px rounded-full"
+                    style="background: var(--badge-subtle-bg); color: var(--text-secondary);"
+                  >{{ skill }}</span>
+                </div>
+              </div>
+
+              <!-- Fallback: skills that point back at this agent via their own frontmatter -->
+              <div v-else-if="skillCounts[agent.slug]" class="mt-3 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
                 <span class="text-[10px] text-meta flex items-center gap-1.5">
                   <UIcon name="i-lucide-sparkles" class="size-3" style="color: var(--accent);" />
                   {{ skillCounts[agent.slug] }} skill{{ skillCounts[agent.slug] === 1 ? '' : 's' }}
