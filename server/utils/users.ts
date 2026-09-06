@@ -14,6 +14,9 @@ import { join } from 'node:path'
  */
 export interface UserProfile {
   login: string
+  /** GitHub's numeric account id, captured at sign-in. It is what makes the
+   *  noreply address resolve to this account rather than to nobody. */
+  githubId?: number
   name?: string
   avatar?: string
   jiraEmail?: string
@@ -83,11 +86,84 @@ export async function saveProfile(login: string, patch: Partial<UserProfile> & {
  * authenticates as them. Missing pieces are simply absent; the run then falls
  * back to whatever the host holds, and the profile page says what to add.
  */
+/**
+ * The identity a run's commits are authored with.
+ *
+ * The container has no git identity of its own, so git used whatever it could
+ * find: a run committed as `Claude Code <claude-code@anthropic.com>`, and the
+ * pull request on the target repository rendered a COLLEAGUE's name and avatar.
+ * GitHub attributes a commit by matching its author email to an account, and
+ * that address is registered to theirs. Nobody did anything — the identity was
+ * simply never set, and the default landed on a real person.
+ *
+ * So it is set explicitly, to the GitHub Actions bot. The choice is deliberate:
+ *
+ * - It is unmistakably not a person. A pipeline commit should not wear a
+ *   developer's face in a repository's history, and the starter is already
+ *   recorded on the run, in the PR body's provenance section, and in the
+ *   branch it pushed.
+ * - The address is GitHub's own, published for exactly this, and resolves to
+ *   the bot rather than to anybody's inbox.
+ * - It cannot silently become a person again the way an unset identity did.
+ *
+ * Overridable per deployment: an operator who wants a different bot sets
+ * GIT_BOT_NAME and GIT_BOT_EMAIL rather than editing this.
+ */
+const ACTIONS_BOT_NAME = 'github-actions[bot]'
+const ACTIONS_BOT_EMAIL = '41898282+github-actions[bot]@users.noreply.github.com'
+
+/**
+ * The identity a run's commits are authored with: the developer who signed in
+ * and started the run, falling back to the GitHub Actions bot when there is no
+ * signed-in developer to attribute to.
+ *
+ * The container has no git identity of its own, so git used whatever it could
+ * find. A run committed as `Claude Code <claude-code@anthropic.com>` and the
+ * pull request rendered a COLLEAGUE's name and avatar — GitHub attributes a
+ * commit by matching its author email to an account, and that address is
+ * registered to theirs. Nobody did anything; the identity was never set, and
+ * the default landed on a real person.
+ *
+ * The noreply form is deliberate. It is the address GitHub issues for exactly
+ * this, it resolves to the right account, and it publishes no private address
+ * into a repository's history. A profile saved before githubId was captured
+ * falls back to the login-only form, which GitHub still resolves for accounts
+ * that have not disabled it.
+ *
+ * The bot is the floor, not the norm: an anonymous run — auth disabled, or a
+ * watch dispatch with no starter — has nobody to attribute to, and must still
+ * not be left guessing. GIT_BOT_NAME and GIT_BOT_EMAIL override that floor for
+ * a deployment with its own bot.
+ */
+export function gitIdentity(profile?: Pick<UserProfile, 'login' | 'name' | 'githubId'>): Record<string, string> {
+  const name = profile
+    ? (profile.name?.trim() || profile.login)
+    : (process.env.GIT_BOT_NAME?.trim() || ACTIONS_BOT_NAME)
+  const email = profile
+    ? (profile.githubId
+        ? `${profile.githubId}+${profile.login}@users.noreply.github.com`
+        : `${profile.login}@users.noreply.github.com`)
+    : (process.env.GIT_BOT_EMAIL?.trim() || ACTIONS_BOT_EMAIL)
+  return {
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
+  }
+}
+
 export async function envForUser(login: string | undefined): Promise<Record<string, string>> {
-  if (!login) return {}
+  // The commit identity first, and unconditionally. An anonymous run — auth
+  // disabled, or a watch dispatch with no starter — still commits, and these
+  // early returns were exactly the path that left git to pick an identity for
+  // itself and land it on a real person's account.
+  // The commit identity is set on every path, including the ones that return
+  // early: an anonymous run still commits, and these returns were exactly where
+  // git was left to invent an identity for itself.
+  if (!login) return { ...gitIdentity() }
   const p = await getProfile(login)
-  if (!p) return {}
-  const env: Record<string, string> = {}
+  if (!p) return { ...gitIdentity() }
+  const env: Record<string, string> = { ...gitIdentity(p) }
   if (p.githubToken) {
     const t = decrypt(p.githubToken)
     env.GH_TOKEN = t
