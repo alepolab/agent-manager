@@ -66,3 +66,44 @@ after a reboot does not restart your containers — that unit does.
 If systemd-resolved is installed, enabling systemd can take over
 `/etc/resolv.conf` and change DNS. Mask it first if the host has a
 hand-written resolv.conf (`generateResolvConf = false` in `/etc/wsl.conf`).
+
+## DOCKER_GID on a rootless host
+
+`docker-compose.team.yml` adds the container user to `${DOCKER_GID:-999}` so it
+can reach the mounted socket. **On this host that value is `0`, not 999.**
+
+Rootless podman maps the host user to container root, so the socket the compose
+file mounts appears inside the container as `root:root` mode `660`. The default
+999 grants nothing, and the container user gets a connection refused that looks
+exactly like a daemon that is not running:
+
+```
+Docker daemon is not running in this container (socket present, nothing
+listening — `curl --unix-socket /var/run/docker.sock http://localhost/v1.41/version` exit 7)
+```
+
+It is a permission error wearing a connectivity error's clothes. `curl` returns
+exit 7 for both.
+
+This only surfaced once the image started running as a non-root user, which it
+must — Claude Code refuses `--dangerously-skip-permissions` as root, and every
+pipeline agent runs with it. Before that the container was root and could open
+the socket regardless.
+
+Set it in the env file the deployment reads:
+
+```
+DOCKER_GID=0
+```
+
+On a real Docker host the value is that host's `docker` group gid instead —
+`getent group docker | cut -d: -f3`. It is host-specific, which is why it is a
+variable and not a literal in the compose file.
+
+Verify from inside the running container, and check the response rather than
+the exit code alone:
+
+```bash
+docker exec agents-ui-team sh -c \
+  'curl -s --unix-socket /var/run/docker.sock http://localhost/v1.41/version | head -c 60'
+```
