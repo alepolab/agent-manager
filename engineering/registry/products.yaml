@@ -10,177 +10,442 @@
 # Validated by: node scripts/validate-registry.mjs
 # Schema:       registry/schemas/products.schema.json
 #
-# NEEDS CONFIRMATION (marked CONFIRM below): branch policies, test commands and
-# owner groups are drawn from the repo map and are first drafts. A wrong value
-# fails the registry check loudly rather than corrupting a ticket, which is why
-# they are committed as drafts rather than left blank.
+# NEEDS CONFIRMATION (marked CONFIRM below): test commands, stack profiles and
+# owner groups are first drafts. A wrong value fails the registry check loudly
+# rather than corrupting a ticket, which is why they are committed as drafts
+# rather than left blank.
+#
+# Branch policies are NOT drafts. Every one was read from the repository:
+# `develop` where the repo has one, `development` for the three C++ repos that
+# use that spelling, and `main` for the two with neither. ocs_cpp14 carries
+# both spellings and `development` is the live one - last commit 31 Aug against
+# 18 Jul on `develop`.
+#
+# Two Jira projects serve two products each: AAA is the server and the EMS
+# portal, PCRFV likewise. resolveProduct prefers the product that matches the
+# project key AND a component word over one matching the key alone, so the EMS
+# entries carry the words that distinguish them. Order still decides where
+# nothing does: the server entries come first and take an unqualified ticket.
 
 products:
-  aaa:
-    suite: aaa
-    match:
-      components: [AAA, RADIUS]
-    repos: [alepolab/aaa_rhel8]
-    version_source: customer_profile          # CONFIRM: which Jira field carries the deployed version
-    branches:
-      bug: 'release/{version}'                # CONFIRM: aaa_rhel8's default is master
-      feature: master
-      infra: master
-    forward_port: master                      # CONFIRM
-    stack:
-      compose: alepo-dev-team-infra/aaa
-      # Two nodes is the default deliberately: per-process state is not a
-      # correctness mechanism, and a single-node stack cannot fail the
-      # tombstone class of bug that a reviewer caught by hand.
-      topology_default: 2node
-      liquibase: true
-    build: 'make build'                       # CONFIRM
-    tests:
-      unit: 'make test'                       # CONFIRM
-      atdd: 'robot --xunit out.xml tests/aaa' # blocked on V2 (--xunit not yet emitted)
-      regression: atdd-aaa
-    owners:
-      protocol: aaa-tech-leads                # CONFIRM: group names
-      money: billing-owners
-      schema: aaa-tech-leads
 
-  pcrf:
-    suite: aaa
+  crm:
+    # ase_lbss is a multi-repo workspace: each modules/* is its own git repo.
+    # The CI build workflow is the list of what actually ships.
+    suite: crm
     match:
-      components: [PCRF, Policy]
-      projects: [PCRFV]
-    repos: [alepolab/pcrf_cpp14, alepolab/pcrf-ems-portal]
-    multi_repo: true
-    branches:
-      bug: development
-      feature: development
-    stack:
-      compose: alepo-dev-team-infra/pcrf
-      topology_default: 2node                 # CONFIRM: PCRF deploys in pairs
-      liquibase: true
-    tests:
-      unit: 'ctest'                           # CONFIRM
-      ui_trace: playwright                    # EMS portal has a UI surface
-    owners:
-      protocol: pcrf-tech-leads               # CONFIRM
-      schema: pcrf-tech-leads
-      ui_parsing: pcrf-ems-owners
-
-  ffm:
-    suite: bss
-    match:
-      components: [FFM, Fulfilment]
-    repos: [alepolab/ffm]
+      projects: [CRM]
+      components: [CRM, Liferay]
+    repos: [alepolab/ase_lbss]
     branches:
       bug: develop
       feature: develop
+      infra: develop
     stack:
-      compose: alepo-dev-team-infra/ffm
+      compose: alepo-dev-team-infra/crm
       topology_default: 1node
-      liquibase: false                        # CONFIRM: FFM is Flask + Celery + Mongo
     tests:
-      unit: 'pytest'                          # CONFIRM
-      ui_trace: playwright                    # Vue 3 front end
+      unit: 'CONFIRM'
     owners:
-      ui_parsing: ffm-owners                  # CONFIRM
-      schema: ffm-owners
+      protocol: crm-leads              # CONFIRM
+      ui_parsing: crm-leads           # CONFIRM
+
+  billing:
+    # Submodules, not a monorepo - read .gitmodules for the member repos.
+    suite: billing
+    match:
+      projects: [SEBL]
+      components: [Billing, rbsbill]
+    repos: [alepolab/billing_cpp14]
+    branches:
+      bug: development
+      feature: development
+      infra: development
+    stack:
+      compose: alepo-dev-team-infra/billing
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: billing-owners        # CONFIRM
+      money: billing-owners           # CONFIRM
+      schema: billing-owners          # CONFIRM
+
+  ocs:
+    # Submodules; see .gitmodules. This repo carries BOTH develop and
+    # development - development is the live one (31 Aug vs 18 Jul).
+    suite: ocs
+    match:
+      projects: [SA]
+      components: [OCS, Diameter, Charging]
+    repos: [alepolab/ocs_cpp14]
+    branches:
+      bug: development
+      feature: development
+      infra: development
+    stack:
+      compose: alepo-dev-team-infra/ocs
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: ocs-tech-leads        # CONFIRM
+      money: billing-owners           # CONFIRM
+
+  cgw:
+    suite: bss
+    match:
+      projects: [CGW]
+      components: [CGW, Charging Gateway]
+    repos: [alepolab/charging-gateway]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/cgw
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  urm:
+    suite: bss
+    match:
+      projects: [URM]
+      components: [URM, Keycloak Roles, IAM]
+    repos: [alepolab/urm]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/urm
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  rpm:
+    suite: bss
+    match:
+      projects: [RPM]
+      components: [RPM, Recharge, Promotion]
+    repos: [alepolab/recharge-promotion-manager]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/rpm
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  collection-manager:
+    suite: bss
+    match:
+      projects: [CM]
+      components: [Collection Manager, Collections]
+    repos: [alepolab/collection-manager]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/collection-manager
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  product-catalog:
+    suite: bss
+    match:
+      projects: [PC]
+      components: [Product Catalogue, Product Catalog]
+    repos: [alepolab/pc]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/product-catalog
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  oms:
+    # No develop branch on this repo - main is where work lands.
+    suite: bss
+    match:
+      projects: [OMS]
+      components: [OMS, Order Management]
+    repos: [alepolab/order-management-system]
+    branches:
+      bug: main
+      feature: main
+      infra: main
+    stack:
+      compose: alepo-dev-team-infra/oms
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
 
   pms:
     suite: bss
     match:
-      components: [PMS, Partner]
+      projects: [WPM]
+      components: [PMS, Partner Management]
     repos: [alepolab/pms]
-    multi_repo: false                          # monorepo: Node + Python billing + rating
     branches:
       bug: develop
       feature: develop
+      infra: develop
     stack:
       compose: alepo-dev-team-infra/pms
       topology_default: 1node
-      liquibase: false                        # CONFIRM
     tests:
-      unit: 'npm test'                        # CONFIRM: monorepo has three runtimes
-      ui_trace: playwright
+      unit: 'CONFIRM'
     owners:
-      money: billing-owners                   # PMS carries billing and rating paths
-      ui_parsing: pms-owners
-      schema: pms-owners
+      protocol: pms-leads             # CONFIRM
+      ui_parsing: pms-leads           # CONFIRM
+
+  ffm:
+    suite: bss
+    match:
+      projects: [FFM]
+      components: [FFM, Fulfilment, Fulfillment]
+    repos: [alepolab/ffm]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/ffm
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  ans:
+    suite: bss
+    match:
+      projects: [ANS]
+      components: [ANS, Notification, Notifications]
+    repos: [alepolab/alepo-notifications]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/ans
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  selfcare:
+    # Two products under one project: selfcarenow, and lum-selfcare-v1 for LUM.
+    suite: bss
+    match:
+      projects: [SCN]
+      components: [Selfcare, SelfcareNow, LUM]
+    repos: [alepolab/selfcarenow, alepolab/lum-selfcare-v1]
+    multi_repo: true
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/selfcare
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: selfcare-leads        # CONFIRM
+      ui_parsing: selfcare-leads      # CONFIRM
 
   vms:
     suite: bss
     match:
+      projects: [VMS]
       components: [VMS, Voucher]
     repos: [alepolab/voucher-management]
     branches:
-      bug: main                               # CONFIRM
-      feature: main
+      bug: develop
+      feature: develop
+      infra: develop
     stack:
       compose: alepo-dev-team-infra/vms
       topology_default: 1node
-      liquibase: false
     tests:
-      unit: 'npm test'                        # CONFIRM
-      ui_trace: playwright                    # React 19 front end
+      unit: 'CONFIRM'
     owners:
-      money: billing-owners                   # vouchers are a money path
-      ui_parsing: vms-owners
+      protocol: CONFIRM
 
-  selfcarenow:
+  mpos:
+    # CONFIRM: no develop branch found; branches are ticket-named. main is the
+    # default but may not be where work lands.
     suite: bss
     match:
-      projects: [SCN]
-      labels: [NEW_WEB_SELFCARE]
-      components: [Selfcare, SelfcareNow]
-    repos: [alepolab/selfcarenow]
+      projects: [MPOS]
+      components: [mPOS, MPOS]
+    repos: [alepolab/mpos]
     branches:
-      bug: main                               # CONFIRM: origin HEAD is main; the team works on integrate/primary-develop
+      bug: main
       feature: main
+      infra: main
     stack:
-      # Product-owned compose in its checkout; not yet in alepo-dev-team-infra.
-      # The provisioner reads recipes/selfcarenow.md for the quirks.
-      compose: selfcarenow/docker-compose.yml
+      compose: alepo-dev-team-infra/mpos
       topology_default: 1node
     tests:
-      unit: 'pnpm --filter @selfcare/web test'  # CONFIRM
-      ui_trace: playwright
+      unit: 'CONFIRM'
     owners:
-      protocol: selfcare-leads                # CONFIRM
-      ui_parsing: selfcare-leads
+      protocol: CONFIRM
 
-  # The infrastructure fallback, and deliberately LAST in this file.
+  aaa:
+    # Submodules; see .gitmodules. Shares the AAA project with aaa-ems below -
+    # this entry takes an AAA ticket that does not name the EMS.
+    suite: aaa
+    match:
+      projects: [AAA]
+      components: [AAA, RADIUS, Radiator]
+    repos: [alepolab/aaa_rhel8]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/aaa
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: aaa-tech-leads        # CONFIRM
+      schema: aaa-tech-leads          # CONFIRM
+
+  aaa-ems:
+    # ems-admin serves up to EMS 14; aaa-ems-portal is EMS 15 onward.
+    # Shares the AAA project - reached when the ticket names the EMS.
+    suite: aaa
+    match:
+      projects: [AAA]
+      components: [AAA EMS, EMS Admin, ems-admin]
+    repos: [alepolab/ems-admin, alepolab/aaa-ems-portal]
+    multi_repo: true
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/aaa-ems
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  pcrf:
+    # Submodules; see .gitmodules. Shares PCRFV with pcrf-ems below - this
+    # entry takes a PCRFV ticket that does not name the EMS or portal.
+    suite: aaa
+    match:
+      projects: [PCRFV]
+      components: [PCRF, Policy]
+    repos: [alepolab/pcrf_cpp14]
+    branches:
+      bug: development
+      feature: development
+      infra: development
+    stack:
+      compose: alepo-dev-team-infra/pcrf
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: pcrf-tech-leads       # CONFIRM
+      schema: pcrf-tech-leads         # CONFIRM
+
+  pcrf-ems:
+    # Shares the PCRFV project - reached when the ticket names the EMS.
+    suite: aaa
+    match:
+      projects: [PCRFV]
+      components: [PCRF EMS, EMS Portal]
+    repos: [alepolab/pcrf-ems-portal]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/pcrf-ems
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  wso2:
+    suite: bss
+    match:
+      projects: [WSO2]
+      components: [WSO2, Integration, MI]
+    repos: [alepolab/wso2]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/wso2
+      topology_default: 1node
+    tests:
+      unit: 'CONFIRM'
+    owners:
+      protocol: CONFIRM
+
+  # The infrastructure entry, and deliberately LAST in this file.
   #
-  # resolveProduct matches in tiers — Jira project key, then labels, then
-  # components — and within a tier the first product in registry order wins. So
-  # a PCRF ticket that happens to mention Docker still resolves to pcrf on the
-  # component tier, because pcrf appears above this entry. Only a ticket that no
-  # product claims falls through to here.
+  # resolveProduct matches in tiers — project key, then labels, then components —
+  # and within a tier a product matching the key AND a word beats one matching
+  # the key alone; where nothing disambiguates, file order decides. So a PCRF
+  # ticket mentioning Docker still resolves to pcrf, and only a ticket no product
+  # claims falls through to here.
   #
-  # It exists because DEVOPS-15 resolved to nothing. With no product, agents got
-  # no repos, no branch policy and — until it was made unconditional — no
-  # checkout path either, so two of them cloned to two invented directories and
-  # the run's git facts came out empty. Compose and deployment work is the most
-  # common shape of ticket with no product of its own; it should land somewhere
-  # correct rather than nowhere.
+  # Keycloak, RabbitMQ and Liquibase route here rather than to products of their
+  # own because they have no application repository: they exist only as compose
+  # services in alepo-dev-team-infra, shared by FFM, CRM, PCRF, VMS and others.
+  # A ticket against one of them is a change to this repo by definition — and
+  # that sharing is why work on them is worth flagging, since the sso stack is
+  # not one team's to recreate.
+  #
+  # terraform-artifacts is NOT here: it is a separate product below. Both are
+  # DEVOPS tickets, but they are different work in different repos — docker and
+  # compose here, demo-environment infrastructure there — and a ticket touches
+  # one or the other. Listing both on one product would demand a merge order
+  # across two changes that never travel together.
   infra:
     suite: bss
     match:
       projects: [DEVOPS]
-      labels: [infra, deployment, docker, compose, rabbitmq, keycloak]
-      # Vocabulary, not products. Every term here names the deployment estate
-      # itself; a term that could belong to an application would steal that
-      # application's tickets whenever the application's own entry missed.
-      components: [Docker, Compose, Infra, Infrastructure, Deployment, Dockerfile, GHCR, Registry, Podman, RabbitMQ, Keycloak, SSO]
-    #
-    # RabbitMQ, Keycloak and the SSO stack are here rather than in a product of
-    # their own because they have no application repository — they exist only as
-    # compose services in alepo-dev-team-infra, shared by FFM, CRM, PCRF, VMS and
-    # others. A ticket against one of them is a change to this repo by
-    # definition. That sharing is also why work on them is worth flagging: the
-    # sso stack is not one team's to recreate.
+      labels: [infra, deployment, docker, compose, rabbitmq, keycloak, liquibase]
+      # Vocabulary of the deployment estate, never application terms: a term
+      # that could belong to an application would steal that application's
+      # tickets whenever its own entry missed.
+      components: [Docker, Compose, Infra, Infrastructure, Deployment, Dockerfile, GHCR, Registry, Podman, RabbitMQ, Keycloak, SSO, Liquibase]
     repos: [alepolab/alepo-dev-team-infra]
     branches:
-      # The deployment repo's own default is develop, and promotion is
-      # develop -> ci-release -> main. A fix enters at develop.
       bug: develop
       feature: develop
       infra: develop
@@ -191,9 +456,34 @@ products:
       compose: alepo-dev-team-infra
       topology_default: 1node
     tests:
-      # bats is what the compose repo already uses for its own checks.
       unit: 'bats tests'
       compose_test: 'docker compose config'
+    owners:
+      protocol: devops
+      schema: devops
+      docs: devops
+
+  # Demo-environment infrastructure. Shares the DEVOPS project with `infra`
+  # above, and is reached the same way the EMS entries are: by naming what it is
+  # about. `infra` sits above it and takes an unqualified DEVOPS ticket, which is
+  # the right default — compose work is the common case.
+  demo-infra:
+    suite: bss
+    match:
+      projects: [DEVOPS]
+      labels: [terraform, gcp, demo-env]
+      components: [Terraform, GCP, Demo Environment, Cloud]
+    repos: [alepolab/terraform-artifacts]
+    branches:
+      # No develop branch on this repo — main is where work lands.
+      bug: main
+      feature: main
+      infra: main
+    stack:
+      compose: not-applicable
+      topology_default: 1node
+    tests:
+      unit: 'terraform validate'              # CONFIRM
     owners:
       protocol: devops
       docs: devops
