@@ -110,6 +110,19 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
   }
 
   const agents: TeamStatus['agents'] = []
+  if (plugin && existsSync(join(plugin.installPath, 'agents'))) {
+    for (const name of await readdir(join(plugin.installPath, 'agents'))) {
+      if (!name.endsWith('.md')) continue
+      const id = name.replace(/\.md$/, '')
+      if (agentTemplates.some(t => t.id === id)) continue
+      const next = await readFile(join(plugin.installPath, 'agents', name), 'utf-8')
+      const to = join(agentsDir, name)
+      const current = await readOr(to)
+      let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
+      if (apply && state !== 'ok') { await writeFile(to, next); state = 'ok' }
+      agents.push({ id, state })
+    }
+  }
   for (const t of agentTemplates.filter(t => t.id.startsWith('sdlc-'))) {
     const path = join(agentsDir, `${t.id}.md`)
     const next = serializeFrontmatter(t.frontmatter as any, t.body)

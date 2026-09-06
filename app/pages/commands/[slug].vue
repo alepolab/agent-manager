@@ -1,4 +1,5 @@
 <script setup lang="ts">
+const { promoting, promote } = usePromote()
 import type { Command, CommandFrontmatter } from '~/types'
 import InstructionEditor from '~/components/studio/InstructionEditor.vue'
 
@@ -162,6 +163,17 @@ useUnsavedChanges(isDirty)
           color="neutral"
           title="Open in Finder"
           @click="reveal(command.filePath)"
+        />
+        <UButton
+          label="Promote to team"
+          icon="i-lucide-git-pull-request"
+          size="sm"
+          variant="ghost"
+          color="neutral"
+          title="Open a pull request that adds this command to the alepo-engineering plugin"
+          :loading="promoting"
+          :disabled="!command || isDirty || promoting"
+          @click="promote('command', slug)"
         />
         <UButton
           label="Delete"
