@@ -13,7 +13,8 @@ directly, never edits a role, and never invents a flag. If something can't be
 expressed as a `deploy.sh` invocation, stop and say so rather than working
 around it.
 
-Input: `$ARGUMENTS` — `<app> <target>`, e.g. `cm dev-app-02`.
+Input: `$ARGUMENTS` — `<app> <target>`, e.g. `cm dev-app-02`. With no target
+at all it deploys to this machine.
 
 ## 0. Where the automation lives
 
@@ -60,10 +61,31 @@ knows. Read `inventory/hosts.yml` and resolve:
   editing a version-controlled file the whole team shares, and the entry needs
   a name as well as an address. Propose the exact YAML and let the operator
   confirm or add it themselves. Never write it silently.
-- **Nothing at all** → the env falls back to **`prod`**. Never to dev: an
-  unqualified deploy must not quietly land somewhere harmless-looking and be
-  mistaken for the real thing. Say plainly that you are falling back to
-  production and get confirmation before anything else happens.
+- **Nothing at all** → **this machine**, through the single-box inventory that
+  already exists for it:
+
+  ```bash
+  --env dev --inventory inventory/local.yml
+  ```
+
+  `inventory/local.yml` puts `localhost` in the `dev` group with
+  `ansible_connection: local`, so nothing is reached over SSH and no remote
+  host can be touched by a command that named no target. Say plainly that you
+  are deploying to the local VM.
+
+  Two consequences to state rather than let the operator discover:
+
+  - The group is `dev`, so `group_vars/dev.yml` applies in full — including
+    the Harbor URM pin (`10.79.4.80:8443`), which needs that registry in the
+    daemon's `insecure-registries` and a `docker login` first, or the pull
+    fails with an x509 error.
+  - Unlike a remote deploy, this one needs `sudo` on this machine for Step 1.
+    Pass `--ask-become-pass` if it prompts.
+
+Call what you resolved the **target flags** — either
+`--env <group> -- --limit <host>` or, for the local case,
+`--env dev --inventory inventory/local.yml`. Every command below uses them
+verbatim; do not re-derive them per step.
 
 A host whose `ansible_host` is still a placeholder — the `192.0.2.0/24`
 documentation range, or an entry marked `TODO` — is not a deployable target.
@@ -91,9 +113,11 @@ Pass it as `-e @$SECRETS` in the pass-through args.
 ## 3. Dry run, always first
 
 ```bash
-./deploy.sh --step deploy --env <env> --app <app> --yes --check \
-  -- --limit <host> -e @"$SECRETS"
+./deploy.sh --step deploy --app <app> --yes --check <target flags> -e @"$SECRETS"
 ```
+
+(`--inventory` is a `deploy.sh` flag, so it goes before the `--`; `--limit`
+is an ansible-playbook flag and goes after it.)
 
 `--check` changes nothing on the host. Read the output and report, in a few
 lines: what would change, the env-slice diff, and anything that failed
@@ -114,8 +138,7 @@ radius is before asking.
 ## 5. Apply
 
 ```bash
-./deploy.sh --step deploy --env <env> --app <app> --yes \
-  -- --limit <host> -e @"$SECRETS"
+./deploy.sh --step deploy --app <app> --yes <target flags> -e @"$SECRETS"
 ```
 
 Stream the output. If it fails, nothing is rolled back — the host is in
@@ -131,7 +154,7 @@ anything else.
 ## 6. Prove it
 
 ```bash
-./deploy.sh --step status --env <env> --app <app>
+./deploy.sh --step status --app <app> --env <env> [--inventory inventory/local.yml]
 ```
 
 Note there is no `--limit` here on purpose: `status` and `logs` go through
