@@ -61,24 +61,62 @@ const baseProducts = readFileSync(join(root, 'registry/products.yaml'), 'utf8')
 }
 
 // ── 3. {version} with no version_source cannot resolve a branch ───────────
+//
+// The fixture INJECTS the {version} policy rather than relying on the committed
+// registry to happen to contain one. It used to strip `version_source:` from
+// whatever the real file had — so the day no product used a {version} branch,
+// this stopped testing anything and passed by having nothing to break. The
+// subject here is the validator, not the registry's current contents.
 {
-  const r = runWith({ products: baseProducts.replace(/^\s*version_source:.*$/m, '') })
+  const withVersionBranch = baseProducts.replace(
+    /^(  ffm:\n(?:.*\n)*?    branches:\n      bug: )\S+$/m,
+    "$1'release/{version}'",
+  )
+  assert.notEqual(withVersionBranch, baseProducts, 'the fixture must actually inject a {version} branch')
+  const r = runWith({ products: withVersionBranch })
   assert.equal(r.code, 1, '{version} without a source must fail')
   assert.match(r.out, /no version_source/, r.out)
 }
 
 // ── 4. An ATDD command that cannot produce a verdict ──────────────────────
 {
-  const r = runWith({ products: baseProducts.replace("robot --xunit out.xml tests/aaa", "robot tests/aaa") })
+  // Injected, not stripped: no product declares an atdd command today, so
+  // mutating one that happens to exist tests nothing the day it stops existing.
+  const withAtdd = baseProducts.replace(
+    /^(  aaa:\n(?:.*\n)*?    tests:\n      unit: .*\n)/m,
+    "$1      atdd: 'robot tests/aaa'\n",
+  )
+  assert.notEqual(withAtdd, baseProducts, 'the fixture must actually inject an atdd command')
+  const r = runWith({ products: withAtdd })
   assert.equal(r.code, 1, 'an atdd command without xunit must fail')
   assert.match(r.out, /does not emit xunit/, r.out)
 }
 
 // ── 5. multi_repo must be backed by the repo list, both ways ──────────────
 {
-  const r = runWith({ products: baseProducts.replace('    multi_repo: true\n', '') })
-  assert.equal(r.code, 1, 'several repos without multi_repo must fail')
-  assert.match(r.out, /not marked multi_repo/, r.out)
+  // Both directions matter, and only one of them is testable by stripping: a
+  // product with several repos must be marked, and a marked product must have
+  // several. Inject rather than strip so this keeps testing the validator when
+  // the registry's own use of multi_repo changes.
+  const marked = baseProducts.replace(
+    /^(  ffm:\n(?:.*\n)*?    repos: .*\n)/m,
+    "$1    multi_repo: true\n",
+  )
+  assert.notEqual(marked, baseProducts, 'the fixture must mark a single-repo product')
+  const r = runWith({ products: marked })
+  assert.equal(r.code, 1, 'multi_repo on a single-repo product must fail')
+  assert.match(r.out, /fewer than two repos/, r.out)
+
+  // And the other direction, which the registry can no longer supply either:
+  // several repos with no multi_repo produces no merge order.
+  const unmarked = baseProducts.replace(
+    /^(  ffm:\n(?:.*\n)*?    repos: \[)([^\]]+)(\]\n)/m,
+    "$1$2, alepolab/ffm-second$3",
+  )
+  assert.notEqual(unmarked, baseProducts, 'the fixture must give a product a second repo')
+  const r2 = runWith({ products: unmarked })
+  assert.equal(r2.code, 1, 'several repos without multi_repo must fail')
+  assert.match(r2.out, /not marked multi_repo/, r2.out)
 }
 
 // ── 6. A duplicate watch id would corrupt bundle and metrics history ──────

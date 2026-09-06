@@ -68,7 +68,38 @@ export async function resolveProduct(text: string): Promise<ProductMatch | undef
   const key = text.match(/\b([A-Z][A-Z0-9]+)-\d+\b/)?.[1]
   const entries = Object.entries(reg.products)
   const pick = (pred: (m: any) => boolean) => entries.find(([, p]) => pred(p?.match ?? {}))
-  const hit = (key && pick(m => (m.projects ?? []).includes(key)))
+  // The ticket key is removed before disambiguating, because a key CONTAINS the
+  // component word: `word('AAA')` matches inside "AAA-56", so the generic AAA
+  // product looked as specific as the EMS one and won on file order. The key has
+  // already been used to pick the candidates; letting it also decide between
+  // them is counting it twice.
+  const textSansKey = text.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, ' ')
+  // How specific a product's claim on this text is: the length of the longest
+  // term of its own that appears. "PCRF EMS" is a stronger claim than "PCRF",
+  // and both match a ticket about the EMS — so length is what separates them.
+  // 0 means the product named nothing in the text at all.
+  const specificity = (m: any) => Math.max(
+    0,
+    ...[...(m.labels ?? []), ...(m.components ?? [])]
+      .filter((t: string) => word(t).test(textSansKey))
+      .map((t: string) => t.length),
+  )
+
+  // Two products can share a Jira project and live in different repositories —
+  // AAA covers the server and the EMS portal, PCRFV the same. Taking the first
+  // product in file order would make the second unreachable by its own project
+  // key, silently, and route every EMS ticket to the server repo.
+  //
+  // So within the project tier, a product that ALSO matches a label or
+  // component beats one matching the key alone. Tier precedence is unchanged:
+  // a project match still outranks any word match, and where nothing
+  // disambiguates, file order still decides.
+  const byProject = key ? entries.filter(([, p]) => ((p?.match ?? {}).projects ?? []).includes(key)) : []
+  const best = byProject
+    .map(e => [e, specificity(e[1]?.match ?? {})] as const)
+    .sort((a, b) => b[1] - a[1])[0]
+  const hit = (best && best[1] > 0 ? best[0] : undefined)
+    || byProject[0]
     || pick(m => (m.labels ?? []).some((l: string) => word(l).test(text)))
     || pick(m => (m.components ?? []).some((c: string) => word(c).test(text)))
   if (!hit) return undefined
