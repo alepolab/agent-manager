@@ -12,17 +12,31 @@ import type { ProductMatch } from '~~/shared/types/run'
  */
 async function registryPath(): Promise<string | null> {
   if (process.env.AGENT_REGISTRY_PATH) return process.env.AGENT_REGISTRY_PATH
+
   const installed = resolveClaudePath('plugins', 'installed_plugins.json')
-  if (!existsSync(installed)) return null
-  try {
-    const data = JSON.parse(await readFile(installed, 'utf-8'))
-    const entry = data?.plugins?.['alepo-engineering@alepo-engineering']?.[0]
-    if (!entry?.installPath) return null
-    const path = join(entry.installPath, 'registry', 'products.yaml')
-    return existsSync(path) ? path : null
-  } catch {
-    return null
+  if (existsSync(installed)) {
+    try {
+      const data = JSON.parse(await readFile(installed, 'utf-8'))
+      const entry = data?.plugins?.['alepo-engineering@alepo-engineering']?.[0]
+      const path = entry?.installPath && join(entry.installPath, 'registry', 'products.yaml')
+      if (path && existsSync(path)) return path
+    }
+    catch { /* fall through to the shipped copy */ }
   }
+
+  // The copy shipped in the product, for the container's normal case: no plugin
+  // installed. Without this, registryPath returned null, loadRegistry returned
+  // null, and resolveProduct returned undefined for EVERY ticket — so no run in
+  // a team container has ever resolved a product. No repos, no branch policy,
+  // no stack profile, no test commands: the agents improvised all of it, and
+  // two of them improvised different checkout directories in the same run.
+  //
+  // Silent by construction, because "no product matched this ticket" and "the
+  // registry could not be found" produced the same undefined. Same shape as the
+  // skills and commands gaps: the plugin is preferred so an operator can update
+  // it independently, and the shipped copy is the floor.
+  const shipped = join(process.cwd(), 'engineering', 'registry', 'products.yaml')
+  return existsSync(shipped) ? shipped : null
 }
 
 export async function loadRegistry(): Promise<{ path: string, products: Record<string, any> } | null> {
