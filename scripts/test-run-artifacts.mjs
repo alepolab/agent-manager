@@ -537,6 +537,31 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   assert.ok(existsSync(join(src, 'steps', 'step-01.json')), 'nested step artifacts stay too')
 
   // And an agent is told where that is, so it links rather than copies.
+  // Every run must be told where to work, product match or not. A run that
+  // resolved no product got no checkout path at all — the line lived inside the
+  // product block — so its agents improvised, and improvised differently: one
+  // cloned to ~/alepo-workspace, another to ~/repos, neither to the configured
+  // root. git facts are computed against the run's workspace, so meta.json lost
+  // commits, files_changed and lines_changed for work that had been done and
+  // committed in a directory nothing else knew about.
+  {
+    const prev = process.env.AGENT_WORKSPACE_ROOT
+    process.env.AGENT_WORKSPACE_ROOT = '/srv/agent-manager/workspace'
+
+    const noProduct = A.artifactHeader(src, undefined, 'alice', runId)
+    assert.ok(noProduct.includes('/srv/agent-manager/workspace/alice'),
+      'a run with no product must still be told its workspace')
+    assert.ok(/do not invent a checkout path/i.test(noProduct),
+      'and told not to improvise one')
+
+    const anonymous = A.artifactHeader(src, undefined, undefined, runId)
+    assert.ok(anonymous.includes('/srv/agent-manager/workspace'),
+      'an anonymous run still gets the shared root, not silence')
+
+    if (prev === undefined) delete process.env.AGENT_WORKSPACE_ROOT
+    else process.env.AGENT_WORKSPACE_ROOT = prev
+  }
+
   const header = A.artifactHeader(src, undefined, undefined, runId)
   assert.ok(header.includes(`/api/runs/${runId}/artifacts`),
     'the artifact header must name the URL the app serves this run at')
