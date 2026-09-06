@@ -562,6 +562,23 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
     else process.env.AGENT_WORKSPACE_ROOT = prev
   }
 
+  // The browser surface is stated as a fact in the header, because the trace
+  // step twice produced no trace and no explanation and the monitor called it
+  // "silence without explanation". The instruction to declare n/a was already
+  // there; what was missing was anything concrete to declare.
+  {
+    const prev = process.env.AGENT_WORKSPACE_ROOT
+    process.env.AGENT_WORKSPACE_ROOT = '/nonexistent-workspace-for-this-test'
+    const bare = A.artifactHeader(src, undefined, 'alice', runId)
+    assert.ok(/Browser surface:/.test(bare), 'every step is told what the browser surface is')
+    assert.ok(/No Playwright config and no UI files/.test(bare),
+      'a checkout with neither must say so, in words the step can quote as its reason')
+    assert.ok(/TRACE: n\/a` is the expected outcome/.test(bare),
+      'and must name the outcome that follows, so n/a is not left as an inference')
+    if (prev === undefined) delete process.env.AGENT_WORKSPACE_ROOT
+    else process.env.AGENT_WORKSPACE_ROOT = prev
+  }
+
   const header = A.artifactHeader(src, undefined, undefined, runId)
   assert.ok(header.includes(`/api/runs/${runId}/artifacts`),
     'the artifact header must name the URL the app serves this run at')
