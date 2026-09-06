@@ -1121,10 +1121,12 @@ Before assembling: read \`meta.json\`'s \`fix.repos\`, and for every entry whose
 Then assemble the bundle and report its real output — do not paraphrase it:
 
 \`\`\`
-node engineering/scripts/assemble-bundle.mjs --run-dir <artifacts dir> --out <artifacts dir>/bundle.json
+node "$SDLC_SCRIPTS_DIR/assemble-bundle.mjs" --run-dir <artifacts dir> --out <artifacts dir>/bundle.json
 \`\`\`
 
 If it exits non-zero, the fields it names as missing are the finding. Report them exactly as printed, and **do not open a PR** — a PR carrying a bundle that failed assembly is worse than no PR, because it looks evidenced and is not.
+
+\`$SDLC_SCRIPTS_DIR\` is set for you and is an absolute path; the assembler lives with the app, not in the product checkout you are standing in. If the command cannot be found, or that variable is empty, **that is the same failure as a non-zero exit** — report it as a finding and do not open a PR. Do not conclude the assembler is missing from the installation and continue without it: an unvalidated bundle in a PR that claims to be evidence-backed is precisely the outcome this step exists to prevent.
 
 ## Absent beats wrong, in the bundle too
 
