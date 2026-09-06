@@ -462,6 +462,28 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.ok(!/git clone git@github\.com/.test(prov.body),
     'an SSH clone URL cannot work in the container and must not be suggested')
 
+  // A compose-only ticket with no UI reached the browser step, which correctly
+  // had nothing to capture. Its output was the ls -la of the artifacts
+  // directory and nothing else, so the monitor read a step named "Browser
+  // Trace" that had produced no trace and no explanation, and ABORTED the run.
+  // The step was right; the review was wrong; and the step gave the review
+  // nothing to be right about.
+  const trace = AGENT_TEMPLATES.find(t => t.id === 'sdlc-trace-capture')
+  assert.ok(trace.body.includes('TRACE: n/a'),
+    'the trace step must declare n/a in a fixed form the monitor can recognise')
+  assert.ok(/must begin with exactly one of these two lines/i.test(trace.body),
+    'the verdict must lead the output, not be buried after an ls -la')
+
+  const monitor = AGENT_TEMPLATES.find(t => t.id === 'sdlc-step-monitor')
+  assert.ok(/not applicable" is a pass|n\/a.*is a pass/i.test(monitor.body),
+    'the monitor must be told a declared, reasoned n/a is a legitimate outcome')
+  assert.ok(/never against what its label sounds like/i.test(monitor.body),
+    'the monitor must judge the contract, not the step name')
+  assert.ok(monitor.body.includes('PIPELINE-SKIP'),
+    'a declared skip is the same shape and must not be aborted either')
+  assert.ok(/declared and reasoned/i.test(monitor.body),
+    'the monitor needs the declared-versus-silent distinction, or it just accepts silence')
+
   assert.ok(evidence.body.includes('Git: local only'),
     'the evidence step needs its own explicit local-only git mandate')
 

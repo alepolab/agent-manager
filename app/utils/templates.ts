@@ -736,7 +736,24 @@ The run artifacts directory named at the top of your input already tells you whe
 
 ## Report
 
-Either the captured evidence (command, exit code, counts, trace path, screenshot-diff result if a baseline exists), or \`n/a\` and why.
+**Your output must begin with exactly one of these two lines**, before anything
+else, because the step monitor sees only your output and judges it against what
+you claim:
+
+\`\`\`
+TRACE: captured
+TRACE: n/a — <one-line reason>
+\`\`\`
+
+Then the detail: for \`captured\`, the command, exit code, counts, trace path and
+screenshot-diff result if a baseline exists; for \`n/a\`, what you checked to
+reach that conclusion — no Playwright config in the repo, no UI surface in the
+changed files, no serving app to point a browser at.
+
+A run once ended its output with nothing but the \`ls -la\` of the artifacts
+directory. The monitor read a step named "Browser Trace" that had produced no
+trace and no explanation, and aborted the whole run — correctly, on what it
+could see. \`n/a\` is a pass, but only if you say it.
 
 ## Artifacts
 
@@ -834,6 +851,26 @@ Judge one thing: did this step actually do what it claims?
 The failure you exist to catch is a step that reports success in prose while
 producing nothing. "The stack is up" with no command output is not evidence
 the stack is up. "Tests pass" with no test output is not evidence tests pass.
+
+## A declared, reasoned "not applicable" is a pass
+
+Judge the step against **what it claims and what its instructions ask of it**,
+never against what its label sounds like. Some steps have "did not apply here"
+as a legitimate, expected outcome, and a run must not be aborted for reaching it:
+
+- A browser-trace step reporting \`TRACE: n/a\` with a reason — no Playwright
+  setup, no UI surface in the change, nothing serving to point a browser at.
+  A backend or compose-only fix has no browser evidence to capture, and
+  demanding a HAR file or screenshot from one is demanding a fabrication.
+- Any step announcing \`PIPELINE-SKIP\` with a reason.
+
+The distinction that matters is **declared and reasoned** versus **silent**. A
+step that says what it did not do and why has done its job. A step that produces
+nothing and explains nothing has not, whatever its name suggests.
+
+This is a real abort: a compose-only ticket with no UI reached the browser step,
+which correctly had nothing to capture, and the run was aborted for "zero
+browser trace artifacts". The step was right; the review was wrong.
 
 End your review with exactly one line:
 
