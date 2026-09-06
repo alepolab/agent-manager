@@ -146,3 +146,54 @@ products:
     owners:
       protocol: selfcare-leads                # CONFIRM
       ui_parsing: selfcare-leads
+
+  # The infrastructure fallback, and deliberately LAST in this file.
+  #
+  # resolveProduct matches in tiers — Jira project key, then labels, then
+  # components — and within a tier the first product in registry order wins. So
+  # a PCRF ticket that happens to mention Docker still resolves to pcrf on the
+  # component tier, because pcrf appears above this entry. Only a ticket that no
+  # product claims falls through to here.
+  #
+  # It exists because DEVOPS-15 resolved to nothing. With no product, agents got
+  # no repos, no branch policy and — until it was made unconditional — no
+  # checkout path either, so two of them cloned to two invented directories and
+  # the run's git facts came out empty. Compose and deployment work is the most
+  # common shape of ticket with no product of its own; it should land somewhere
+  # correct rather than nowhere.
+  infra:
+    suite: bss
+    match:
+      projects: [DEVOPS]
+      labels: [infra, deployment, docker, compose, rabbitmq, keycloak]
+      # Vocabulary, not products. Every term here names the deployment estate
+      # itself; a term that could belong to an application would steal that
+      # application's tickets whenever the application's own entry missed.
+      components: [Docker, Compose, Infra, Infrastructure, Deployment, Dockerfile, GHCR, Registry, Podman, RabbitMQ, Keycloak, SSO]
+    #
+    # RabbitMQ, Keycloak and the SSO stack are here rather than in a product of
+    # their own because they have no application repository — they exist only as
+    # compose services in alepo-dev-team-infra, shared by FFM, CRM, PCRF, VMS and
+    # others. A ticket against one of them is a change to this repo by
+    # definition. That sharing is also why work on them is worth flagging: the
+    # sso stack is not one team's to recreate.
+    repos: [alepolab/alepo-dev-team-infra]
+    branches:
+      # The deployment repo's own default is develop, and promotion is
+      # develop -> ci-release -> main. A fix enters at develop.
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      # This repo IS the compose estate. A ticket changing it usually needs no
+      # separate harness stood up — the provisioner is expected to say so and
+      # still leave the checkout behind.
+      compose: alepo-dev-team-infra
+      topology_default: 1node
+    tests:
+      # bats is what the compose repo already uses for its own checks.
+      unit: 'bats tests'
+      compose_test: 'docker compose config'
+    owners:
+      protocol: devops
+      docs: devops

@@ -64,6 +64,11 @@ COPY --chown=bun:bun engineering/skills ./engineering/skills
 # commands and made the gap look filled on the one box that built the image.
 COPY --chown=bun:bun engineering/commands ./engineering/commands
 
+# And the product registry. Without it resolveProduct returns undefined for
+# every ticket - no repos, no branch policy, no stack profile - and the failure
+# is indistinguishable from "no product matched".
+COPY --chown=bun:bun engineering/registry ./engineering/registry
+
 COPY --chown=bun:bun docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.
