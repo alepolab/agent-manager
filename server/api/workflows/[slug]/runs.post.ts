@@ -2,7 +2,7 @@ import { startRun } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
 import { findRunInWorkspace } from '../../../utils/workflowRunStore'
 import { runWorkspace } from '../../../utils/workspace'
-import { expandTicketKey } from '../../../utils/jiraTicketSource'
+import { expandTicketKey, ticketKeyFrom } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
 
@@ -61,6 +61,10 @@ export default defineEventHandler(async (event) => {
     // This route is the manual/API start path, never a watch dispatch — the
     // reserved literal is the honest answer to "what triggered this?".
     watch: 'direct-invocation',
+    // Read from the prompt, so a run started by hand reports back to its ticket
+    // the way a watch-dispatched one does. Without it notifyTicketOutcome never
+    // fires for a manual run - the key was in the prompt and nothing looked.
+    ticketKey: ticketKeyFrom(body.initialPrompt),
     autoRun: body.autoRun === true,
     projectDir: body.projectDir,
     startedBy: user?.login,

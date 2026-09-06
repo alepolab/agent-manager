@@ -1,3 +1,19 @@
+> **The CI check described below has been retired.**
+>
+> It read `.agent/evidence-run/` from a pull request's checkout. Evidence no
+> longer goes into a product repository — it stays in the run directory, is
+> served by the app at `/api/runs/:id/artifacts`, and is quoted in full in the
+> pull request body. With nothing writing that directory, the check could only
+> ever report "no evidence": a check that looks like enforcement and is not.
+>
+> What remains and is still used: `assemble-bundle.mjs`, `validate-bundle.mjs`,
+> `bundle-summary.mjs` and the schema. The evidence step runs the assembler
+> inside the container, and refuses to open a pull request if it fails. That is
+> the gate now, and it runs before the PR exists rather than after.
+>
+> The rest of this document describes the retired workflow, kept for the
+> reasoning in it.
+
 # Evidence bundle
 
 ## What it is

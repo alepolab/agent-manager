@@ -508,7 +508,7 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
 
 // ── publishEvidenceToProject: the run directory travels with the PR ───────
 //
-// This is what makes .github/workflows/evidence-bundle.yml able to pass at
+// This is what makes the bundle assembler able to pass at
 // all. A GitHub Actions artifact can only be created inside a workflow run,
 // and this pipeline runs on an engineer's machine, so nothing could ever
 // upload `evidence-run-<sha>` and the check could only fail with "no artifact
