@@ -27,7 +27,7 @@ export default defineEventHandler(async (event) => {
   if (!token.access_token) return sendRedirect(event, '/login?error=' + encodeURIComponent(`GitHub token exchange failed: ${token.error_description || 'no token returned'}`))
 
   const gh = (path: string) => fetch(`https://api.github.com${path}`, { headers: { authorization: `Bearer ${token.access_token}`, accept: 'application/vnd.github+json', 'user-agent': 'agent-manager' } })
-  const me = (await (await gh('/user')).json()) as { login?: string, name?: string, avatar_url?: string }
+  const me = (await (await gh('/user')).json()) as { id?: number, login?: string, name?: string, avatar_url?: string }
   if (!me.login) return sendRedirect(event, '/login?error=' + encodeURIComponent('GitHub did not return a user'))
   // Membership is checked, but the FAILURE has to name itself: this endpoint
   // returns a non-2xx for three unrelated reasons, and collapsing them into
@@ -49,7 +49,15 @@ export default defineEventHandler(async (event) => {
     return sendRedirect(event, '/login?error=' + encodeURIComponent(`Could not confirm @${me.login} as an active member of the ${ORG()} GitHub organisation. ${detail}`))
   }
 
-  await saveProfile(me.login, { name: me.name ?? undefined, avatar: me.avatar_url, githubTokenPlain: token.access_token })
+  // The numeric id is what makes a <id>+<login>@users.noreply.github.com commit
+  // address resolve to this account. Captured at sign-in because that is the
+  // only moment it is on offer.
+  await saveProfile(me.login, {
+    name: me.name ?? undefined,
+    avatar: me.avatar_url,
+    ...(typeof me.id === 'number' ? { githubId: me.id } : {}),
+    githubTokenPlain: token.access_token,
+  })
   await session.update({ user: { login: me.login, name: me.name ?? undefined, avatar: me.avatar_url } } as any)
   return sendRedirect(event, '/')
 })
