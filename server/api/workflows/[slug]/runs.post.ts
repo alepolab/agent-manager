@@ -1,6 +1,7 @@
 import { startRun } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
-import { findActiveRun } from '../../../utils/workflowRunStore'
+import { findRunInWorkspace } from '../../../utils/workflowRunStore'
+import { runWorkspace } from '../../../utils/workspace'
 import { expandTicketKey } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
@@ -12,13 +13,21 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'initialPrompt is required' })
   }
 
-  // One run per workflow: two concurrent runs against the same projectDir would
-  // have their agents editing the same files.
-  const active = await findActiveRun(slug)
+  // Locked on the DIRECTORY a run will write, not on the workflow. Two runs
+  // sharing a checkout corrupt each other; two developers working on unrelated
+  // products share nothing, and a per-workflow lock made the second one wait
+  // behind the first with no queue — which made the pipeline single-user.
+  //
+  // The check has to come after the user is known, because an unset projectDir
+  // resolves to that developer's own workspace root.
+  const user = await currentUser(event)
+  const workspace = runWorkspace({ projectDir: body.projectDir, startedBy: user?.login })
+  const active = await findRunInWorkspace(workspace)
   if (active) {
     throw createError({
       statusCode: 409,
-      message: `This workflow already has a run in progress`,
+      message: `${active.startedBy ? `@${active.startedBy} has` : 'There is'} a run in progress in ${workspace}`
+        + ` (${active.workflowName ?? active.workflowSlug}). Wait for it, stop it, or start this one against a different project directory.`,
       data: { runId: active.id },
     })
   }
@@ -40,7 +49,6 @@ export default defineEventHandler(async (event) => {
   // as the run exists, and the run continues server-side. That is the feature.
   // A bare ticket key becomes the ticket itself when the jira CLI can serve
   // it; otherwise the key is passed through and the intake step works from it.
-  const user = await currentUser(event)
   const expanded = await expandTicketKey(body.initialPrompt, await envForUser(user?.login))
   const bareKey = /^[A-Z][A-Z0-9]+-\d+$/.test(body.initialPrompt.trim())
   const initialPrompt = expanded ?? (bareKey
