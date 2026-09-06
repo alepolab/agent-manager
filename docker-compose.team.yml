@@ -22,6 +22,28 @@ services:
       - AGENT_USERS_DIR=/srv/agent-manager/users
       - AGENT_WORKSPACE_ROOT=/srv/agent-manager/workspace
       - TEAM_SEED_ON_BOOT=1
+      # Without this the pipeline cannot execute a single step. The agent SDK
+      # spawns Claude Code, which had nothing to authenticate with, so every
+      # run died on "Claude Code process exited with code 1" at its first step.
+      #
+      # It is absent from the image on purpose: stage-claude-config.sh refuses
+      # to bake .credentials.json in, because the image is distributable and
+      # that file holds OAuth tokens. Correct — but nothing then supplied a
+      # credential at runtime, so two right decisions left no path between them.
+      #
+      # Either variable works. An API key must be WORKSPACE-SCOPED: an
+      # org-level key answers /v1/messages with 400 "not scoped to a
+      # workspace, so this request must include the anthropic-workspace-id
+      # header", and Claude Code does not send that header (there is no
+      # ANTHROPIC_WORKSPACE_ID; ANTHROPIC_CUSTOM_HEADERS is the only way in).
+      #
+      # A subscription OAuth token from `claude setup-token` is tied to one
+      # person: every developer's runs then draw on that individual's limits,
+      # with no cost attribution. Per-developer credentials — the shape
+      # envForUser already uses for GH_TOKEN and JIRA_API_TOKEN — are the
+      # answer for a shared instance.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - AGENT_MANAGER_SECRET=${AGENT_MANAGER_SECRET:?set a 32+ character secret}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:?register the GitHub OAuth app}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:?register the GitHub OAuth app}

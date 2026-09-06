@@ -489,7 +489,13 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       '',
       `Product: ${product.name}${product.suite ? ` (suite: ${product.suite})` : ''}`,
       `Repos: ${product.repos.join(', ')}`,
-      `Checkouts: ${process.env.AGENT_WORKSPACE_ROOT || '~/alepo-workspace'}/<repo name>; confirm each with git remote -v, and clone git@github.com:<repo>.git there if it is missing.`,
+      // HTTPS, not git@github.com. The container has no SSH key, but it does have
+      // a credential helper wired to $GITHUB_TOKEN (see the Dockerfile), which
+      // envForUser fills from the starter's own sealed token. An SSH clone URL
+      // bypasses all of that and fails with a key error the agent cannot fix,
+      // which is how a provisioner step reported the repo 'is not checked out
+      // anywhere on this host' after being told to clone it.
+      `Checkouts: ${process.env.AGENT_WORKSPACE_ROOT || '~/alepo-workspace'}/<repo name>; confirm each with git remote -v, and clone https://github.com/<repo>.git there if it is missing.`,
       ...(product.multiRepo ? ['Multi-repo: yes. Every repo listed gets its own branch, commit and PR; plan.md must give a merge order and nothing merges until every PR in the set is approved.'] : []),
       `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,

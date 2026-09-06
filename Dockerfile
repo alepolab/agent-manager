@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built application from build stage
-COPY --from=build /app/.output .output
+COPY --from=build --chown=bun:bun /app/.output .output
 
 # Bake in a curated Claude config so the image is self-contained: plugins,
 # skills, agents and settings travel with it, and a fresh host needs no
@@ -55,16 +55,16 @@ COPY --from=build /app/.output .output
 # boots "9 agents, 0 skills": every agent declares skills that cannot resolve,
 # and because buildAgentSystemPrompt swallows a per-skill failure by design,
 # each agent silently runs without the instructions it was supposed to have.
-COPY engineering/skills ./engineering/skills
+COPY --chown=bun:bun engineering/skills ./engineering/skills
 
 # And its commands, for the same reason one level down. teamSync falls back to
 # these when no plugin is installed. Without this COPY the fallback finds
 # nothing and a container seeds zero commands - which is what shipped, because
 # the staged ~/.claude payload below happened to carry the operator's own
 # commands and made the gap look filled on the one box that built the image.
-COPY engineering/commands ./engineering/commands
+COPY --chown=bun:bun engineering/commands ./engineering/commands
 
-COPY docker/claude-config /root/.claude
+COPY --chown=bun:bun docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.
 #
@@ -93,6 +93,61 @@ RUN printf '%s\n' \
     > /usr/local/bin/git-credential-env \
     && chmod +x /usr/local/bin/git-credential-env \
     && git config --system credential."https://github.com".helper env 2>/dev/null || true
+
+# GitHub CLI.
+#
+# sdlc-evidence-and-pr opens the pull request that is the whole pipeline's
+# deliverable. Without `gh` it would improvise against the REST API or fail
+# outright — after seven successful steps have already spent real money.
+#
+# The single binary from the release tarball, not the apt repository: apt drags
+# in a keyring and dependency closure for one executable. Pinned by version and
+# verified by checksum, so a moved tag cannot change what lands in the image.
+ARG GH_VERSION=2.100.0
+ARG GH_SHA256=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
+RUN set -eux; \
+    url="https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"; \
+    curl -fsSL "$url" -o /tmp/gh.tgz; \
+    echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tgz -C /tmp; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_amd64"; \
+    gh --version
+
+# Run as a non-root user.
+#
+# Not hygiene — a hard requirement. agentCaller.ts starts every pipeline agent
+# with permissionMode 'bypassPermissions' and allowDangerouslySkipPermissions,
+# and Claude Code refuses both when it is running as root:
+#
+#   --dangerously-skip-permissions cannot be used with root/sudo privileges
+#   for security reasons
+#
+# The SDK surfaces that only as "Claude Code process exited with code 1", so a
+# deployed team instance failed every run at its first step with no usable
+# reason. Verified both ways in the container: as uid 0 the CLI refuses, as
+# uid 1000 the same command returns normally.
+#
+# `bun` (uid 1000) already exists in the base image. Both compose files put
+# their config somewhere this user must be able to write: standalone at
+# /root/.claude, team mode at /srv/agent-manager. /root is 700 by default, so
+# it needs traverse permission as well as ownership of the directory inside it.
+#
+# A named volume created fresh inherits ownership from the image path, so a new
+# deployment is correct on its own. An EXISTING root-owned volume does not — it
+# must be chowned once, which is preferable to deleting it and losing the
+# signed-in developers' sealed tokens:
+#
+#   docker run --rm -u 0 -v <project>_team-home:/srv/agent-manager \
+#     <image> chown -R 1000:1000 /srv/agent-manager
+# Ownership comes from `COPY --chown` above, not a recursive chown here. A
+# `chown -R` over /app and /root/.claude rewrites every file into a new layer:
+# it cost 106 MB (433 -> 539) for metadata changes alone, because a layer stores
+# whole files, not the bits that differ.
+RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs \
+    && chmod 711 /root \
+    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs
+USER bun
 
 # Set environment variables
 ENV HOST=0.0.0.0

@@ -65,12 +65,16 @@ watch(ticket, (t) => {
     catch { routing.value = undefined }
   }, 400)
 })
+// On by default: the pause-after-every-wave gate is useful when you are
+// watching a run, and pure friction when you are not. A failed step, a
+// PIPELINE-HALT or a monitor voting ABORT still stops the run either way.
+const autoRun = ref(true)
 const runbook = computed(() => workflows.value.find(w => w.slug.startsWith('runbook')) ?? workflows.value[0])
 async function startFromTicket() {
   if (!ticket.value.trim() || !runbook.value) return
   starting.value = true
   try {
-    const run = await $fetch<WorkflowRun>(`/api/workflows/${runbook.value.slug}/runs`, { method: 'POST', body: { initialPrompt: ticket.value.trim(), autoRun: false } })
+    const run = await $fetch<WorkflowRun>(`/api/workflows/${runbook.value.slug}/runs`, { method: 'POST', body: { initialPrompt: ticket.value.trim(), autoRun: autoRun.value } })
     ticket.value = ''
     await navigateTo(`/workflows/${run.workflowSlug}?run=${run.id}`)
   } catch (e: any) {
@@ -102,6 +106,11 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
           <span class="field-hint">{{ runbook ? `Runs ${runbook.name}. A bare key is expanded from Jira when your profile has a token.` : 'Create a workflow first.' }}</span>
           <span v-if="routing" class="field-hint block" style="color: var(--success);">Routes to {{ routing.name }}{{ routing.suite ? ` (${routing.suite})` : '' }}: {{ routing.repos.join(', ') || 'no repos listed' }}{{ routing.recipe ? '' : ', no recipe yet' }}</span>
           <span v-else-if="routing === null" class="field-hint block" style="color: var(--warning);">No product in the registry matches this ticket. Intake will work from the text alone; add the project key or a product label to route it.</span>
+          <label class="flex items-center gap-2 cursor-pointer mt-2">
+            <input v-model="autoRun" type="checkbox" class="shrink-0" :disabled="!runbook">
+            <span class="field-label mb-0">Run to completion without pausing</span>
+          </label>
+          <span class="field-hint">Each step starts as soon as the one before it finishes. A failed step or an aborting monitor still stops the run.</span>
         </div>
         <UButton type="submit" label="Start" icon="i-lucide-play" :loading="starting" :disabled="!ticket.trim() || !runbook" />
       </form>
