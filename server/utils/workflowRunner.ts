@@ -6,7 +6,8 @@ import {
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
-import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, BOOT_ID } from './workflowRunStore.ts'
+import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
+import { runWorkspace } from './workspace.ts'
 import { resolveProduct } from './registry.ts'
 import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
@@ -933,9 +934,14 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (!RESTARTABLE.includes(run.status)) {
     throw new RestartError(409, `A ${run.status} run cannot be restarted; ${run.status === 'paused' ? 'continue it instead' : 'wait for it to settle'}`)
   }
-  const active = await findActiveRun(run.workflowSlug)
-  if (active && active.id !== run.id) {
-    throw new RestartError(409, 'This workflow already has a run in progress', { runId: active.id })
+  // Same scope as starting a run: what conflicts is a shared working directory.
+  const active = await findRunInWorkspace(runWorkspace(run), run.id)
+  if (active) {
+    throw new RestartError(
+      409,
+      `${active.startedBy ? `@${active.startedBy} has` : 'There is'} a run in progress in ${runWorkspace(run)}`,
+      { runId: active.id },
+    )
   }
   const l = await rehydrate(run)
   if (l.running) throw new RestartError(409, 'This run is already running')
