@@ -58,8 +58,11 @@ services:
       - AGENT_RUN_MAX_TOKENS=${AGENT_RUN_MAX_TOKENS:-8000000}
     volumes:
       - team-home:/srv/agent-manager
-      - /usr/bin/docker:/usr/bin/docker:ro
-      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      # The socket only. The image ships its own docker client and compose
+      # plugin, so there is no host binary to borrow — and borrowing them was
+      # broken anyway: on a podman host /usr/bin/docker is a shim that execs
+      # /usr/bin/podman, which was never mounted, so `docker ps` failed inside
+      # a container whose socket worked perfectly over curl.
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/api/health"]

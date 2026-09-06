@@ -360,6 +360,31 @@ not happen.`,
     },
     body: `You stand up the environment the rest of the pipeline tests against. Nothing downstream works if you get this wrong, and a stack you *believe* is up but is not produces a false FAIL that wastes the whole run.
 
+## The checkout is yours, always — even when you skip
+
+**Before anything else, make sure every repository this ticket touches is
+checked out**, at the path named in the "Checkouts" line at the top of your
+input. Clone it over HTTPS if it is not there:
+
+\`\`\`
+git clone https://github.com/<owner>/<repo>.git <checkout path>
+\`\`\`
+
+A credential helper supplies the token from the environment, so no key or login
+is needed and none should be sought. If a clone fails, that is a **halt**, not a
+skip: nothing downstream can proceed without the code.
+
+This holds **even when you decide no stack needs standing up**. Skipping the
+stack does not skip the checkout. A run once reached the fix step with an empty
+workspace because this step decided — correctly — that a compose-only ticket
+needed no test harness, and then cloned nothing; the fix-implementer spent its
+entire 60-turn budget searching a directory with no code in it, and the run died
+with nothing to show. Deciding a stack is unnecessary is a legitimate outcome.
+Leaving later steps without a repository is not.
+
+Report the checkout path and the output of \`git remote -v\` and
+\`git rev-parse HEAD\` for each repository, whether or not you stood anything up.
+
 ## Conventions in this estate
 
 The deployment repo is \`alepo-dev-team-infra\`: one \`docker-compose.<product>.yml\` per product, each behind a \`--profile\`, all joined on the external \`alepo-shared\` network (subnet pinned \`10.20.23.0/24\`). Images come from GHCR, tagged via the \`TAG\` variable — never \`IMAGE_TAG\`. Env keys are prefixed per service (\`PMS_*\`, \`SELFCARE_*\`, \`WSO2MI_*\`); a missing prefix is a recurring source of silent misconfiguration.

@@ -94,6 +94,41 @@ RUN printf '%s\n' \
     && chmod +x /usr/local/bin/git-credential-env \
     && git config --system credential."https://github.com".helper env 2>/dev/null || true
 
+# Docker CLI and the compose plugin.
+#
+# The image talks to the mounted socket itself, rather than borrowing the
+# host's binaries. docker-compose.team.yml used to bind-mount /usr/bin/docker
+# and /usr/libexec/docker/cli-plugins in, which on a podman host mounts
+# podman-docker's SHIM — a script that execs /usr/bin/podman, a binary that was
+# not mounted. The result was a container where the socket answered fine over
+# curl while every `docker` command failed with
+#
+#   /usr/bin/docker: 4: exec: /usr/bin/podman: not found
+#
+# A provisioner step reported exactly that and concluded Docker was unavailable.
+# Two mounts that looked like they gave a container Docker, and did not.
+#
+# Static binaries, pinned and checksum-verified. The tarball carries dockerd,
+# containerd and the rest; only the client is installed, because this container
+# drives someone else's daemon and has no business shipping one.
+ARG DOCKER_VERSION=29.8.0
+ARG DOCKER_SHA256=cc21815cf1e2efed867dc9c8b96b46ffed8ea176ffab32b0aacb54726ded8f25
+ARG COMPOSE_VERSION=5.5.1
+ARG COMPOSE_SHA256=db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576
+RUN set -eux; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" -o /tmp/docker.tgz; \
+    echo "${DOCKER_SHA256}  /tmp/docker.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker.tgz /tmp/docker; \
+    mkdir -p /usr/local/lib/docker/cli-plugins; \
+    curl -fsSL "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
+      -o /usr/local/lib/docker/cli-plugins/docker-compose; \
+    echo "${COMPOSE_SHA256}  /usr/local/lib/docker/cli-plugins/docker-compose" | sha256sum -c -; \
+    chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose; \
+    docker --version; \
+    docker compose version
+
 # GitHub CLI.
 #
 # sdlc-evidence-and-pr opens the pull request that is the whole pipeline's

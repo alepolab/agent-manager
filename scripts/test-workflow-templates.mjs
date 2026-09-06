@@ -447,6 +447,21 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   // ships a fix with nothing proving it.
   assert.ok(evidence.body.includes('.agent/plan.md'),
     'the plan file is still required in the repo by the plan gate')
+  // The provisioner owns the checkout, including when it decides no stack is
+  // needed. A run reached the fix step with an empty workspace because this
+  // step correctly judged a compose-only ticket needed no harness and then
+  // cloned nothing; the fix-implementer burned its whole 60-turn budget
+  // searching a directory with no code in it.
+  const prov = AGENT_TEMPLATES.find(t => t.id === 'sdlc-stack-provisioner')
+  assert.ok(/The checkout is yours, always/.test(prov.body),
+    'the provisioner must be told the checkout is its responsibility')
+  assert.ok(/even when you (decide no stack|skip)/i.test(prov.body),
+    'skipping the stack must not be read as skipping the checkout')
+  assert.ok(prov.body.includes('git clone https://github.com/'),
+    'the clone must be HTTPS: the container has a credential helper and no SSH key')
+  assert.ok(!/git clone git@github\.com/.test(prov.body),
+    'an SSH clone URL cannot work in the container and must not be suggested')
+
   assert.ok(evidence.body.includes('Git: local only'),
     'the evidence step needs its own explicit local-only git mandate')
 }
