@@ -146,3 +146,27 @@ products:
     owners:
       protocol: selfcare-leads                # CONFIRM
       ui_parsing: selfcare-leads
+
+  # Infrastructure work on the shared compose repo itself. DEVOPS tickets
+  # routed nowhere before this entry, so an infra run started with no repo,
+  # branch or test facts. Everything marked CONFIRM is a best guess from the
+  # DEVOPS-15 run, which authored a test in this repo; the devops owners
+  # should correct it.
+  infra:
+    suite: platform
+    match:
+      projects: [DEVOPS]
+    repos: [alepolab/alepo-dev-team-infra]
+    branches:
+      bug: main                               # CONFIRM
+      feature: main                           # CONFIRM
+      infra: main
+    stack:
+      # The repo is the stack: a change here is verified by bringing up the
+      # profile it touches, named in the ticket, not a fixed product profile.
+      compose: alepo-dev-team-infra           # CONFIRM
+      topology_default: 1node
+    tests:
+      unit: 'npm test'                        # CONFIRM: the DEVOPS-15 run wrote a test here; check its runner
+    owners:
+      schema: devops                          # CONFIRM: group name
