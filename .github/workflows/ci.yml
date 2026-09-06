@@ -166,9 +166,9 @@
 #
 # Standards followed (github.com/alepolab CLAUDE.md, GitHub Actions section):
 #   - actions pinned to a commit SHA, not a tag (same pins as
-#     evidence-bundle.yml, for the same versions)
+#     the retired evidence-bundle workflow, for the same versions)
 #   - minimal `permissions:` at workflow level (contents: read only — no job
-#     here calls the Checks/PRs API, unlike evidence-bundle.yml)
+#     here calls the Checks/PRs API)
 #   - a concurrency group that cancels a superseded run
 #   - dependency caching (setup-node's built-in npm cache, keyed on
 #     package-lock.json)

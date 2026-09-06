@@ -433,9 +433,11 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
  * as commits a reviewer has to read past to see the fix. The evidence is for
  * judging the change, not part of it.
  *
- * `.github/workflows/evidence-bundle.yml` still accepts a committed
- * `.agent/evidence-run/` if one is there, so a human who wants that workflow can
- * still opt into it; nothing produces one automatically any more.
+ * The CI workflow that read `.agent/evidence-run/` from a pull request's
+ * checkout has been retired with it: once nothing wrote that directory, the
+ * check could only ever report "no evidence", which is a check that looks like
+ * enforcement and is not. The bundle itself is unaffected - it is still
+ * assembled into the run directory and served by the app.
  */
 
 /** Prepended to every step's input. The only channel an agent has for

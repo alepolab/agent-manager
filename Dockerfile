@@ -69,6 +69,13 @@ COPY --chown=bun:bun engineering/commands ./engineering/commands
 # is indistinguishable from "no product matched".
 COPY --chown=bun:bun engineering/registry ./engineering/registry
 
+# And its scripts. The evidence step is instructed to run
+# `node engineering/scripts/assemble-bundle.mjs`, and a real run reported back:
+# "assemble-bundle.mjs is not installed anywhere in this Agent Manager
+# installation. Bundle validation cannot be executed." It was right about the
+# container - the file exists in the repo and was never shipped in the image.
+COPY --chown=bun:bun engineering/scripts ./engineering/scripts
+
 COPY --chown=bun:bun docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.
