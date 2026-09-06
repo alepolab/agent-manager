@@ -124,5 +124,40 @@ assert.equal(s.drifted, 0, 'apply leaves nothing drifted in the bare case')
 
 rmSync(bare, { recursive: true, force: true })
 
+// ── No plugin: watches must still seed ────────────────────────────────────
+//
+// This read was plugin-only, so a team container seeded ZERO watches every time
+// while engineering/registry/watches.yaml sat unread in the image. "0 watches"
+// is a legitimate count for a deployment that has registered none, which is
+// exactly why it never looked wrong — the seventh capability in this codebase to
+// fall back to nothing without the plugin.
+//
+// The assertion is on the seeded RESULT with no plugin installed, not on the
+// file existing in the repo.
+{
+  const bare2 = mkdtempSync(join(tmpdir(), 'team-watch-'))
+  D.setClaudeDir(bare2)
+
+  const shipped = readFileSync(join(import.meta.dirname, '..', 'engineering', 'registry', 'watches.yaml'), 'utf8')
+  const declared = [...shipped.matchAll(/^\s*-\s*id:\s*(\S+)/gm)].map(m => m[1])
+  assert.ok(declared.length, 'engineering/registry/watches.yaml must declare watches for this to mean anything')
+
+  const st = await T.teamStatus()
+  assert.equal(st.pluginVersion, null, 'no plugin is installed in this scenario')
+  assert.deepEqual(st.watches.map(w => w.id).sort(), [...declared].sort(),
+    'with no plugin installed, watches come from the shipped registry')
+
+  await T.teamSync()
+  const seeded = JSON.parse(readFileSync(join(bare2, 'watches.json'), 'utf8'))
+  const list = Array.isArray(seeded) ? seeded : seeded.watches
+  assert.deepEqual(list.map(w => w.id).sort(), [...declared].sort(), 'and are written to watches.json')
+
+  // Every one seeded OFF. A watch dispatches unattended runs that open pull
+  // requests and comment on real tickets; arming one is an operator's decision.
+  for (const w of list) assert.equal(w.enabled, false, `${w.id} must seed disabled`)
+
+  rmSync(bare2, { recursive: true, force: true })
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('teamSync: all assertions passed')

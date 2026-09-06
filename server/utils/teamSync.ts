@@ -185,7 +185,18 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
   // state (enabled, concurrency). Seeding creates a missing watch disabled and
   // refreshes the query and cap of an existing one, never its enabled flag.
   const watches: TeamStatus['watches'] = []
-  const watchesYaml = plugin ? join(plugin.installPath, 'registry', 'watches.yaml') : null
+  // Same plugin-preferred, shipped-fallback shape as skills, commands and the
+  // product registry - and for the same reason. This read was plugin-only, so a
+  // team container seeded ZERO watches, every time, while the file sat unread in
+  // the image at engineering/registry/watches.yaml.
+  //
+  // "0 watches" is a legitimate count for a deployment that has registered none,
+  // which is exactly why it never looked wrong.
+  const pluginWatches = plugin ? join(plugin.installPath, 'registry', 'watches.yaml') : null
+  const shippedWatches = join(process.cwd(), 'engineering', 'registry', 'watches.yaml')
+  const watchesYaml = (pluginWatches && existsSync(pluginWatches))
+    ? pluginWatches
+    : (existsSync(shippedWatches) ? shippedWatches : null)
   if (watchesYaml && existsSync(watchesYaml)) {
     let defined: any[] = []
     try { defined = parse(await readFile(watchesYaml, 'utf-8'))?.watches ?? [] } catch { defined = [] }
