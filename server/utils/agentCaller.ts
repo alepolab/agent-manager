@@ -289,6 +289,26 @@ export async function callAgent(
  * shape is real - a concurrent model-registry probe against a stale model
  * id hit exactly this combination mid-development.
  */
+/**
+ * An agent call that reached the model and came back an error, carrying what it
+ * spent. Distinct from a transport failure, which has no usage to report.
+ */
+export class AgentResultError extends Error {
+  // Declared and assigned explicitly, not as constructor parameter properties:
+  // those are TypeScript syntax that has to be COMPILED rather than stripped,
+  // and every scripts/test-*.mjs suite imports this module straight into node,
+  // which refuses it with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX.
+  usage: AgentUsage | null
+  subtype: string
+
+  constructor(message: string, usage: AgentUsage | null, subtype: string) {
+    super(message)
+    this.name = 'AgentResultError'
+    this.usage = usage
+    this.subtype = subtype
+  }
+}
+
 export function interpretResultMessage(
   message: { subtype: string, is_error?: boolean, result?: string, usage?: unknown, errors?: string[] },
   /** The budget this call ran under, folded into the thrown message. The SDK
@@ -312,10 +332,17 @@ export function interpretResultMessage(
   const budget = message.subtype === 'error_max_turns' && maxTurns
     ? ` (turn budget: ${maxTurns} - raise this agent's maxTurns if the step legitimately needs more work)`
     : ''
-  throw new Error(
+  // The SDK reports usage on an error result too, and throwing it away made a
+  // failed step cost $0.00 in the run's own accounting. One error_max_turns
+  // step burned 519 seconds and 109 assistant messages and was recorded as
+  // free — the most expensive failures were the least visible ones, which is
+  // exactly backwards for a budget you are trying to hold.
+  throw new AgentResultError(
     `Claude Code returned an error result (${message.subtype}` +
     `${message.is_error ? ', is_error' : ''}): ` +
     `${errors?.join('; ') || 'no further detail'}${budget}`,
+    usageFrom(message.usage),
+    message.subtype,
   )
 }
 
