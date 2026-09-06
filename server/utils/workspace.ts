@@ -68,3 +68,59 @@ export function hasCheckout(workspace: string): boolean {
   }
   catch { return false }
 }
+
+/** What a browser-trace step can actually do here, decided by looking rather
+ *  than by asking an agent to notice.
+ *
+ * The trace step twice produced no trace and no explanation, and the monitor
+ * called it - correctly - "silence without explanation". The instruction to
+ * declare `TRACE: n/a` was there; what was missing was anything concrete to
+ * declare. A step told "there is no playwright config in this checkout and the
+ * change touches no UI files" has a fact to quote. A step left to work it out
+ * and then remember to say so has a chore it can skip.
+ *
+ * Deliberately conservative: it reports what is present, never that a trace is
+ * impossible. The agent still decides, and every existing check on a CAPTURED
+ * trace - populated trace.zip, real pass/fail counts, no fabricated artifact -
+ * is untouched. This only closes the silent path.
+ */
+const PLAYWRIGHT_CONFIGS = ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs']
+const UI_EXTENSIONS = ['.vue', '.tsx', '.jsx', '.svelte', '.html', '.css', '.scss']
+
+export interface BrowserSurface { playwright: boolean, uiFiles: string[], summary: string }
+
+export function browserSurface(workspace: string): BrowserSurface {
+  const roots: string[] = []
+  if (existsSync(workspace)) {
+    roots.push(workspace)
+    try {
+      for (const e of readdirSync(workspace, { withFileTypes: true })) {
+        if (e.isDirectory() && !e.name.startsWith('.')) roots.push(join(workspace, e.name))
+      }
+    }
+    catch { /* an unreadable workspace reports as bare */ }
+  }
+
+  const playwright = roots.some(r => PLAYWRIGHT_CONFIGS.some(c => existsSync(join(r, c))))
+
+  // Only the working tree, and only one level of it: this is a hint for the
+  // agent, not an inventory. A deep scan of a large checkout would cost more
+  // than the step it is informing.
+  const uiFiles: string[] = []
+  for (const r of roots) {
+    try {
+      for (const e of readdirSync(r, { withFileTypes: true })) {
+        if (e.isFile() && UI_EXTENSIONS.some(x => e.name.endsWith(x))) uiFiles.push(join(r, e.name))
+      }
+    }
+    catch { /* skip */ }
+  }
+
+  const summary = playwright
+    ? `Playwright config found${uiFiles.length ? '' : ', though no UI files were seen at the top level'} — a trace is expected unless the change has no UI surface.`
+    : uiFiles.length
+      ? 'No Playwright config found in this checkout, but UI files are present — say which you checked before reporting n/a.'
+      : 'No Playwright config and no UI files found in this checkout — `TRACE: n/a` is the expected outcome, and this sentence is the reason to give.'
+
+  return { playwright, uiFiles, summary }
+}

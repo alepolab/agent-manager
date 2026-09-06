@@ -474,11 +474,18 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.ok(/must begin with exactly one of these two lines/i.test(trace.body),
     'the verdict must lead the output, not be buried after an ls -la')
 
+  assert.ok(/Browser surface/.test(trace.body),
+    'the trace step must be pointed at the stated fact rather than left to infer one')
+  assert.ok(/only if you say why/i.test(trace.body),
+    'a bare n/a with no reason is the silence the monitor rejects')
+
   const monitor = AGENT_TEMPLATES.find(t => t.id === 'sdlc-step-monitor')
   assert.ok(/not applicable" is a pass|n\/a.*is a pass/i.test(monitor.body),
     'the monitor must be told a declared, reasoned n/a is a legitimate outcome')
   assert.ok(/never against what its label sounds like/i.test(monitor.body),
     'the monitor must judge the contract, not the step name')
+  assert.ok(/Browser surface/.test(monitor.body),
+    'the monitor must know the fact the trace step is quoting, or it cannot check the reason')
   assert.ok(monitor.body.includes('PIPELINE-SKIP'),
     'a declared skip is the same shape and must not be aborted either')
   assert.ok(/declared and reasoned/i.test(monitor.body),

@@ -750,10 +750,19 @@ screenshot-diff result if a baseline exists; for \`n/a\`, what you checked to
 reach that conclusion — no Playwright config in the repo, no UI surface in the
 changed files, no serving app to point a browser at.
 
-A run once ended its output with nothing but the \`ls -la\` of the artifacts
+The reason is not yours to invent: the header at the top of your input carries a
+**Browser surface** line, computed by looking at the checkout before you started.
+Quote it. If it says no Playwright config and no UI files were found, that
+sentence IS your reason, and naming the checkout you looked in makes it
+checkable.
+
+Two runs ended their output with nothing but the \`ls -la\` of the artifacts
 directory. The monitor read a step named "Browser Trace" that had produced no
-trace and no explanation, and aborted the whole run — correctly, on what it
-could see. \`n/a\` is a pass, but only if you say it.
+trace and no explanation, and called it silence without explanation — correctly,
+on what it could see. It aborted one run and sent the other back for a retry
+that could only produce the same silence.
+
+\`n/a\` is a pass, but only if you say it, and only if you say why.
 
 ## Artifacts
 
@@ -862,6 +871,9 @@ as a legitimate, expected outcome, and a run must not be aborted for reaching it
   setup, no UI surface in the change, nothing serving to point a browser at.
   A backend or compose-only fix has no browser evidence to capture, and
   demanding a HAR file or screenshot from one is demanding a fabrication.
+  The step's input carries a **Browser surface** line stating what was found in
+  the checkout; a reason consistent with it is a good reason, and CONTINUE is
+  the right verdict.
 - Any step announcing \`PIPELINE-SKIP\` with a reason.
 
 The distinction that matters is **declared and reasoned** versus **silent**. A

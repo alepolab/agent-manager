@@ -7,7 +7,7 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
-import { runWorkspace, hasCheckout } from './workspace.ts'
+import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct } from './registry.ts'
 import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
@@ -419,6 +419,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
   const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id) + body
+
+  // Logged, not only handed to the agent: "why was there no browser trace" was
+  // a question that could previously only be answered by reading an agent's
+  // output, and the answer was missing from it.
+  if (step.agentSlug === 'sdlc-trace-capture') {
+    const surface = browserSurface(runWorkspace(run))
+    log.info('browser surface for the trace step', {
+      runId: run.id,
+      playwright: surface.playwright,
+      uiFilesSeen: surface.uiFiles.length,
+      expectation: surface.playwright ? 'a trace is expected' : 'TRACE: n/a is the expected outcome',
+    })
+  }
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,

@@ -1,4 +1,4 @@
-import { workspaceRootFor } from './workspace.ts'
+import { workspaceRootFor, browserSurface } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
@@ -470,6 +470,12 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     'Clone into that directory and work there. Do not invent a checkout path and',
     'do not search the filesystem for one — anything you leave elsewhere is',
     'invisible to every later step and to the evidence bundle.',
+    '',
+    // Stated as a fact, so the browser-trace step has something to quote rather
+    // than a conclusion to reach and then remember to announce. It produced no
+    // trace and no explanation twice, and the monitor called it exactly that:
+    // "silence without explanation".
+    `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
     '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
