@@ -449,6 +449,35 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     'the plan file is still required in the repo by the plan gate')
   assert.ok(evidence.body.includes('Git: local only'),
     'the evidence step needs its own explicit local-only git mandate')
+
+  // The PR body is the deliverable now that evidence does not travel with the
+  // branch: a reviewer who never opens Agent Manager must be able to decide
+  // from the text alone. These sections are what makes that true, and a
+  // shortened spec is how a body quietly becomes a summary again.
+  for (const section of [
+    '### Context',
+    '### Root cause',
+    '### The change',
+    '### The test that proves it',
+    '### Verification',
+    '### Browser evidence',
+    '### Security review',
+    '### Deployment and rollback',
+    '### What a reviewer should check',
+    '### Limits of this change',
+    '### Provenance',
+  ]) {
+    assert.ok(evidence.body.includes(section),
+      `the PR body spec must require "${section}" — a reviewer reading only the PR needs it`)
+  }
+
+  // Three rules that make the sections worth having.
+  assert.ok(/Quote, do not summarise/i.test(evidence.body),
+    'the spec must demand captured output rather than claims about it')
+  assert.ok(/never a heading with nothing under it|never a section quietly dropped/i.test(evidence.body),
+    'an empty section must be stated as empty, not omitted')
+  assert.ok(/State the rollback before anything else/i.test(evidence.body),
+    'the rollback must lead the deployment section, per the change-safety standard')
 }
 
 // Anything stood up to test gets removed, and the PR enters the promotion chain

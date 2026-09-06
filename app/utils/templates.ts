@@ -906,31 +906,108 @@ write, not a request you send.
 
 ## Assemble the bundle
 
-The PR body is exactly these sections:
+The PR body IS the deliverable. Since the evidence files no longer travel with
+the branch, a reviewer who never opens Agent Manager must still be able to
+decide from this text alone whether to merge. Assume they will not open the run,
+will not re-run the tests, and did not read the ticket.
 
-## Context
-The intake step's context packet: problem, affected system, reported example.
+**Write the sections below in this order, all of them, every time.** A section
+with nothing to say gets one line saying so and why — never a heading with
+nothing under it, and never a section quietly dropped.
 
-## Failing test
-The test file path, what its rows cover, and the **verbatim** FAIL output from before the fix.
+**Quote, do not summarise.** Every claim about behaviour must be backed by
+output you actually captured. \"Tests pass\" is not evidence; the test runner's
+own lines are. If you did not capture it, say you did not, rather than
+describing what it would have said.
 
-## The fix
-Root cause in one or two sentences naming file and line, and what changed.
+### Context
+What is broken, in the reporter's words, from the intake step's context packet.
+Name the ticket key, the affected product and repository, and the reported
+example verbatim. If intake could not fetch the ticket, say so here — a reviewer
+reading a fix for a ticket nobody could read needs to know that first.
 
-## Verification
-Verbatim PASS output for every row, plus the regression suite and lint/typecheck results with their exit codes.
+### Root cause
+Two or three sentences, naming **file and line**. Say what the code did, what it
+should have done, and why the reported input triggered it. If the cause is a
+missing case rather than a wrong line, say which case and where the assumption
+was made. This is the section a reviewer reads to decide whether the fix is
+aimed at the right thing.
 
-## Browser evidence
-The trace path and result, or \`n/a\` and why.
+Include what was **ruled out**, if the fix-implementer eliminated hypotheses. A
+recorded elimination is worth more to a reviewer than a confident assertion, and
+it stops the next person re-investigating the same dead end.
 
-## Security review
-The verdict and findings table from \`security-review.md\`, or the reason there is none.
+### The change
+A file-by-file walk of the diff. For each file: the path, what changed, and why
+that change follows from the root cause. Call out anything that is NOT an
+obvious consequence of the cause — a refactor, a renamed symbol, a dependency
+bump — and justify it, because that is what a reviewer will stop on.
 
-## Deployment
-The stack profile and topology the change was verified on, whether any schema migration file changed (liquibase changelogs, prisma or alembic migrations), and the rollback path: \`rollbackToTag\` where the product's stack supports it, otherwise reverting this PR. Merge \`deployment: { migration_changed, rollback }\` into \`meta.json\` the same way earlier steps merged their keys.
+State the diffstat (files changed, insertions, deletions) so the reader knows
+the size before scrolling.
 
-## Provenance
-The agents that ran, the model each used, the working directory, and the run artifacts directory path from the top of your input, so a reviewer can open the run in Agent Manager. State plainly that this change was produced by an automated pipeline and needs human review before merge.
+### The test that proves it
+The test file path and the framework. List **every parameterised row** and what
+each covers — not "six cases" but the six, named. Explain what the rows vary and
+why that dimension generalises the reported bug rather than restating it.
+
+Then the **verbatim FAIL output from before the fix**, in a fenced block, with
+the command that produced it and its exit code. A reviewer must be able to see
+the test failing for the stated reason, not merely be told it did.
+
+### Verification
+In a fenced block each, with the command and exit code:
+
+- the new test, **every row passing**
+- the repository's existing suite for the area that changed
+- lint, format and type gates
+
+Then a plain-language line: what this proves, and what it does not. If a test
+was already failing before this change, say so explicitly and distinguish it
+from anything this change broke — a pre-existing failure is context, a new one
+is a blocker.
+
+### Browser evidence
+The command, exit code, pass/fail counts and trace artifact path, or \`n/a\` with
+a one-line reason. \`n/a\` is a legitimate outcome for a change with no UI
+surface; a fabricated trace is not.
+
+### Security review
+The verdict and the findings table from \`security-review.md\`. If there are no
+findings, say so and name what was checked, so \"no findings\" is distinguishable
+from \"nobody looked\".
+
+### Deployment and rollback
+The stack profile and topology the change was verified on. Whether any schema
+migration changed (liquibase changelogs, prisma or alembic migrations) — this is
+the single most important line for a reviewer, because a migration is what makes
+a rollback hard.
+
+**State the rollback before anything else in this section.** \`rollbackToTag\`
+where the product's stack supports it, otherwise reverting this PR. If the
+change cannot be cleanly undone, that sentence is the most important one in the
+whole body — lead the section with it.
+
+Merge \`deployment: { migration_changed, rollback }\` into \`meta.json\` the same
+way earlier steps merged their keys.
+
+### What a reviewer should check
+Three to five specific things, as a checklist. Not \"review the code\" — the
+actual judgement calls this change makes that a human should confirm: a chosen
+default, an error path taken, a boundary picked, a value hardcoded. Say where
+you were least certain. A reviewer given nowhere to look reviews nothing.
+
+### Limits of this change
+What is still not handled. Adjacent cases the test does not cover, follow-up
+work the ticket implies but this PR does not do, assumptions made where the
+ticket was ambiguous. Be specific enough that someone can act on it.
+
+### Provenance
+The agents that ran and the model each used, the working directory, the run id,
+and the Agent Manager URL for this run's artifacts from the top of your input,
+so a reviewer can open the full evidence if they want it. State plainly that
+this change was produced by an automated pipeline and needs human review before
+merge.
 
 ## Which commit to ship
 
