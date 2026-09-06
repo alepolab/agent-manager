@@ -23,7 +23,7 @@ products:
     repos: [alepolab/aaa_rhel8]
     version_source: customer_profile          # CONFIRM: which Jira field carries the deployed version
     branches:
-      bug: 'release/{version}'                # CONFIRM: aaa_rhel8's default is master
+      bug: 'release/AAA-{version}'            # CONFIRM the version mapping; the repo's release branches are named release/AAA-12.0.0.8 (checked 2026-09-06)
       feature: master
       infra: master
     forward_port: master                      # CONFIRM
@@ -36,7 +36,7 @@ products:
       liquibase: true
     build: 'make build'                       # CONFIRM
     tests:
-      unit: 'make test'                       # CONFIRM
+      unit: 'make test'                       # CONFIRM: the Makefile at master has no test target (checked 2026-09-06)
       atdd: 'robot --xunit out.xml tests/aaa' # blocked on V2 (--xunit not yet emitted)
       regression: atdd-aaa
     owners:
@@ -59,7 +59,7 @@ products:
       topology_default: 2node                 # CONFIRM: PCRF deploys in pairs
       liquibase: true
     tests:
-      unit: 'ctest'                           # CONFIRM
+      unit: 'ctest'                           # CONFIRM for pcrf_cpp14 (no Makefile test target); pcrf-ems-portal is `make test` (verified 2026-09-06)
       ui_trace: playwright                    # EMS portal has a UI surface
     owners:
       protocol: pcrf-tech-leads               # CONFIRM
@@ -79,11 +79,11 @@ products:
       topology_default: 1node
       liquibase: false                        # CONFIRM: FFM is Flask + Celery + Mongo
     tests:
-      unit: 'pytest'                          # CONFIRM
+      unit: 'make test'                       # verified 2026-09-06: Makefile test runs test-common, test-api, test-worker
       ui_trace: playwright                    # Vue 3 front end
     owners:
-      ui_parsing: ffm-owners                  # CONFIRM
-      schema: ffm-owners
+      ui_parsing: bss-team                    # GitHub team slug; CONFIRM it is the right group
+      schema: bss-team
 
   pms:
     suite: bss
@@ -99,12 +99,12 @@ products:
       topology_default: 1node
       liquibase: false                        # CONFIRM
     tests:
-      unit: 'npm test'                        # CONFIRM: monorepo has three runtimes
+      unit: 'make test'                       # verified 2026-09-06: Makefile test runs test-pms, test-billing, test-rating, test-atdd-lib
       ui_trace: playwright
     owners:
       money: billing-owners                   # PMS carries billing and rating paths
-      ui_parsing: pms-owners
-      schema: pms-owners
+      ui_parsing: bss-team                    # GitHub team slug; CONFIRM
+      schema: bss-team
 
   vms:
     suite: bss
@@ -112,18 +112,18 @@ products:
       components: [VMS, Voucher]
     repos: [alepolab/voucher-management]
     branches:
-      bug: main                               # CONFIRM
-      feature: main
+      bug: develop                            # promotion chain develop -> ci-release -> main; a fix enters at develop
+      feature: develop
     stack:
       compose: alepo-dev-team-infra/vms
       topology_default: 1node
       liquibase: false
     tests:
-      unit: 'npm test'                        # CONFIRM
+      unit: 'pnpm test'                       # verified 2026-09-06: pnpm workspace, root script is `turbo run test`
       ui_trace: playwright                    # React 19 front end
     owners:
       money: billing-owners                   # vouchers are a money path
-      ui_parsing: vms-owners
+      ui_parsing: bss-team                    # GitHub team slug; CONFIRM
 
   selfcarenow:
     suite: bss
@@ -133,19 +133,19 @@ products:
       components: [Selfcare, SelfcareNow]
     repos: [alepolab/selfcarenow]
     branches:
-      bug: main                               # CONFIRM: origin HEAD is main; the team works on integrate/primary-develop
-      feature: main
+      bug: develop                            # promotion chain develop -> ci-release -> main; a fix enters at develop
+      feature: develop
     stack:
       # Product-owned compose in its checkout; not yet in alepo-dev-team-infra.
       # The provisioner reads recipes/selfcarenow.md for the quirks.
       compose: selfcarenow/docker-compose.yml
       topology_default: 1node
     tests:
-      unit: 'pnpm --filter @selfcare/web test'  # CONFIRM
+      unit: 'pnpm test'                       # verified 2026-09-06: root script runs generate:api then jest
       ui_trace: playwright
     owners:
-      protocol: selfcare-leads                # CONFIRM
-      ui_parsing: selfcare-leads
+      protocol: bss-team                      # GitHub team slug; CONFIRM
+      ui_parsing: bss-team
 
   # Infrastructure work on the shared compose repo itself. DEVOPS tickets
   # routed nowhere before this entry, so an infra run started with no repo,
@@ -158,15 +158,15 @@ products:
       projects: [DEVOPS]
     repos: [alepolab/alepo-dev-team-infra]
     branches:
-      bug: main                               # CONFIRM
-      feature: main                           # CONFIRM
-      infra: main
+      bug: develop                            # promotion chain develop -> ci-release -> main (branches verified 2026-09-06)
+      feature: develop
+      infra: develop
     stack:
       # The repo is the stack: a change here is verified by bringing up the
       # profile it touches, named in the ticket, not a fixed product profile.
       compose: alepo-dev-team-infra           # CONFIRM
       topology_default: 1node
     tests:
-      unit: 'npm test'                        # CONFIRM: the DEVOPS-15 run wrote a test here; check its runner
+      unit: 'bats --tap tests/*.bats'         # verified 2026-09-06: .github/workflows/test.yml runs exactly this
     owners:
-      schema: devops                          # CONFIRM: group name
+      schema: devops_team                     # GitHub team slug
