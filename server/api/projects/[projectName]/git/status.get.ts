@@ -30,26 +30,19 @@ const emptyStatus = (projectPath: string, error?: string): GitStatusResponse => 
   ...(error ? { error } : {}),
 })
 
+import { resolveProjectPath } from '../../../../utils/projects'
+
 export default defineEventHandler(async (event): Promise<GitStatusResponse> => {
   const projectName = getRouterParam(event, 'projectName')
   if (!projectName) {
     throw createError({ statusCode: 400, message: 'Project name is required' })
   }
 
-  let projectPath: string
-  try {
-    const res = await $fetch<{ projectName: string | null }>(`/api/projects/resolve?name=${encodeURIComponent(projectName)}`)
-    if (!res.projectName) {
-      projectPath = projectName.replace(/-/g, '/')
-    } else {
-      const projects = await $fetch<any[]>('/api/projects')
-      const project = projects.find(p => p.name === res.projectName)
-      if (!project) throw new Error('Project not found')
-      projectPath = project.path
-    }
-  } catch (e) {
-    projectPath = projectName.replace(/-/g, '/')
-  }
+  // Resolution is a lookup, not an HTTP call. It used to $fetch our own
+  // /api/projects routes, which the auth middleware rejected with 401 in
+  // team mode — and the catch below turned that into a silently wrong
+  // directory rather than an error.
+  const projectPath = await resolveProjectPath(projectName)
 
   try {
     await validateGitRepository(projectPath)

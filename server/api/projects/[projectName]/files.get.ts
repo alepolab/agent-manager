@@ -68,30 +68,19 @@ async function getFileTree(dirPath: string, rootPath: string, maxDepth = 3, curr
   })
 }
 
+import { resolveProjectPath } from '../../../utils/projects'
+
 export default defineEventHandler(async (event) => {
   const projectName = getRouterParam(event, 'projectName')
   if (!projectName) {
     throw createError({ statusCode: 400, message: 'Project name is required' })
   }
 
-  // Use the project resolution logic from server/api/projects/resolve.get.ts
-  // For now, assume projectName is the decoded path or we can resolve it
-  let projectPath: string
-  try {
-    const res = await $fetch<{ projectName: string | null }>(`/api/projects/resolve?name=${encodeURIComponent(projectName)}`)
-    if (!res.projectName) {
-      // Fallback: maybe it's already a path
-      projectPath = projectName.replace(/-/g, '/')
-    } else {
-      // We need the actual path. Let's look up the project.
-      const projects = await $fetch<any[]>('/api/projects')
-      const project = projects.find(p => p.name === res.projectName)
-      if (!project) throw new Error('Project not found')
-      projectPath = project.path
-    }
-  } catch (e) {
-    projectPath = projectName.replace(/-/g, '/')
-  }
+  // Resolution is a lookup, not an HTTP call. It used to $fetch our own
+  // /api/projects routes, which the auth middleware rejected with 401 in
+  // team mode — and the catch below turned that into a silently wrong
+  // directory rather than an error.
+  const projectPath = await resolveProjectPath(projectName)
 
   try {
     await access(projectPath)
