@@ -42,6 +42,34 @@ assert.ok(existsSync(join(process.env.CLAUDE_DIR, 'commands', 'triage.md')), 'pl
   const w = (Array.isArray(watches) ? watches : watches.watches).find(x => x.id === 'csup-bugs')
   assert.ok(w, 'a registry watch is seeded')
   assert.equal(w.enabled, false, 'seeded disabled')
+
+  // And a re-seed must never turn one back on. A watch dispatches unattended
+  // runs that open pull requests and — with JIRA_POST_ENABLED=1 — comment on
+  // real tickets, so "off" has to survive every later apply. Seeding refreshes
+  // the query and the cap of an existing watch; the enabled flag is the
+  // operator's, not the registry's.
+  {
+    const path = join(process.env.CLAUDE_DIR, 'watches.json')
+    const doc = JSON.parse(readFileSync(path, 'utf8'))
+    const list = Array.isArray(doc) ? doc : doc.watches
+    const target = list.find(x => x.id === 'csup-bugs')
+    target.enabled = true
+    writeFileSync(path, JSON.stringify(Array.isArray(doc) ? list : doc, null, 2))
+
+    await T.teamSync()
+    const after = JSON.parse(readFileSync(path, 'utf8'))
+    const afterList = Array.isArray(after) ? after : after.watches
+    assert.equal(afterList.find(x => x.id === 'csup-bugs').enabled, true,
+      'a re-seed must not disable a watch the operator enabled')
+
+    target.enabled = false
+    writeFileSync(path, JSON.stringify(Array.isArray(doc) ? list : doc, null, 2))
+    await T.teamSync()
+    const off = JSON.parse(readFileSync(path, 'utf8'))
+    const offList = Array.isArray(off) ? off : off.watches
+    assert.equal(offList.find(x => x.id === 'csup-bugs').enabled, false,
+      'and must not re-enable one the operator disabled')
+  }
   assert.equal(w.dailyDispatchCap, 10)
   assert.equal(w.query, 'project = CSUP AND status = Done')
   assert.equal(typeof s.instance.auth, 'string', 'instance facts are reported')
