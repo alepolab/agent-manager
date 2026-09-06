@@ -15,7 +15,6 @@ import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions }
 import { captureBaseline } from './gitFacts.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
-  publishEvidenceToProject,
   markArtifactsUnusable,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
@@ -161,7 +160,6 @@ async function publish(run: WorkflowRun) {
         // or stopped run has, by definition, evidence with a hole in it, and
         // committing that would hand CI a bundle that looks complete because
         // the assembler cannot tell a missing stage from an absent file.
-        if (run.status === 'completed') await publishEvidenceToProject(run.id, run.projectDir)
         // Tell the ticket its run finished. Best effort and deliberately last:
         // notifyTicketOutcome is already gated - it posts nothing unless
         // JIRA_POST_ENABLED=1 and credentials resolve - so on an ordinary
@@ -418,7 +416,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id) + body
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
@@ -859,7 +857,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const l: Live = {
     workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
   }
-  const header = artifactHeader(runArtifactsDir(run.id))
+  const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   for (const s of run.steps) {
     state.visits[s.stepId] = s.visits ?? 0
     if (s.status !== 'completed') continue

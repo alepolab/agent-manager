@@ -851,16 +851,26 @@ shape of the answer.`,
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
 
-## Commit the evidence, or CI has none
+## The evidence does not go in the repository
 
-The run directory is copied to \`.agent/evidence-run/\` in the project tree by
-the runner when the run completes. Copying is not committing: \`.github/workflows/evidence-bundle.yml\`
-reads that directory **from the pull request's checkout**, so evidence left
-untracked is evidence CI cannot see. A real run produced a full, correct bundle
-and committed only the test file — the check would have failed with "no
-evidence" while the files sat on disk beside it.
+Write the bundle into the run artifacts directory named at the top of your
+input, and **nowhere else**. Do not copy it into the checkout, do not create
+\`.agent/evidence-run/\`, and never \`git add\` an artifact you produced.
 
-So \`git add .agent/evidence-run\` and include it in your commit.
+The evidence is what a reviewer judges the change *by*; it is not part of the
+change. A run's logs, step outputs and oracle XML committed into a product
+repository are noise a reviewer has to read past to reach the diff, in someone
+else's history, forever.
+
+Agent Manager serves the bundle: every file you write is readable at
+\`/api/runs/<run id>/artifacts\` and in the run panel. Your pull request body
+carries the evidence as **text you quote** — the verbatim FAIL output, the
+verbatim PASS output, the exit codes — plus a link to the run. A reviewer reads
+the body; if they want the raw files, they open the run.
+
+The only things that belong in your commit are the fix, the test that proves it,
+and \`.agent/plan.md\` — the plan gate requires that one, and it is a statement
+of intent rather than an artifact of the run.
 
 ## Which branch the pull request targets
 
@@ -924,7 +934,7 @@ The agents that ran, the model each used, the working directory, and the run art
 
 ## Which commit to ship
 
-\`meta.json\`'s \`fix.repos[].commits\` names the commit the fix-implementer made; that is the change you ship. Do not compare it against other local branches or earlier runs' commits, and do not investigate history — a previous run spent its whole budget on that and never opened the PR. Untracked files the run produced in the checkout (the test file named in \`plan.md\`, and \`.agent/plan.md\`) must be committed on your branch together with the fix, or the PR ships a fix without its oracle.
+\`meta.json\`'s \`fix.repos[].commits\` names the commit the fix-implementer made; that is the change you ship. Do not compare it against other local branches or earlier runs' commits, and do not investigate history — a previous run spent its whole budget on that and never opened the PR. Two untracked files the run produced in the checkout must be committed on your branch together with the fix, or the PR ships a fix without its oracle: the test file named in \`plan.md\`, and \`.agent/plan.md\` itself. Nothing else the run produced belongs in the commit — see "The evidence does not go in the repository" above.
 
 ## Open the PR
 

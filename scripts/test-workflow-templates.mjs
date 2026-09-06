@@ -432,11 +432,21 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
 
   // The evidence step is the one most likely to push, because opening a PR
-  // sounds like its job - and it is the only step that can commit the evidence
-  // CI reads from the checkout.
+  // sounds like its job.
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
-  assert.ok(evidence.body.includes('git add .agent/evidence-run'),
-    'the evidence step must commit .agent/evidence-run, or CI checks out a branch with no evidence in it')
+
+  // It used to be told to `git add .agent/evidence-run`, which committed a
+  // run's logs and oracle XML into the product repo it was fixing. Evidence is
+  // what a reviewer judges the change BY, not part of the change; the app
+  // serves it at /api/runs/:id/artifacts instead.
+  assert.ok(!evidence.body.includes('git add .agent/evidence-run'),
+    'the evidence step must not commit the run directory into the repository it is fixing')
+  assert.ok(/The evidence does not go in the repository/.test(evidence.body),
+    'the evidence step must be told explicitly where evidence does and does not go')
+  // The two files that ARE the oracle still have to be committed, or the PR
+  // ships a fix with nothing proving it.
+  assert.ok(evidence.body.includes('.agent/plan.md'),
+    'the plan file is still required in the repo by the plan gate')
   assert.ok(evidence.body.includes('Git: local only'),
     'the evidence step needs its own explicit local-only git mandate')
 }
