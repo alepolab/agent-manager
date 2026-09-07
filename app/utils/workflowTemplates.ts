@@ -17,6 +17,8 @@ export interface WorkflowTemplateStep {
   approval?: boolean
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
+  /** See WorkflowStep.jira. */
+  jira?: { transition?: string, comment?: boolean }
 }
 
 export interface WorkflowTemplate {
@@ -101,6 +103,7 @@ export function materializeTemplateSteps(
     }
     if (step.maxVisits !== undefined) materialized.maxVisits = step.maxVisits
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
+    if (step.jira !== undefined) materialized.jira = step.jira
     return materialized
   })
 }
@@ -142,6 +145,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
     description: 'Paste a support ticket: stands up the stack, writes a failing parameterised test, fixes the cause, verifies, and opens a PR carrying the evidence bundle.',
     icon: 'i-lucide-git-pull-request-arrow',
     steps: [
+      // Runner-executed, no model: the ticket moves to In Progress the moment the
+      // run starts, so nobody else picks it up while an agent is on it.
+      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack',
         next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
@@ -159,7 +165,10 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // Closes the loop the PR opens: reviewer checklist answered, checks watched, blockers
       // from the automated review fixed and pushed. Loops on RETRY until mergeable.
       { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review',
-        next: [], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
+        next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
+      // `next` names a template id, and a repeated id resolves to its LAST step, which
+      // is this one: the review step, not the In Progress step at the top.
+      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Review', next: [], jira: { transition: 'In Review', comment: true }, monitorSlug: 'sdlc-step-monitor' },
     ],
   },
 ]

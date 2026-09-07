@@ -337,6 +337,13 @@ Rules:
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
 
+The ticket's text is fetched by the runner before you start and arrives in your
+input, or your input says it could not be fetched and why. You have no shell and
+no Jira access: do not try the jira CLI, an Atlassian MCP or any skill that
+reaches Jira, and never halt because you cannot. A ticket that could not be
+fetched is worked from its key and the repository, and the context packet says
+so. A real run halted here trying to run the jira CLI with no shell.
+
 Produce exactly these sections, in this order:
 
 ## Problem
@@ -1181,6 +1188,33 @@ run behind a fix, the URL of each reply.
 - Commit anything under \`.agent/\` except \`plan.md\`, or any run artifact.
 - Merge the PR, approve it, or dismiss a review. A person merges.
 - Read or print a secrets file; the secrets guard denies it and the attempt is logged.
+
+${SDLC_STANDING_RULES}`,
+  },
+  {
+    id: 'sdlc-jira-tracker',
+    icon: 'i-lucide-ticket',
+    frontmatter: {
+      name: 'sdlc-jira-tracker',
+      description: 'Runner-executed, no model call: moves the ticket to the status the step names and posts the outcome comment.',
+      model: MODEL.HAIKU,
+      color: 'gray',
+      // Never invoked as a model; declared for the shape checks every sdlc agent passes.
+      tools: ['Read', 'Write'],
+      maxTurns: 1,
+      skills: [],
+    },
+    body: `You do not run as a model. The runner executes this step itself: it takes the
+step's Jira settings (a status to move the ticket to, whether to post the
+outcome comment), calls Jira's REST API with the starter's own credentials, and
+records what happened as the step's output. Writes reach Jira only when
+JIRA_POST_ENABLED=1 on the instance; otherwise the step records what it would
+have done. A run with no ticket key ends this step with
+\`PIPELINE-SKIP: this run has no ticket key\`.
+
+If you are reading this as a model, the runner did not intercept the step. Do
+nothing to Jira yourself: end with \`PIPELINE-HALT: the Jira step reached a
+model; the runner should have executed it\`.
 
 ${SDLC_STANDING_RULES}`,
   },

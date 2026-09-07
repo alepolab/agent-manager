@@ -253,6 +253,8 @@ export interface WorkflowStep {
    * for a step that must see evidence produced several hops upstream.
    */
   contextMode?: 'predecessors' | 'ancestors'
+  /** Present on a step the runner executes itself, without a model: move the ticket, post the outcome comment, or both. */
+  jira?: { transition?: string, comment?: boolean }
 }
 
 export interface Workflow {

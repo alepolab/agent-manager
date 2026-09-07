@@ -115,6 +115,8 @@ export interface WorkflowRun {
   branch?: string
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
+  /** A Jira step already posted the outcome comment; settling must not post a second one. */
+  ticketCommented?: boolean
   /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
   question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string

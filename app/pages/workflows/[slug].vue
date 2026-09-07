@@ -630,6 +630,19 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             <span class="field-hint">The run pauses on the run page until you approve, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>
           </div>
 
+          <div v-if="settingsStep.agentSlug === 'sdlc-jira-tracker'" class="field-group">
+            <label class="field-label">Move the ticket to</label>
+            <input
+              :value="settingsStep.jira?.transition ?? ''" type="text" class="field-input" placeholder="In Progress"
+              @change="settingsStepId && patchStep(settingsStepId, { jira: { ...(settingsStep.jira ?? {}), transition: ($event.target as HTMLInputElement).value.trim() || undefined } })"
+            >
+            <label class="flex items-center gap-2 cursor-pointer mt-2">
+              <input type="checkbox" :checked="settingsStep.jira?.comment === true" @change="settingsStepId && patchStep(settingsStepId, { jira: { ...(settingsStep.jira ?? {}), comment: ($event.target as HTMLInputElement).checked || undefined } })">
+              <span class="field-label mb-0">Post the outcome comment</span>
+            </label>
+            <span class="field-hint">Runner-executed, no model call. The status must be one the ticket can move to; when it is not, the step's output lists the ones available. Writes reach Jira only when JIRA_POST_ENABLED=1 on the instance.</span>
+          </div>
+
           <div class="field-group">
             <label class="field-label">Max visits per run</label>
             <input

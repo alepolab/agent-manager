@@ -10,6 +10,7 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 
 | Step | Agent | Output |
 |---|---|---|
+| Jira: In Progress | `sdlc-jira-tracker` | Runner-executed: the ticket moves to In Progress so nobody else picks it up |
 | Ticket Intake | `sdlc-ticket-intake` | Context packet: product, repo, branch, acceptance criteria |
 | Stand Up Stack | `sdlc-stack-provisioner` | The product stack running locally from the recipe |
 | Failing Test | `sdlc-test-author` | A parameterised test that reproduces the bug and fails |
@@ -19,6 +20,7 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 | Security Review | `sdlc-security-review` | Graded findings and a verdict on the diff |
 | Evidence Bundle + PR | `sdlc-evidence-and-pr` | PR carrying the evidence bundle; Jira comment with link and cost |
 | PR Checks + Review | `sdlc-pr-follow-up` | Reviewer checklist answered, checks watched, automated-review blockers fixed and pushed until the PR is mergeable |
+| Jira: In Review | `sdlc-jira-tracker` | Runner-executed: outcome comment posted, ticket moved to In Review. Both Jira steps write only when `JIRA_POST_ENABLED=1` |
 
 Verify, Browser Trace and Security Review run in parallel after the fix. Runs are persisted, survive server restarts, can be paused, stopped, restarted from any step with a note, or cloned. Budgets cap minutes and tokens per run.
 
