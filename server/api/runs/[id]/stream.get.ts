@@ -1,5 +1,5 @@
 import { getRun } from '../../../utils/workflowRunStore'
-import { subscribe } from '../../../utils/workflowRunner'
+import { subscribe, subscribeLog, getLiveLog } from '../../../utils/workflowRunner'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 export default defineEventHandler(async (event) => {
@@ -20,6 +20,7 @@ export default defineEventHandler(async (event) => {
   // The full run first, so a late subscriber is immediately correct rather
   // than waiting for the next change.
   send({ type: 'run', run: initial })
+  send({ type: 'log-snapshot', logs: getLiveLog(id) })
 
   const finished = (r: WorkflowRun) =>
     r.status !== 'running' && r.status !== 'paused'
@@ -31,12 +32,13 @@ export default defineEventHandler(async (event) => {
   }
 
   await new Promise<void>((resolve) => {
+    const unsubscribeLog = subscribeLog(id, (stepId, line) => send({ type: 'log', stepId, line }))
     const unsubscribe = subscribe(id, (run) => {
       send({ type: 'run', run })
       if (finished(run)) { send({ type: 'done' }); cleanup(); resolve() }
     })
-    const cleanup = () => { unsubscribe(); try { event.node.res.end() } catch { /* already closed */ } }
+    const cleanup = () => { unsubscribe(); unsubscribeLog(); try { event.node.res.end() } catch { /* already closed */ } }
     // The run is not the connection: a client leaving must not affect it.
-    event.node.req.on('close', () => { unsubscribe(); resolve() })
+    event.node.req.on('close', () => { unsubscribe(); unsubscribeLog(); resolve() })
   })
 })

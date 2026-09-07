@@ -9,6 +9,8 @@ export function useWorkflowRun(slug: string) {
   const runs = ref<WorkflowRun[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  /** Live output per step id while the run streams; what the agent is doing, newest last. */
+  const logs = ref<Record<string, string[]>>({})
   let source: EventSource | null = null
 
   function listen(runId: string) {
@@ -18,6 +20,11 @@ export function useWorkflowRun(slug: string) {
       try {
         const payload = JSON.parse(e.data)
         if (payload.type === 'run') run.value = payload.run
+        if (payload.type === 'log-snapshot') logs.value = payload.logs ?? {}
+        if (payload.type === 'log') {
+          const tail = [...(logs.value[payload.stepId] ?? []), payload.line]
+          logs.value = { ...logs.value, [payload.stepId]: tail.slice(-400) }
+        }
         if (payload.type === 'done') { source?.close(); source = null; refreshRuns() }
       } catch { /* a malformed frame self-heals on the next one */ }
     }
@@ -69,7 +76,7 @@ export function useWorkflowRun(slug: string) {
   onScopeDispose(() => source?.close())
 
   return {
-    run, runs, loading, error, attach, start, refreshRuns,
+    run, runs, loading, error, logs, attach, start, refreshRuns,
     continueRun: () => act('continue')(),
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
     respond: async (reply: string) => {

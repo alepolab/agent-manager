@@ -2,7 +2,7 @@
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES } from '~/utils/runStatus'
 
-const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[] }>()
+const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]> }>()
 const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [] }>()
 
 /** Optional correction handed to whichever step is restarted next. */
@@ -64,6 +64,15 @@ const progress = computed(() => {
 })
 
 const expanded = ref<string | null>(null)
+/** Live output for a step, newest last; the pre scrolls to the newest line as it arrives. */
+const liveFor = (stepId: string) => props.logs?.[stepId] ?? []
+const latest = (stepId: string) => liveFor(stepId).at(-1)?.slice(9) ?? ''
+const logPre = ref<Record<string, HTMLElement | null>>({})
+watch(() => expanded.value && liveFor(expanded.value).length, async () => {
+  await nextTick()
+  const el = expanded.value ? logPre.value[expanded.value] : null
+  if (el) el.scrollTop = el.scrollHeight
+})
 
 // Cost is fetched separately from the run record itself (GET /api/runs/[id]/cost,
 // server/utils/costReport.ts) rather than computed here: pricing lives in
@@ -177,10 +186,15 @@ const money = (n: number) => `$${n.toFixed(4)}`
             @click="emit('restart', step.stepId, note)"
           />
         </div>
+        <div v-if="step.status === 'running' && latest(step.stepId) && expanded !== step.stepId" class="pl-4 text-[10px] font-mono truncate text-label" :title="latest(step.stepId)">{{ latest(step.stepId) }}</div>
         <div v-if="expanded === step.stepId" class="pl-4 pb-2 space-y-1">
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
+          <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
+            <div class="text-[10px] text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
+            <pre :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="text-[10px] font-mono whitespace-pre-wrap max-h-56 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">{{ liveFor(step.stepId).join('\n') }}</pre>
+          </div>
           <pre v-if="step.output" class="text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
-          <p v-else class="text-[11px] text-label">No output yet.</p>
+          <p v-else-if="!liveFor(step.stepId).length" class="text-[11px] text-label">No output yet.</p>
         </div>
       </div>
     </div>

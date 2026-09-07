@@ -17,6 +17,7 @@ import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch } from './workspace.ts'
 import { existsSync } from 'node:fs'
+import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -98,6 +99,8 @@ interface Live {
   /** One controller per step in flight, so stopRun can cancel the SDK call
    *  itself rather than only marking the record. */
   aborts: Map<string, AbortController>
+  /** Live output per step id: what the agent is doing right now, newest last. Capped; the full log is the step's .log artifact. */
+  logs: Record<string, string[]>
   /** True while this run's wave loop is actually executing in the background - the
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
@@ -105,6 +108,30 @@ interface Live {
 }
 const live = new Map<string, Live>()
 const subscribers = new Map<string, Set<(run: WorkflowRun) => void>>()
+
+/** Live-log listeners: one line at a time, per step. */
+const logSubscribers = new Map<string, Set<(stepId: string, line: string) => void>>()
+export function subscribeLog(runId: string, fn: (stepId: string, line: string) => void): () => void {
+  if (!logSubscribers.has(runId)) logSubscribers.set(runId, new Set())
+  logSubscribers.get(runId)!.add(fn)
+  return () => logSubscribers.get(runId)?.delete(fn)
+}
+/** The in-memory tail for a run still owned by this process; {} once it is gone. */
+export function getLiveLog(runId: string): Record<string, string[]> {
+  return live.get(runId)?.logs ?? {}
+}
+const LOG_TAIL = 400
+function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
+  const stamped = `${new Date().toISOString().slice(11, 19)} ${line}`
+  const tail = (l.logs[rec.stepId] ??= [])
+  tail.push(stamped)
+  if (tail.length > LOG_TAIL) tail.splice(0, tail.length - LOG_TAIL)
+  const index = String(run.steps.indexOf(rec) + 1).padStart(2, '0')
+  void appendFile(join(runArtifactsDir(run.id), 'steps', `step-${index}-${rec.agentSlug}.log`), stamped + '\n').catch(() => {})
+  for (const fn of logSubscribers.get(run.id) ?? []) {
+    try { fn(rec.stepId, stamped) } catch { /* a broken listener must not stop the run */ }
+  }
+}
 
 export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => void {
   if (!subscribers.has(runId)) subscribers.set(runId, new Set())
@@ -456,7 +483,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   l.aborts.set(id, ac)
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+    logLine(l, run, rec, `step started, visit ${rec.visits}`)
     const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onProgress: (progress: AgentProgress) => {
+      if (progress.line) { logLine(l, run, rec, progress.line); return }
       // Diagnostic only (see AgentProgress's doc comment) - mutated directly
       // onto the live rec and republished so the SSE stream carries it, but
       // never written to the step's persisted artifact JSON and never
@@ -724,7 +753,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
   }
   live.set(run.id, l)
   // Best-effort: a filesystem problem here must not stop the run. The run
@@ -904,7 +933,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   for (const s of run.steps) {

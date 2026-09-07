@@ -21,7 +21,20 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'agent-progress-claudedir-')
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'agent-progress-artifacts-'))
 
 const runner = await import('../server/utils/workflowRunner.ts')
-const { shouldEmitProgress, PROGRESS_MIN_INTERVAL_MS } = await import('../server/utils/agentCaller.ts')
+const { shouldEmitProgress, PROGRESS_MIN_INTERVAL_MS, describeBlock } = await import('../server/utils/agentCaller.ts')
+
+// ── describeBlock: one line per thing the agent does, inputs summarised not dumped ──
+{
+  assert.equal(describeBlock({ type: 'tool_use', name: 'Bash', input: { command: 'pytest -q tests/unit', description: 'run tests' } }), '[Bash] pytest -q tests/unit', 'a command is the line')
+  assert.equal(describeBlock({ type: 'tool_use', name: 'Write', input: { file_path: '/w/plan.md', content: 'SECRET FILE BODY' } }), '[Write] /w/plan.md', 'a write shows its path, never its content')
+  assert.equal(describeBlock({ type: 'tool_use', name: 'Grep', input: { pattern: 'encoding', path: '/w' } }), '[Grep] /w', 'the first informative field wins')
+  assert.equal(describeBlock({ type: 'text', text: '  Looking at\n the plugin  ' }), 'Looking at the plugin', 'text is squashed to one line')
+  assert.equal(describeBlock({ type: 'tool_result', content: [{ type: 'text', text: '4 failed, 2 passed' }] }), '→ 4 failed, 2 passed', 'a result is previewed')
+  assert.equal(describeBlock({ type: 'tool_result', content: 'boom', is_error: true }), '✗ boom', 'an error result is marked')
+  assert.equal(describeBlock({ type: 'text', text: '   ' }), null, 'blank text is not a line')
+  assert.equal(describeBlock({ type: 'thinking', thinking: 'hmm' }), null, 'thinking is not streamed')
+  assert.ok(describeBlock({ type: 'text', text: 'x'.repeat(500) }).length <= 200, 'lines are capped')
+}
 
 // ── the throttle policy is a pure decision, tested in isolation ───────────
 {

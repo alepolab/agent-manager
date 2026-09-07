@@ -16,7 +16,7 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
-const { run, runs, attach, start, continueRun, stop, restart } = useWorkflowRun(slug)
+const { run, runs, logs, attach, start, continueRun, stop, restart } = useWorkflowRun(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
@@ -490,6 +490,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <WorkflowRunBar
           :run="run"
           :runs="runs"
+          :logs="logs"
           @continue="continueRun"
           @stop="stop"
           @restart="restart"
@@ -575,6 +576,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <WorkflowRunPanel
           :run="run"
           :runs="runs"
+          :logs="logs"
           @continue="continueRun"
           @stop="stop"
           @attach="attachRun"
