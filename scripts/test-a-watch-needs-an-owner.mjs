@@ -41,9 +41,12 @@ check('the saved Watch object actually carries createdBy',
   /\bcreatedBy,/.test(literal),
   'computing body.createdBy and omitting it from the object literal is exactly the original defect — the value was set and dropped')
 
+// Asserts the BEHAVIOUR (stored owner wins over the body), not the local
+// variable's name — an earlier version pinned `existingOwner` and broke when
+// the same lookup was widened to serve every field on an edit.
 check('an existing owner is preserved on update',
-  /const existingOwner = \(await listWatches\(\)\)\.find\(w => w\.id === id\)\?\.createdBy/.test(post)
-  && /const createdBy = existingOwner \?\? body\.createdBy/.test(post),
+  /const existing = \(await listWatches\(\)\)\.find\(w => w\.id === id\)/.test(post)
+  && /createdBy = existing\?\.createdBy \?\? body\.createdBy/.test(post),
   'a second person enabling or retiming someone else\'s watch must not silently become the account its runs spend')
 
 check('the scheduler refuses an ownerless watch',
