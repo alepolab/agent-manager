@@ -87,7 +87,10 @@ fi
 # Plugin caches are git clones. The history is dead weight in an image and can
 # hold branches nobody meant to ship.
 find "$STAGE" -type d -name ".git" -prune -exec rm -rf {} + 2>/dev/null || true
-find "$STAGE" -type f \( -name "*.log" -o -name ".DS_Store" \) -delete 2>/dev/null || true
+# .env.example is a template with no values in it, but the .env.* denylist
+# below cannot tell it apart from a real one. Drop it here; a real .env still
+# trips the check.
+find "$STAGE" -type f \( -name "*.log" -o -name ".DS_Store" -o -name ".env.example" \) -delete 2>/dev/null || true
 
 # ── Fail closed ───────────────────────────────────────────────────────────
 violations=()
