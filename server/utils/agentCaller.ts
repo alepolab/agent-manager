@@ -1,12 +1,33 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { getClaudeDir, resolveClaudePath } from './claudeDir.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import { resolveTools, resolveMaxTurns } from './agentToolPolicy.ts'
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import { createLogger, preview } from './log.ts'
 import type { AgentFrontmatter } from '~/types'
+
+/**
+ * Absolute path to the shipped `engineering/scripts` directory, handed to every
+ * agent as `SDLC_SCRIPTS_DIR`.
+ *
+ * The evidence step's instructions used to say `node
+ * engineering/scripts/assemble-bundle.mjs` — a path relative to the *app*,
+ * evaluated in the *product checkout*, where no `engineering/` exists. The
+ * assembler is in the image at /app/engineering/scripts and always has been;
+ * from the agent's cwd it simply is not there. So the bundle went unvalidated
+ * and the agent reported the assembler "absent from this installation" — an
+ * accurate description of what it could see, and a false one about the install.
+ *
+ * That is the failure worth naming: the run completed, the PR opened, and the
+ * only sign was one line inside a step's output. An absolute path costs
+ * nothing and cannot be read relative to the wrong tree.
+ */
+export function sdlcScriptsDir(): string {
+  return join(process.cwd(), 'engineering', 'scripts')
+}
 
 const log = createLogger('agent')
 
@@ -208,9 +229,16 @@ export async function callAgent(
       // and PRs are not attributed to whoever runs the server.
       // Identity for git, gh and jira: the starter's own tokens when they have
       // a profile, else the bot token, else whatever the host holds.
-      ...((process.env.AGENT_GH_TOKEN || Object.keys(userEnv).length)
-        ? { env: { ...process.env, ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}), ...userEnv } }
-        : {}),
+      // Unconditional, where it used to be spread only when a token or a user
+      // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
+      // including the no-credential one; a conditional env is exactly how a
+      // variable goes missing in the configuration nobody tests.
+      env: {
+        ...process.env,
+        ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
+        SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
+        ...userEnv,
+      },
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
