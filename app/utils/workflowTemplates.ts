@@ -155,7 +155,11 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       // The one step with an outward effect: it pushes and opens the pull request. It waits for a person.
       { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR', approval: true,
-        next: [], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
+        next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
+      // Closes the loop the PR opens: reviewer checklist answered, checks watched, blockers
+      // from the automated review fixed and pushed. Loops on RETRY until mergeable.
+      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review',
+        next: [], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
     ],
   },
 ]

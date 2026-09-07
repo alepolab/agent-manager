@@ -18,6 +18,7 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 | Browser Trace | `sdlc-trace-capture` | Screenshots and console for UI-facing changes |
 | Security Review | `sdlc-security-review` | Graded findings and a verdict on the diff |
 | Evidence Bundle + PR | `sdlc-evidence-and-pr` | PR carrying the evidence bundle; Jira comment with link and cost |
+| PR Checks + Review | `sdlc-pr-follow-up` | Reviewer checklist answered, checks watched, automated-review blockers fixed and pushed until the PR is mergeable |
 
 Verify, Browser Trace and Security Review run in parallel after the fix. Runs are persisted, survive server restarts, can be paused, stopped, restarted from any step with a note, or cloned. Budgets cap minutes and tokens per run.
 
