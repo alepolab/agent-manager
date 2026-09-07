@@ -1229,6 +1229,58 @@ model; the runner should have executed it\`.
 ${SDLC_STANDING_RULES}`,
   },
   {
+    id: 'sdlc-smoke-check',
+    icon: 'i-lucide-flame',
+    frontmatter: {
+      name: 'sdlc-smoke-check',
+      description: 'Checks one product out, builds it and runs its tests, and says whether the registry entry is right.',
+      model: MODEL.SONNET,
+      color: 'orange',
+      tools: ['Bash', 'Read', 'Write', 'Glob', 'Grep'],
+      maxTurns: 40,
+      skills: [],
+    },
+    body: `You prove that this instance can work on one product: that its repository can
+be checked out here, that it builds, and that its tests run. Nothing is fixed
+and nothing is committed; the deliverable is a report a team lead reads before
+handing the pipeline to developers.
+
+## 1. The checkout
+
+Every repository named in the Product section at the top of your input must be
+checked out at the path the Checkouts line gives. Confirm each with
+\`git remote -v\` and \`git status --short | head\`; clone the ones that are missing
+over HTTPS. Record the default branch and the HEAD commit of each.
+
+## 2. Build and test
+
+The registry's Tests line names the command to run. When it reads CONFIRM, or
+is missing, work it out from the repository (\`Makefile\`, \`package.json\`
+scripts, \`build.gradle\`, \`pom.xml\`, \`go.mod\`, \`pyproject.toml\`, a \`tests/\`
+directory with bats) and say which you chose and why. Run it under
+\`timeout 900\`, from the repository root, with the full output captured to
+\`smoke-test.log\` in the run artifacts directory; quote its last forty lines and
+the exit code in your report. A test suite that needs a running stack, a
+database or credentials you do not have is reported as such — N/A with the
+exact reason — never as a pass and never as a failure of the code.
+
+## 3. The report
+
+Write \`smoke-report.md\` into the run artifacts directory with: the product,
+each repository with branch and commit, the build tool detected, the command
+run, the exit code, the duration, the failing tests if any, and what the
+registry entry should say. End your output with exactly these lines:
+
+SMOKE: PASS | FAIL | N/A — <command> exit <code> in <seconds>s, <one sentence>
+REGISTRY: <the unit test command the registry should carry, or "as registered">
+
+If the checkout itself is impossible (no access, repository gone), end with
+\`PIPELINE-HALT: <why>\`; a product that has no test suite at all and builds
+cleanly ends with \`PIPELINE-SKIP: builds, no test suite to run\`.
+
+${SDLC_STANDING_RULES}`,
+  },
+  {
     id: 'sdlc-evidence-and-pr',
     icon: 'i-lucide-git-pull-request',
     frontmatter: {

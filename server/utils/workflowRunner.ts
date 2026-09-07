@@ -73,6 +73,8 @@ interface WorkflowLike {
 }
 
 export interface StartRunOpts {
+  /** A registry product key the caller has chosen; skips resolution from the prompt. */
+  productKey?: string
   workflow: WorkflowLike
   initialPrompt: string
   /** See WorkflowRun.watch (shared/types/run.ts) — the id of the watch that
@@ -984,7 +986,12 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   if (!artifacts.ok) throw new Error(`Run artifacts directory ${artifacts.path} is not writable by this process (${artifacts.error}); set AGENT_RUNS_DIR to a writable path`)
   // Resolved once, before any agent runs, and carried on the run: agents are
   // handed registry facts rather than asked to guess which product this is.
-  const product = await resolveProduct(opts.initialPrompt).catch(() => undefined)
+  // Named by the caller (a smoke sweep knows which product it is testing), else
+  // resolved from the prompt's ticket key, labels and component words.
+  const product = opts.productKey
+    ? await productByKey(opts.productKey)
+    : await resolveProduct(opts.initialPrompt).catch(() => undefined)
+  if (opts.productKey && !product) throw new Error(`Unknown product "${opts.productKey}"; registered: ${(await registeredProductKeys()).join(', ')}`)
   // The checkout a product-routed run works in, when it is already on this
   // instance: then the baseline, the dirty-tree facts and the run branch all
   // apply, instead of an agent committing wherever it happens to be.

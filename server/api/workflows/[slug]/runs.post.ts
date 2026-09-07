@@ -8,7 +8,7 @@ import { envForUser } from '../../../utils/users'
 
 export default defineEventHandler(async (event) => {
   const slug = getRouterParam(event, 'slug')!
-  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string }>(event)
+  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string }>(event)
   if (!body?.initialPrompt?.trim()) {
     throw createError({ statusCode: 400, message: 'initialPrompt is required' })
   }
@@ -62,6 +62,7 @@ export default defineEventHandler(async (event) => {
   const run = await startRun({
     workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
     initialPrompt,
+    ...(body.productKey ? { productKey: body.productKey } : {}),
     // This route is the manual/API start path, never a watch dispatch — the
     // reserved literal is the honest answer to "what triggered this?".
     watch: 'direct-invocation',
