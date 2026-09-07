@@ -20,6 +20,7 @@
  */
 
 import { existsSync, readdirSync } from 'node:fs'
+import { homedir as osHomedir } from 'node:os'
 import { join } from 'node:path'
 
 /** Login sanitiser, matching users.ts: a login becomes one safe path segment. */
@@ -27,9 +28,11 @@ const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_')
 
 export const WORKSPACE_ROOT_VAR = 'AGENT_WORKSPACE_ROOT'
 
-/** The configured root all developer workspaces live under. */
+/** The configured root all developer workspaces live under, as an absolute path: a `~` here
+ *  was handed to existsSync and to agents' Read and Glob, none of which expand it, so a
+ *  checkout that existed read as missing and a restart was refused for an "empty directory". */
 export function workspaceRoot(): string {
-  return (process.env[WORKSPACE_ROOT_VAR] || '~/alepo-workspace').replace(/\/+$/, '')
+  return (process.env[WORKSPACE_ROOT_VAR] || '~/alepo-workspace').replace(/\/+$/, '').replace(/^~(?=\/|$)/, osHomedir())
 }
 
 /**

@@ -1062,9 +1062,15 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
     workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {},
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
+  // A declared skip is a settled outcome, the same as completed: a restart of a
+  // later step must not run it again. A real restart re-ran the provisioner,
+  // which cloned the product a second time beside the checkout the fix step
+  // was working in. A scheduler skip (after a failure) has no skipReason and
+  // stays pending, so the restart can reach it.
+  const settled = (s: RunStep) => s.status === 'completed' || (s.status === 'skipped' && !!s.skipReason)
   for (const s of run.steps) {
     state.visits[s.stepId] = s.visits ?? 0
-    if (s.status !== 'completed') continue
+    if (!settled(s)) continue
     markCompleted(graph, state, s.stepId)
     l.outputs[s.stepId] = s.output
     // Stored input carries the artifact header; computeInput's retry branch
@@ -1074,7 +1080,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   // A completed node has consumed its arming: live, markRunning clears it before
   // the node executes. Without this an entry node stays armed and re-runs, and
   // re-arms everything downstream with it.
-  for (const s of run.steps) if (s.status === 'completed') state.armed[s.stepId] = false
+  for (const s of run.steps) if (settled(s)) state.armed[s.stepId] = false
   live.set(run.id, l)
   return l
 }

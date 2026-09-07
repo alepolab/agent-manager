@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'registry-'))
@@ -57,7 +57,7 @@ assert.equal(byComponent?.multiRepo, true, 'multi_repo flag is carried')
 assert.equal(byKey?.multiRepo, undefined, 'absent flag stays absent')
 assert.match(A.artifactHeader('/tmp/x', byComponent), /Multi-repo: yes/, 'header states the multi-repo rule')
 assert.doesNotMatch(A.artifactHeader('/tmp/x', byKey), /Multi-repo/, 'single-repo products get no multi-repo line')
-assert.match(A.artifactHeader('/tmp/x', byKey), /Checkouts: ~\/alepo-workspace/, 'header states the checkout convention')
+assert.ok(A.artifactHeader('/tmp/x', byKey).includes(`Checkouts: ${homedir()}/alepo-workspace`), 'header states the checkout convention, as an absolute path the agents\' tools can open')
 assert.equal(await R.resolveProduct('nothing here'), undefined, 'no match is undefined, never a guess')
 
 const header = A.artifactHeader('/tmp/x', byKey)

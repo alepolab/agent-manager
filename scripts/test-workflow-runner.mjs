@@ -923,6 +923,32 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(await runner.noteRun('no-such-run', 'x'), null, 'a run not in flight here cannot take a note')
 }
 
+// ── 24. a restart does not re-run a step that declared a skip ─────────────
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const calls = []
+  let dFails = true
+  runner.setAgentCaller(async (agentSlug) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-b') return 'nothing to stand up here\nPIPELINE-SKIP: unit-test-only change'
+    if (agentSlug === 'agent-d' && dFails) throw new Error('d failed once')
+    return `out ${agentSlug}`
+  })
+  let sk = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  sk = await runner.waitForSettled(sk.id, TIMEOUT)
+  assert.equal(sk.status, 'failed')
+  assert.equal(sk.steps.find(s => s.stepId === 'b').status, 'skipped')
+  assert.ok(sk.steps.find(s => s.stepId === 'b').skipReason, 'the skip was declared, not scheduled')
+  runner._dropLive(sk.id)
+  dFails = false
+  calls.length = 0
+  sk = await runner.restartRun(sk.id, 'd')
+  sk = await runner.waitForSettled(sk.id, TIMEOUT)
+  assert.equal(sk.status, 'completed')
+  assert.deepEqual(calls, ['agent-d'], `only the restarted step ran; a declared skip stays settled: ${calls.join(',')}`)
+  assert.equal(sk.steps.find(s => s.stepId === 'b').visits, 1, 'the skipped step was not visited again')
+}
+
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not
