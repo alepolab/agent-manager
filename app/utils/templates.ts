@@ -569,7 +569,7 @@ Then make the **smallest** change that addresses the root cause:
 
 ## Report
 
-State: the root cause in one or two sentences naming the file and line, what you changed and why, which hypotheses you eliminated on the way, and confirmation that you did not touch the test file.
+State: the root cause in one or two sentences naming the file and line, what you changed and why, which hypotheses you eliminated on the way, and confirmation that you did not touch the test file. Then paste, verbatim, the last lines of the test command's output showing the rows passing, and the output of \`git diff --stat\` for the commit you made. A report without both is sent back for another attempt; the monitor judges evidence, not prose.
 
 ## Artifacts
 
@@ -807,12 +807,15 @@ the stack is up. "Tests pass" with no test output is not evidence tests pass.
 End your review with exactly one line:
 
 VERDICT: CONTINUE   - the step did what it claims, with evidence in the output
-VERDICT: RETRY      - the step is recoverable and a second attempt is worth making
-VERDICT: ABORT      - the step failed in a way that makes every later step meaningless
+VERDICT: RETRY      - the work may be right but the output does not prove it, or the step is recoverable; say exactly what the next attempt must show
+VERDICT: ABORT      - the step did something no later step can undo or check: it touched a remote, edited the oracle it was told not to, worked outside the repository, contradicted the ticket, or ended with PIPELINE-HALT
 
-Prefer ABORT over CONTINUE when the step was supposed to establish something
-later steps depend on and did not. A pipeline that stops here is cheap; a pull
-request built on evidence that was never gathered is not.
+Missing evidence is a RETRY, never an ABORT. A report of passing tests without
+the test output, or a fix without its diff, costs one more attempt to prove;
+an ABORT throws away every step before it. Prefer RETRY over CONTINUE when the
+step was supposed to establish something later steps depend on and did not
+show it. A real run was aborted at the fix step for a report that lacked its
+test output while the fix itself was correct and committed.
 
 ## A declared skip is not a failure
 

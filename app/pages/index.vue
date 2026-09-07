@@ -55,14 +55,16 @@ const cost = computed(() => ({
 const ticket = ref('')
 const starting = ref(false)
 /** Where the registry would route this ticket; shown before Start so the wrong stack is never a surprise. */
-const routing = ref<{ name: string, suite: string | null, repos: string[], recipe: boolean } | null | undefined>(undefined)
+interface Preflight { product: { name: string, suite: string | null, repos: string[], recipe: boolean } | null, checkout: { name: string, exists: boolean, git: boolean, branch?: string, dirty: number } | null, artifacts: { ok: boolean, path: string }, tokens: { github: boolean, jira: boolean } }
+const preflight = ref<Preflight | undefined>(undefined)
+const routing = computed(() => preflight.value === undefined ? undefined : preflight.value.product)
 let routeTimer: ReturnType<typeof setTimeout> | null = null
 watch(ticket, (t) => {
   if (routeTimer) clearTimeout(routeTimer)
-  if (!t.trim()) { routing.value = undefined; return }
+  if (!t.trim()) { preflight.value = undefined; return }
   routeTimer = setTimeout(async () => {
-    try { routing.value = (await $fetch<{ product: typeof routing.value }>('/api/registry/resolve', { query: { q: t.trim().slice(0, 2000) } })).product }
-    catch { routing.value = undefined }
+    try { preflight.value = await $fetch<Preflight>('/api/registry/preflight', { query: { q: t.trim().slice(0, 2000) } }) }
+    catch { preflight.value = undefined }
   }, 400)
 })
 const runbook = computed(() => workflows.value.find(w => w.slug.startsWith('runbook')) ?? workflows.value[0])
@@ -102,6 +104,14 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
           <span class="field-hint">{{ runbook ? `Runs ${runbook.name}. A bare key is expanded from Jira when your profile has a token.` : 'Create a workflow first.' }}</span>
           <span v-if="routing" class="field-hint block" style="color: var(--success);">Routes to {{ routing.name }}{{ routing.suite ? ` (${routing.suite})` : '' }}: {{ routing.repos.join(', ') || 'no repos listed' }}{{ routing.recipe ? '' : ', no recipe yet' }}</span>
           <span v-else-if="routing === null" class="field-hint block" style="color: var(--warning);">No product in the registry matches this ticket. Intake will work from the text alone; add the project key or a product label to route it.</span>
+          <template v-if="preflight">
+            <span v-if="preflight.checkout && !preflight.checkout.exists" class="field-hint block">Checkout {{ preflight.checkout.name }} is not on this instance yet; the stack step clones it.</span>
+            <span v-else-if="preflight.checkout?.git && preflight.checkout.dirty" class="field-hint block" style="color: var(--warning);">{{ preflight.checkout.name }} is on {{ preflight.checkout.branch }} with {{ preflight.checkout.dirty }} uncommitted change(s). The run branches from its HEAD and carries them; park them on the <NuxtLink to="/team" class="underline">Team page</NuxtLink> if they are not meant to travel.</span>
+            <span v-else-if="preflight.checkout?.git" class="field-hint block">Checkout {{ preflight.checkout.name }} on {{ preflight.checkout.branch }}, clean. The run gets its own branch.</span>
+            <span v-if="!preflight.artifacts.ok" class="field-hint block" style="color: var(--error);">Evidence cannot be written to {{ preflight.artifacts.path }}; the run will refuse to start. Fix AGENT_RUNS_DIR on the instance.</span>
+            <span v-if="!preflight.tokens.github" class="field-hint block" style="color: var(--warning);">No GitHub token for you: the pull request step will fail. Sign in with GitHub or set AGENT_GH_TOKEN.</span>
+            <span v-if="!preflight.tokens.jira" class="field-hint block">No Jira token on your <NuxtLink to="/profile" class="underline">profile</NuxtLink>: bare keys are not expanded and the outcome comment stays unposted.</span>
+          </template>
         </div>
         <UButton type="submit" label="Start" icon="i-lucide-play" :loading="starting" :disabled="!ticket.trim() || !runbook" />
       </form>

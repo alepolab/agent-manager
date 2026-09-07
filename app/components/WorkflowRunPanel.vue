@@ -24,6 +24,20 @@ async function showFile(name: string) {
 }
 watch(() => props.run?.id, () => { artifacts.value = null; openFile.value = null })
 
+/** What intake left unanswered, and where the fix landed: read from the run's own artifacts. */
+const intake = ref<{ open_questions?: string[] } | null>(null)
+const prLinks = ref<string[]>([])
+async function loadFacts() {
+  if (!props.run) { intake.value = null; prLinks.value = []; return }
+  const id = props.run.id
+  try { intake.value = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/context-packet.json`, { responseType: 'text' })) } catch { intake.value = null }
+  try {
+    const meta = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/meta.json`, { responseType: 'text' }))
+    prLinks.value = (meta?.fix?.repos ?? []).map((r: any) => r?.pr).filter((u: unknown): u is string => typeof u === 'string' && /^https?:/.test(u))
+  } catch { prLinks.value = [] }
+}
+watch(() => [props.run?.id, props.run?.status, props.run?.steps.filter(s => s.status === 'completed').length], loadFacts, { immediate: true })
+
 /** Restart and clone only make sense once nothing is executing. */
 const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
 const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
@@ -102,6 +116,14 @@ const money = (n: number) => `$${n.toFixed(4)}`
       The process that was running this is gone. Its steps are frozen where they stopped.
     </p>
 
+    <div v-if="intake?.open_questions?.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <div class="font-medium" style="color: var(--text-primary);">Intake left {{ intake.open_questions.length }} question(s) open</div>
+      <ol class="list-decimal ml-4 space-y-0.5"><li v-for="q in intake.open_questions" :key="q">{{ q }}</li></ol>
+      <p class="text-label">Answer in the note below and restart the step that needs the answer.</p>
+    </div>
+    <div v-if="prLinks.length" class="flex flex-wrap gap-3 text-[11px]">
+      <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
+    </div>
     <textarea
       v-if="settledRun"
       v-model="note"

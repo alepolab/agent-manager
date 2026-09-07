@@ -781,6 +781,33 @@ assert.ok(envsSeen.every(e => e?.GH_TOKEN === 'gh-for-sandeep' && e?.JIRA_API_TO
 let anon = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 anon = await runner.waitForSettled(anon.id, TIMEOUT)
 assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
+// ── 17. a run refuses to start without somewhere to write evidence ────────
+{
+  const saved = process.env.AGENT_RUNS_DIR
+  const blocker = join(tmpdir(), `runner-blocker-${process.pid}`)
+  writeFileSync(blocker, '')
+  process.env.AGENT_RUNS_DIR = join(blocker, 'runs')
+  await assert.rejects(runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false }), /not writable/, 'the failure is one line at start, not an agent step later')
+  process.env.AGENT_RUNS_DIR = saved
+  rmSync(blocker, { force: true })
+}
+
+// ── 18. a run with a checkout gets its own branch and its ticket key ──────
+{
+  const projectDir = mkdtempSync(join(tmpdir(), 'runner-branch-'))
+  git(projectDir, ['init', '-q', '-b', 'develop'])
+  git(projectDir, ['config', 'user.email', 'test@example.invalid']); git(projectDir, ['config', 'user.name', 'Test'])
+  writeFileSync(join(projectDir, 'a.txt'), 'a\n'); git(projectDir, ['add', '.']); git(projectDir, ['commit', '-q', '-m', 'init'])
+  runner.setAgentCaller(async (agentSlug) => `out ${agentSlug}`)
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  let br = await runner.startRun({ workflow, initialPrompt: 'CSUP-77: labels unprintable', watch: 'direct-invocation', autoRun: false, projectDir })
+  assert.equal(br.ticketKey, 'CSUP-77', 'the ticket key is read from the prompt so the notifier can find the issue')
+  assert.equal(br.branch, `fix/CSUP-77-${br.id.slice(0, 8)}`, 'the runner names the branch')
+  assert.equal(git(projectDir, ['branch', '--show-current']), br.branch, 'and checks it out before any agent runs')
+  br = await runner.waitForSettled(br.id, TIMEOUT)
+  rmSync(projectDir, { recursive: true, force: true })
+}
+
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not

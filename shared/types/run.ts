@@ -105,6 +105,8 @@ export interface WorkflowRun {
    *  anything an agent writes. Its only job is to tell the notifier which
    *  issue to comment on when the run finishes with a pull request. */
   ticketKey?: string
+  /** Branch the runner created in projectDir for this run's commits; absent when there was no checkout. */
+  branch?: string
   projectDir?: string
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */

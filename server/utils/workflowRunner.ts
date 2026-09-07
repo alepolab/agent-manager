@@ -13,6 +13,9 @@ import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
+import { artifactsWritable, checkoutDirFor, ensureRunBranch } from './workspace.ts'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   publishEvidenceToProject,
@@ -418,7 +421,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined) + body
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
@@ -650,9 +653,19 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  // A run with nowhere to write evidence fails here, in one line, rather than
+  // an agent step later after it has spent its budget finding out.
+  const artifacts = await artifactsWritable()
+  if (!artifacts.ok) throw new Error(`Run artifacts directory ${artifacts.path} is not writable by this process (${artifacts.error}); set AGENT_RUNS_DIR to a writable path`)
   // Resolved once, before any agent runs, and carried on the run: agents are
   // handed registry facts rather than asked to guess which product this is.
   const product = await resolveProduct(opts.initialPrompt).catch(() => undefined)
+  // The checkout a product-routed run works in, when it is already on this
+  // instance: then the baseline, the dirty-tree facts and the run branch all
+  // apply, instead of an agent committing wherever it happens to be.
+  const firstRepo = product?.repos?.[0]
+  const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo)) ? checkoutDirFor(firstRepo) : undefined)
+  const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
   // Captured BEFORE createRun, so the baseline is the project directory's
   // HEAD at the true moment execution begins — before any step, and so any
   // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
@@ -660,7 +673,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   // fall back to a guess: an absent baseline means computeFixFacts later
   // reports nothing, rather than diffing against a branch's shared base and
   // attributing that branch's whole history to this run.
-  const baseCommit = await captureBaseline(opts.projectDir)
+  const baseCommit = await captureBaseline(projectDir)
   const run = await createRun({
     product,
     startedBy: opts.startedBy,
@@ -669,11 +682,18 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     autoRun: opts.autoRun,
     initialPrompt: opts.initialPrompt,
     watch: opts.watch,
-    ticketKey: opts.ticketKey,
-    projectDir: opts.projectDir,
+    ticketKey,
+    projectDir,
     baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
+  // The run's own branch, off whatever the checkout has at HEAD. Runner-owned
+  // so no agent ever commits to develop directly again.
+  if (projectDir && existsSync(join(projectDir, '.git'))) {
+    const branch = `fix/${ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
+    try { await ensureRunBranch(projectDir, branch); run.branch = branch; await saveRun(run) }
+    catch (err) { log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, projectDir, error: err instanceof Error ? err.message : String(err) }) }
+  }
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),

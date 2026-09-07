@@ -14,6 +14,22 @@ interface TeamStatus {
   checkedAt: number
 }
 const status = ref<TeamStatus | null>(null)
+interface Checkout { path: string, name: string, exists: boolean, git: boolean, branch?: string, head?: string, dirty: number, dirtyFiles: string[] }
+const checkouts = ref<Checkout[]>([])
+const confirmStash = ref<string | null>(null)
+const stashing = ref<string | null>(null)
+async function loadCheckouts() { try { checkouts.value = await $fetch<Checkout[]>('/api/workspace') } catch { checkouts.value = [] } }
+async function stash(c: Checkout) {
+  if (confirmStash.value !== c.path) { confirmStash.value = c.path; return }
+  stashing.value = c.path
+  try {
+    const r = await $fetch<{ stashed: boolean, message: string }>('/api/workspace/stash', { method: 'POST', body: { path: c.path } })
+    toast.add({ title: r.stashed ? `Parked ${c.dirty} change(s) in ${c.name}` : `${c.name} was already clean`, description: r.stashed ? `Restore with: git -C ${c.path} stash pop` : undefined, color: 'success' })
+    await loadCheckouts()
+  } catch (e: any) {
+    toast.add({ title: 'Could not park changes', description: e.data?.message || e.message, color: 'error' })
+  } finally { stashing.value = null; confirmStash.value = null }
+}
 const loading = ref(true)
 const syncing = ref(false)
 const error = ref<string | null>(null)
@@ -34,7 +50,7 @@ async function sync() {
     toast.add({ title: 'Sync failed', description: e.data?.message || e.message, color: 'error' })
   } finally { syncing.value = false }
 }
-onMounted(refresh)
+onMounted(() => { refresh(); loadCheckouts() })
 const color = (s: Item['state']) => s === 'ok' ? 'var(--success)' : s === 'missing' ? 'var(--error)' : 'var(--warning)'
 </script>
 
@@ -98,6 +114,18 @@ const color = (s: Item['state']) => s === 'ok' ? 'var(--success)' : s === 'missi
               <span class="text-label truncate ml-auto" :title="p.repos.join(', ')">{{ p.repos.length }} repo{{ p.repos.length === 1 ? '' : 's' }}</span>
               <span class="text-[10px] px-1.5 py-0.5 rounded" :style="{ color: p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }">{{ p.recipe ? 'recipe' : 'no recipe' }}</span>
             </div>
+          </div>
+        </div>
+        <div class="rounded-xl p-4 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <div class="font-medium mb-1" style="color: var(--text-primary);">Checkouts</div>
+          <p class="text-label mb-2">Product repositories under the workspace root. A run branches from the checkout's HEAD and carries any uncommitted change with it, so park changes that are not meant to travel.</p>
+          <p v-if="!checkouts.length" class="text-label">No checkouts yet; the stack step clones a product the first time it is needed.</p>
+          <div v-for="c in checkouts" :key="c.path" class="flex items-center gap-3 py-1" style="border-top: 1px solid var(--border-subtle);">
+            <span class="font-mono w-40 truncate" :title="c.path">{{ c.name }}</span>
+            <span v-if="c.git" class="text-label font-mono truncate">{{ c.branch }} @ {{ c.head }}</span>
+            <span v-else class="text-label">not a git checkout</span>
+            <span class="ml-auto whitespace-nowrap" :style="{ color: c.dirty ? 'var(--warning)' : 'var(--success)' }" :title="c.dirtyFiles.join('\n')">{{ c.dirty ? `${c.dirty} uncommitted` : 'clean' }}</span>
+            <UButton v-if="c.git && c.dirty" size="xs" variant="ghost" :color="confirmStash === c.path ? 'warning' : 'neutral'" :loading="stashing === c.path" :label="confirmStash === c.path ? 'Confirm park' : 'Park changes'" @click="stash(c)" />
           </div>
         </div>
         <div class="rounded-xl p-4 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
