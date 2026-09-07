@@ -35,8 +35,15 @@ RUN apt-get update && apt-get install -y \
     python3 \
     git \
     curl \
-    openjdk-17-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
+# Temurin 17, pinned and checksummed: the base image's Debian carries no JDK 17
+# package. Installed under /opt so a host-mounted JDK on PATH still wins.
+RUN set -eu; \
+    curl -fsSL -o /tmp/jdk.tgz "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz"; \
+    echo "3808d1d15e3ec6bd5b84057fb5d84c33d8a1536a258146bcea2e603fc726e08e  /tmp/jdk.tgz" | sha256sum -c -; \
+    mkdir -p /opt/jdk-17; tar -xzf /tmp/jdk.tgz -C /opt/jdk-17 --strip-components=1; rm -f /tmp/jdk.tgz
+ENV JAVA_HOME=/opt/jdk-17
+ENV PATH="/opt/jdk-17/bin:${PATH}"
 
 # Copy built application from build stage
 COPY --from=build --chown=bun:bun /app/.output .output
