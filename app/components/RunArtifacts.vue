@@ -45,7 +45,9 @@ async function open(name: string) {
 }
 async function render() {
   const k = kind.value
+  jsonRendered.value = {}
   if (k === 'markdown') { rendered.value = await renderMarkdownWithHighlighting(raw.value); return }
+  if (k === 'json') void renderJsonMarkdown(jsonRows.value)
   if (raw.value.length > HIGHLIGHT_MAX) { rendered.value = ''; return }
   if (k === 'json' || k === 'xml' || k === 'code') {
     const text = k === 'json' ? pretty(raw.value) : raw.value
@@ -55,6 +57,14 @@ async function render() {
 const pretty = (s: string) => { try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s } }
 
 /** JSON as a document: every leaf on its own row, strings with their real line breaks. */
+/** Values that read like markdown (a step's input or output, a report) are rendered as such; the row's raw text is one click away in Raw mode. */
+const jsonRendered = ref<Record<string, string>>({})
+const looksLikeMarkdown = (v: string) => v.length > 60 && /(^|\n)(#{1,6} |\|.*\||- |\d+\. |```)/.test(v)
+async function renderJsonMarkdown(rows: { path: string, value: string }[]) {
+  const out: Record<string, string> = {}
+  for (const r of rows) if (looksLikeMarkdown(r.value)) out[r.path] = await renderMarkdownWithHighlighting(r.value)
+  jsonRendered.value = out
+}
 const jsonRows = computed(() => {
   if (kind.value !== 'json') return []
   let data: unknown
@@ -169,7 +179,8 @@ defineExpose({ refresh })
         <div v-else-if="kind === 'json'" class="space-y-1.5">
           <div v-for="r in jsonRows" :key="r.path" class="grid gap-3" style="grid-template-columns: 14rem minmax(0, 1fr);">
             <span class="font-mono text-[11px] truncate" style="color: var(--text-tertiary);" :title="r.path">{{ r.path || '(root)' }}</span>
-            <span :class="[r.long ? 'whitespace-pre-wrap' : 'whitespace-pre-wrap', 'break-words min-w-0']" :style="{ color: 'var(--text-primary)', fontFamily: r.long ? 'var(--font-sans)' : 'var(--font-mono)' }">{{ r.value }}</span>
+            <div v-if="jsonRendered[r.path]" class="prose prose-sm max-w-none text-[12px] leading-relaxed break-words evidence-prose min-w-0 rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);" v-html="jsonRendered[r.path]" />
+            <span v-else class="whitespace-pre-wrap break-words min-w-0" :style="{ color: 'var(--text-primary)', fontFamily: r.long ? 'var(--font-sans)' : 'var(--font-mono)' }">{{ r.value }}</span>
           </div>
         </div>
 

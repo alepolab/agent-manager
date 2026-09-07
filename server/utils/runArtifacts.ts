@@ -509,7 +509,6 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
     )
   }
-  if (checkout) lines.push('', `Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. Commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy above.`)
   if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
   lines.push('', '---', '')
   return lines.join('\n')
