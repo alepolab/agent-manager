@@ -165,7 +165,7 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<strin
               <td class="px-3 py-2 text-label truncate max-w-[12rem]" :title="r.initialPrompt">{{ r.initialPrompt }}</td>
               <td class="px-3 py-2">
                 <div class="flex gap-1 justify-end">
-                  <UButton size="xs" variant="ghost" label="Open" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" />
+                  <UButton size="xs" variant="ghost" label="Open" :to="`/runs/${r.id}`" />
                   <UButton v-if="canRestart(r)" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Restart" :loading="busy === r.id" @click="act(r, 'restart', { stepId: restartPoint(r) })" />
                   <UButton size="xs" variant="ghost" icon="i-lucide-copy" label="Clone" :to="`/workflows/${r.workflowSlug}?clone=${r.id}`" />
                   <UButton

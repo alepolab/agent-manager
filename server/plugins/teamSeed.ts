@@ -1,7 +1,3 @@
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import { agentTemplates } from '~/utils/templates'
-import { resolveClaudePath } from '../utils/claudeDir'
 /**
  * Brings the instance's config directory in line with the team plugin and
  * the shipped templates at boot, so a fresh instance carries the team's
@@ -12,7 +8,7 @@ import { teamSync } from '../utils/teamSync.ts'
 
 export default defineNitroPlugin(() => {
   if (process.env.TEAM_SEED_ON_BOOT === '0') return
-  teamSync().then((s) => {
+  teamSync('boot').then((s) => {
     console.log(`[teamSeed] plugin ${s.pluginVersion ?? 'not installed'}; ${s.agents.length} agents, ${s.skills.length} skills, ${s.commands.length} commands, ${s.watches.length} watches, workflow ${s.workflow.state}`)
 
     // A seeded item that was edited locally is REWRITTEN here, every boot. That
@@ -38,22 +34,14 @@ export default defineNitroPlugin(() => {
     // looked healthy doing it.
     //
     // A warning, not a failure: one absent optional skill must not take the
-    // instance down, but it must not be silent either.
-    try {
-      const declared = new Set<string>()
-      for (const t of agentTemplates.filter(t => t.id.startsWith('sdlc-'))) {
-        for (const skill of t.frontmatter.skills ?? []) declared.add(skill)
-      }
-      const missing = [...declared].filter(n => !existsSync(join(resolveClaudePath('skills'), n))).sort()
-      if (missing.length) {
-        console.warn(
-          `[teamSeed] WARNING: ${missing.length} of ${declared.size} declared skills do not resolve — `
-          + `agents declaring them run WITHOUT those instructions, silently: ${missing.join(', ')}`)
-      } else {
-        console.log(`[teamSeed] all ${declared.size} declared skills resolve`)
-      }
-    } catch (err) {
-      console.warn('[teamSeed] could not verify declared skills', err)
+    // instance down, but it must not be silent either. The same list is on the
+    // Team page as `unresolvedSkills`.
+    if (s.unresolvedSkills.length) {
+      console.warn(
+        `[teamSeed] WARNING: ${s.unresolvedSkills.length} declared skills do not resolve — `
+        + `agents declaring them run WITHOUT those instructions, silently: ${s.unresolvedSkills.join(', ')}`)
+    } else {
+      console.log('[teamSeed] all declared skills resolve')
     }
   }).catch((err) => console.error('[teamSeed] failed:', err instanceof Error ? err.message : err))
 })

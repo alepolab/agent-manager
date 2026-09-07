@@ -33,7 +33,8 @@ const { shouldEmitProgress, PROGRESS_MIN_INTERVAL_MS, describeBlock } = await im
   assert.equal(describeBlock({ type: 'tool_result', content: 'boom', is_error: true }), '✗ boom', 'an error result is marked')
   assert.equal(describeBlock({ type: 'text', text: '   ' }), null, 'blank text is not a line')
   assert.equal(describeBlock({ type: 'thinking', thinking: 'hmm' }), null, 'thinking is not streamed')
-  assert.ok(describeBlock({ type: 'text', text: 'x'.repeat(500) }).length <= 200, 'lines are capped')
+  assert.ok(describeBlock({ type: 'text', text: 'x'.repeat(500) }).length <= 300, 'prose lines are capped')
+  assert.ok(describeBlock({ type: 'tool_use', name: 'Bash', input: { command: 'y'.repeat(900) } }).length <= 610, 'a command keeps more, so the line that worked is not lost')
 }
 
 // ── the throttle policy is a pure decision, tested in isolation ───────────

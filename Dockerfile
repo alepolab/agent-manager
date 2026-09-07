@@ -35,6 +35,12 @@ RUN apt-get update && apt-get install -y \
 
 # Copy built application from build stage
 COPY --from=build --chown=bun:bun /app/.output .output
+# The agent SDK (0.3.x) runs Claude Code from a per-platform optional package
+# holding a native binary, loaded at runtime rather than imported, so Nitro's
+# dependency tracing leaves it out of .output. Without it every agent call
+# fails with "Native CLI binary for linux-x64 not found". Bun installed it in
+# the build stage; put it where the bundled SDK looks.
+COPY --from=build --chown=bun:bun /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64 .output/server/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64
 
 # Bake in a curated Claude config so the image is self-contained: plugins,
 # skills, agents and settings travel with it, and a fresh host needs no

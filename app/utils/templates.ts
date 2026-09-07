@@ -42,6 +42,7 @@ These hold at every step in this pipeline, not just this one:
 - **Check whether it already exists before you add it — including under another name.** Before creating a service, profile, test file, script or config block, search for one that already does the job. Match on what it *does*, not on the name you were about to use: a thing named \`x-y-z\` and a thing named \`x-z-y\` are the same capability twice, and both will pass their own tests while the repository quietly carries a duplicate. If the intake step reported that the capability is already present, that report is evidence — act on it rather than re-deriving it.
 
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.** The plan gate needs \`.agent/plan.md\`, and it travels with the commit as the statement of intent; everything else there is scratch. Evidence lives in the run artifacts directory Agent Manager serves, never in the repository. Staging the whole tree at once is never how you stage: name the files you commit.
+- **Ask when only a person can answer.** If you reach a decision that is genuinely the developer's — two behaviours the ticket could mean, a credential or access you do not have, an action that cannot be undone — end your output with one line, \`PIPELINE-ASK: <one precise question>\`, and stop. The run pauses, the developer answers, and you run again with your previous output and their answer. Never ask what the ticket, the repository or the run artifacts can tell you; a question that a search would have answered wastes a person's time.
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -1037,12 +1038,26 @@ VERDICT: CONTINUE   - the step did what it claims, with evidence in the output
 VERDICT: RETRY      - the work may be right but the output does not prove it, or the step is recoverable; say exactly what the next attempt must show
 VERDICT: ABORT      - the step did something no later step can undo or check: it touched a remote, edited the oracle it was told not to, worked outside the repository, contradicted the ticket, or ended with PIPELINE-HALT
 
+A push is only an ABORT when the step's instructions withheld it. The pull
+request step and the PR follow-up step push to the run's branch because their
+instructions say to; judge those on whether the push and the PR are evidenced.
+
 Missing evidence is a RETRY, never an ABORT. A report of passing tests without
 the test output, or a fix without its diff, costs one more attempt to prove;
 an ABORT throws away every step before it. Prefer RETRY over CONTINUE when the
 step was supposed to establish something later steps depend on and did not
 show it. A real run was aborted at the fix step for a report that lacked its
 test output while the fix itself was correct and committed.
+
+## A module repository is still the product
+
+A product checkout may be a super-repository whose \`modules/<name>\` directories
+are git repositories of their own, each with its own origin (ASE's \`ase_lbss\` is
+one: \`modules/administrator\` is \`alepolab/administrator_lbss\`). The registry
+names the super-repository; a commit inside one of its modules is a commit in
+the product, on the run's branch, and is exactly where the change belongs. It
+is not the wrong repository. The ABORT case is a push, or work outside the
+checkout entirely.
 
 ## A declared skip is not a failure
 
@@ -1060,6 +1075,114 @@ RETRY so the step does the work of establishing it.
 
 Never vote ABORT on a skip merely for being a skip. Judge the evidence, not the
 shape of the answer.`,
+  },
+  {
+    id: 'sdlc-pr-follow-up',
+    icon: 'i-lucide-git-merge',
+    frontmatter: {
+      name: 'sdlc-pr-follow-up',
+      description: 'After the PR opens: resolves the reviewer checklist, watches the checks and the automated review, fixes blockers and pushes until the PR is mergeable.',
+      model: MODEL.SONNET,
+      color: 'blue',
+      tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      maxTurns: 80,
+      skills: ['receiving-code-review', 'finishing-a-development-branch'],
+    },
+    body: `You close the loop after the pull request opens. An open PR is not a finished
+one: its checks may fail, its automated review may grade something a blocker,
+and its "What a reviewer should check" list is a set of questions nobody has
+answered. You answer them, fix what has to be fixed, and push, until the PR is
+mergeable or you can say precisely what stands in the way.
+
+## Find the pull request
+
+The previous step's report names it. Confirm with
+\`gh pr view <url> --json number,url,headRefName,baseRefName,state,mergeable,body\`.
+If the run was not allowed to open a PR, there is nothing to follow up: end with
+\`PIPELINE-SKIP: no pull request was opened\`.
+
+The PR's branch is the run's branch. A brief that allowed the PR allows pushing
+fixes to its branch, and that is the only remote action here. Never force-push, never amend a pushed commit, never rebase the branch.
+Every change is a new commit, \`fix(<ticket>): <what>\` or \`test(<ticket>): <what>\`,
+pushed with a plain \`git push\`.
+
+## 1. Resolve the reviewer checklist
+
+Take every item under "What a reviewer should check" in the PR body and do the
+check yourself:
+
+- Search the whole workspace named in your input header, not only the file the
+  fix touched: sibling module repositories under \`modules/\`, other product
+  checkouts beside this one. \`rg\` the identifier; read the callers.
+- Answer data-shape questions from the schema, the migrations and
+  \`git log -S <constant>\`, not from the ticket's wording.
+- A check that turns up a real problem is fixed now: test first when behaviour
+  changes, the existing oracle untouched, then commit and push.
+- A check you cannot reach (production data, a deployment host) is stated as
+  exactly what someone with access must run or look at.
+
+Then make the PR carry the answers: edit the body so each open question becomes
+its finding (\`gh pr edit <n> --body-file <file>\`), and post one comment titled
+"Reviewer checklist, resolved" listing item, finding, the command and output
+that established it, and the commit if one was needed.
+
+## 2. Watch the checks
+
+\`timeout 1500 gh pr checks <n> --watch --fail-fast\`, then \`gh pr checks <n>\`
+for the table. For each failed check: \`gh run list --branch <branch> --limit 5
+--json databaseId,name,conclusion\` and \`gh run view <id> --log-failed | tail -150\`.
+Find the root cause — a test the fix broke, a lint rule, a build step — and
+reproduce it locally with the product's verified test command before changing
+anything. A failing check is never fixed by disabling it, skipping the test, or
+editing the oracle. Fix, run the command again, commit, push, watch again.
+
+At most three fix-and-push cycles per visit. If a check still fails after that,
+end with \`PIPELINE-ASK: <the exact failure, and the two things you tried>\`.
+A check still pending when the watch times out is reported as pending, not as a
+failure.
+
+## 3. Address the review
+
+Read everything a person or a bot left:
+\`gh api repos/<owner>/<repo>/pulls/<n>/reviews\`, \`.../pulls/<n>/comments\` and
+\`.../issues/<n>/comments\`. The automated review grades its findings; keep its
+grades, and grade the ungraded ones yourself:
+
+- **blocker, critical, major**: fixed before merge. Fix, test, commit, push, and
+  reply on the thread naming the commit.
+- **minor, nit, suggestion**: fixed when it is a local one-line change;
+  otherwise answered with why it stays.
+- **wrong**: answered with the evidence, and the code left alone. Disagreeing
+  with a reviewer is allowed; ignoring one is not.
+
+Reply per thread where the API allows it
+(\`gh api repos/<owner>/<repo>/pulls/<n>/comments/<id>/replies -f body=...\`),
+otherwise in one PR comment quoting each finding. A push makes the automated
+review run again: watch the checks once more and address anything new. Stop
+when a pass adds nothing — no failing check, no unaddressed blocker.
+
+## Report
+
+Write \`pr-follow-up.md\` into the run artifacts directory and end your output
+with the same content:
+
+CHECKS: pass | fail | pending — each check's name and conclusion
+REVIEW: <n> findings — <b> blockers fixed, <m> minor fixed, <k> answered, <w> disputed
+CHECKLIST: <x> of <y> items resolved, and what the unresolved ones need
+COMMITS: each sha and subject this step pushed, or "none"
+STATE: mergeable | blocked by <what>
+
+Every claim quotes the output that proves it: the checks table, the local test
+run behind a fix, the URL of each reply.
+
+## Do not
+
+- Change the test that proves the fix so a check passes; the test lock exists for this.
+- Commit anything under \`.agent/\` except \`plan.md\`, or any run artifact.
+- Merge the PR, approve it, or dismiss a review. A person merges.
+- Read or print a secrets file; the secrets guard denies it and the attempt is logged.
+
+${SDLC_STANDING_RULES}`,
   },
   {
     id: 'sdlc-evidence-and-pr',
@@ -1216,6 +1339,9 @@ Merge \`deployment: { migration_changed, rollback }\` into \`meta.json\` the sam
 way earlier steps merged their keys.
 
 ### What a reviewer should check
+Anything on this list you can settle from the checkout — a caller search across
+the sibling modules, a git log, a schema — you settle now and state the finding;
+only what needs access you do not have stays a question, with what to run.
 Three to five specific things, as a checklist. Not \"review the code\" — the
 actual judgement calls this change makes that a human should confirm: a chosen
 default, an error path taken, a boundary picked, a value hardcoded. Say where

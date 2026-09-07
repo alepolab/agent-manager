@@ -822,13 +822,186 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   lr = await runner.waitForSettled(lr.id, TIMEOUT)
   off()
   assert.equal(lr.status, 'completed')
-  const tail = runner.getLiveLog(lr.id)
+  const tail = await runner.getLiveLog(lr.id)
   assert.ok(tail.a?.some(l => /\[Bash\] echo agent-a$/.test(l)), 'the tail holds the reported line, timestamped')
   assert.ok(tail.a?.[0] && /step started, visit 1$/.test(tail.a[0]), 'and opens with the step start')
   assert.ok(seen.some(([s, l]) => s === 'b' && /→ done$/.test(l)), 'listeners hear each line as it happens')
   const logs = readdirSync(join(process.env.AGENT_RUNS_DIR, lr.id, 'artifacts', 'steps')).filter(f => f.endsWith('.log'))
   assert.ok(logs.includes('step-01-agent-a.log'), `the step log is an artifact: ${logs.join(',')}`)
   assert.match(readFileSync(join(process.env.AGENT_RUNS_DIR, lr.id, 'artifacts', 'steps', 'step-01-agent-a.log'), 'utf8'), /\[Bash\] echo agent-a/, 'holding the same lines')
+  runner._dropLive(lr.id)
+  const fromDisk = await runner.getLiveLog(lr.id)
+  assert.deepEqual(fromDisk.a, tail.a, 'once the process that ran it is gone, the same lines come from the artifact')
+}
+
+// ── 20. a checkout cloned mid-run gets the run branch before the next step ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const wsRoot = mkdtempSync(join(tmpdir(), 'runner-ws-'))
+  const savedRoot = process.env.AGENT_WORKSPACE_ROOT
+  process.env.AGENT_WORKSPACE_ROOT = wsRoot
+  const cloned = join(wsRoot, 'alice', 'ase_lbss')
+  const seenBranch = {}
+  runner.setAgentCaller(async (agentSlug, input, projectDir) => {
+    if (agentSlug === 'agent-a') {
+      // The provisioner: clone into the developer's workspace, on main, no branch.
+      mkdirSync(cloned, { recursive: true })
+      git(cloned, ['init', '-q', '-b', 'main']); git(cloned, ['config', 'user.email', 't@x']); git(cloned, ['config', 'user.name', 't'])
+      writeFileSync(join(cloned, 'a.txt'), 'a\n'); git(cloned, ['add', '.']); git(cloned, ['commit', '-q', '-m', 'init'])
+    } else {
+      seenBranch[agentSlug] = { branch: git(cloned, ['branch', '--show-current']), projectDir, header: /Working checkout: .* on branch fix\/CSUP-9-/.test(input) }
+    }
+    return `out ${agentSlug}`
+  })
+  let lazy = await runner.startRun({ workflow, initialPrompt: 'CSUP-9: cloned later', watch: 'direct-invocation', autoRun: true, startedBy: 'alice' })
+  assert.equal(lazy.branch, undefined, 'nothing to branch before the clone exists')
+  lazy = await runner.waitForSettled(lazy.id, TIMEOUT)
+  assert.equal(lazy.status, 'completed')
+  assert.equal(lazy.branch, `fix/CSUP-9-${lazy.id.slice(0, 8)}`, 'the branch was made once the checkout appeared')
+  assert.equal(lazy.projectDir, cloned, 'and the run now knows its checkout')
+  assert.equal(seenBranch['agent-b'].branch, lazy.branch, 'the next step ran with the branch checked out')
+  assert.equal(seenBranch['agent-b'].projectDir, cloned, 'in that directory')
+  assert.ok(seenBranch['agent-b'].header, 'and was told so in its header')
+  process.env.AGENT_WORKSPACE_ROOT = savedRoot
+  rmSync(wsRoot, { recursive: true, force: true })
+}
+
+// ── 21. an agent's question pauses the run; the answer resumes it ─────────
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const inputs = {}
+  runner.setAgentCaller(async (agentSlug, input) => {
+    inputs[agentSlug] = input
+    if (agentSlug === 'agent-a' && !/User response/.test(input)) return 'I need to know.\nPIPELINE-ASK: Which customer profile applies, SaskTel or Lum?'
+    return `out ${agentSlug}`
+  })
+  let q = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  assert.equal(q.status, 'paused', 'a question pauses the run')
+  assert.equal(q.question?.kind, 'question'); assert.match(q.question.text, /SaskTel or Lum/)
+  assert.equal(q.steps.find(s => s.stepId === 'a').status, 'waiting', 'the asking step waits rather than completing')
+  assert.deepEqual(q.currentStepIds, ['a'])
+  q = await runner.respondToRun(q.id, 'SaskTel')
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  assert.equal(q.status, 'completed', 'the answer re-runs the step and a run-to-completion run carries on')
+  assert.equal(q.question, undefined)
+  assert.match(inputs['agent-a'], /User response:\nSaskTel/, 'the step saw the answer with its own previous output')
+  assert.ok(inputs['agent-d'], 'downstream steps ran after the answer')
+}
+
+// ── 22. a step marked for approval waits for a person, note travels with the go-ahead ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const gated = { ...workflow, steps: workflow.steps.map(s => s.id === 'd' ? { ...s, approval: true } : s) }
+  const inputs = {}
+  runner.setAgentCaller(async (agentSlug, input) => { inputs[agentSlug] = input; return `out ${agentSlug}` })
+  let g = await runner.startRun({ workflow: gated, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.status, 'paused', 'run-to-completion still stops at an approval gate')
+  assert.equal(g.question?.kind, 'approval'); assert.equal(g.question.stepId, 'd')
+  assert.equal(g.steps.find(s => s.stepId === 'd').status, 'pending', 'the gated step has not started')
+  assert.equal(inputs['agent-d'], undefined)
+  g = await runner.continueRun(g.id, 'Target the SaskTel branch policy')
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.status, 'completed')
+  assert.match(inputs['agent-d'], /Operator note from the operator, sent while the run was in flight: Target the SaskTel branch policy/, 'the approval note reached the gated step')
+}
+
+// ── 23. a note sent while a step runs reaches whichever step starts next ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const inputs = {}
+  runner.setAgentCaller(async (agentSlug, input) => { inputs[agentSlug] = input; if (agentSlug === 'agent-a') await new Promise(r => setTimeout(r, 400)); return `out ${agentSlug}` })
+  let n = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  await new Promise(r => setTimeout(r, 100))
+  assert.deepEqual(await runner.noteRun(n.id, 'The plugin lives under modules/administrator'), { queued: 'The plugin lives under modules/administrator' })
+  n = await runner.waitForSettled(n.id, TIMEOUT)
+  assert.equal(n.status, 'completed')
+  assert.ok(!/modules\/administrator/.test(inputs['agent-a']), 'the step already running did not get it')
+  const carriers = ['agent-b', 'agent-c', 'agent-d'].filter(s => /Operator note .*modules\/administrator/.test(inputs[s] ?? ''))
+  assert.equal(carriers.length, 1, `exactly one later step carries the note: ${carriers.join(',')}`)
+  assert.equal(await runner.noteRun('no-such-run', 'x'), null, 'a run not in flight here cannot take a note')
+}
+
+// ── 24. a restart does not re-run a step that declared a skip ─────────────
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const calls = []
+  let dFails = true
+  runner.setAgentCaller(async (agentSlug) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-b') return 'nothing to stand up here\nPIPELINE-SKIP: unit-test-only change'
+    if (agentSlug === 'agent-d' && dFails) throw new Error('d failed once')
+    return `out ${agentSlug}`
+  })
+  let sk = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  sk = await runner.waitForSettled(sk.id, TIMEOUT)
+  assert.equal(sk.status, 'failed')
+  assert.equal(sk.steps.find(s => s.stepId === 'b').status, 'skipped')
+  assert.ok(sk.steps.find(s => s.stepId === 'b').skipReason, 'the skip was declared, not scheduled')
+  runner._dropLive(sk.id)
+  dFails = false
+  calls.length = 0
+  sk = await runner.restartRun(sk.id, 'd')
+  sk = await runner.waitForSettled(sk.id, TIMEOUT)
+  assert.equal(sk.status, 'completed')
+  assert.deepEqual(calls, ['agent-d'], `only the restarted step ran; a declared skip stays settled: ${calls.join(',')}`)
+  assert.equal(sk.steps.find(s => s.stepId === 'b').visits, 1, 'the skipped step was not visited again')
+}
+
+// ── 25. a restart is always worth one visit, and reads the record, not a stale memory ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const calls = []
+  let cFails = 3
+  runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); if (agentSlug === 'agent-c' && cFails-- > 0) throw new Error('c keeps failing'); return `out ${agentSlug}` })
+  let v = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  v = await runner.waitForSettled(v.id, TIMEOUT)
+  assert.equal(v.status, 'failed')
+  // Two restarts fail too, leaving c at its visit cap of 3.
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'c')).id, TIMEOUT)
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'c')).id, TIMEOUT)
+  assert.equal(v.steps.find(s => s.stepId === 'c').visits, 3, 'c is at its cap')
+  calls.length = 0
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'c')).id, TIMEOUT)
+  assert.equal(v.status, 'completed', 'a restart at the cap still runs the step once more: ' + v.error + ' calls=' + calls.join(','))
+  assert.ok(calls.includes('agent-c'), 'the capped step actually ran')
+  assert.equal(v.steps.find(s => s.stepId === 'c').visits, 3, 'the visit count saturates at the cap the evidence schema allows')
+  // The record on disk, not memory, is what a restart reads.
+  const rec = await store.getRun(v.id)
+  rec.status = 'failed'; rec.steps.find(s => s.stepId === 'd').status = 'failed'
+  await store.saveRun(rec)
+  calls.length = 0
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'd')).id, TIMEOUT)
+  assert.equal(v.status, 'completed'); assert.deepEqual(calls, ['agent-d'], 'the step marked failed on disk ran, whatever memory remembered')
+}
+
+// ── 26. running out of turns is a checkpoint: the retry starts from the log tail ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const { AgentResultError } = await import('../server/utils/agentCaller.ts')
+  const inputs = {}
+  let starved = true
+  runner.setAgentCaller(async (agentSlug, input, projectDir, { onProgress } = {}) => {
+    inputs[agentSlug] = inputs[agentSlug] ?? []; inputs[agentSlug].push(input)
+    if (agentSlug === 'agent-b' && starved) {
+      onProgress?.({ turn: 1, lastTool: 'Bash', lastActivityAt: Date.now(), line: '[Bash] JUNIT=/x/junit.jar java org.junit.runner.JUnitCore T' })
+      onProgress?.({ turn: 1, lastTool: 'Bash', lastActivityAt: Date.now(), line: '→ OK (6 tests) EXIT: 0' })
+      starved = false
+      throw new AgentResultError('Claude Code returned an error result (error_max_turns): no further detail', { input_tokens: 5, output_tokens: 1 }, 'error_max_turns')
+    }
+    return `out ${agentSlug}`
+  })
+  let mt = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  mt = await runner.waitForSettled(mt.id, TIMEOUT)
+  assert.equal(mt.status, 'completed', 'the run survives a step that ran out of turns')
+  const b = mt.steps.find(s => s.stepId === 'b')
+  assert.equal(b.status, 'completed'); assert.equal(b.visits, 2, 'the step ran a second time')
+  assert.equal(inputs['agent-b'].length, 2)
+  assert.match(inputs['agent-b'][1], /ran out of its turn budget/, 'the retry is told why')
+  assert.match(inputs['agent-b'][1], /OK \(6 tests\) EXIT: 0/, 'and gets the tail of what the first attempt did')
+  const snaps = readdirSync(join(process.env.AGENT_RUNS_DIR, mt.id, 'artifacts', 'steps'))
+  assert.ok(snaps.some(f => /step-02-.*-retry-1\.json$/.test(f)), 'the starved attempt is snapshotted')
 }
 
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real

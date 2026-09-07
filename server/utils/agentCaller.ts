@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -85,6 +85,8 @@ export interface AgentCallResult {
   output: string
   model: string | null
   usage: AgentUsage | null
+  /** The SDK session the call ran in: its transcript is `~/.claude/projects/<cwd>/<sessionId>.jsonl`. */
+  sessionId: string | null
 }
 
 /**
@@ -111,8 +113,9 @@ export interface AgentProgress {
   line?: string
 }
 
-const LINE_MAX = 200
-const squash = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, LINE_MAX)
+const LINE_MAX = 300
+const TOOL_LINE_MAX = 600
+const squash = (s: string, max = LINE_MAX) => s.replace(/\s+/g, ' ').trim().slice(0, max)
 
 /**
  * The live-log line for one content block, or null when the block says
@@ -127,7 +130,7 @@ export function describeBlock(block: unknown): string | null {
   if (b.type === 'tool_use' && typeof b.name === 'string') {
     const i = b.input ?? {}
     const detail = [i.command, i.file_path, i.path, i.pattern, i.query, i.url, i.description].find(v => typeof v === 'string' && v.trim()) as string | undefined
-    return squash(`[${b.name}] ${detail ?? ''}`)
+    return squash(`[${b.name}] ${detail ?? ''}`, TOOL_LINE_MAX)
   }
   if (b.type === 'tool_result') {
     const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((c: any) => (typeof c?.text === 'string' ? c.text : '')).join(' ') : ''
@@ -138,8 +141,18 @@ export function describeBlock(block: unknown): string | null {
 }
 export type OnAgentProgress = (progress: AgentProgress) => void
 
-/** Per-call extras: the runner's abort signal, the starter's identity env, and a progress sink. */
-export interface AgentCallOptions { signal?: AbortSignal, env?: Record<string, string>, onProgress?: OnAgentProgress }
+/** Per-call extras: the runner's abort signal, the starter's identity env, a progress sink,
+ *  a steering hook and a session hook. `onSteer` receives `deliver`, which pushes an operator
+ *  message into the agent's conversation while it works (the SDK delivers it once the tool
+ *  call or model request in flight completes, without ending the turn); it returns false once the call is over.
+ *  `onSession` fires as soon as the SDK reports the session id and the directory it ran in. */
+export interface AgentCallOptions {
+  signal?: AbortSignal
+  env?: Record<string, string>
+  onProgress?: OnAgentProgress
+  onSteer?: (deliver: (text: string) => boolean) => void
+  onSession?: (sessionId: string, cwd: string) => void
+}
 
 /** Floor between successive progress emissions when the active tool hasn't
  *  changed — publishing on every SDK message would be far too chatty (a
@@ -207,7 +220,7 @@ export function shouldEmitProgress(
 export async function callAgent(
   agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
-  const { signal, env: userEnv = {}, onProgress } = opts
+  const { signal, env: userEnv = {}, onProgress, onSteer, onSession } = opts
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -249,6 +262,34 @@ export async function callAgent(
   let result = ''
   let modelRan: string | null = null
   let usage: AgentUsage | null = null
+  let sessionId: string | null = null
+
+  // ── steering: the prompt is a stream so the operator can talk to the agent mid-step ──
+  // The first message is the step input. Later ones are operator notes, pushed
+  // with priority 'next': the CLI hands them to the model as soon as the tool call
+  // or model request in flight completes, without ending the turn. ('now' would
+  // abort whatever is in flight, and an aborted model request comes back as an
+  // error result that ends the step - seen live.) The stream ends at the first result
+  // with nothing pending; a note that arrives after that is refused (deliver
+  // returns false) and the runner falls back to queueing it for the next step.
+  const pending: string[] = []
+  let finished = false
+  let wake: (() => void) | undefined
+  const kick = () => { const w = wake; wake = undefined; w?.() }
+  onSteer?.((text) => { if (finished) return false; pending.push(text); kick(); return true })
+  async function* messages(): AsyncGenerator<SDKUserMessage> {
+    yield { type: 'user', message: { role: 'user', content: input }, parent_tool_use_id: null, session_id: sessionId ?? '' }
+    for (;;) {
+      while (pending.length) {
+        yield {
+          type: 'user', priority: 'next', parent_tool_use_id: null, session_id: sessionId ?? '',
+          message: { role: 'user', content: `Operator note, sent while you were working. Take it into account from here on: ${pending.shift()!}` },
+        }
+      }
+      if (finished) return
+      await new Promise<void>((resolve) => { wake = resolve })
+    }
+  }
 
   // ── progress telemetry (diagnostic only — see AgentProgress's doc comment) ──
   let turn = 0
@@ -267,8 +308,11 @@ export async function callAgent(
     onProgress(progress)
   }
 
+  // The loop keeps its own indentation inside the try: the assembler test reads
+  // this block by shape and expects `env: {` at the depth it has always had.
+  try {
   for await (const message of query({
-    prompt: input,
+    prompt: messages(),
     options: {
       cwd,
       // A bot identity for git and gh, when one is configured, so agent pushes
@@ -298,6 +342,7 @@ export async function callAgent(
     // The one place the real, observed model comes from - never the request.
     if (message.type === 'system' && message.subtype === 'init') {
       modelRan = message.model
+      if (message.session_id && message.session_id !== sessionId) { sessionId = message.session_id; onSession?.(sessionId, cwd) }
       log.debug('agent model resolved', { agentSlug, modelRequested: declaredModel ?? '(sdk default)', modelRan })
     }
     if (message.type === 'assistant') {
@@ -336,7 +381,17 @@ export async function callAgent(
       const interpreted = interpretResultMessage(message, maxTurns)
       result = interpreted.output
       usage = interpreted.usage
+      // The turn is over. Close the input stream unless a note is still queued,
+      // in which case the agent gets one more turn to act on it.
+      if (!pending.length) finished = true
+      kick()
     }
+  }
+  } finally {
+    // Every exit path, a thrown error result included: otherwise the input
+    // generator stays suspended forever and a queued note is never released.
+    finished = true
+    kick()
   }
   // Final flush so the last observed turn/tool is never lost to the
   // throttle floor - only when there was ever anything to report (see
@@ -355,7 +410,7 @@ export async function callAgent(
     outputTokens: usage?.output_tokens ?? '(none reported)',
   }))
 
-  return { output: result, model: modelRan, usage }
+  return { output: result, model: modelRan, usage, sessionId }
 }
 
 /**

@@ -159,5 +159,76 @@ rmSync(bare, { recursive: true, force: true })
   rmSync(bare2, { recursive: true, force: true })
 }
 
+// ── Diffs, per-item apply, layout, broken JSON, audit, lock ───────────────
+//
+// "drifted" was a word: no diff, no way to apply one item, and a runbook file
+// that did not parse threw inside status and took the whole page down. A node
+// moved on the workflow canvas saved a `position` the comparison read as drift,
+// so Apply undid the layout. Back on the first temp dir with the fake plugin.
+{
+  D.setClaudeDir(process.env.CLAUDE_DIR)
+  const wfPath = join(process.env.CLAUDE_DIR, 'workflows', 'runbook-a-ticket-to-evidence-backed-pr.json')
+  await T.teamSync()
+
+  writeFileSync(wfPath, 'not json')
+  let s = await T.teamStatus()
+  assert.equal(s.workflow.state, 'drifted', 'a runbook file that does not parse is drift, not a crash')
+  assert.equal(typeof s.workflow.diff, 'string', 'and carries a diff')
+  s = await T.teamSync()
+  assert.equal(s.workflow.state, 'ok')
+  JSON.parse(readFileSync(wfPath, 'utf8'))
+
+  const wf = JSON.parse(readFileSync(wfPath, 'utf8'))
+  wf.steps[0].position = { x: 40, y: 80 }
+  writeFileSync(wfPath, JSON.stringify(wf, null, 2))
+  s = await T.teamStatus()
+  assert.equal(s.workflow.state, 'ok', 'a step position is the operator\'s layout, not drift')
+  wf.steps[1].label = 'renamed locally'
+  writeFileSync(wfPath, JSON.stringify(wf, null, 2))
+  s = await T.teamStatus()
+  assert.equal(s.workflow.state, 'drifted')
+  assert.ok(s.workflow.diff.includes('renamed locally'), 'the diff shows the local text')
+  s = await T.teamSync()
+  const after = JSON.parse(readFileSync(wfPath, 'utf8'))
+  assert.deepEqual(after.steps[0].position, { x: 40, y: 80 }, 'apply keeps the layout')
+  assert.notEqual(after.steps[1].label, 'renamed locally', 'and restores the team label')
+
+  writeFileSync(join(process.env.CLAUDE_DIR, 'agents', 'sdlc-verifier.md'), 'edited locally')
+  writeFileSync(join(process.env.CLAUDE_DIR, 'agents', 'sdlc-test-author.md'), 'also edited')
+  s = await T.teamStatus()
+  const v = s.agents.find(a => a.id === 'sdlc-verifier')
+  assert.equal(v.state, 'drifted'); assert.ok(v.diff.includes('edited locally'), 'a drifted agent carries its diff')
+  assert.equal(s.agents.find(a => a.id === 'sdlc-ticket-intake').diff, undefined, 'an ok item carries none')
+  s = await T.teamSync('sandeep', ['agent:sdlc-verifier'])
+  assert.equal(s.agents.find(a => a.id === 'sdlc-verifier').state, 'ok', 'only the named item is applied')
+  assert.equal(s.agents.find(a => a.id === 'sdlc-test-author').state, 'drifted', 'the other stays as it was')
+  assert.equal(s.drifted, 1)
+  assert.deepEqual([s.lastApplied.by, s.lastApplied.items], ['sandeep', 1], 'who applied what is recorded')
+  s = await T.teamSync()
+  assert.equal(s.drifted, 0)
+
+  // The registry's cap moves; the operator's enabled flag does not.
+  writeFileSync(join(cache, 'registry', 'watches.yaml'), 'watches:\n  - id: csup-bugs\n    jql: project = CSUP AND status = Done\n    daily_dispatch_cap: 20\n    mode: shadow\n')
+  const wpath = join(process.env.CLAUDE_DIR, 'watches.json')
+  const doc = JSON.parse(readFileSync(wpath, 'utf8')); const list = Array.isArray(doc) ? doc : doc.watches
+  list.find(x => x.id === 'csup-bugs').enabled = true
+  writeFileSync(wpath, JSON.stringify(Array.isArray(doc) ? list : doc, null, 2))
+  s = await T.teamStatus()
+  const w = s.watches.find(x => x.id === 'csup-bugs')
+  assert.equal(w.state, 'drifted'); assert.ok(w.diff.includes('20'), 'a changed cap reads as drift with the new value in the diff')
+  s = await T.teamSync()
+  const w2 = JSON.parse(readFileSync(wpath, 'utf8')); const l2 = Array.isArray(w2) ? w2 : w2.watches
+  assert.deepEqual([l2.find(x => x.id === 'csup-bugs').dailyDispatchCap, l2.find(x => x.id === 'csup-bugs').enabled], [20, true])
+
+  const results = await Promise.allSettled([T.teamSync(), T.teamSync()])
+  assert.deepEqual(results.map(r => r.status).sort(), ['fulfilled', 'rejected'], 'one apply at a time')
+  assert.equal(results.find(r => r.status === 'rejected').reason.statusCode, 409)
+
+  assert.equal(typeof s.enforcement.ok, 'boolean', 'enforcement is reported, armed or not')
+  assert.ok(Array.isArray(s.enforcement.checks))
+  assert.ok(Array.isArray(s.unresolvedSkills) && !s.unresolvedSkills.includes('intent-template'), 'a seeded skill is not unresolved')
+  assert.equal(s.sources.skills, 'plugin', 'the page can say where the team version came from')
+  assert.equal(typeof s.instance.workspaceRoot, 'string')
+}
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('teamSync: all assertions passed')

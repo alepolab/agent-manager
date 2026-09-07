@@ -43,7 +43,19 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 const hasContent = computed(() => agents.value.length > 0 || commands.value.length > 0 || skills.value.length > 0)
 
 const attention = computed(() => runs.value.filter(r =>
-  ['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
+  !r.dismissed && (['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing')))
+const dismissing = ref(false)
+async function dismiss(ids: string[]) {
+  dismissing.value = true
+  try {
+    await Promise.all(ids.map(id => $fetch(`/api/runs/${id}/dismiss`, { method: 'POST' })))
+    await refresh()
+  } catch (e: any) {
+    toast.add({ title: 'Could not dismiss', description: e.data?.message || e.message, color: 'error' })
+  } finally { dismissing.value = false }
+}
+/** Everything settled in the queue; a paused run still needs a decision, so it stays. */
+const dismissable = computed(() => attention.value.filter(r => r.status !== 'paused'))
 const mine = computed(() => runs.value.filter(r => r.startedBy && r.startedBy === me.value?.login).slice(0, 8))
 const dayAgo = Date.now() - 86_400_000, weekAgo = Date.now() - 7 * 86_400_000
 const cost = computed(() => ({
@@ -127,16 +139,22 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
 
       <!-- Needs attention -->
       <section>
-        <h2 class="text-section-label mb-2">Needs attention <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
+        <div class="flex items-center gap-3 mb-2">
+          <h2 class="text-section-label">Needs attention <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
+          <button v-if="dismissable.length" class="text-[11px] text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} settled</button>
+        </div>
         <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
         <p v-else-if="!attention.length && !escalated.length" class="text-[13px] text-label">Nothing waiting on you.</p>
         <div v-else class="space-y-1">
-          <NuxtLink v-for="r in attention" :key="r.id" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
-            <span class="font-medium truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
-            <span class="text-label truncate">{{ why(r) }}</span>
-            <span class="ml-auto text-label whitespace-nowrap">{{ r.startedBy || '' }} · {{ ago(r.startedAt) }}</span>
-          </NuxtLink>
+          <div v-for="r in attention" :key="r.id" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <NuxtLink :to="`/runs/${r.id}`" class="flex-1 min-w-0 flex items-center gap-3 focus-ring">
+              <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="font-medium truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
+              <span class="text-label truncate">{{ why(r) }}</span>
+              <span class="ml-auto text-label whitespace-nowrap">{{ r.startedBy || '' }} · {{ ago(r.startedAt) }}</span>
+            </NuxtLink>
+            <button v-if="r.status !== 'paused'" class="p-1 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
+          </div>
           <NuxtLink v-for="t in escalated" :key="t.watchId + t.key" to="/watches" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <span class="font-mono uppercase text-[11px] w-20 shrink-0" style="color: var(--error);">escalated</span>
             <span class="font-medium truncate" style="color: var(--text-primary);">{{ t.key }}</span>
@@ -152,7 +170,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
           <h2 class="text-section-label mb-2">My recent runs</h2>
           <p v-if="loaded && !mine.length" class="text-[13px] text-label">No runs started by you yet.</p>
           <div v-else class="space-y-1">
-            <NuxtLink v-for="r in mine" :key="r.id" :to="`/workflows/${r.workflowSlug}?run=${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <NuxtLink v-for="r in mine" :key="r.id" :to="`/runs/${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
               <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
               <span class="truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
               <div class="w-24 shrink-0"><RunProgressBar :steps="r.steps" /></div>

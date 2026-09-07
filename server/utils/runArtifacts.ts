@@ -454,7 +454,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     ...(runId
       ? [
           `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
-          `and shown in the run panel at ${appUrl}/runs?run=${runId}. Link that in a pull`,
+          `and shown on the run page at ${appUrl}/runs/${runId}. Link that in a pull`,
           'request body; never copy artifacts into the repository to make them reachable.',
           '',
         ]
@@ -469,7 +469,8 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // commits, files_changed and lines_changed for work that had actually been
     // done and committed — in a directory nothing else knew about.
     `Work in: ${workspaceRootFor(startedBy)}`,
-    'Clone into that directory and work there. Do not invent a checkout path and',
+    `Clone each repository into its own directory there, ${workspaceRootFor(startedBy)}/<repo name>, and work inside it.`,
+    'Never clone into the workspace directory itself. Do not invent a checkout path and',
     'do not search the filesystem for one — anything you leave elsewhere is',
     'invisible to every later step and to the evidence bundle.',
     '',
@@ -478,7 +479,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // trace and no explanation twice, and the monitor called it exactly that:
     // "silence without explanation".
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
-    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run: commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy.`] : []),
+    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run, in the checkout and in every module repository nested under it: commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The evidence step pushes that branch and opens the pull request on that repository against the branch policy.`] : []),
     '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
@@ -508,7 +509,6 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
     )
   }
-  if (checkout) lines.push('', `Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. Commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy above.`)
   if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
   lines.push('', '---', '')
   return lines.join('\n')

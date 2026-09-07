@@ -4,7 +4,7 @@ import type { AgentModel } from '~/types'
  * All supported model identifiers.
  * This is the canonical list — update here to add/remove models.
  */
-export const MODEL_IDS = ['opus', 'sonnet', 'haiku'] as const satisfies AgentModel[]
+export const MODEL_IDS = ['fable', 'opus', 'sonnet', 'haiku'] as const satisfies AgentModel[]
 
 /**
  * Named constants for every model ID.
@@ -19,6 +19,7 @@ export const MODEL_IDS = ['opus', 'sonnet', 'haiku'] as const satisfies AgentMod
  *   if (model === 'sonnet') { ... }
  */
 export const MODEL = {
+  FABLE: 'fable' as const,
   OPUS: 'opus' as const,
   SONNET: 'sonnet' as const,
   HAIKU: 'haiku' as const,
@@ -46,6 +47,15 @@ export interface ModelMeta {
 }
 
 export const MODEL_META: Record<AgentModel, ModelMeta> = {
+  fable: {
+    label: 'Fable',
+    tagline: 'Most intelligent',
+    description: 'Anthropic\'s most intelligent model (Claude Fable 5.1). Best for the hardest reasoning and long agentic work.',
+    badgeBg: 'bg-rose-500/15',
+    badgeText: 'text-rose-400',
+    color: '#E11D48',
+    contextWindow: 200_000,
+  },
   opus: {
     label: 'Opus',
     tagline: 'Most capable',

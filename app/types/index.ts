@@ -1,4 +1,4 @@
-export type AgentModel = 'opus' | 'sonnet' | 'haiku'
+export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
 export type AgentTool = 'Read' | 'Grep' | 'Glob' | 'Bash' | 'Write' | 'Edit'
 
@@ -242,6 +242,8 @@ export interface WorkflowStep {
   monitorSlug?: string
   /** How many times this step may run in one execution. Guards cycles. Default 3. */
   maxVisits?: number
+  /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
+  approval?: boolean
   /** Canvas position, persisted so branches and loops keep their layout. */
   position?: { x: number, y: number }
   /**

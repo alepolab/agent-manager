@@ -2,8 +2,36 @@
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES } from '~/utils/runStatus'
 
-const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]> }>()
-const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [] }>()
+const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
+const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string] }>()
+
+/** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
+const anyRunning = computed(() => props.run?.steps.some(s => s.status === 'running') ?? false)
+/** What the note box is for right now: a reply, an approval note, a note to the next step, or a restart note. */
+const noteMode = computed(() => {
+  const r = props.run
+  if (!r) return 'restart'
+  if (r.status === 'paused' && r.question?.kind === 'question') return 'reply'
+  if (r.status === 'paused') return 'continue'
+  if (r.status === 'running') return 'steer'
+  return 'restart'
+})
+const notePlaceholder = computed(() => ({
+  reply: 'Your answer to the agent',
+  continue: 'Optional note for the step about to run, e.g. target the SaskTel branch policy',
+  steer: anyRunning.value
+    ? 'Instruction for the agent working now, e.g. the plugin lives under modules/administrator'
+    : 'Send a note to whichever step starts next, e.g. the plugin lives under modules/administrator',
+  restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
+}[noteMode.value]))
+const sent = ref<string | null>(null)
+function send(kind: 'respond' | 'note' | 'continue') {
+  const text = note.value.trim()
+  if (kind === 'respond') emit('respond', text)
+  else if (kind === 'note') { emit('note', text); sent.value = text }
+  else emit('continue', text || undefined)
+  note.value = ''
+}
 
 /** Optional correction handed to whichever step is restarted next. */
 const note = ref('')
@@ -109,6 +137,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
       >
         &larr; All runs ({{ runs.length }})
       </button>
+      <NuxtLink v-if="!fullPage" :to="`/runs/${run.id}`" class="text-[11px] text-label hover:underline shrink-0 focus-ring" title="Steps, live output and every evidence file, full screen">Full page &nearr;</NuxtLink>
       <span class="text-[11px] font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">
         {{ run.status }}
       </span>
@@ -134,14 +163,23 @@ const money = (n: number) => `$${n.toFixed(4)}`
     <div v-if="prLinks.length" class="flex flex-wrap gap-3 text-[11px]">
       <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
     </div>
+    <div v-if="run.question" class="rounded-lg p-3 text-[12px] space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
+      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
+    </div>
+    <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
     <textarea
-      v-if="settledRun"
+      v-if="settledRun || run.status === 'paused' || run.status === 'running'"
       v-model="note"
       rows="2"
       class="field-input w-full resize-none text-[12px]"
-      placeholder="Optional note for the step you restart, e.g. verify from inside the container only"
-      aria-label="Note for the restarted step"
+      :placeholder="notePlaceholder"
+      :aria-label="notePlaceholder"
+      @keydown.meta.enter="noteMode === 'reply' ? send('respond') : noteMode === 'steer' ? send('note') : noteMode === 'continue' ? send('continue') : undefined"
     />
+    <p v-if="settledRun && run.steps.some(s => s.sessionId)" class="text-[11px] text-label">
+      Questions or feedback for a step's agent go to its chat: expand the step and choose Ask this agent, or use the speech bubble on its row. The conversation continues with everything the agent saw. A note typed here goes to the step you restart.
+    </p>
     <!-- One honest number: the run's cost so far, from server/utils/costReport.ts.
          Never fabricated - a step that hasn't reported usage, or ran on a model
          with no pricing entry, makes this a stated PARTIAL total, not a silent
@@ -180,6 +218,12 @@ const money = (n: number) => `$${n.toFixed(4)}`
           </button>
           <!-- Visible on the row itself: an action nobody has to discover by expanding. -->
           <UButton
+            v-if="step.sessionId && step.sessionProject"
+            size="xs" variant="soft" icon="i-lucide-message-circle"
+            :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
+            :aria-label="`Open the ${step.label} agent's chat`" :title="`Open the ${step.label} agent's chat`"
+          />
+          <UButton
             v-if="settledRun && stepSettled(step)"
             size="xs" variant="ghost" color="neutral" icon="i-lucide-rotate-ccw"
             :aria-label="`Restart from ${step.label}`" :title="`Restart from ${step.label}`"
@@ -188,10 +232,17 @@ const money = (n: number) => `$${n.toFixed(4)}`
         </div>
         <div v-if="step.status === 'running' && latest(step.stepId) && expanded !== step.stepId" class="pl-4 text-[10px] font-mono truncate text-label" :title="latest(step.stepId)">{{ latest(step.stepId) }}</div>
         <div v-if="expanded === step.stepId" class="pl-4 pb-2 space-y-1">
+          <!-- Questions and feedback for a finished step go to the agent itself: its
+               Claude Code session continues on /cli with everything it saw. -->
+          <UButton
+            v-if="step.sessionId && step.sessionProject"
+            size="xs" variant="soft" icon="i-lucide-message-circle" label="Ask this agent"
+            :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
+          />
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
           <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
             <div class="text-[10px] text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
-            <pre :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="text-[10px] font-mono whitespace-pre-wrap max-h-56 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">{{ liveFor(step.stepId).join('\n') }}</pre>
+            <div :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="max-h-72 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);"><LogLines :lines="liveFor(step.stepId)" /></div>
           </div>
           <pre v-if="step.output" class="text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
           <p v-else-if="!liveFor(step.stepId).length" class="text-[11px] text-label">No output yet.</p>
@@ -214,7 +265,10 @@ const money = (n: number) => `$${n.toFixed(4)}`
     </div>
 
     <div class="flex gap-2">
-      <UButton v-if="run.status === 'paused'" size="xs" label="Continue" @click="emit('continue')" />
+      <UButton v-if="noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
+      <UButton v-else-if="run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="`Approve and run`" @click="send('continue')" />
+      <UButton v-else-if="run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
+      <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
       <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
       <UButton v-if="run.status === 'running' || run.status === 'paused'" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
       <UButton v-if="settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />

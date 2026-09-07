@@ -20,6 +20,7 @@
  */
 
 import { existsSync, readdirSync } from 'node:fs'
+import { homedir as osHomedir } from 'node:os'
 import { join } from 'node:path'
 
 /** Login sanitiser, matching users.ts: a login becomes one safe path segment. */
@@ -27,9 +28,11 @@ const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_')
 
 export const WORKSPACE_ROOT_VAR = 'AGENT_WORKSPACE_ROOT'
 
-/** The configured root all developer workspaces live under. */
+/** The configured root all developer workspaces live under, as an absolute path: a `~` here
+ *  was handed to existsSync and to agents' Read and Glob, none of which expand it, so a
+ *  checkout that existed read as missing and a restart was refused for an "empty directory". */
 export function workspaceRoot(): string {
-  return (process.env[WORKSPACE_ROOT_VAR] || '~/alepo-workspace').replace(/\/+$/, '')
+  return (process.env[WORKSPACE_ROOT_VAR] || '~/alepo-workspace').replace(/\/+$/, '').replace(/^~(?=\/|$)/, osHomedir())
 }
 
 /**
@@ -169,7 +172,8 @@ export async function checkoutState(path: string): Promise<CheckoutState> {
       gitRaw(path, ['status', '--porcelain', '-uall']),
     ])
     const remote = await git(path, ['remote', 'get-url', 'origin']).catch(() => undefined)
-    const files = status.split('\n').filter(Boolean).map(l => l.slice(3))
+    // A nested repository shows up as one untracked directory in its parent; it is its own checkout, not a change here.
+    const files = status.split('\n').filter(Boolean).map(l => l.slice(3)).filter(f => !(f.endsWith('/') && existsSync(join(path, f, '.git'))))
     return { path, name, exists: true, git: true, branch, head, remote, dirty: files.length, dirtyFiles: files.slice(0, 20) }
   } catch {
     return { path, name, exists: true, git: true, dirty: 0, dirtyFiles: [] }
@@ -193,6 +197,22 @@ export async function listCheckouts(): Promise<(CheckoutState & { owner?: string
   return out
 }
 
+/**
+ * The git checkout inside a run's workspace: the workspace itself when an
+ * agent cloned into it, else the child named after the repo, else the only
+ * child with a .git. Undefined until something has been cloned.
+ */
+export function findCheckout(workspace: string, repoName?: string): string | undefined {
+  const ws = expand(workspace)
+  if (!existsSync(ws)) return undefined
+  if (existsSync(join(ws, '.git'))) return ws
+  if (repoName && existsSync(join(ws, repoName, '.git'))) return join(ws, repoName)
+  try {
+    const withGit = readdirSync(ws, { withFileTypes: true }).filter(e => e.isDirectory() && existsSync(join(ws, e.name, '.git'))).map(e => e.name)
+    return withGit.length === 1 ? join(ws, withGit[0]!) : undefined
+  } catch { return undefined }
+}
+
 /** Parks uncommitted work under a named stash so a run starts from a clean tree. `git stash pop` brings it back. */
 export async function stashCheckout(path: string, login: string): Promise<{ stashed: boolean, message: string }> {
   const s = await checkoutState(path)
@@ -203,10 +223,36 @@ export async function stashCheckout(path: string, login: string): Promise<{ stas
   return { stashed: true, message }
 }
 
-/** A run works on its own branch off the checkout's current HEAD. Creating it is the runner's job, not an agent's. */
-export async function ensureRunBranch(path: string, branch: string): Promise<void> {
-  await git(path, ['checkout', '--quiet', '-B', branch])
-  await excludeFromGit(path, '.agent/evidence-run/')
+/**
+ * A run works on its own branch off the checkout's current HEAD. Creating it
+ * is the runner's job, not an agent's. A super-repo whose modules are their
+ * own repositories (ASE keeps each module under modules/<name> with its own
+ * origin) gets the branch in every one of them too: the commit and the pull
+ * request happen in the module, and a module left on main would be pushed
+ * as main.
+ */
+export async function ensureRunBranch(path: string, branch: string): Promise<string[]> {
+  const repos = [path, ...nestedRepos(path)]
+  for (const r of repos) {
+    await git(r, ['checkout', '--quiet', '-B', branch])
+    await excludeFromGit(r, '.agent/evidence-run/')
+  }
+  return repos
+}
+
+/** Git repositories one level under the checkout or under its modules/ directory. */
+export function nestedRepos(path: string): string[] {
+  const out: string[] = []
+  for (const parent of [path, join(path, 'modules')]) {
+    if (!existsSync(parent)) continue
+    try {
+      for (const e of readdirSync(parent, { withFileTypes: true })) {
+        const dir = join(parent, e.name)
+        if (e.isDirectory() && !e.name.startsWith('.') && dir !== join(path, 'modules') && existsSync(join(dir, '.git'))) out.push(dir)
+      }
+    } catch { /* unreadable: nothing nested */ }
+  }
+  return out
 }
 
 /** Evidence copies never reach a commit, whatever an agent stages: the path is excluded in the checkout itself. */

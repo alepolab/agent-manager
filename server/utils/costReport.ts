@@ -51,7 +51,7 @@ export function stepCost(step: StepWithUsage): StepCost {
   }
 
   const meta = resolveModelMeta(step.model ?? undefined)
-  if (!meta) {
+  if (!meta?.pricing) {
     return {
       ...base,
       input_tokens: usage.input_tokens,

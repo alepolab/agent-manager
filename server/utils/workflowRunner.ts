@@ -1,5 +1,5 @@
 import {
-  buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed,
+  buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
@@ -9,15 +9,15 @@ import {
 import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct } from './registry.ts'
-import { getModelPricing } from './models.ts'
+import { resolveModelMeta } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
-import { artifactsWritable, checkoutDirFor, ensureRunBranch } from './workspace.ts'
+import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
 import { existsSync } from 'node:fs'
-import { appendFile } from 'node:fs/promises'
+import { appendFile, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -68,7 +68,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, contextMode?: 'predecessors' | 'ancestors' }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors' }[]
 }
 
 export interface StartRunOpts {
@@ -101,6 +101,16 @@ interface Live {
   aborts: Map<string, AbortController>
   /** Live output per step id: what the agent is doing right now, newest last. Capped; the full log is the step's .log artifact. */
   logs: Record<string, string[]>
+  /** Steps the operator has approved to run (see WorkflowStep.approval). */
+  approved: Set<string>
+  /** Operator notes addressed to a step, delivered with its next input. */
+  notes: Record<string, string>
+  /** A note for whichever step starts next. */
+  nextNote?: string
+  /** Per step in flight: pushes an operator note into the agent's conversation; false once the call is over. */
+  steer: Map<string, (text: string) => boolean>
+  /** The step that asked the operator a question and waits for the answer. */
+  waiting?: string
   /** True while this run's wave loop is actually executing in the background - the
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
@@ -116,9 +126,23 @@ export function subscribeLog(runId: string, fn: (stepId: string, line: string) =
   logSubscribers.get(runId)!.add(fn)
   return () => logSubscribers.get(runId)?.delete(fn)
 }
-/** The in-memory tail for a run still owned by this process; {} once it is gone. */
-export function getLiveLog(runId: string): Record<string, string[]> {
-  return live.get(runId)?.logs ?? {}
+/** The in-memory tail for a run this process ran; otherwise the step .log artifacts, so a finished run reads the same. */
+export async function getLiveLog(runId: string): Promise<Record<string, string[]>> {
+  const l = live.get(runId)
+  if (l) return l.logs
+  const run = await getRun(runId)
+  if (!run) return {}
+  const dir = join(runArtifactsDir(runId), 'steps')
+  if (!existsSync(dir)) return {}
+  const out: Record<string, string[]> = {}
+  for (const name of await readdir(dir)) {
+    const m = name.match(/^step-(\d+)-.*\.log$/)
+    const step = m ? run.steps[Number(m[1]) - 1] : undefined
+    if (!step) continue
+    const lines = (await readFile(join(dir, name), 'utf8')).split('\n').filter(Boolean)
+    out[step.stepId] = lines.slice(-LOG_TAIL)
+  }
+  return out
 }
 const LOG_TAIL = 400
 function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
@@ -151,8 +175,10 @@ function computeUsage(run: WorkflowRun): RunUsage {
     if (!s.usage) continue
     input += s.usage.input_tokens
     output += s.usage.output_tokens
-    const p = getModelPricing(s.model ?? undefined)
-    usd += (s.usage.input_tokens / 1_000_000) * p.input + (s.usage.output_tokens / 1_000_000) * p.output
+    // No list price known: the tokens still count, the dollars are left out,
+    // the same way costReport marks such a step unpriced rather than guessing.
+    const p = resolveModelMeta(s.model ?? undefined)?.pricing
+    if (p) usd += (s.usage.input_tokens / 1_000_000) * p.input + (s.usage.output_tokens / 1_000_000) * p.output
   }
   return { input_tokens: input, output_tokens: output, usd: Math.round(usd * 10000) / 10000 }
 }
@@ -433,6 +459,12 @@ async function runMonitor(
   }
 }
 
+/** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
+export function parseAsk(output: string): string | null {
+  const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
+  return m ? m[1]!.trim() : null
+}
+
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
   const step = stepOf(l, id)
   const rec = recOf(run, id)
@@ -444,8 +476,20 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // lastInputs WITHOUT the header keeps that branch's reconstruction clean; rec
   // and the agent call both use `input`, so the run's own record matches
   // exactly what the agent saw.
-  const body = override ?? computeInput(l, run, id, run.initialPrompt)
+  let body = override ?? computeInput(l, run, id, run.initialPrompt)
+  // A note the operator sent while the run was in flight, or attached to an
+  // approval: delivered once, with this step's input, as a correction from a person.
+  const note = l.notes[id] ?? l.nextNote
+  if (note) {
+    body += `\n\n---\nOperator note from ${run.startedBy ?? 'the operator'}, sent while the run was in flight: ${note}`
+    delete l.notes[id]
+    if (l.nextNote === note) l.nextNote = undefined
+  }
   l.lastInputs[id] = body
+  // The provisioner may have cloned since the last step: the branch is made
+  // the moment a checkout exists, so no step ever commits on main or develop,
+  // and the header below names it.
+  await ensureRunCheckout(run)
   const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
@@ -484,7 +528,16 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onProgress: (progress: AgentProgress) => {
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+      // The transcript is a normal Claude Code session, so it is readable on /cli;
+      // named after the run so it is findable there among the developer's own.
+      // Claude Code names the transcript folder by replacing every non-alphanumeric
+      // character of the working directory with '-' (verified against ~/.claude/projects).
+      Object.assign(rec, { sessionId, sessionProject: cwd.replace(/[^A-Za-z0-9]/g, '-') })
+      void publish(run)
+      // Loaded on demand: that module's extension-less imports do not resolve under the plain-node tests.
+      void import('./claudeCodeHistory.ts').then(m => m.setSessionName(sessionId, `${run.ticketKey ?? run.workflowSlug} · ${step.label} · run ${run.id.slice(0, 8)}`)).catch(() => {})
+    }, onProgress: (progress: AgentProgress) => {
       if (progress.line) { logLine(l, run, rec, progress.line); return }
       // Diagnostic only (see AgentProgress's doc comment) - mutated directly
       // onto the live rec and republished so the SSE stream carries it, but
@@ -516,6 +569,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       }))
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
       return false
+    }
+
+    // A question stops the step where it is: the run pauses on the operator,
+    // and the answer re-runs the step with its own output and the reply.
+    const ask = parseAsk(output)
+    if (ask) {
+      l.outputs[id] = output
+      Object.assign(rec, { status: 'waiting', output, model, usage })
+      run.question = { stepId: id, text: ask, kind: 'question', askedAt: Date.now() }
+      l.waiting = id
+      log.info('step asked the operator', () => ({ runId: run.id, stepId: id, agentSlug: step.agentSlug, question: preview(ask) }))
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
     }
 
     // A skip is a SUCCESS, not a failure: the step examined its job, found
@@ -569,6 +635,21 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
+    // A step that ran out of turns has usually done most of its work, and its
+    // log tail says how far it got. One retry that starts from there is cheaper
+    // than a dead run: the budget becomes a checkpoint, not a wall. A real
+    // verifier died one turn after its tests passed, with nothing reported.
+    if (err instanceof AgentResultError && err.subtype === 'error_max_turns' && !l.stopped && canRevisit(l.graph, l.state, id)) {
+      const tail = (l.logs[id] ?? []).slice(-25).join('\n')
+      Object.assign(rec, { status: 'failed', error: err.message, completedAt: Date.now(), ...(err.usage ? { usage: err.usage } : {}) })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+      l.outputs[id] = tail
+      l.retryFeedback[id] = 'Your previous attempt ran out of its turn budget before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.'
+      l.state.status[id] = 'completed'
+      armNode(l.state, id)
+      log.warn('step ran out of turns; retrying from its log tail', { runId: run.id, stepId: id, agentSlug: step.agentSlug, visits: rec.visits })
+      return true
+    }
     markFailed(l.state, id)
     // A failed step still spent tokens. Recording them is what keeps the run's
     // cost honest and makes an expensive failure visible in the cost report
@@ -596,6 +677,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return false
   } finally {
     l.aborts.delete(id)
+    l.steer.delete(id)
   }
 }
 
@@ -623,12 +705,40 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
 
   const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (!wave.length) {
+    // Nothing can run but steps remain: that is a stuck run, never a finished one.
+    const stuck = run.steps.filter(s => s.status === 'pending')
+    if (stuck.length) {
+      for (const s of stuck) s.status = 'skipped'
+      run.status = 'failed'
+      run.error = `No step can run: ${stuck.map(s => s.label).join(', ')} pending but not schedulable (visit limit reached or a predecessor did not complete). Restart the step you want to run.`
+      run.endedAt = Date.now()
+      run.currentStepIds = []
+      run.nextStepIds = []
+      l.running = false
+      log.warn('run stuck', { runId: run.id, pending: stuck.map(s => s.stepId) })
+      await publish(run)
+      return run
+    }
     run.status = 'completed'
     run.endedAt = Date.now()
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
     log.info('run completed', { runId: run.id, workflowSlug: run.workflowSlug })
+    await publish(run)
+    return run
+  }
+
+  // A step marked for approval waits for a person before it starts, run-to-completion or not.
+  const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id))
+  if (gate) {
+    const label = stepOf(l, gate)?.label ?? gate
+    run.question = { stepId: gate, text: `Approve "${label}" to run it`, kind: 'approval', askedAt: Date.now() }
+    run.status = 'paused'
+    run.currentStepIds = []
+    run.nextStepIds = wave
+    l.running = false
+    log.info('run waits for approval', { runId: run.id, stepId: gate })
     await publish(run)
     return run
   }
@@ -675,6 +785,16 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return run
   }
 
+  // A step is waiting on the operator: nothing else starts until they answer.
+  if (l.waiting) {
+    run.status = 'paused'
+    run.currentStepIds = [l.waiting]
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    return run
+  }
+
   if (isFinished(l.graph, l.state)) {
     run.status = 'completed'
     run.endedAt = Date.now()
@@ -697,6 +817,29 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   l.running = false
   await publish(run)
   return run
+}
+
+/**
+ * The run's own branch, off whatever the checkout has at HEAD, created as
+ * soon as there is a checkout to make it in. Runner-owned so no agent ever
+ * commits to develop directly again; a real run cloned onto main and would
+ * have pushed it. Idempotent: a run that already has its branch is left alone.
+ */
+async function ensureRunCheckout(run: WorkflowRun): Promise<void> {
+  if (run.branch) return
+  const repoName = run.product?.repos?.[0]?.split('/').pop()
+  const checkout = (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir : findCheckout(runWorkspace(run), repoName)
+  if (!checkout) return
+  const branch = `fix/${run.ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
+  try {
+    const repos = await ensureRunBranch(checkout, branch)
+    run.branch = branch
+    run.projectDir = checkout
+    await saveRun(run)
+    log.info('run branch created', { runId: run.id, checkout, branch, repos: repos.length })
+  } catch (err) {
+    log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, checkout, error: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 /**
@@ -743,17 +886,11 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
-  // The run's own branch, off whatever the checkout has at HEAD. Runner-owned
-  // so no agent ever commits to develop directly again.
-  if (projectDir && existsSync(join(projectDir, '.git'))) {
-    const branch = `fix/${ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
-    try { await ensureRunBranch(projectDir, branch); run.branch = branch; await saveRun(run) }
-    catch (err) { log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, projectDir, error: err instanceof Error ? err.message : String(err) }) }
-  }
+  await ensureRunCheckout(run)
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   live.set(run.id, l)
   // Best-effort: a filesystem problem here must not stop the run. The run
@@ -771,7 +908,8 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * recreate the exact coupling this feature removes, just scoped to one wave instead of
  * the whole run. Callers await waitForSettled(runId) for the outcome.
  */
-export async function continueRun(runId: string): Promise<WorkflowRun | null> {
+/** Continue a paused run. A note travels to the approved step, or to whichever step starts next. */
+export async function continueRun(runId: string, note?: string): Promise<WorkflowRun | null> {
   let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds
   // name what was executing; restarting from those is the honest resume.
@@ -803,6 +941,19 @@ export async function continueRun(runId: string): Promise<WorkflowRun | null> {
     l.running = false
     return run
   }
+  // An open question is answered, never skipped: continuing without a reply
+  // tells the agent so in words, and it decides.
+  if (run.question?.kind === 'question') {
+    l.running = false
+    return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.')
+  }
+  if (run.question?.kind === 'approval') {
+    l.approved.add(run.question.stepId)
+    if (note?.trim()) l.notes[run.question.stepId] = note.trim()
+  } else if (note?.trim()) {
+    l.nextNote = note.trim()
+  }
+  run.question = undefined
   // Persist 'running' before returning, as restartRun and respondToRun do: a
   // reader that lands between this return and the wave's first publish would
   // otherwise see the old 'paused' record and treat the run as settled.
@@ -831,6 +982,8 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   const id = run.currentStepIds[0]
   if (!id) return run
   const combined = `Previous agent output:\n${l.outputs[id] ?? ''}\n\nUser response:\n${reply}`
+  run.question = undefined
+  l.waiting = undefined
   // Flip away from 'paused' before doing any work, matching runWave and the client's
   // isRunning flip ahead of its own executeNode call in respondToStep. Without this,
   // run.status reads 'paused' for the whole duration of the reply - indistinguishable
@@ -866,6 +1019,12 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
         await publish(run)
         return
       }
+      // A run-to-completion run resumes on its own once the answer is in.
+      if (run.autoRun && !l.stopped) {
+        l.running = true
+        await driveToSettlement(l, run)
+        return
+      }
       run.nextStepIds = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
       run.status = 'paused'
       await publish(run)
@@ -881,6 +1040,30 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   return run
 }
 
+/** The operator's way to steer a run in flight: the note goes straight into every
+ *  agent working right now, and is logged on their steps; with no agent mid-call it
+ *  waits for whichever step starts next. */
+export async function noteRun(runId: string, text: string): Promise<{ delivered: string[] } | { queued: string } | null> {
+  const l = live.get(runId)
+  if (!l) return null
+  const note = text.trim()
+  const run = await getRun(runId)
+  const delivered: string[] = []
+  for (const [stepId, deliver] of l.steer) {
+    const rec = run?.steps.find(s => s.stepId === stepId)
+    if (!rec || !deliver(note)) continue
+    delivered.push(rec.label)
+    logLine(l, run!, rec, `[Operator] ${note}`)
+  }
+  if (delivered.length) {
+    log.info('operator note delivered to running agents', { runId, steps: delivered, preview: preview(note) })
+    return { delivered }
+  }
+  l.nextNote = note
+  log.info('operator note queued', { runId, preview: preview(text) })
+  return { queued: l.nextNote }
+}
+
 export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   const run = await getRun(runId)
   if (!run) return null
@@ -892,7 +1075,8 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
     skipPending(l.state)
     for (const ac of l.aborts.values()) ac.abort()
   }
-  for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+  for (const s of run.steps) if (s.status === 'pending' || s.status === 'waiting') s.status = 'skipped'
+  run.question = undefined
   run.status = 'stopped'
   run.endedAt = Date.now()
   run.currentStepIds = []
@@ -933,12 +1117,21 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
+  // A declared skip is a settled outcome, the same as completed: a restart of a
+  // later step must not run it again. A real restart re-ran the provisioner,
+  // which cloned the product a second time beside the checkout the fix step
+  // was working in. A scheduler skip (after a failure) has no skipReason and
+  // stays pending, so the restart can reach it.
+  const settled = (s: RunStep) => s.status === 'completed' || (s.status === 'skipped' && !!s.skipReason)
   for (const s of run.steps) {
     state.visits[s.stepId] = s.visits ?? 0
-    if (s.status !== 'completed') continue
+    // A failed step is restored as failed, not pending: restartRun re-runs failed
+    // wave siblings by reading exactly this, and a pending-looking failure would
+    // never be picked up again.
+    if (!settled(s)) { if (s.status === 'failed') markFailed(state, s.stepId); continue }
     markCompleted(graph, state, s.stepId)
     l.outputs[s.stepId] = s.output
     // Stored input carries the artifact header; computeInput's retry branch
@@ -948,7 +1141,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   // A completed node has consumed its arming: live, markRunning clears it before
   // the node executes. Without this an entry node stays armed and re-runs, and
   // re-arms everything downstream with it.
-  for (const s of run.steps) if (s.status === 'completed') state.armed[s.stepId] = false
+  for (const s of run.steps) if (settled(s)) state.armed[s.stepId] = false
   live.set(run.id, l)
   return l
 }
@@ -1018,10 +1211,24 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
       { runId: active.id },
     )
   }
+  // A restart starts from what is on disk. An in-memory record left by a
+  // previous attempt carries that attempt's state, and a second restart
+  // scheduled against it found nothing to run and reported the run complete.
+  const stale = live.get(runId)
+  if (stale?.running) throw new RestartError(409, 'This run is already running')
+  if (stale) live.delete(runId)
   const l = await rehydrate(run)
-  if (l.running) throw new RestartError(409, 'This run is already running')
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
+  // A failed step elsewhere in the same wave would stay failed after a partial
+  // restart, and the join downstream then waits on it forever - the run settles
+  // with its evidence step never armed. So every other failed step whose
+  // predecessors all completed is re-run too, with its own descendants: the
+  // operator's restart means "get this run going", not "this one step only".
+  const readyFailed = l.graph.nodes.map(n => n.id).filter(id =>
+    !reset.includes(id) && l.state.status[id] === 'failed'
+    && (l.graph.forwardPreds[id] ?? []).every(p => l.state.status[p] === 'completed'))
+  for (const id of readyFailed) for (const d of [id, ...forwardDescendants(l.graph, id)]) if (!reset.includes(d)) reset.push(d)
 
   // A restart re-runs steps; it does not re-create what earlier steps left on
   // disk. Restarting a downstream step into a workspace with no checkout is how
@@ -1068,6 +1275,16 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (l.graph.entries.includes(stepId)) armNode(l.state, stepId)
   else if ((l.graph.forwardPreds[stepId] ?? []).every(p => l.state.status[p] === 'completed')) armNode(l.state, stepId)
   else throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
+  for (const id of readyFailed) armNode(l.state, id)
+  // An operator's restart is always worth one more visit: the visit cap guards
+  // loops and monitor retries, not a person's explicit decision. A step at its
+  // cap was otherwise unschedulable, and the empty wave read as a finished run.
+  // The cap itself is fixed by the evidence schema, so the count saturates there.
+  for (const id of reset) {
+    const node = l.graph.nodes.find(n => n.id === id)
+    const cap = node ? maxVisitsOf(node) : Infinity
+    if ((l.state.visits[id] ?? 0) >= cap) l.state.visits[id] = cap - 1
+  }
 
   // An operator note rides the same channel as a monitor's retry feedback, so
   // the restarted step sees its previous attempt and the correction together.
@@ -1085,7 +1302,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.bootId = BOOT_ID
   if (startedBy) run.startedBy = startedBy
   run.currentStepIds = []
-  run.nextStepIds = [stepId]
+  run.nextStepIds = [stepId, ...readyFailed]
   await publish(run)
   void driveToSettlement(l, run)
   return run

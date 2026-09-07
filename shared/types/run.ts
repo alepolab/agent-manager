@@ -3,6 +3,8 @@ export type WorkflowRunStatus =
 
 export type RunStepStatus =
   | 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+  /** The step stopped to ask the operator something and waits for the answer. */
+  | 'waiting'
 
 export interface RunStep {
   stepId: string
@@ -25,35 +27,12 @@ export interface RunStep {
    *  model. Never guessed either way, since a wrong value here is the kind
    *  of defect that produces no error. */
   model?: string | null
+  /** The Claude Code session the latest visit ran in, and the project folder
+   *  under `~/.claude/projects` holding its transcript: together the /cli link. */
+  sessionId?: string
+  sessionProject?: string
   /** Tokens the agent call actually consumed, as the SDK reported them. */
   usage?: { input_tokens: number, output_tokens: number } | null
-}
-
-/** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
-export interface RunCi {
-  pr: string
-  status: 'pending' | 'passing' | 'failing' | 'unknown'
-  checks: { name: string, bucket: string }[]
-  checkedAt: number
-  /** True once the checks reached a final state; the poller stops looking. */
-  final: boolean
-  error?: string
-}
-
-export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
-export interface RunBudget { maxMinutes: number, maxTokens: number }
-
-/** The registry entry a run resolved to at start, or absent when nothing matched. */
-export interface ProductMatch {
-  name: string
-  suite?: string
-  /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
-  multiRepo?: boolean
-  repos: string[]
-  branches: Record<string, string>
-  stack: { compose: string, topology_default: string, liquibase?: boolean }
-  tests: Record<string, string>
-  recipe?: string
   /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK
    *  message loop while this step is still `running` — see
    *  server/utils/agentCaller.ts's AgentProgress doc comment for exactly
@@ -85,6 +64,33 @@ export interface ProductMatch {
   lastActivityAt?: number
 }
 
+/** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
+export interface RunCi {
+  pr: string
+  status: 'pending' | 'passing' | 'failing' | 'unknown'
+  checks: { name: string, bucket: string }[]
+  checkedAt: number
+  /** True once the checks reached a final state; the poller stops looking. */
+  final: boolean
+  error?: string
+}
+
+export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
+export interface RunBudget { maxMinutes: number, maxTokens: number }
+
+/** The registry entry a run resolved to at start, or absent when nothing matched. */
+export interface ProductMatch {
+  name: string
+  suite?: string
+  /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
+  multiRepo?: boolean
+  repos: string[]
+  branches: Record<string, string>
+  stack: { compose: string, topology_default: string, liquibase?: boolean }
+  tests: Record<string, string>
+  recipe?: string
+}
+
 export interface WorkflowRun {
   id: string
   workflowSlug: string
@@ -107,6 +113,10 @@ export interface WorkflowRun {
   ticketKey?: string
   /** Branch the runner created in projectDir for this run's commits; absent when there was no checkout. */
   branch?: string
+  /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
+  dismissed?: boolean
+  /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
+  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number }
   projectDir?: string
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
