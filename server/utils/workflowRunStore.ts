@@ -1,17 +1,16 @@
-import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
+import { agentManagerSettings } from './appSettings.ts'
 import { runWorkspace } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 
 /** Per-run caps: an env var on the instance wins, then the Settings page's values, then the defaults. */
 export function defaultBudget(): RunBudget {
-  let s: { maxTokens?: unknown, maxMinutes?: unknown } = {}
-  try { s = JSON.parse(readFileSync(resolveClaudePath('settings.json'), 'utf-8'))?.agentManager?.runBudget ?? {} } catch { /* no settings, or none for runs */ }
+  const s = agentManagerSettings().runBudget ?? {}
   return {
     maxMinutes: Number(process.env.AGENT_RUN_MAX_MINUTES) || Number(s.maxMinutes) || 180,
     maxTokens: Number(process.env.AGENT_RUN_MAX_TOKENS) || Number(s.maxTokens) || 8_000_000,

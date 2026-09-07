@@ -1,4 +1,5 @@
 import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import { agentManagerSettings } from './appSettings.ts'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -244,7 +245,11 @@ export async function callAgent(
     })
   }
 
-  const declaredModel = frontmatter?.model
+  // An instance-wide override from the Settings page beats the agent's own file:
+  // that is how a team moves every pipeline agent to a newer model without
+  // editing ten agents and drifting from the shipped templates.
+  const override = agentManagerSettings().agentModel
+  const declaredModel = override || frontmatter?.model
   const toolsOption = resolveTools(frontmatter)
   const maxTurns = resolveMaxTurns(frontmatter)
 
@@ -253,6 +258,7 @@ export async function callAgent(
     agentSlug,
     cwd,
     modelRequested: declaredModel ?? '(sdk default)',
+    modelSource: override ? 'settings override' : frontmatter?.model ? 'agent file' : 'sdk default',
     toolCount: toolsOption ? toolsOption.length : '(sdk default)',
     maxTurns,
     inputLength: input.length,
