@@ -104,8 +104,8 @@ export type OnAgentProgress = (progress: AgentProgress) => void
 
 /** Per-call extras: the runner's abort signal, the starter's identity env, a progress sink,
  *  a steering hook and a session hook. `onSteer` receives `deliver`, which pushes an operator
- *  message into the agent's conversation while it works (the SDK delivers it after the tool
- *  call in flight, without ending the turn); it returns false once the call is over.
+ *  message into the agent's conversation while it works (the SDK delivers it once the tool
+ *  call or model request in flight completes, without ending the turn); it returns false once the call is over.
  *  `onSession` fires as soon as the SDK reports the session id and the directory it ran in. */
 export interface AgentCallOptions {
   signal?: AbortSignal
@@ -227,8 +227,10 @@ export async function callAgent(
 
   // ── steering: the prompt is a stream so the operator can talk to the agent mid-step ──
   // The first message is the step input. Later ones are operator notes, pushed
-  // with priority 'now' so the CLI hands them to the model after the tool call in
-  // flight rather than after the whole turn. The stream ends at the first result
+  // with priority 'next': the CLI hands them to the model as soon as the tool call
+  // or model request in flight completes, without ending the turn. ('now' would
+  // abort whatever is in flight, and an aborted model request comes back as an
+  // error result that ends the step - seen live.) The stream ends at the first result
   // with nothing pending; a note that arrives after that is refused (deliver
   // returns false) and the runner falls back to queueing it for the next step.
   const pending: string[] = []
@@ -241,7 +243,7 @@ export async function callAgent(
     for (;;) {
       while (pending.length) {
         yield {
-          type: 'user', priority: 'now', parent_tool_use_id: null, session_id: sessionId ?? '',
+          type: 'user', priority: 'next', parent_tool_use_id: null, session_id: sessionId ?? '',
           message: { role: 'user', content: `Operator note, sent while you were working. Take it into account from here on: ${pending.shift()!}` },
         }
       }
