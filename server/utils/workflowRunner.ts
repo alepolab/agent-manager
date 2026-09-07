@@ -1215,6 +1215,15 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   const l = await rehydrate(run)
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
+  // A failed step elsewhere in the same wave would stay failed after a partial
+  // restart, and the join downstream then waits on it forever - the run settles
+  // with its evidence step never armed. So every other failed step whose
+  // predecessors all completed is re-run too, with its own descendants: the
+  // operator's restart means "get this run going", not "this one step only".
+  const readyFailed = l.graph.nodes.map(n => n.id).filter(id =>
+    !reset.includes(id) && l.state.status[id] === 'failed'
+    && (l.graph.forwardPreds[id] ?? []).every(p => l.state.status[p] === 'completed'))
+  for (const id of readyFailed) for (const d of [id, ...forwardDescendants(l.graph, id)]) if (!reset.includes(d)) reset.push(d)
 
   // A restart re-runs steps; it does not re-create what earlier steps left on
   // disk. Restarting a downstream step into a workspace with no checkout is how
@@ -1261,6 +1270,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (l.graph.entries.includes(stepId)) armNode(l.state, stepId)
   else if ((l.graph.forwardPreds[stepId] ?? []).every(p => l.state.status[p] === 'completed')) armNode(l.state, stepId)
   else throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
+  for (const id of readyFailed) armNode(l.state, id)
   // An operator's restart is always worth one more visit: the visit cap guards
   // loops and monitor retries, not a person's explicit decision. A step at its
   // cap was otherwise unschedulable, and the empty wave read as a finished run.
@@ -1287,7 +1297,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.bootId = BOOT_ID
   if (startedBy) run.startedBy = startedBy
   run.currentStepIds = []
-  run.nextStepIds = [stepId]
+  run.nextStepIds = [stepId, ...readyFailed]
   await publish(run)
   void driveToSettlement(l, run)
   return run
