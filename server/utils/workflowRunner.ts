@@ -13,7 +13,6 @@ import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
-import { getProjectName } from './claudeProjects.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
@@ -530,7 +529,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
-      Object.assign(rec, { sessionId, sessionProject: getProjectName(cwd) })
+      // Claude Code names the transcript folder by replacing every non-alphanumeric
+      // character of the working directory with '-' (verified against ~/.claude/projects).
+      Object.assign(rec, { sessionId, sessionProject: cwd.replace(/[^A-Za-z0-9]/g, '-') })
       void publish(run)
       // Loaded on demand: that module's extension-less imports do not resolve under the plain-node tests.
       void import('./claudeCodeHistory.ts').then(m => m.setSessionName(sessionId, `${run.ticketKey ?? run.workflowSlug} · ${step.label} · run ${run.id.slice(0, 8)}`)).catch(() => {})
