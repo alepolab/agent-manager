@@ -44,7 +44,7 @@ export interface Command {
 
 export interface Settings {
   /** Agent Manager's own switches, kept under one key so Claude Code ignores them. */
-  agentManager?: { labs?: boolean }
+  agentManager?: { labs?: boolean, /** Per-run caps applied to new runs; an instance env var overrides them. */ runBudget?: { maxTokens?: number, maxMinutes?: number } }
   hooks?: Record<string, unknown[]>
   enabledPlugins?: Record<string, boolean>
   statusLine?: { type: string; command: string }

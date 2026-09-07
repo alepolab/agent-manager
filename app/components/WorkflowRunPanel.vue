@@ -164,7 +164,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
       <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
     </div>
     <div v-if="run.question" class="rounded-lg p-3 text-[12px] space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
-      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
       <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
     </div>
     <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
@@ -189,6 +189,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
         {{ money(cost.totals.cost_usd) }}
       </span>
       <span class="text-label">{{ (cost.totals.input_tokens + cost.totals.output_tokens).toLocaleString() }} tokens</span>
+      <span v-if="run.budget" class="text-label" :title="`Cap ${run.budget.maxTokens.toLocaleString()} tokens, ${run.budget.maxMinutes} min. Set in Settings; the run pauses and asks when it is reached.`">of {{ run.budget.maxTokens.toLocaleString() }}</span>
       <span
         v-if="!cost.totals.complete"
         class="text-[10px] px-1.5 py-0.5 rounded"
@@ -225,7 +226,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
           />
           <UButton
             v-if="settledRun && stepSettled(step)"
-            size="xs" variant="ghost" color="neutral" icon="i-lucide-rotate-ccw"
+            size="xs" variant="soft" icon="i-lucide-rotate-ccw"
             :aria-label="`Restart from ${step.label}`" :title="`Restart from ${step.label}`"
             @click="emit('restart', step.stepId, note)"
           />
@@ -266,7 +267,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
 
     <div class="flex gap-2">
       <UButton v-if="noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
-      <UButton v-else-if="run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="`Approve and run`" @click="send('continue')" />
+      <UButton v-else-if="run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'" @click="send('continue')" />
       <UButton v-else-if="run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
       <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
       <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
