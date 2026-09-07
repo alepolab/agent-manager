@@ -10,6 +10,20 @@ import { createLogger } from './log.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep, ProductMatch } from '~~/shared/types/run'
 
+/**
+ * The literal the fix-implementer writes into `meta.json`'s `fix.repos[].pr`
+ * before any pull request exists. The evidence step overwrites it with the real
+ * URL; a run that never reaches that step leaves it in place.
+ *
+ * It lives here, once, because it did not. `ciPoller.prUrlsOf` filtered it and
+ * `ticketNotifier.readReportedPrUrls` — reading the same field of the same file
+ * — did not, so a budget-halted run posted "a pull request is ready for review:
+ * https://example.invalid/pending" onto a real Jira ticket. Two readers of one
+ * field is how one of them silently stops agreeing with the other.
+ */
+export const PLACEHOLDER_PR = 'https://example.invalid/pending'
+
+
 const log = createLogger('artifacts')
 
 /** Extends RunStep with the one field this file needs that the shared type
