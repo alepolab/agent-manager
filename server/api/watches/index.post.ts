@@ -36,8 +36,25 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // The owner, and why it is read back rather than taken from the body.
+  //
+  // Line ~21 above has always computed `createdBy` from the signed-in user, and
+  // this object literal has always been built without it — so the value was
+  // computed and dropped on the floor at every save, create and enable alike.
+  // Every watch on every instance therefore carried `createdBy: undefined`, and
+  // a watch with no owner dispatches runs with no identity: `envForUser` finds
+  // no profile, no GH_TOKEN reaches the agent, and the provisioner halts on
+  // `git clone ... exit 128`. The whole unattended path was dead, and the only
+  // symptom was a clone failure eight minutes into a run.
+  //
+  // An existing owner is preserved: a second person enabling or retiming
+  // someone else's watch must not silently become the account its runs spend.
+  const existingOwner = (await listWatches()).find(w => w.id === id)?.createdBy
+  const createdBy = existingOwner ?? body.createdBy
+
   const watch: Watch = {
     id,
+    createdBy,
     name: body.name.trim(),
     workflowSlug: body.workflowSlug.trim(),
     intervalSeconds: body.intervalSeconds ?? 300,
