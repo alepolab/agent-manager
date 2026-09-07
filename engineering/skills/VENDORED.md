@@ -111,3 +111,79 @@ One thing found while evaluating them, worth reporting upstream: amplitude's
 Code resolves a skill by DIRECTORY and anything reading frontmatter resolves it
 by NAME, so it exists under two strings and one of them always misses.
 `engineering/scripts/test-skills.mjs` catches exactly this.
+
+## ECC
+
+`ECC-LICENSE` · MIT, © 2026 Affaan Mustafa · https://github.com/affaan-m/ECC
+Pinned at `e04ea0b9cc8248686edf5ac751cadff550e162b8` (v2.2.1).
+
+24 of ECC's 286 skills, copied verbatim. They are the ones that match
+a language or technology this estate actually runs:
+
+- `api-design`
+- `architecture-decision-records`
+- `cpp-testing`
+- `docker-patterns`
+- `e2e-testing`
+- `fastapi-patterns`
+- `golang-testing`
+- `java-coding-standards`
+- `kubernetes-patterns`
+- `mysql-patterns`
+- `python-patterns`
+- `python-testing`
+- `react-patterns`
+- `react-performance`
+- `react-testing`
+- `redis-patterns`
+- `security-review`
+- `springboot-patterns`
+- `springboot-security`
+- `springboot-tdd`
+- `springboot-verification`
+- `tdd-workflow`
+- `ui-to-vue`
+- `vue-patterns`
+
+MIT requires the copyright and permission notice travel with the copy; that is
+what `ECC-LICENSE` is for. ECC vendors no third-party content of its own - one
+LICENSE file across 3,520 files, and no embedded notices in anything taken here.
+
+### Not taken, and why
+
+Four candidates were dropped after reading them rather than their names:
+
+- `git-workflow` teaches merge-versus-rebase. This estate forbids rebase-merge
+  outright, and a skill arguing the other way inside an agent that must not
+  touch a remote is a contradiction waiting to surface mid-run.
+- `github-ops` automates PRs, releases and CI through the `gh` CLI - the same
+  collision, more directly.
+- `security-scan` audits a `.claude/` directory with AgentShield, a third-party
+  tool. It is Claude Code configuration hygiene, not application security, and
+  the name suggests otherwise.
+- `benchmark-methodology` scores competitors on positioning and pricing. It is
+  marketing benchmarking, not performance benchmarking, and it depends on a
+  skill we do not ship.
+
+The remaining ~245 are for stacks we do not run, or are crypto, trading and
+marketing skills with no bearing here.
+
+### These are NOT declared in agent frontmatter
+
+`buildAgentSystemPrompt` inlines the full body of every declared skill.
+Declaring all 24 would add roughly 80,000 tokens to every agent's prompt
+on every step of every run - against a prompt that is about 7,000 today - and
+most of it would concern languages the ticket does not touch.
+
+Instead each code-touching agent carries a catalogue: one line per skill saying
+when it applies, about 650 tokens, and an instruction to read the matching ones
+from `$SDLC_SKILLS_DIR` at run time. `SDLC_SKILLS_DIR` is set in
+`server/utils/agentCaller.ts` and is absolute, because the agent's cwd is the
+product checkout where nothing of ours exists.
+
+### Refreshing
+
+Re-clone at a new tag, copy the same 24 directories, update the SHA above, and
+re-run `node scripts/test-vendored-ecc-skills.mjs` - it checks the catalogue in
+the agent prompts still matches what is on disk, which is the pair most likely
+to drift apart.
