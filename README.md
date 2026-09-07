@@ -99,6 +99,7 @@ All values are environment variables. Never write them into files in this repo.
 |---|---|
 | `AUTH_DISABLED=1` | No sign-in; every request is `DEV_USER` (default `local`). For a single developer's machine only. |
 | `AGENT_MANAGER_SECRET` | 32+ characters. Seals the session cookie and encrypts stored tokens. Required when auth is on. |
+| `AGENT_MANAGER_API_TOKEN`, `AGENT_MANAGER_API_LOGIN` | Optional. A 32+ character bearer token for scripts and operators, acting as the named developer: `curl -H "Authorization: Bearer $TOKEN" .../api/runs`. |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | The GitHub OAuth app. |
 | `GITHUB_ORG` | Organisation whose active members may sign in (default `alepolab`). |
 | `AGENT_USERS_DIR` | Where profiles live (default `~/.agent-manager/users`). Mode 600, sealed tokens only. |
