@@ -52,7 +52,8 @@ export async function prUrlsOf(run: WorkflowRun): Promise<string[]> {
 export async function pollOnce(now = Date.now()): Promise<number> {
   let checked = 0
   for (const run of await listRuns()) {
-    if (run.status !== 'completed') continue
+    // A failed run can still have opened its PR (a budget cap after the PR step, say); its checks matter as much.
+    if (run.status !== 'completed' && run.status !== 'failed') continue
     if ((run.endedAt ?? run.startedAt) < now - LOOKBACK_MS) continue
     if (run.ci?.final) continue
     const urls = await prUrlsOf(run)
