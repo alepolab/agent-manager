@@ -1,4 +1,4 @@
-export type AgentModel = 'opus' | 'sonnet' | 'haiku'
+export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
 export type AgentTool = 'Read' | 'Grep' | 'Glob' | 'Bash' | 'Write' | 'Edit'
 

@@ -8,7 +8,7 @@
  * Source: https://www.anthropic.com/pricing
  */
 
-export const MODEL_IDS = ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] as const
+export const MODEL_IDS = ['claude-fable-5-1', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] as const
 export type ModelId = (typeof MODEL_IDS)[number]
 
 /**
@@ -18,6 +18,7 @@ export type ModelId = (typeof MODEL_IDS)[number]
  * Verified by live `query()` calls against the installed
  * @anthropic-ai/claude-agent-sdk (0.2.81) on 2026-09-03, reading the
  * `system`/`init` message's `model` field for each alias:
+ *   fable  -> claude-fable-5-1   (2026-09-07, `claude -p --model fable --output-format json` modelUsage)
  *   sonnet -> claude-sonnet-4-6
  *   opus   -> claude-opus-4-6
  *   haiku  -> claude-haiku-4-5-20251001
@@ -31,6 +32,7 @@ export type ModelId = (typeof MODEL_IDS)[number]
  * ('claude-opus-4' etc.) that the SDK rejected outright.
  */
 export const MODEL_ALIAS: Record<string, ModelId> = {
+  fable: 'claude-fable-5-1',
   opus: 'claude-opus-4-6',
   sonnet: 'claude-sonnet-4-6',
   haiku: 'claude-haiku-4-5-20251001',
@@ -50,6 +52,7 @@ export const MODEL_ALIAS: Record<string, ModelId> = {
  *   models: ['sonnet', 'opus', 'haiku']
  */
 export const MODEL_ALIAS_KEY = {
+  FABLE: 'fable' as const,
   OPUS: 'opus' as const,
   SONNET: 'sonnet' as const,
   HAIKU: 'haiku' as const,
@@ -72,10 +75,17 @@ export interface ServerModelMeta {
   id: ModelId
   /** Max context window in tokens */
   contextWindow: number
-  pricing: ModelPricing
+  /** Absent when the list price is not known here: cost reports then mark the
+   *  step unpriced rather than inventing a number. */
+  pricing?: ModelPricing
 }
 
 export const SERVER_MODEL_META: Record<ModelId, ServerModelMeta> = {
+  // Pricing deliberately absent: not published where this table can cite it.
+  'claude-fable-5-1': {
+    id: 'claude-fable-5-1',
+    contextWindow: 200_000,
+  },
   'claude-opus-4-6': {
     id: 'claude-opus-4-6',
     contextWindow: 200_000,
@@ -94,7 +104,7 @@ export const SERVER_MODEL_META: Record<ModelId, ServerModelMeta> = {
 }
 
 /** Fallback pricing when model is unknown */
-export const DEFAULT_PRICING: ModelPricing = SERVER_MODEL_META['claude-sonnet-4-6'].pricing
+export const DEFAULT_PRICING: ModelPricing = SERVER_MODEL_META['claude-sonnet-4-6'].pricing!
 
 /** Default context window when model is unknown */
 export const DEFAULT_CONTEXT_WINDOW = 200_000

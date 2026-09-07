@@ -17,7 +17,7 @@
     "e2e:libs": "mkdir -p \"$HOME/.cache/agent-manager-browser-libs\" && T=$(mktemp -d) && cd \"$T\" && apt-get download libnspr4 libnss3 libasound2t64 && for f in *.deb; do dpkg -x \"$f\" x; done && cp -r x/usr/lib/x86_64-linux-gnu/* \"$HOME/.cache/agent-manager-browser-libs/\" && rm -rf \"$T\" && echo 'browser libs extracted (no sudo needed)'"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.76",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.263",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nuxt/ui": "^3",
     "@vue-flow/controls": "^1.1",
