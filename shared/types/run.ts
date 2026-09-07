@@ -29,33 +29,6 @@ export interface RunStep {
   model?: string | null
   /** Tokens the agent call actually consumed, as the SDK reported them. */
   usage?: { input_tokens: number, output_tokens: number } | null
-}
-
-/** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
-export interface RunCi {
-  pr: string
-  status: 'pending' | 'passing' | 'failing' | 'unknown'
-  checks: { name: string, bucket: string }[]
-  checkedAt: number
-  /** True once the checks reached a final state; the poller stops looking. */
-  final: boolean
-  error?: string
-}
-
-export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
-export interface RunBudget { maxMinutes: number, maxTokens: number }
-
-/** The registry entry a run resolved to at start, or absent when nothing matched. */
-export interface ProductMatch {
-  name: string
-  suite?: string
-  /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
-  multiRepo?: boolean
-  repos: string[]
-  branches: Record<string, string>
-  stack: { compose: string, topology_default: string, liquibase?: boolean }
-  tests: Record<string, string>
-  recipe?: string
   /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK
    *  message loop while this step is still `running` — see
    *  server/utils/agentCaller.ts's AgentProgress doc comment for exactly
@@ -85,6 +58,33 @@ export interface ProductMatch {
   assistantMessages?: number
   lastTool?: string
   lastActivityAt?: number
+}
+
+/** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
+export interface RunCi {
+  pr: string
+  status: 'pending' | 'passing' | 'failing' | 'unknown'
+  checks: { name: string, bucket: string }[]
+  checkedAt: number
+  /** True once the checks reached a final state; the poller stops looking. */
+  final: boolean
+  error?: string
+}
+
+export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
+export interface RunBudget { maxMinutes: number, maxTokens: number }
+
+/** The registry entry a run resolved to at start, or absent when nothing matched. */
+export interface ProductMatch {
+  name: string
+  suite?: string
+  /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
+  multiRepo?: boolean
+  repos: string[]
+  branches: Record<string, string>
+  stack: { compose: string, topology_default: string, liquibase?: boolean }
+  tests: Record<string, string>
+  recipe?: string
 }
 
 export interface WorkflowRun {

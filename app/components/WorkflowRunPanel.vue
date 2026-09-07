@@ -222,7 +222,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
           <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
             <div class="text-[10px] text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
-            <pre :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="text-[10px] font-mono whitespace-pre-wrap max-h-56 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">{{ liveFor(step.stepId).join('\n') }}</pre>
+            <div :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="max-h-72 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);"><LogLines :lines="liveFor(step.stepId)" /></div>
           </div>
           <pre v-if="step.output" class="text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
           <p v-else-if="!liveFor(step.stepId).length" class="text-[11px] text-label">No output yet.</p>
