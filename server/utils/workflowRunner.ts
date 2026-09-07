@@ -1,6 +1,6 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
@@ -121,6 +121,8 @@ interface Live {
   running: boolean
   /** A step found the fault outside the run's scope; runWave re-provisions and continues from there. */
   widen?: { from: string, target: string, reason: string, added: string[] }
+  /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
+  rework?: { from: string, target: string, instruction: string }
 }
 const live = new Map<string, Live>()
 const subscribers = new Map<string, Set<(run: WorkflowRun) => void>>()
@@ -681,6 +683,30 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       return true
     }
 
+    // An earlier step's output is what stops this one, and it is fixable: send
+    // the run back there with the instruction, rather than halting the run. A
+    // real security review halted a run over an error body that leaked a
+    // message, with the implementer one restart away.
+    const rework = parseRework(output)
+    if (rework) {
+      const want = rework.target.trim().toLowerCase()
+      const target = run.steps.find(s => s.stepId !== id && (s.label.toLowerCase() === want || s.agentSlug.toLowerCase() === want))
+      if (!target) {
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', output, model, usage, error: `Step asked to send the run back to "${rework.target}", which is not a step of this run (${run.steps.map(s => s.label).join(', ')})`, completedAt: Date.now() })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+      l.outputs[id] = output
+      Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
+      l.rework = { from: id, target: target.stepId, instruction: rework.instruction }
+      logLine(l, run, rec, `sent the run back to ${target.label}: ${rework.instruction}`)
+      log.info('step sent the run back', () => ({ runId: run.id, stepId: id, target: target.stepId, instruction: preview(rework.instruction) }))
+      markCompleted(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    }
+
     const ask = parseAsk(output)
     if (ask) {
       l.outputs[id] = output
@@ -916,6 +942,32 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     const note = `The run was widened to ${w.target} by "${stepOf(l, w.from)?.label ?? w.from}": ${w.reason}. Repositories now in scope: ${run.product?.repos.join(', ')}. Check out what is missing, stand up what the fault needs, and continue there.`
     log.info('run widened; re-provisioning', { runId: run.id, target: w.target, from: w.from, restartAt: provisioner })
     return restartRun(run.id, provisioner, note, run.startedBy, { fromRunner: true })
+  }
+
+  if (l.rework) {
+    // Bounded: two steps disagreeing forever is a failure to report, not a loop to run.
+    const w = l.rework
+    l.rework = undefined
+    run.reworks = (run.reworks ?? 0) + 1
+    const from = stepOf(l, w.from)?.label ?? w.from
+    if (run.reworks > 2) {
+      for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+      run.status = 'failed'
+      run.error = `Sent back ${run.reworks} times and still not accepted; the last instruction from "${from}": ${w.instruction}`
+      run.endedAt = Date.now()
+      run.currentStepIds = []
+      run.nextStepIds = []
+      l.running = false
+      log.warn('run reworked too often', { runId: run.id, reworks: run.reworks, from: w.from, target: w.target })
+      await publish(run)
+      return run
+    }
+    run.currentStepIds = []
+    run.nextStepIds = [w.target]
+    l.running = false
+    await publish(run)
+    log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, reworks: run.reworks })
+    return restartRun(run.id, w.target, `Sent back by "${from}" (rework ${run.reworks} of 2): ${w.instruction}`, run.startedBy, { fromRunner: true })
   }
 
   if (l.waiting) {

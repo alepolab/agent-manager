@@ -1117,6 +1117,48 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.match(bad.steps.find(s => s.stepId === 't').error, /neither a registered product/)
 }
 
+// ── 26. a step sends the run back to an earlier step instead of halting ─────
+// A real security review halted a run over an error body that leaked a message,
+// with the implementer one restart away.
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const chain = { slug: 'rework-demo', name: 'Rework demo', steps: [
+    { id: 'f', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['r'] },
+    { id: 'r', agentSlug: 'agent-review', label: 'Security Review', next: [] },
+  ] }
+  mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'rework-demo.json'), JSON.stringify({ ...chain, description: '', createdAt: new Date().toISOString() }))
+  const fixInputs = []
+  let reviews = 0
+  runner.setAgentCaller(async (agentSlug, input) => {
+    if (agentSlug === 'agent-fix') { fixInputs.push(input); return 'fixed' }
+    reviews += 1
+    return reviews === 1 ? 'VERDICT: FAIL\nPIPELINE-REWORK: Implement Fix — GenericResource.java:198 returns the exception message to the caller; return a generic string' : 'VERDICT: PASS'
+  })
+  let rw = await runner.startRun({ workflow: chain, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  rw = await runner.waitForSettled(rw.id, TIMEOUT)
+  assert.equal(rw.status, 'completed', `the rework continues the run: ${rw.error}`)
+  assert.equal(rw.steps.find(s => s.stepId === 'f').visits, 2, 'the fix step ran again')
+  assert.equal(rw.steps.find(s => s.stepId === 'r').visits, 2, 'and the review ran again after it')
+  assert.match(fixInputs[1], /Sent back by "Security Review".*GenericResource\.java:198/, 'the fix step is told what to change')
+  assert.equal(rw.reworks, 1)
+
+  // Two steps disagreeing forever is a failure to report, not a loop to run.
+  runner.setAgentCaller(async (agentSlug) => agentSlug === 'agent-fix' ? 'fixed' : 'PIPELINE-REWORK: Implement Fix — still leaking')
+  let loop = await runner.startRun({ workflow: chain, initialPrompt: 'go again', watch: 'direct-invocation', autoRun: true })
+  loop = await runner.waitForSettled(loop.id, TIMEOUT)
+  assert.equal(loop.status, 'failed')
+  assert.match(loop.error, /Sent back 3 times/)
+  assert.equal(loop.reworks, 3)
+
+  // A target that is not a step of the run fails the step, naming the steps.
+  runner.setAgentCaller(async (agentSlug) => agentSlug === 'agent-fix' ? 'fixed' : 'PIPELINE-REWORK: Nowhere — nothing')
+  let lost = await runner.startRun({ workflow: chain, initialPrompt: 'go once more', watch: 'direct-invocation', autoRun: true })
+  lost = await runner.waitForSettled(lost.id, TIMEOUT)
+  assert.equal(lost.status, 'failed')
+  assert.match(lost.steps.find(s => s.stepId === 'r').error, /not a step of this run/)
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

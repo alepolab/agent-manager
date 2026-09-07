@@ -54,6 +54,12 @@ These hold at every step in this pipeline, not just this one:
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
+- **Send work back rather than halting on it.** When what stops you is an earlier step's output and that step could fix it — an oracle row that cannot reach the code it tests, a fix that leaks a message in an error body, a stack brought up on the wrong branch — end with
+
+      PIPELINE-REWORK: <that step's label> — <exactly what to change, with file:line>
+
+  The runner re-runs that step with your instruction as its note and everything after it again, at most twice per run; a third disagreement fails the run with both positions on record. Halt only when no step of this run can fix what you found.
+
 - **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
 
 const SDLC_LANGUAGE_SKILLS = `## Language-matched skills
@@ -991,7 +997,7 @@ Write \`security-review.md\` into the run artifacts directory named at the top o
 
 ## Report
 
-The verdict, the findings table, and the artifact path. A high finding ends your output with \`PIPELINE-HALT: security review found <n> high severity finding(s); see security-review.md\` so the PR is not opened on top of it.
+The verdict, the findings table, and the artifact path. A high finding that the implementer can fix within the ticket — an error body that leaks a message, an unvalidated input, a missing check — ends your output with \`PIPELINE-REWORK: Implement Fix — <each finding with file:line and exactly what to change>\`: the runner sends the run back to that step with your findings, and the fix comes back through verification and this review again. Halt with \`PIPELINE-HALT: security review found <n> high severity finding(s); see security-review.md\` only when a finding cannot be fixed within the ticket — a design that leaks by construction, a secret already published — so the PR is not opened on top of it.
 
 ${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
@@ -1042,6 +1048,9 @@ as a legitimate, expected outcome, and a run must not be aborted for reaching it
   the checkout; a reason consistent with it is a good reason, and CONTINUE is
   the right verdict.
 - Any step announcing \`PIPELINE-SKIP\` with a reason.
+- A step ending with \`PIPELINE-REWORK: <step> — <what to change>\`: it sent the run
+  back to an earlier step with a fixable finding. That is the outcome a reviewer
+  step exists for; vote CONTINUE when the instruction names what to change.
 - A step ending with \`PIPELINE-WIDEN: <product or repo> — <evidence>\`: it found the
   fault outside the run's code and handed the run to the runner to widen. That is
   a correct outcome for a step whose job was to establish the cause; vote CONTINUE

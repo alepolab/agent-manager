@@ -339,6 +339,19 @@ export function parseWiden(text: string | undefined | null): { target: string, r
   return last ? { target: last[1]!.trim(), reason: last[2]!.trim() } : null
 }
 
+/**
+ * A step that finds an earlier step's output is what stops it says so with
+ *   PIPELINE-REWORK: <step label or agent> — <what to change>
+ * and the runner sends the run back to that step with the instruction, instead
+ * of the step halting the whole run over something fixable. The last such line
+ * wins, like the other outcomes.
+ */
+export function parseRework(text: string | undefined | null): { target: string, instruction: string } | null {
+  const matches = [...(text ?? '').matchAll(/^PIPELINE-REWORK:[^\S\n]*(.+?)[^\S\n]*(?:—|:| - )[^\S\n]*(.*)$/gm)]
+  const last = matches[matches.length - 1]
+  return last ? { target: last[1]!.trim(), instruction: last[2]!.trim() } : null
+}
+
 export function parseSkip(text: string | undefined | null): string | null {
   const matches = [...(text ?? '').matchAll(/^PIPELINE-SKIP:[^\S\n]*(\S.*)$/gm)]
   const last = matches[matches.length - 1]

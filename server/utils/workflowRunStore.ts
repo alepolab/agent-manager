@@ -133,7 +133,7 @@ export async function saveRun(run: WorkflowRun): Promise<void> {
   // treats unparseable JSON as a missing run, which turned a concurrent read
   // during publish into a spurious 404.
   const path = runPath(run.id)
-  const tmp = `${path}.${process.pid}.tmp`
+  const tmp = `${path}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`  // unique per call: two concurrent saves of one run shared a name, and the second rename found nothing
   await writeFile(tmp, JSON.stringify(run, null, 2), 'utf-8')
   await rename(tmp, path)
 }
