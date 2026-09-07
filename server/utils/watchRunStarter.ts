@@ -112,6 +112,14 @@ export async function realRunStarter(watch: Watch, ticket: TicketRef): Promise<{
     // The runner's own fact for "what triggered this" — the watch that
     // dispatched it, never left to the agent to self-report.
     watch: watch.id,
+    // The key the ticket came from. validateTicket has already refused a
+    // keyless ticket by this point, so it is always present.
+    //
+    // It was not passed at all, and a watch-dispatched run therefore recorded
+    // ticketKey: null and notified nothing — leaving B5 broken for exactly the
+    // unattended case it exists for. The watch knew the ticket well enough to
+    // build the prompt out of it and dropped the key on the way.
+    ticketKey: ticket.key,
     autoRun: watch.autoRun,
     projectDir: watch.projectDir,
     startedBy: watch.createdBy,
