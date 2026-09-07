@@ -1080,6 +1080,43 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   rmSync(projectDir, { recursive: true, force: true })
 }
 
+// ── 25. a step that finds the fault elsewhere widens the run instead of halting ──
+// A real run halted on a selfcare ticket whose 500 was raised inside the CRM:
+// the step could see where the fault was and had no way to bring that code in.
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const wide = { slug: 'widen-demo', name: 'Widen demo', steps: [
+    { id: 'p', agentSlug: 'sdlc-stack-provisioner', label: 'Provision', next: ['t'] },
+    { id: 't', agentSlug: 'agent-t', label: 'Failing Test', next: [] },
+  ] }
+  mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'widen-demo.json'), JSON.stringify({ ...wide, description: '', createdAt: new Date().toISOString() }))
+  const inputs = { p: [], t: [] }
+  runner.setAgentCaller(async (agentSlug, input) => {
+    if (agentSlug === 'sdlc-stack-provisioner') { inputs.p.push(input); return 'stack up' }
+    inputs.t.push(input)
+    return inputs.t.length === 1
+      ? 'The 500 is raised in the CRM, not here.\nPIPELINE-WIDEN: alepolab/other-crm — the stack trace names its upload handler'
+      : 'oracle written in the CRM repository'
+  })
+  let w = await runner.startRun({ workflow: wide, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  w = await runner.waitForSettled(w.id, TIMEOUT)
+  assert.equal(w.status, 'completed', `widening continues the run: ${w.error}`)
+  assert.ok(w.product?.repos.includes('alepolab/other-crm'), 'the named repository joined the run')
+  assert.equal(w.steps.find(s => s.stepId === 'p').visits, 2, 'provisioning ran again for the wider scope')
+  assert.equal(w.steps.find(s => s.stepId === 't').visits, 2, 'and the step that widened ran again after it')
+  assert.match(inputs.p[1], /widened to alepolab\/other-crm/, 'the re-run provisioner is told why')
+  assert.match(inputs.t[1], /other-crm/, 'the header now names the added repository')
+  assert.equal(w.steps.find(s => s.stepId === 't').status, 'completed')
+
+  // An unknown target fails the step with the registered keys named, not the run's honesty.
+  runner.setAgentCaller(async (agentSlug) => agentSlug === 'sdlc-stack-provisioner' ? 'stack up' : 'PIPELINE-WIDEN: nonsense — no such thing')
+  let bad = await runner.startRun({ workflow: wide, initialPrompt: 'go again', watch: 'direct-invocation', autoRun: true })
+  bad = await runner.waitForSettled(bad.id, TIMEOUT)
+  assert.equal(bad.status, 'failed')
+  assert.match(bad.steps.find(s => s.stepId === 't').error, /neither a registered product/)
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

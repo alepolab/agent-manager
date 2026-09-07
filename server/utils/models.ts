@@ -8,7 +8,7 @@
  * Source: https://www.anthropic.com/pricing
  */
 
-export const MODEL_IDS = ['claude-fable-5-1', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] as const
+export const MODEL_IDS = ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] as const
 export type ModelId = (typeof MODEL_IDS)[number]
 
 /**
@@ -33,8 +33,9 @@ export type ModelId = (typeof MODEL_IDS)[number]
  */
 export const MODEL_ALIAS: Record<string, ModelId> = {
   fable: 'claude-fable-5-1',
-  opus: 'claude-opus-4-6',
-  sonnet: 'claude-sonnet-4-6',
+  // Observed 2026-09-07 with agent SDK 0.3.263: the aliases moved to the Claude 5 ids.
+  opus: 'claude-opus-5',
+  sonnet: 'claude-sonnet-5',
   haiku: 'claude-haiku-4-5-20251001',
 }
 
@@ -86,6 +87,10 @@ export const SERVER_MODEL_META: Record<ModelId, ServerModelMeta> = {
     id: 'claude-fable-5-1',
     contextWindow: 200_000,
   },
+  // No list price cited here for the Claude 5 ids either; steps on them are
+  // costed from the SDK's own figure (usage.usd), never from a guessed table.
+  'claude-opus-5': { id: 'claude-opus-5', contextWindow: 200_000 },
+  'claude-sonnet-5': { id: 'claude-sonnet-5', contextWindow: 200_000 },
   'claude-opus-4-6': {
     id: 'claude-opus-4-6',
     contextWindow: 200_000,

@@ -104,7 +104,11 @@ export async function resolveProduct(text: string): Promise<ProductMatch | undef
     || pick(m => (m.components ?? []).some((c: string) => word(c).test(text)))
   if (!hit) return undefined
   const [name, p] = hit
-  const recipe = join(reg.path, '..', '..', 'recipes', `${name}.md`)
+  return productMatchFrom(reg.path, name, p)
+}
+
+function productMatchFrom(registryPath: string, name: string, p: any): ProductMatch {
+  const recipe = join(registryPath, '..', '..', 'recipes', `${name}.md`)
   return {
     name,
     ...(p.suite ? { suite: String(p.suite) } : {}),
@@ -115,4 +119,17 @@ export async function resolveProduct(text: string): Promise<ProductMatch | undef
     tests: p.tests ?? {},
     ...(existsSync(recipe) ? { recipe } : {}),
   }
+}
+
+/** The registry entry for a product key, as a ProductMatch; undefined when the key is not registered. */
+export async function productByKey(key: string): Promise<ProductMatch | undefined> {
+  const reg = await loadRegistry()
+  const p = reg?.products?.[key]
+  return reg && p ? productMatchFrom(reg.path, key, p) : undefined
+}
+
+/** Every registered product key, for a message that has to name them. */
+export async function registeredProductKeys(): Promise<string[]> {
+  const reg = await loadRegistry()
+  return reg ? Object.keys(reg.products) : []
 }

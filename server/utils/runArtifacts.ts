@@ -520,6 +520,13 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
       `Tests: ${Object.entries(product.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,
       ...(product.recipe ? [`Recipe: ${product.recipe}`] : []),
+      ...(product.alsoInScope ?? []).flatMap(p => [
+        '',
+        `Also in scope (a step widened the run to it): ${p.name}`,
+        `  Repos: ${p.repos.join(', ')} — checked out beside the others, on the run branch`,
+        `  Stack: ${p.stack?.compose ?? 'not registered'} (${p.stack?.topology_default ?? '-'})`,
+        `  Tests: ${Object.entries(p.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,
+      ]),
       'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
     )
   }
