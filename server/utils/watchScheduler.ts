@@ -162,6 +162,29 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
     return { dispatched, skipped, failed }
   }
 
+  // A watch with no owner cannot produce a working run, so it must not produce
+  // one at all.
+  //
+  // `startRun` takes `startedBy: watch.createdBy`. With no owner that is
+  // undefined, `envForUser` finds no profile, and no GH_TOKEN reaches the
+  // agent. The run then dispatches, spends real money and several minutes on
+  // ticket intake, and dies at the provisioner on `git clone ... exit 128`
+  // against a private repository — every time, for every ticket the query
+  // matches. Dispatching into that is worse than not dispatching: it burns
+  // budget, marks tickets as attempted, and reports a failure whose cause is
+  // eight minutes downstream of the actual problem.
+  //
+  // Refusing here is loud, cheap and correct. `enabled` was never the whole
+  // precondition; it only looked like it while every watch happened to be
+  // ownerless.
+  if (!watch.createdBy?.trim()) {
+    log.warn('cycle refused: watch has no owner, so its runs would have no credentials', {
+      watchId: watch.id,
+      remedy: 'open the watch on the Watches page and save it while signed in; the signed-in user becomes its owner',
+    })
+    return { dispatched, skipped, failed }
+  }
+
   log.debug('cycle starting', { watchId: watch.id })
 
   // Reconcile before fetching anything new: a run that finished (or died)
