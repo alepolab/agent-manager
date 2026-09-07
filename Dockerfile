@@ -31,10 +31,15 @@ WORKDIR /app
 # generate code with Java tools: a real run halted with 'generate:api requires
 # Java, which is not installed', and an earlier one only passed because the
 # agent found a JDK lying in the mounted home directory.
-RUN apt-get update && apt-get install -y \
+# chromium brings the shared libraries the browser the agent-browser skill
+# downloads needs (libglib, libnss, libgbm and the rest); without them the
+# Browser Trace step could never open a page in this container.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     git \
     curl \
+    chromium \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 # Temurin 17, pinned and checksummed: the base image's Debian carries no JDK 17
 # package. Installed under /opt so a host-mounted JDK on PATH still wins.
