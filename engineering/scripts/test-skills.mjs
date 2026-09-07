@@ -48,6 +48,14 @@ function readFrontmatter(path) {
     // A `key: >` or `key: |` block scalar continues on indented lines.
     if (block && /^\s/.test(line)) { fm[block] = (fm[block] ? fm[block] + ' ' : '') + line.trim(); continue }
     block = null
+    // A nested mapping (`metadata:` then `  origin: ECC`) is valid YAML that
+    // this line-based reader has no use for: it only ever asserts on top-level
+    // keys. It used to reject the whole file instead, which made it STRICTER
+    // than the runtime — server/utils/frontmatter.ts parses real YAML and reads
+    // all 24 vendored ECC skills without complaint. A test that fails a file
+    // the product loads correctly reports a defect that is not there, and the
+    // obvious way to make it pass is to edit valid upstream content.
+    if (/^\s/.test(line)) continue
     const kv = line.match(/^([A-Za-z0-9_-]+):\s?(.*)$/)
     assert.ok(kv, `${path}: frontmatter line is not "key: value": "${line}"`)
     let [, key, value] = kv

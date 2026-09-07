@@ -29,6 +29,24 @@ export function sdlcScriptsDir(): string {
   return join(process.cwd(), 'engineering', 'scripts')
 }
 
+/**
+ * Absolute path to the seeded skills directory, handed to every agent as
+ * `SDLC_SKILLS_DIR`.
+ *
+ * Language-matched skills are read from disk at run time rather than declared
+ * in an agent's frontmatter, because `buildAgentSystemPrompt` inlines the FULL
+ * BODY of every declared skill. Declaring all 24 would have put ~80,000 tokens
+ * into every agent's prompt on every step of every run - an eleven-fold
+ * increase on a prompt that is ~7,000 today, and most of it irrelevant, since a
+ * Java run has no use for the Go testing skill.
+ *
+ * Absolute for the reason the assembler was: the agent's cwd is the product
+ * checkout, where nothing of ours exists.
+ */
+export function sdlcSkillsDir(): string {
+  return resolveClaudePath('skills')
+}
+
 const log = createLogger('agent')
 
 /**
@@ -265,6 +283,7 @@ export async function callAgent(
         ...process.env,
         ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
         SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
+        SDLC_SKILLS_DIR: sdlcSkillsDir(),
         ...userEnv,
       },
       abortController,
