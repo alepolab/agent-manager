@@ -26,6 +26,14 @@ const saving = ref(false)
 async function toggleLabs(on: boolean) {
   await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), labs: on } } as any)
 }
+/** Per-run caps for new runs. Blank returns to the default; a run that reaches its cap pauses and asks. */
+async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
+  const current = (settings.value as any)?.agentManager?.runBudget ?? {}
+  const value = Number(raw)
+  const runBudget = { ...current, [key]: raw.trim() && value > 0 ? Math.round(value) : undefined }
+  await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), runBudget } } as any)
+  toast.add({ title: 'Run budget saved for new runs', color: 'success' })
+}
 const viewMode = ref<'structured' | 'raw'>('structured')
 const showRemoveConfirm = ref(false)
 const repoToRemove = ref<{ owner: string; repo: string; type: 'skills' | 'agents'; count: number } | null>(null)
@@ -327,6 +335,28 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                 <span class="field-toggle__thumb" />
               </span>
             </label>
+          </div>
+          <div class="flex items-start justify-between gap-4 py-3">
+            <div>
+              <div class="text-[13px] font-medium">Run budget</div>
+              <div class="text-[12px] mt-0.5 text-label">
+                Caps for each new run. When a run reaches one it pauses and asks whether to continue with another allowance. Defaults 8,000,000 tokens and 180 minutes; an AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES variable on the instance overrides these.
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <input
+                type="number" min="1" step="100000" class="field-input w-36 text-[12px]" placeholder="8000000" aria-label="Max tokens per run"
+                :value="settings?.agentManager?.runBudget?.maxTokens ?? ''"
+                @change="setRunBudget('maxTokens', ($event.target as HTMLInputElement).value)"
+              />
+              <span class="text-[11px] text-label">tokens</span>
+              <input
+                type="number" min="1" step="10" class="field-input w-24 text-[12px]" placeholder="180" aria-label="Max minutes per run"
+                :value="settings?.agentManager?.runBudget?.maxMinutes ?? ''"
+                @change="setRunBudget('maxMinutes', ($event.target as HTMLInputElement).value)"
+              />
+              <span class="text-[11px] text-label">min</span>
+            </div>
           </div>
           <div class="flex items-center justify-between">
             <div>

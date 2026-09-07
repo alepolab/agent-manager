@@ -184,6 +184,20 @@ function computeUsage(run: WorkflowRun): RunUsage {
 }
 
 /** A run over its time or token cap, with the reason; null while within budget. */
+/** Raises the caps to what is spent plus one default allowance; a person asked for more. */
+function extendBudget(run: WorkflowRun): void {
+  const spent = computeUsage(run)
+  const fresh = defaultBudget()
+  const extended = {
+    maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil((Date.now() - run.startedAt) / 60000) + fresh.maxMinutes),
+    maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens + spent.output_tokens + fresh.maxTokens),
+  }
+  if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes) {
+    log.info('operator extends the run budget', { runId: run.id, from: run.budget, to: extended })
+    run.budget = extended
+  }
+}
+
 function budgetExceeded(run: WorkflowRun): string | null {
   const b = run.budget
   const minutes = (Date.now() - run.startedAt) / 60000
@@ -192,7 +206,7 @@ function budgetExceeded(run: WorkflowRun): string | null {
   // and the wave loop recurses without publishing in between.
   const u = computeUsage(run)
   const tokens = u.input_tokens + u.output_tokens
-  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens} tokens over the ${b.maxTokens} token cap. Restart the next step to continue with a fresh allowance.`
+  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens.toLocaleString()} tokens over the ${b.maxTokens.toLocaleString()} token cap.`
   return null
 }
 
@@ -691,14 +705,20 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   const anythingLeft = run.steps.some(s => s.status === 'pending' || s.status === 'running')
   const over = anythingLeft ? budgetExceeded(run) : null
   if (over) {
-    skipPending(l.state)
-    for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
-    run.status = 'failed'
-    run.error = over
-    run.endedAt = Date.now()
+    // The cap is a checkpoint, not a verdict: the run pauses and asks. Continuing
+    // grants another allowance (see continueRun); nobody has to find an env var
+    // to get a run whose PR is already open through its follow-up step.
+    const fresh = defaultBudget()
+    const next = run.steps.find(s => s.status === 'pending')
+    run.status = 'paused'
+    run.question = {
+      stepId: next?.stepId ?? '', kind: 'approval', reason: 'budget', askedAt: Date.now(),
+      text: `${over} Continue to grant another ${fresh.maxTokens.toLocaleString()} tokens and ${fresh.maxMinutes} minutes, or stop the run here.`,
+    }
     run.currentStepIds = []
-    run.nextStepIds = []
+    run.nextStepIds = next ? [next.stepId] : []
     l.running = false
+    log.warn('run paused on budget', { runId: run.id, over })
     await publish(run)
     return run
   }
@@ -948,8 +968,9 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
     return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.')
   }
   if (run.question?.kind === 'approval') {
-    l.approved.add(run.question.stepId)
-    if (note?.trim()) l.notes[run.question.stepId] = note.trim()
+    if (run.question.reason === 'budget') extendBudget(run)
+    else l.approved.add(run.question.stepId)
+    if (note?.trim() && run.question.stepId) l.notes[run.question.stepId] = note.trim()
   } else if (note?.trim()) {
     l.nextNote = note.trim()
   }
@@ -1293,20 +1314,8 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
     l.retryFeedback[stepId] = `Operator note: ${note.trim()}`
   }
 
-  // A restart is a person's decision, and it comes with a fresh allowance: the
-  // caps are raised to what is already spent plus one default budget. Otherwise
-  // the check that failed the run fails it again before the restarted step runs,
-  // and a run whose PR is open is left with its follow-up never done.
-  const spent = computeUsage(run)
-  const fresh = defaultBudget()
-  const extended = {
-    maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil((Date.now() - run.startedAt) / 60000) + fresh.maxMinutes),
-    maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens + spent.output_tokens + fresh.maxTokens),
-  }
-  if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes) {
-    log.info('operator restart extends the run budget', { runId, from: run.budget, to: extended })
-    run.budget = extended
-  }
+  // A restart is a person's decision, and it comes with a fresh allowance.
+  extendBudget(run)
   l.stopped = false
   l.running = true
   run.status = 'running'

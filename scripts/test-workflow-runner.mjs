@@ -698,14 +698,22 @@ assert.equal(costed.usage.input_tokens, 4000, 'input tokens summed over four ste
 assert.equal(costed.usage.output_tokens, 400)
 assert.ok(costed.usage.usd > 0, 'a dollar estimate is computed from the model that ran')
 
-// ── 12. a token budget stops a run before the next wave ───────────────────
+// ── 12. a token budget pauses a run before the next wave and asks ─────────
 process.env.AGENT_RUN_MAX_TOKENS = '1500'
 let capped = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 capped = await runner.waitForSettled(capped.id, TIMEOUT)
+assert.equal(capped.status, 'paused', 'reaching the budget pauses the run instead of failing it')
+assert.equal(capped.question?.kind, 'approval')
+assert.equal(capped.question?.reason, 'budget', 'the question says it is the budget asking')
+assert.match(capped.question?.text ?? '', /budget/i, 'and why')
+assert.ok(capped.steps.some(s => s.status === 'pending'), 'later steps wait; nothing is skipped')
+const capBefore = capped.budget.maxTokens
+// Continuing is the operator granting another allowance: the cap rises and the run finishes.
+await runner.continueRun(capped.id)
+capped = await runner.waitForSettled(capped.id, TIMEOUT)
 delete process.env.AGENT_RUN_MAX_TOKENS
-assert.equal(capped.status, 'failed', 'exceeding the budget fails the run')
-assert.match(capped.error, /budget/i, 'the run says why')
-assert.ok(capped.steps.some(s => s.status === 'skipped'), 'later steps are skipped, not run')
+assert.equal(capped.status, 'completed', 'the run finishes on the extended budget')
+assert.ok(capped.budget.maxTokens > capBefore, 'the cap was raised, not ignored')
 
 // ── 13. stopRun aborts the agent call in flight ───────────────────────────
 runner.setAgentCaller((agentSlug, input, projectDir, { signal } = {}) => new Promise((resolve, reject) => {
