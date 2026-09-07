@@ -55,7 +55,15 @@ export interface TeamStatus {
 
 const RUNBOOK_SLUG = 'runbook-a-ticket-to-evidence-backed-pr'
 
-async function pluginInstall(): Promise<{ version: string, installPath: string } | null> {
+/**
+ * The installed alepo-engineering plugin, or null when there is none.
+ *
+ * Exported because `promote` needs the same answer: a promotion is a PR into
+ * the plugin, so on an instance with no plugin installed it changes the team
+ * repo and nothing here. Saying so is the difference between an honest result
+ * and a green link that does nothing where the operator is looking.
+ */
+export async function pluginInstall(): Promise<{ version: string, installPath: string } | null> {
   const p = resolveClaudePath('plugins', 'installed_plugins.json')
   if (!existsSync(p)) return null
   try {
