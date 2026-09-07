@@ -308,83 +308,85 @@ export async function callAgent(
     onProgress(progress)
   }
 
+  // The loop keeps its own indentation inside the try: the assembler test reads
+  // this block by shape and expects `env: {` at the depth it has always had.
   try {
-    for await (const message of query({
-      prompt: messages(),
-      options: {
-        cwd,
-        // A bot identity for git and gh, when one is configured, so agent pushes
-        // and PRs are not attributed to whoever runs the server.
-        // Identity for git, gh and jira: the starter's own tokens when they have
-        // a profile, else the bot token, else whatever the host holds.
-        // Unconditional, where it used to be spread only when a token or a user
-        // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
-        // including the no-credential one; a conditional env is exactly how a
-        // variable goes missing in the configuration nobody tests.
-        env: {
-          ...process.env,
-          ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
-          SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
-          SDLC_SKILLS_DIR: sdlcSkillsDir(),
-          ...userEnv,
-        },
-        abortController,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        maxTurns,
-        ...(declaredModel ? { model: declaredModel } : {}),
-        ...(toolsOption ? { tools: toolsOption } : {}),
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
+  for await (const message of query({
+    prompt: messages(),
+    options: {
+      cwd,
+      // A bot identity for git and gh, when one is configured, so agent pushes
+      // and PRs are not attributed to whoever runs the server.
+      // Identity for git, gh and jira: the starter's own tokens when they have
+      // a profile, else the bot token, else whatever the host holds.
+      // Unconditional, where it used to be spread only when a token or a user
+      // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
+      // including the no-credential one; a conditional env is exactly how a
+      // variable goes missing in the configuration nobody tests.
+      env: {
+        ...process.env,
+        ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
+        SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
+        SDLC_SKILLS_DIR: sdlcSkillsDir(),
+        ...userEnv,
       },
-    })) {
-      // The one place the real, observed model comes from - never the request.
-      if (message.type === 'system' && message.subtype === 'init') {
-        modelRan = message.model
-        if (message.session_id && message.session_id !== sessionId) { sessionId = message.session_id; onSession?.(sessionId, cwd) }
-        log.debug('agent model resolved', { agentSlug, modelRequested: declaredModel ?? '(sdk default)', modelRan })
-      }
-      if (message.type === 'assistant') {
-        turn += 1
-        // Duck-typed on purpose: the SDK's BetaMessage content-block union is
-        // deep and version-sensitive (see the doc comment on AgentProgress),
-        // and all this needs is "was one of this turn's blocks a tool_use, and
-        // what was its name" - never its `input`, which can carry ticket text
-        // or file contents.
-        const content = (message as { message?: { content?: unknown } }).message?.content
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (
-              block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use'
-              && typeof (block as { name?: unknown }).name === 'string'
-            ) {
-              lastTool = (block as { name: string }).name
-            }
-            // Lines are never throttled: a watcher wants every command, not a sample.
-            const line = describeBlock(block)
-            if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
+      abortController,
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+      maxTurns,
+      ...(declaredModel ? { model: declaredModel } : {}),
+      ...(toolsOption ? { tools: toolsOption } : {}),
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
+    },
+  })) {
+    // The one place the real, observed model comes from - never the request.
+    if (message.type === 'system' && message.subtype === 'init') {
+      modelRan = message.model
+      if (message.session_id && message.session_id !== sessionId) { sessionId = message.session_id; onSession?.(sessionId, cwd) }
+      log.debug('agent model resolved', { agentSlug, modelRequested: declaredModel ?? '(sdk default)', modelRan })
+    }
+    if (message.type === 'assistant') {
+      turn += 1
+      // Duck-typed on purpose: the SDK's BetaMessage content-block union is
+      // deep and version-sensitive (see the doc comment on AgentProgress),
+      // and all this needs is "was one of this turn's blocks a tool_use, and
+      // what was its name" - never its `input`, which can carry ticket text
+      // or file contents.
+      const content = (message as { message?: { content?: unknown } }).message?.content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use'
+            && typeof (block as { name?: unknown }).name === 'string'
+          ) {
+            lastTool = (block as { name: string }).name
           }
-        }
-        emitProgress()
-      }
-      if (message.type === 'user' && onProgress) {
-        const content = (message as { message?: { content?: unknown } }).message?.content
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            const line = describeBlock(block)
-            if (line) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
-          }
+          // Lines are never throttled: a watcher wants every command, not a sample.
+          const line = describeBlock(block)
+          if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
         }
       }
-      if (message.type === 'result') {
-        const interpreted = interpretResultMessage(message, maxTurns)
-        result = interpreted.output
-        usage = interpreted.usage
-        // The turn is over. Close the input stream unless a note is still queued,
-        // in which case the agent gets one more turn to act on it.
-        if (!pending.length) finished = true
-        kick()
+      emitProgress()
+    }
+    if (message.type === 'user' && onProgress) {
+      const content = (message as { message?: { content?: unknown } }).message?.content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          const line = describeBlock(block)
+          if (line) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
+        }
       }
     }
+    if (message.type === 'result') {
+      const interpreted = interpretResultMessage(message, maxTurns)
+      result = interpreted.output
+      usage = interpreted.usage
+      // The turn is over. Close the input stream unless a note is still queued,
+      // in which case the agent gets one more turn to act on it.
+      if (!pending.length) finished = true
+      kick()
+    }
+  }
   } finally {
     // Every exit path, a thrown error result included: otherwise the input
     // generator stays suspended forever and a queued note is never released.
