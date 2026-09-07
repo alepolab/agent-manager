@@ -622,6 +622,21 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
+    // A step that ran out of turns has usually done most of its work, and its
+    // log tail says how far it got. One retry that starts from there is cheaper
+    // than a dead run: the budget becomes a checkpoint, not a wall. A real
+    // verifier died one turn after its tests passed, with nothing reported.
+    if (err instanceof AgentResultError && err.subtype === 'error_max_turns' && !l.stopped && canRevisit(l.graph, l.state, id)) {
+      const tail = (l.logs[id] ?? []).slice(-25).join('\n')
+      Object.assign(rec, { status: 'failed', error: err.message, completedAt: Date.now(), ...(err.usage ? { usage: err.usage } : {}) })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+      l.outputs[id] = tail
+      l.retryFeedback[id] = 'Your previous attempt ran out of its turn budget before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.'
+      l.state.status[id] = 'completed'
+      armNode(l.state, id)
+      log.warn('step ran out of turns; retrying from its log tail', { runId: run.id, stepId: id, agentSlug: step.agentSlug, visits: rec.visits })
+      return true
+    }
     markFailed(l.state, id)
     // A failed step still spent tokens. Recording them is what keeps the run's
     // cost honest and makes an expensive failure visible in the cost report

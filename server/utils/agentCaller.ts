@@ -72,8 +72,9 @@ export interface AgentProgress {
   line?: string
 }
 
-const LINE_MAX = 200
-const squash = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, LINE_MAX)
+const LINE_MAX = 300
+const TOOL_LINE_MAX = 600
+const squash = (s: string, max = LINE_MAX) => s.replace(/\s+/g, ' ').trim().slice(0, max)
 
 /**
  * The live-log line for one content block, or null when the block says
@@ -88,7 +89,7 @@ export function describeBlock(block: unknown): string | null {
   if (b.type === 'tool_use' && typeof b.name === 'string') {
     const i = b.input ?? {}
     const detail = [i.command, i.file_path, i.path, i.pattern, i.query, i.url, i.description].find(v => typeof v === 'string' && v.trim()) as string | undefined
-    return squash(`[${b.name}] ${detail ?? ''}`)
+    return squash(`[${b.name}] ${detail ?? ''}`, TOOL_LINE_MAX)
   }
   if (b.type === 'tool_result') {
     const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((c: any) => (typeof c?.text === 'string' ? c.text : '')).join(' ') : ''

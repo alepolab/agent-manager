@@ -976,6 +976,34 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(v.status, 'completed'); assert.deepEqual(calls, ['agent-d'], 'the step marked failed on disk ran, whatever memory remembered')
 }
 
+// ── 26. running out of turns is a checkpoint: the retry starts from the log tail ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const { AgentResultError } = await import('../server/utils/agentCaller.ts')
+  const inputs = {}
+  let starved = true
+  runner.setAgentCaller(async (agentSlug, input, projectDir, { onProgress } = {}) => {
+    inputs[agentSlug] = inputs[agentSlug] ?? []; inputs[agentSlug].push(input)
+    if (agentSlug === 'agent-b' && starved) {
+      onProgress?.({ turn: 1, lastTool: 'Bash', lastActivityAt: Date.now(), line: '[Bash] JUNIT=/x/junit.jar java org.junit.runner.JUnitCore T' })
+      onProgress?.({ turn: 1, lastTool: 'Bash', lastActivityAt: Date.now(), line: '→ OK (6 tests) EXIT: 0' })
+      starved = false
+      throw new AgentResultError('Claude Code returned an error result (error_max_turns): no further detail', { input_tokens: 5, output_tokens: 1 }, 'error_max_turns')
+    }
+    return `out ${agentSlug}`
+  })
+  let mt = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  mt = await runner.waitForSettled(mt.id, TIMEOUT)
+  assert.equal(mt.status, 'completed', 'the run survives a step that ran out of turns')
+  const b = mt.steps.find(s => s.stepId === 'b')
+  assert.equal(b.status, 'completed'); assert.equal(b.visits, 2, 'the step ran a second time')
+  assert.equal(inputs['agent-b'].length, 2)
+  assert.match(inputs['agent-b'][1], /ran out of its turn budget/, 'the retry is told why')
+  assert.match(inputs['agent-b'][1], /OK \(6 tests\) EXIT: 0/, 'and gets the tail of what the first attempt did')
+  const snaps = readdirSync(join(process.env.AGENT_RUNS_DIR, mt.id, 'artifacts', 'steps'))
+  assert.ok(snaps.some(f => /step-02-.*-retry-1\.json$/.test(f)), 'the starved attempt is snapshotted')
+}
+
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not
