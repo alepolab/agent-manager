@@ -177,6 +177,9 @@ const money = (n: number) => `$${n.toFixed(4)}`
       :aria-label="notePlaceholder"
       @keydown.meta.enter="noteMode === 'reply' ? send('respond') : noteMode === 'steer' ? send('note') : noteMode === 'continue' ? send('continue') : undefined"
     />
+    <p v-if="settledRun && run.steps.some(s => s.sessionId)" class="text-[11px] text-label">
+      Questions or feedback for a step's agent go to its chat: expand the step and choose Ask this agent, or use the speech bubble on its row. The conversation continues with everything the agent saw. A note typed here goes to the step you restart.
+    </p>
     <!-- One honest number: the run's cost so far, from server/utils/costReport.ts.
          Never fabricated - a step that hasn't reported usage, or ran on a model
          with no pricing entry, makes this a stated PARTIAL total, not a silent
@@ -216,7 +219,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
           <!-- Visible on the row itself: an action nobody has to discover by expanding. -->
           <UButton
             v-if="step.sessionId && step.sessionProject"
-            size="xs" variant="ghost" color="neutral" icon="i-lucide-message-circle"
+            size="xs" variant="soft" icon="i-lucide-message-circle"
             :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
             :aria-label="`Open the ${step.label} agent's chat`" :title="`Open the ${step.label} agent's chat`"
           />
@@ -229,6 +232,13 @@ const money = (n: number) => `$${n.toFixed(4)}`
         </div>
         <div v-if="step.status === 'running' && latest(step.stepId) && expanded !== step.stepId" class="pl-4 text-[10px] font-mono truncate text-label" :title="latest(step.stepId)">{{ latest(step.stepId) }}</div>
         <div v-if="expanded === step.stepId" class="pl-4 pb-2 space-y-1">
+          <!-- Questions and feedback for a finished step go to the agent itself: its
+               Claude Code session continues on /cli with everything it saw. -->
+          <UButton
+            v-if="step.sessionId && step.sessionProject"
+            size="xs" variant="soft" icon="i-lucide-message-circle" label="Ask this agent"
+            :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
+          />
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
           <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
             <div class="text-[10px] text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
