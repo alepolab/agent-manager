@@ -107,6 +107,8 @@ export interface WorkflowRun {
   ticketKey?: string
   /** Branch the runner created in projectDir for this run's commits; absent when there was no checkout. */
   branch?: string
+  /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
+  dismissed?: boolean
   projectDir?: string
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */

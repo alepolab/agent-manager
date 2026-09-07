@@ -2,7 +2,7 @@
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES } from '~/utils/runStatus'
 
-const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]> }>()
+const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
 const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [] }>()
 
 /** Optional correction handed to whichever step is restarted next. */
@@ -109,6 +109,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
       >
         &larr; All runs ({{ runs.length }})
       </button>
+      <NuxtLink v-if="!fullPage" :to="`/runs/${run.id}`" class="text-[11px] text-label hover:underline shrink-0 focus-ring" title="Steps, live output and every evidence file, full screen">Full page &nearr;</NuxtLink>
       <span class="text-[11px] font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">
         {{ run.status }}
       </span>

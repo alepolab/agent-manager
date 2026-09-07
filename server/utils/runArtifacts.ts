@@ -454,7 +454,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     ...(runId
       ? [
           `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
-          `and shown in the run panel at ${appUrl}/runs?run=${runId}. Link that in a pull`,
+          `and shown on the run page at ${appUrl}/runs/${runId}. Link that in a pull`,
           'request body; never copy artifacts into the repository to make them reachable.',
           '',
         ]
