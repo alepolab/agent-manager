@@ -50,6 +50,11 @@ const toast = useToast()
 const expanded = ref<Record<string, boolean>>({})
 const showCreateModal = ref(false)
 const creating = ref(false)
+/** The watch being edited, or null when the modal is creating a new one. The
+ *  same form serves both: the fields are identical, and keeping two of them in
+ *  sync is how one of them quietly stops matching the backend. */
+const editing = ref<Watch | null>(null)
+const isEditing = computed(() => editing.value !== null)
 
 const form = reactive({
   name: '',
@@ -181,7 +186,27 @@ async function onDelete(watch: Watch) {
   }
 }
 
+function openEdit(watch: Watch) {
+  editing.value = watch
+  form.name = watch.name ?? ''
+  form.workflowSlug = watch.workflowSlug
+  form.intervalSeconds = watch.intervalSeconds ?? 300
+  form.maxConcurrentRuns = watch.maxConcurrentRuns ?? 1
+  form.dailyDispatchCap = watch.dailyDispatchCap ?? 20
+  form.query = watch.query ?? ''
+  form.projectDir = watch.projectDir ?? ''
+  form.autoRun = watch.autoRun === true
+  showCreateModal.value = true
+}
+
+function openCreate() {
+  editing.value = null
+  resetForm()
+  showCreateModal.value = true
+}
+
 function resetForm() {
+  editing.value = null
   form.name = ''
   form.workflowSlug = undefined
   form.intervalSeconds = 300
@@ -192,11 +217,16 @@ function resetForm() {
   form.autoRun = false
 }
 
-async function onCreate() {
+async function onSubmit() {
   if (!form.name.trim() || !form.workflowSlug) return
+  const wasEditing = editing.value
   creating.value = true
   try {
     const watch = await save({
+      // Sending the id is what makes this an update rather than a second watch
+      // with a de-duplicated slug. Its absence was the whole reason there was
+      // no edit path.
+      ...(wasEditing ? { id: wasEditing.id, enabled: wasEditing.enabled } : {}),
       name: form.name.trim(),
       workflowSlug: form.workflowSlug,
       intervalSeconds: form.intervalSeconds,
@@ -209,9 +239,24 @@ async function onCreate() {
     await fetchState(watch.id)
     showCreateModal.value = false
     resetForm()
-    toast.add({ title: 'Watch created', description: 'New watches start disabled — enable it once you have seen it behave.', color: 'success' })
+    if (wasEditing) {
+      // Saving is also how an ownerless watch adopts an owner: the route stamps
+      // the signed-in user when the stored record has none, and the scheduler
+      // refuses to dispatch a watch with no owner because its runs would carry
+      // no credentials.
+      toast.add({
+        title: 'Watch updated',
+        description: watch.createdBy && !wasEditing.createdBy
+          ? `Saved, and it now runs as @${watch.createdBy}.`
+          : 'Saved.',
+        color: 'success',
+      })
+    }
+    else {
+      toast.add({ title: 'Watch created', description: 'New watches start disabled — enable it once you have seen it behave.', color: 'success' })
+    }
   } catch (e: any) {
-    toast.add({ title: 'Failed to create watch', description: e?.data?.message || e?.message, color: 'error' })
+    toast.add({ title: wasEditing ? 'Failed to update watch' : 'Failed to create watch', description: e?.data?.message || e?.message, color: 'error' })
   } finally {
     creating.value = false
   }
@@ -244,7 +289,7 @@ function relativeTime(ms: number): string {
           title="Disable every enabled watch. Nothing further is dispatched until one is turned back on."
           @click="onPauseAll"
         />
-        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
+        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="openCreate" />
       </template>
     </PageHeader>
 
@@ -273,7 +318,7 @@ function relativeTime(ms: number): string {
       <div v-else-if="!watches.length" class="flex flex-col items-center justify-center py-16 space-y-3">
         <UIcon name="i-lucide-eye" class="size-8 text-meta" />
         <p class="text-[13px] text-label">No watches configured yet.</p>
-        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
+        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="openCreate" />
       </div>
 
       <!-- Watch list -->
@@ -332,6 +377,14 @@ function relativeTime(ms: number): string {
                 </span>
               </label>
               <UButton
+                icon="i-lucide-pencil"
+                size="xs"
+                variant="ghost"
+                color="neutral"
+                title="Edit watch"
+                @click="openEdit(watch)"
+              />
+              <UButton
                 icon="i-lucide-trash-2"
                 size="xs"
                 variant="ghost"
@@ -387,11 +440,19 @@ function relativeTime(ms: number): string {
     <UModal v-model:open="showCreateModal">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
-          <h3 class="text-page-title">New Watch</h3>
-          <p class="text-[12px] text-label">
+          <h3 class="text-page-title">{{ isEditing ? `Edit ${editing?.name || 'watch'}` : 'New Watch' }}</h3>
+          <p v-if="!isEditing" class="text-[12px] text-label">
             New watches always start disabled — enable it explicitly once you've watched it behave against a real cycle.
           </p>
-          <form class="space-y-3" @submit.prevent="onCreate">
+          <p v-else-if="!editing?.createdBy" class="text-[12px] text-label">
+            This watch has no owner, so the scheduler refuses to dispatch from it — its runs would carry no
+            credentials and would halt at the first clone. Saving here makes you its owner.
+          </p>
+          <p v-else class="text-[12px] text-label">
+            Runs as <span class="font-medium">@{{ editing?.createdBy }}</span>. Enabling and disabling stays on the card;
+            this form does not change it.
+          </p>
+          <form class="space-y-3" @submit.prevent="onSubmit">
             <div class="field-group">
               <label class="field-label">Name</label>
               <input v-model="form.name" placeholder="e.g. CSUP triage" class="field-input w-full" required>
@@ -436,7 +497,7 @@ function relativeTime(ms: number): string {
             </div>
             <div class="flex justify-end gap-2 pt-2">
               <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showCreateModal = false }" />
-              <UButton type="submit" label="Create" size="sm" :loading="creating" :disabled="!form.name.trim() || !form.workflowSlug" />
+              <UButton type="submit" :label="isEditing ? 'Save changes' : 'Create'" size="sm" :loading="creating" :disabled="!form.name.trim() || !form.workflowSlug" />
             </div>
           </form>
         </div>
