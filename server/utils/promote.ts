@@ -15,6 +15,8 @@ const execFileP = promisify(execFile)
  * request for it, as the developer who asked. The plugin is the team's source
  * of truth, so a promotion is a PR, never a direct write to anyone's config.
  */
+import { pluginInstall } from './teamSync.ts'
+
 export type PromoteKind = 'agent' | 'skill' | 'command'
 
 export class PromoteError extends Error {
@@ -53,7 +55,7 @@ function locate(kind: PromoteKind, slug: string): { from: string, to: string } {
 // ponytail: one promotion at a time; a per-checkout lock if two developers ever race
 let busy = false
 
-export async function promoteToTeam(kind: PromoteKind, slug: string, login: string): Promise<{ branch: string, pr: string, path: string }> {
+export async function promoteToTeam(kind: PromoteKind, slug: string, login: string): Promise<{ branch: string, pr: string, path: string, pluginInstalled: boolean, note?: string }> {
   if (busy) throw new PromoteError(409, 'Another promotion is in progress; try again in a moment')
   busy = true
   try {
@@ -87,7 +89,23 @@ export async function promoteToTeam(kind: PromoteKind, slug: string, login: stri
     await git(['-c', `user.name=${login}`, '-c', `user.email=${login}@users.noreply.github.com`, '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', title])
     await git(['push', '--quiet', '-u', 'origin', branch])
     const pr = await openPr({ token, head: branch, title, body: `Promoted from Agent Manager by @${login}.\n\nFile: \`${to}\`. Once merged, reinstall the plugin and apply team standards on the Team page.` })
-    return { branch, pr, path: to }
+    // A promotion lands in the plugin. An instance with no plugin installed
+    // reads its agents, skills and commands from the copy shipped in the
+    // product instead, so merging this PR changes the team repo and leaves THIS
+    // box exactly as it was - the seeder will keep reverting the same edit on
+    // every boot. Reporting only the PR link would be the same defect the
+    // seeder warning just fixed: an operation that reports success while
+    // nothing changes where the operator is looking.
+    const installed = (await pluginInstall()) !== null
+    return {
+      branch,
+      pr,
+      path: to,
+      pluginInstalled: installed,
+      ...(installed
+        ? {}
+        : { note: 'No alepo-engineering plugin is installed on this instance, so merging this PR will not change behaviour here — the seeder will keep reverting local edits to the shipped copy. Install the plugin and apply team standards on the Team page, or edit the shipped template in the product repo and redeploy.' }),
+    }
   } finally {
     busy = false
   }
