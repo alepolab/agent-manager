@@ -30,6 +30,15 @@ export interface TeamStatus {
   skills: { name: string, state: ItemState }[]
   commands: { name: string, state: ItemState }[]
   workflow: { slug: string, state: ItemState, steps: number }
+  /**
+   * Items this call OVERWROTE because they had been edited locally — not the
+   * ones it created. A seeded item that differs from the team version is
+   * rewritten at every boot, so an operator's edit to a shipped agent, skill or
+   * command works perfectly until the next restart and then vanishes with
+   * nothing said. That silence is the defect: the loss is invisible from the
+   * UI, from the boot line, and from the filesystem afterwards.
+   */
+  reverted: { kind: 'agent' | 'skill' | 'command', name: string }[]
   /** Registry watches, seeded disabled; an operator enables them on the Watches page. */
   watches: { id: string, state: ItemState }[]
   registry: { ok: boolean, products: number, path: string | null, items: { key: string, suite?: string, repos: string[], recipe: boolean }[] }
@@ -95,6 +104,7 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
   // The installed plugin stays preferred - an operator can update it
   // independently - and the copy shipped in the product (engineering/skills/,
   // see its VENDORED.md) is the fallback.
+  const reverted: TeamStatus['reverted'] = []
   const shippedSkills = join(process.cwd(), 'engineering', 'skills')
   const skillsSource = (plugin && existsSync(join(plugin.installPath, 'skills')))
     ? join(plugin.installPath, 'skills')
@@ -109,6 +119,7 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
       const to = join(skillsDir, name, 'SKILL.md')
       const current = await readOr(to)
       let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
+      if (apply && state === 'drifted') reverted.push({ kind: 'skill', name })
       if (apply && state !== 'ok') {
         // The WHOLE directory, not just SKILL.md. Several skills carry
         // supporting files their body points at - systematic-debugging has ten
@@ -150,32 +161,45 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
       const to = join(commandsDir, name)
       const current = await readOr(to)
       let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
+      if (apply && state === 'drifted') reverted.push({ kind: 'command', name: name.replace(/\.md$/, '') })
       if (apply && state !== 'ok') { await mkdir(commandsDir, { recursive: true }); await writeFile(to, next); state = 'ok' }
       commands.push({ name: name.replace(/\.md$/, ''), state })
     }
   }
 
-  const agents: TeamStatus['agents'] = []
+  // Agents take the SAME plugin-preferred, shipped-fallback shape as skills and
+  // commands above. They did not, and the asymmetry made `promote` a trap: an
+  // agent promoted into the plugin was skipped here by an explicit
+  // `if (agentTemplates.some(t => t.id === id)) continue`, so the shipped
+  // template kept winning and the operator's edit kept being reverted on every
+  // boot - after a green PR that said it had been promoted. The escape hatch
+  // reported success and changed nothing.
+  const pluginAgents = new Map<string, string>()
   if (plugin && existsSync(join(plugin.installPath, 'agents'))) {
     for (const name of await readdir(join(plugin.installPath, 'agents'))) {
       if (!name.endsWith('.md')) continue
-      const id = name.replace(/\.md$/, '')
-      if (agentTemplates.some(t => t.id === id)) continue
-      const next = await readFile(join(plugin.installPath, 'agents', name), 'utf-8')
-      const to = join(agentsDir, name)
-      const current = await readOr(to)
-      let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
-      if (apply && state !== 'ok') { await writeFile(to, next); state = 'ok' }
-      agents.push({ id, state })
+      pluginAgents.set(name.replace(/\.md$/, ''), await readFile(join(plugin.installPath, 'agents', name), 'utf-8'))
     }
   }
-  for (const t of agentTemplates.filter(t => t.id.startsWith('sdlc-'))) {
-    const path = join(agentsDir, `${t.id}.md`)
-    const next = serializeFrontmatter(t.frontmatter as any, t.body)
+
+  const agents: TeamStatus['agents'] = []
+  const shippedIds = new Set(agentTemplates.filter(t => t.id.startsWith('sdlc-')).map(t => t.id))
+  const seedAgent = async (id: string, next: string) => {
+    const path = join(agentsDir, `${id}.md`)
     const current = await readOr(path)
     let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
+    // Captured BEFORE the write, because applying sets it to 'ok' and the
+    // distinction that matters to a human - "this existed and I replaced it" -
+    // is gone a line later.
+    if (apply && state === 'drifted') reverted.push({ kind: 'agent', name: id })
     if (apply && state !== 'ok') { await writeFile(path, next); state = 'ok' }
-    agents.push({ id: t.id, state })
+    agents.push({ id, state })
+  }
+  for (const t of agentTemplates.filter(t => t.id.startsWith('sdlc-'))) {
+    await seedAgent(t.id, pluginAgents.get(t.id) ?? serializeFrontmatter(t.frontmatter as any, t.body))
+  }
+  for (const [id, next] of pluginAgents) {
+    if (!shippedIds.has(id)) await seedAgent(id, next)
   }
 
   const wfPath = join(workflowsDir, `${RUNBOOK_SLUG}.json`)
@@ -253,6 +277,7 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
       budget: defaultBudget(),
     },
     drifted,
+    reverted,
     checkedAt: Date.now(),
   }
 }
