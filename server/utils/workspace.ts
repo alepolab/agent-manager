@@ -13,8 +13,9 @@ import { agentRunsRoot } from './runArtifacts.ts'
  * the developer before Start.
  */
 const execFileP = promisify(execFile)
-const git = async (cwd: string, args: string[]) =>
-  (await execFileP('git', args, { cwd, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout.trim()
+const gitRaw = async (cwd: string, args: string[]) =>
+  (await execFileP('git', args, { cwd, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout
+const git = async (cwd: string, args: string[]) => (await gitRaw(cwd, args)).trim()
 
 export const workspaceRoot = () => process.env.AGENT_WORKSPACE_ROOT || join(homedir(), 'alepo-workspace')
 /** Where a product repo is expected on this instance: <workspace>/<repo name>. */
@@ -39,9 +40,10 @@ export async function checkoutState(path: string): Promise<CheckoutState> {
   if (!existsSync(join(path, '.git'))) return { path, name, exists: true, git: false, dirty: 0, dirtyFiles: [] }
   try {
     const [branch, head, status] = await Promise.all([
-      git(path, ['rev-parse', '--abbrev-ref', 'HEAD']),
-      git(path, ['rev-parse', '--short', 'HEAD']),
-      git(path, ['status', '--porcelain', '-uall']),
+      git(path, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => 'no commits yet'),
+      git(path, ['rev-parse', '--short', 'HEAD']).catch(() => ''),
+      // Untrimmed: a leading space is the status column of the first line, not padding.
+      gitRaw(path, ['status', '--porcelain', '-uall']),
     ])
     const remote = await git(path, ['remote', 'get-url', 'origin']).catch(() => undefined)
     const files = status.split('\n').filter(Boolean).map(l => l.slice(3))
@@ -54,7 +56,8 @@ export async function checkoutState(path: string): Promise<CheckoutState> {
 export async function listCheckouts(): Promise<CheckoutState[]> {
   const root = workspaceRoot()
   if (!existsSync(root)) return []
-  const names = (await readdir(root, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name).sort()
+  // Dot-directories are tooling state (.claude, editor caches), never a product checkout.
+  const names = (await readdir(root, { withFileTypes: true })).filter(d => d.isDirectory() && !d.name.startsWith('.')).map(d => d.name).sort()
   return Promise.all(names.map(n => checkoutState(join(root, n))))
 }
 

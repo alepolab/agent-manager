@@ -75,6 +75,7 @@ const paletteSearch = ref('')
 const editingName = ref(false)
 const editingDescription = ref(false)
 const settingsStepId = ref<string | null>(null)
+useHead({ title: computed(() => `${name.value || 'Workflow'} | Agent Manager`) })
 
 // Load workflow
 onMounted(async () => {
