@@ -646,7 +646,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 60,
+      maxTurns: 80,
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
@@ -682,9 +682,89 @@ Do the adversarial work for real: a two-node rerun to catch state that only brea
 
 For every other \`blast_radius\`, merge \`adversarial: null\` into \`meta.json\` explicitly — do not simply omit the key.
 
+## Deploy the fixed build and prove it runs
+
+Your tests prove the *source*. They do not prove the *artifact*. The stack the
+provisioner stood up runs a GHCR image built before this fix existed — so up to
+this point nothing in this run has shown that the code you just verified builds
+into a deployable image, or that the image starts and serves. A pull request
+that calls itself evidence-backed while never once running the fixed build is
+the gap this section closes.
+
+Do this only after your tests, lint and type gates are green. A build of code
+that does not pass its own tests proves nothing worth having.
+
+1. **Build from the fixed checkout**, tagged locally:
+
+\`\`\`
+docker build -t localhost/agent-sdlc/<repo>:<run id> <checkout path>
+\`\`\`
+
+2. **Deploy it alongside the baseline — never over it.** Use your own compose
+   project name and the local tag, and publish no host ports:
+
+\`\`\`
+TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id> -f <compose file> --profile <profile> up -d
+\`\`\`
+
+   **Why alongside, and not in place.** This step runs *in parallel* with
+   Browser Trace and Security Review — the fix step dispatches all three at
+   once. Replacing the running stack's image would swap the application out
+   from under a browser session mid-trace and yield a recording of a
+   half-restarted app: evidence that is worse than none, because it looks real.
+   Your own project name means nothing you do can reach a stack another step is
+   using. The \`TAG\` variable is the tag lever in this estate — never
+   \`IMAGE_TAG\`.
+
+   **The \`localhost/\` prefix is load-bearing, not decoration.** This host runs
+   rootless podman behind the docker CLI, and podman normalises a bare
+   \`agent-sdlc/x:y\` to \`docker.io/agent-sdlc/x:y\` — a registry name for an image
+   that exists only on this machine, which invites a pull for something no
+   registry has. \`localhost/\` is unambiguous on podman and harmless on docker.
+   Before \`up\`, confirm the tag resolves locally and quote the result:
+
+\`\`\`
+docker image inspect localhost/agent-sdlc/<repo>:<run id> --format '{{index .RepoTags 0}}'
+\`\`\`
+
+   If that fails, the build did not produce the tag you think it did — stop
+   there rather than letting compose reach for a registry.
+
+3. **Prove health from inside the stack's own network**, exactly as the
+   provisioner does: \`docker exec <container> curl -sf http://localhost:<container-port>/...\`
+   plus \`docker inspect\`, and quote their real output. You execute inside the
+   agent-manager container: host \`localhost\` and host-published ports are
+   unreachable from where you run, so a timeout there says nothing about the
+   build. A container that is running is still not a service that is serving.
+
+4. **Tear down exactly the project you created**: \`docker compose -p sdlc-<run id> down\`.
+   Never \`down -v\` or any volume prune — that destroys seeded data other runs
+   depend on and cannot be undone — and never remove anything you did not start.
+
+**Never push the image you build.** It is a local tag for this run only. A
+registry push from inside a run puts an unreviewed build somewhere other
+people's deployments can find it.
+
+### When to skip, and how to say so
+
+Skipping is legitimate here and often correct. It is legitimate only when you
+**state what you measured**:
+
+- The provisioner stood up no stack — read \`stack-report.md\` and say that it did
+  not, rather than inferring it from an empty \`docker ps\`.
+- The repository has no Dockerfile or image build path — name the paths you
+  actually looked at, and widen the search once before concluding absence.
+- The build cannot finish inside this step's budget. The C++ repositories
+  (\`ocs_cpp14\`, \`billing_cpp14\`, \`pcrf_cpp14\`) build in tens of minutes; say which
+  repository it is and that the build was declined on time, not attempted and
+  hidden.
+
+A skip with a measured reason is a pass, and the monitor will treat it as one.
+A skip because the work looked hard is not, and "seems fine" is not a finding.
+
 ## Report
 
-State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before. If \`blast_radius\` required adversarial verification, report what you did for that too.
+State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before. If \`blast_radius\` required adversarial verification, report what you did for that too. Then state, in one line, whether the fixed build was deployed and proved healthy — or, if you skipped the deploy, which of the three reasons above applied and what you measured to establish it.
 
 ## Artifacts
 
@@ -692,6 +772,8 @@ Write two files into the run artifacts directory named at the top of your input,
 
 - \`oracle-after.xml\` — three runs of the parameterised test, and every one must **PASS**. The assembler derives \`oracle_after.verdict\` from this file itself, and the bundle validator hard-rejects anything but \`oracle_after.verdict: PASS\` here — do not report PASS in prose without the file backing it.
 - \`regression.xml\` — the repo's existing test suite run.
+
+And, when you deployed the fixed build, \`deploy-report.md\`: the image tag you built, the compose project name, the health commands with their verbatim output, and the teardown command you ran. If you skipped the deploy, write the same file saying so and why — a reviewer needs to see the decision, not its absence.
 
 Then merge \`oracle_after\`, \`regression\`, and \`adversarial\` (the object above, or \`null\`) into \`meta.json\` in that same directory:
 
