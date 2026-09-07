@@ -1,25 +1,148 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+/**
+ * Which directory a run's agents will work in.
+ *
+ * The run lock exists because two runs editing the same files corrupt each
+ * other. It was written as "one run per workflow", which is neither necessary
+ * nor sufficient once more than one developer signs in:
+ *
+ * - Not necessary: two people working on unrelated products share nothing, yet
+ *   the second one got a 409 and no queue. A single global lock on the pipeline
+ *   makes the tool single-user in practice.
+ * - Not sufficient: `projectDir` is unset on every real run, because the
+ *   provisioner clones into AGENT_WORKSPACE_ROOT. That root was ONE shared
+ *   directory, so two runs of two DIFFERENT workflows would both clone
+ *   alepo-dev-team-infra into the same path and stomp each other — a collision
+ *   a per-workflow lock cannot see.
+ *
+ * So the root is now per developer, and the lock is scoped to the directory a
+ * run will actually touch. Two people run concurrently; one person still cannot
+ * start a second run over their own checkout.
+ */
+
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { agentRunsRoot } from './runArtifacts.ts'
+
+/** Login sanitiser, matching users.ts: a login becomes one safe path segment. */
+const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_')
+
+export const WORKSPACE_ROOT_VAR = 'AGENT_WORKSPACE_ROOT'
+
+/** The configured root all developer workspaces live under. */
+export function workspaceRoot(): string {
+  return (process.env[WORKSPACE_ROOT_VAR] || '~/alepo-workspace').replace(/\/+$/, '')
+}
 
 /**
- * The instance's product checkouts and the two preconditions a run cannot do
- * without: a checkout to work in and a directory to write evidence to. Checked
- * by the runner before any agent spends a token discovering them, and shown to
- * the developer before Start.
+ * One developer's own checkout area. Anonymous runs (auth disabled, or a watch
+ * dispatch with no starter) share the bare root, which is the old behaviour and
+ * correct for them: there is no identity to separate them by.
  */
+export function workspaceRootFor(login: string | undefined): string {
+  const root = workspaceRoot()
+  return login ? `${root}/${safe(login)}` : root
+}
+
+/**
+ * The directory a run will actually write in, and therefore the thing the lock
+ * must be taken on. An explicit projectDir wins — the caller named a checkout,
+ * and two runs against it collide however different their workflows are.
+ */
+export function runWorkspace(run: { projectDir?: string, startedBy?: string }): string {
+  return (run.projectDir?.trim()) || workspaceRootFor(run.startedBy)
+}
+
+/**
+ * Whether a workspace holds a git checkout — the side effect a restart cannot
+ * recreate on its own.
+ *
+ * The directory itself is either the checkout (an explicit projectDir) or the
+ * root the provisioner clones repositories into, so both shapes count: a `.git`
+ * here, or a `.git` one level down.
+ */
+export function hasCheckout(workspace: string): boolean {
+  if (!existsSync(workspace)) return false
+  if (existsSync(join(workspace, '.git'))) return true
+  try {
+    return readdirSync(workspace, { withFileTypes: true })
+      .some(e => e.isDirectory() && existsSync(join(workspace, e.name, '.git')))
+  }
+  catch { return false }
+}
+
+/** What a browser-trace step can actually do here, decided by looking rather
+ *  than by asking an agent to notice.
+ *
+ * The trace step twice produced no trace and no explanation, and the monitor
+ * called it - correctly - "silence without explanation". The instruction to
+ * declare `TRACE: n/a` was there; what was missing was anything concrete to
+ * declare. A step told "there is no playwright config in this checkout and the
+ * change touches no UI files" has a fact to quote. A step left to work it out
+ * and then remember to say so has a chore it can skip.
+ *
+ * Deliberately conservative: it reports what is present, never that a trace is
+ * impossible. The agent still decides, and every existing check on a CAPTURED
+ * trace - populated trace.zip, real pass/fail counts, no fabricated artifact -
+ * is untouched. This only closes the silent path.
+ */
+const PLAYWRIGHT_CONFIGS = ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs']
+const UI_EXTENSIONS = ['.vue', '.tsx', '.jsx', '.svelte', '.html', '.css', '.scss']
+
+export interface BrowserSurface { playwright: boolean, uiFiles: string[], summary: string }
+
+export function browserSurface(workspace: string): BrowserSurface {
+  const roots: string[] = []
+  if (existsSync(workspace)) {
+    roots.push(workspace)
+    try {
+      for (const e of readdirSync(workspace, { withFileTypes: true })) {
+        if (e.isDirectory() && !e.name.startsWith('.')) roots.push(join(workspace, e.name))
+      }
+    }
+    catch { /* an unreadable workspace reports as bare */ }
+  }
+
+  const playwright = roots.some(r => PLAYWRIGHT_CONFIGS.some(c => existsSync(join(r, c))))
+
+  // Only the working tree, and only one level of it: this is a hint for the
+  // agent, not an inventory. A deep scan of a large checkout would cost more
+  // than the step it is informing.
+  const uiFiles: string[] = []
+  for (const r of roots) {
+    try {
+      for (const e of readdirSync(r, { withFileTypes: true })) {
+        if (e.isFile() && UI_EXTENSIONS.some(x => e.name.endsWith(x))) uiFiles.push(join(r, e.name))
+      }
+    }
+    catch { /* skip */ }
+  }
+
+  const summary = playwright
+    ? `Playwright config found${uiFiles.length ? '' : ', though no UI files were seen at the top level'} — a trace is expected unless the change has no UI surface.`
+    : uiFiles.length
+      ? 'No Playwright config found in this checkout, but UI files are present — say which you checked before reporting n/a.'
+      : 'No Playwright config and no UI files found in this checkout — `TRACE: n/a` is the expected outcome, and this sentence is the reason to give.'
+
+  return { playwright, uiFiles, summary }
+}
+
+// ── Checkout facts and run preparation ──────────────────────────────────────
+// The roots above say where a developer's checkouts live; what follows reads
+// them, prepares one for a run, and checks the one thing every run needs.
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { agentRunsRoot } from './runArtifacts.ts'
+
 const execFileP = promisify(execFile)
 const gitRaw = async (cwd: string, args: string[]) =>
   (await execFileP('git', args, { cwd, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout
 const git = async (cwd: string, args: string[]) => (await gitRaw(cwd, args)).trim()
 
-export const workspaceRoot = () => process.env.AGENT_WORKSPACE_ROOT || join(homedir(), 'alepo-workspace')
-/** Where a product repo is expected on this instance: <workspace>/<repo name>. */
-export const checkoutDirFor = (repo: string) => join(workspaceRoot(), repo.split('/').pop() || repo)
+/** The roots above keep `~` for display; filesystem work needs it expanded. */
+const expand = (p: string) => p.replace(/^~(?=\/|$)/, homedir())
+/** Where a product repo is expected for this developer: <their workspace>/<repo name>. */
+export const checkoutDirFor = (repo: string, login?: string) => join(expand(workspaceRootFor(login)), repo.split('/').pop() || repo)
 
 export interface CheckoutState {
   path: string
@@ -53,12 +176,21 @@ export async function checkoutState(path: string): Promise<CheckoutState> {
   }
 }
 
-export async function listCheckouts(): Promise<CheckoutState[]> {
-  const root = workspaceRoot()
+/** Every checkout on the instance: the shared root's own, and each developer's under it. */
+export async function listCheckouts(): Promise<(CheckoutState & { owner?: string })[]> {
+  const root = expand(workspaceRoot())
   if (!existsSync(root)) return []
   // Dot-directories are tooling state (.claude, editor caches), never a product checkout.
-  const names = (await readdir(root, { withFileTypes: true })).filter(d => d.isDirectory() && !d.name.startsWith('.')).map(d => d.name).sort()
-  return Promise.all(names.map(n => checkoutState(join(root, n))))
+  const dirs = (await readdir(root, { withFileTypes: true })).filter(d => d.isDirectory() && !d.name.startsWith('.')).map(d => d.name).sort()
+  const out: (CheckoutState & { owner?: string })[] = []
+  for (const name of dirs) {
+    const path = join(root, name)
+    if (existsSync(join(path, '.git'))) { out.push(await checkoutState(path)); continue }
+    // A developer's workspace: its children are the checkouts.
+    const inner = (await readdir(path, { withFileTypes: true })).filter(d => d.isDirectory() && !d.name.startsWith('.') && existsSync(join(path, d.name, '.git'))).map(d => d.name).sort()
+    for (const n of inner) out.push({ ...(await checkoutState(join(path, n))), owner: name })
+  }
+  return out
 }
 
 /** Parks uncommitted work under a named stash so a run starts from a clean tree. `git stash pop` brings it back. */
@@ -74,10 +206,10 @@ export async function stashCheckout(path: string, login: string): Promise<{ stas
 /** A run works on its own branch off the checkout's current HEAD. Creating it is the runner's job, not an agent's. */
 export async function ensureRunBranch(path: string, branch: string): Promise<void> {
   await git(path, ['checkout', '--quiet', '-B', branch])
-  await excludeFromGit(path, '.agent/')
+  await excludeFromGit(path, '.agent/evidence-run/')
 }
 
-/** The plan gate's scratch directory never reaches a commit, whatever an agent stages: it is excluded in the checkout itself. */
+/** Evidence copies never reach a commit, whatever an agent stages: the path is excluded in the checkout itself. */
 export async function excludeFromGit(path: string, pattern: string): Promise<void> {
   const file = join(path, '.git', 'info', 'exclude')
   const current = existsSync(file) ? await readFile(file, 'utf8') : ''

@@ -1,3 +1,4 @@
+import { workspaceRootFor, browserSurface } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
@@ -420,15 +421,64 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
   log.error('meta.json removed after a finalize failure; the assembler will see this run as absent', { runId })
 }
 
+/**
+ * Evidence lives in the run directory and is served by the app
+ * (`GET /api/runs/:id/artifacts`). It is deliberately NOT copied into the
+ * repository being fixed.
+ *
+ * `publishEvidenceToProject` used to copy the run directory to
+ * `<projectDir>/.agent/evidence-run/` so it could travel with the pull request,
+ * and the evidence agent was told to `git add` it. That put a run's whole
+ * bundle — logs, step outputs, oracle XML — into someone else's product repo,
+ * as commits a reviewer has to read past to see the fix. The evidence is for
+ * judging the change, not part of it.
+ *
+ * The CI workflow that read `.agent/evidence-run/` from a pull request's
+ * checkout has been retired with it: once nothing wrote that directory, the
+ * check could only ever report "no evidence", which is a check that looks like
+ * enforcement and is not. The bundle itself is unaffected - it is still
+ * assembled into the run directory and served by the app.
+ */
+
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, checkout?: { dir: string, branch?: string }, runUrl?: string): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string }): string {
+  // The app serves this directory, so an agent can point a reviewer at it
+  // instead of copying files into a product repository to make them reachable.
+  const appUrl = (process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/+$/, '')
   const lines = [
     '## Run artifacts directory',
     '',
     `Write every artifact you produce into: ${dir}`,
     '',
+    ...(runId
+      ? [
+          `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
+          `and shown in the run panel at ${appUrl}/runs?run=${runId}. Link that in a pull`,
+          'request body; never copy artifacts into the repository to make them reachable.',
+          '',
+        ]
+      : []),
     `Claude config directory: ${getClaudeDir()}`,
+    '',
+    // Unconditional, because it used to live inside the product block below and
+    // a run that resolved no product told its agents nothing about where to
+    // work. They improvised, and improvised differently: one cloned to
+    // ~/alepo-workspace, another to ~/repos, neither to the configured root.
+    // git facts are computed against the run's workspace, so `meta.json` lost
+    // commits, files_changed and lines_changed for work that had actually been
+    // done and committed — in a directory nothing else knew about.
+    `Work in: ${workspaceRootFor(startedBy)}`,
+    'Clone into that directory and work there. Do not invent a checkout path and',
+    'do not search the filesystem for one — anything you leave elsewhere is',
+    'invisible to every later step and to the evidence bundle.',
+    '',
+    // Stated as a fact, so the browser-trace step has something to quote rather
+    // than a conclusion to reach and then remember to announce. It produced no
+    // trace and no explanation twice, and the monitor called it exactly that:
+    // "silence without explanation".
+    `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
+    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run: commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy.`] : []),
     '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
@@ -443,7 +493,13 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       '',
       `Product: ${product.name}${product.suite ? ` (suite: ${product.suite})` : ''}`,
       `Repos: ${product.repos.join(', ')}`,
-      `Checkouts: ${process.env.AGENT_WORKSPACE_ROOT || '~/alepo-workspace'}/<repo name>; confirm each with git remote -v, and clone git@github.com:<repo>.git there if it is missing.`,
+      // HTTPS, not git@github.com. The container has no SSH key, but it does have
+      // a credential helper wired to $GITHUB_TOKEN (see the Dockerfile), which
+      // envForUser fills from the starter's own sealed token. An SSH clone URL
+      // bypasses all of that and fails with a key error the agent cannot fix,
+      // which is how a provisioner step reported the repo 'is not checked out
+      // anywhere on this host' after being told to clone it.
+      `Checkouts: ${workspaceRootFor(startedBy)}/<repo name>; confirm each with git remote -v, and clone https://github.com/<repo>.git there if it is missing.`,
       ...(product.multiRepo ? ['Multi-repo: yes. Every repo listed gets its own branch, commit and PR; plan.md must give a merge order and nothing merges until every PR in the set is approved.'] : []),
       `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
@@ -452,7 +508,6 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
     )
   }
-  if (runUrl) lines.push('', `Run page: ${runUrl} — Agent Manager keeps this run's artifacts directory as the evidence bundle and shows it there; link it from the pull request body instead of committing evidence.`)
   if (checkout) lines.push('', `Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. Commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy above.`)
   if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
   lines.push('', '---', '')

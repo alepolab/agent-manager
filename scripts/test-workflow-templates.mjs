@@ -432,17 +432,99 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
 
   // The evidence step is the one most likely to push, because opening a PR
-  // sounds like its job - and it is the only step that can commit the evidence
-  // CI reads from the checkout.
+  // sounds like its job.
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
-  assert.ok(!evidence.body.includes('git add .agent'),
-    'the evidence step must never stage .agent: evidence lives in Agent Manager, a real PR shipped twenty evidence files by mistake')
-  assert.match(evidence.body, /never in the repository/i, 'and must say where evidence does live')
+
+  // It used to be told to `git add .agent/evidence-run`, which committed a
+  // run's logs and oracle XML into the product repo it was fixing. Evidence is
+  // what a reviewer judges the change BY, not part of the change; the app
+  // serves it at /api/runs/:id/artifacts instead.
+  assert.ok(!evidence.body.includes('git add .agent/evidence-run'),
+    'the evidence step must not commit the run directory into the repository it is fixing')
+  assert.ok(/The evidence does not go in the repository/.test(evidence.body),
+    'the evidence step must be told explicitly where evidence does and does not go')
+  // The two files that ARE the oracle still have to be committed, or the PR
+  // ships a fix with nothing proving it.
+  assert.ok(evidence.body.includes('.agent/plan.md'),
+    'the plan file is still required in the repo by the plan gate')
   for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
-    assert.ok(a.body.includes('is scratch, never a commit'), `${a.id} must carry the standing rule that .agent/ is never committed`)
+    assert.ok(a.body.includes('but `plan.md` is ever staged'), `${a.id} must carry the standing rule that only plan.md leaves .agent/`)
   }
+  // The provisioner owns the checkout, including when it decides no stack is
+  // needed. A run reached the fix step with an empty workspace because this
+  // step correctly judged a compose-only ticket needed no harness and then
+  // cloned nothing; the fix-implementer burned its whole 60-turn budget
+  // searching a directory with no code in it.
+  const prov = AGENT_TEMPLATES.find(t => t.id === 'sdlc-stack-provisioner')
+  assert.ok(/The checkout is yours, always/.test(prov.body),
+    'the provisioner must be told the checkout is its responsibility')
+  assert.ok(/even when you (decide no stack|skip)/i.test(prov.body),
+    'skipping the stack must not be read as skipping the checkout')
+  assert.ok(prov.body.includes('git clone https://github.com/'),
+    'the clone must be HTTPS: the container has a credential helper and no SSH key')
+  assert.ok(!/git clone git@github\.com/.test(prov.body),
+    'an SSH clone URL cannot work in the container and must not be suggested')
+
+  // A compose-only ticket with no UI reached the browser step, which correctly
+  // had nothing to capture. Its output was the ls -la of the artifacts
+  // directory and nothing else, so the monitor read a step named "Browser
+  // Trace" that had produced no trace and no explanation, and ABORTED the run.
+  // The step was right; the review was wrong; and the step gave the review
+  // nothing to be right about.
+  const trace = AGENT_TEMPLATES.find(t => t.id === 'sdlc-trace-capture')
+  assert.ok(trace.body.includes('TRACE: n/a'),
+    'the trace step must declare n/a in a fixed form the monitor can recognise')
+  assert.ok(/must begin with exactly one of these two lines/i.test(trace.body),
+    'the verdict must lead the output, not be buried after an ls -la')
+
+  assert.ok(/Browser surface/.test(trace.body),
+    'the trace step must be pointed at the stated fact rather than left to infer one')
+  assert.ok(/only if you say why/i.test(trace.body),
+    'a bare n/a with no reason is the silence the monitor rejects')
+
+  const monitor = AGENT_TEMPLATES.find(t => t.id === 'sdlc-step-monitor')
+  assert.ok(/not applicable" is a pass|n\/a.*is a pass/i.test(monitor.body),
+    'the monitor must be told a declared, reasoned n/a is a legitimate outcome')
+  assert.ok(/never against what its label sounds like/i.test(monitor.body),
+    'the monitor must judge the contract, not the step name')
+  assert.ok(/Browser surface/.test(monitor.body),
+    'the monitor must know the fact the trace step is quoting, or it cannot check the reason')
+  assert.ok(monitor.body.includes('PIPELINE-SKIP'),
+    'a declared skip is the same shape and must not be aborted either')
+  assert.ok(/declared and reasoned/i.test(monitor.body),
+    'the monitor needs the declared-versus-silent distinction, or it just accepts silence')
+
   assert.ok(evidence.body.includes('Git: local only'),
     'the evidence step needs its own explicit local-only git mandate')
+
+  // The PR body is the deliverable now that evidence does not travel with the
+  // branch: a reviewer who never opens Agent Manager must be able to decide
+  // from the text alone. These sections are what makes that true, and a
+  // shortened spec is how a body quietly becomes a summary again.
+  for (const section of [
+    '### Context',
+    '### Root cause',
+    '### The change',
+    '### The test that proves it',
+    '### Verification',
+    '### Browser evidence',
+    '### Security review',
+    '### Deployment and rollback',
+    '### What a reviewer should check',
+    '### Limits of this change',
+    '### Provenance',
+  ]) {
+    assert.ok(evidence.body.includes(section),
+      `the PR body spec must require "${section}" — a reviewer reading only the PR needs it`)
+  }
+
+  // Three rules that make the sections worth having.
+  assert.ok(/Quote, do not summarise/i.test(evidence.body),
+    'the spec must demand captured output rather than claims about it')
+  assert.ok(/never a heading with nothing under it|never a section quietly dropped/i.test(evidence.body),
+    'an empty section must be stated as empty, not omitted')
+  assert.ok(/State the rollback before anything else/i.test(evidence.body),
+    'the rollback must lead the deployment section, per the change-safety standard')
 }
 
 // Anything stood up to test gets removed, and the PR enters the promotion chain

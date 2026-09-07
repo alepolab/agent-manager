@@ -506,10 +506,89 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
     'finalize re-asserts the real installed version over the agent\'s placeholder self-report')
 }
 
+// ── publishEvidenceToProject: the run directory travels with the PR ───────
+//
+// This is what makes the bundle assembler able to pass at
+// all. A GitHub Actions artifact can only be created inside a workflow run,
+// and this pipeline runs on an engineer's machine, so nothing could ever
+// upload `evidence-run-<sha>` and the check could only fail with "no artifact
+// found". Committing the directory is the path that works.
+// Evidence must NOT reach a repository. It used to be copied to
+// `<projectDir>/.agent/evidence-run/` so it could travel with the pull request,
+// which put a run's logs, step outputs and oracle XML into someone else's
+// product repo as commits a reviewer has to read past to reach the diff.
+//
+// The app serves the run directory instead, so the evidence is reachable
+// without being committed anywhere. What follows asserts the writer is gone and
+// the artifacts stay where the app can serve them.
 {
-  const h = A.artifactHeader('/tmp/x', undefined, 'sandeep', { dir: '/w/ffm', branch: 'fix/CSUP-1-abc' }, 'http://am/workflows/w?run=1')
-  assert.match(h, /Run page: http:\/\/am\/workflows\/w\?run=1/, 'agents are told where the evidence is served')
-  assert.match(h, /Working checkout: \/w\/ffm on branch fix\/CSUP-1-abc/, 'and which branch the runner made for them')
+  const runId = 'evidence-stays-put'
+  const src = A.runArtifactsDir(runId)
+  mkdirSync(src, { recursive: true })
+  writeFileSync(join(src, 'meta.json'), JSON.stringify({ identity: 'x' }))
+  mkdirSync(join(src, 'steps'), { recursive: true })
+  writeFileSync(join(src, 'steps', 'step-01.json'), '{}')
+
+  assert.equal(typeof A.publishEvidenceToProject, 'undefined',
+    'the writer that copied evidence into a project tree must not exist at all')
+
+  // The artifacts remain where the app reads them from.
+  assert.ok(existsSync(join(src, 'meta.json')), 'the bundle stays in the run directory')
+  assert.ok(existsSync(join(src, 'steps', 'step-01.json')), 'nested step artifacts stay too')
+
+  // And an agent is told where that is, so it links rather than copies.
+  // Every run must be told where to work, product match or not. A run that
+  // resolved no product got no checkout path at all — the line lived inside the
+  // product block — so its agents improvised, and improvised differently: one
+  // cloned to ~/alepo-workspace, another to ~/repos, neither to the configured
+  // root. git facts are computed against the run's workspace, so meta.json lost
+  // commits, files_changed and lines_changed for work that had been done and
+  // committed in a directory nothing else knew about.
+  {
+    const prev = process.env.AGENT_WORKSPACE_ROOT
+    process.env.AGENT_WORKSPACE_ROOT = '/srv/agent-manager/workspace'
+
+    const noProduct = A.artifactHeader(src, undefined, 'alice', runId)
+    assert.ok(noProduct.includes('/srv/agent-manager/workspace/alice'),
+      'a run with no product must still be told its workspace')
+    assert.ok(/do not invent a checkout path/i.test(noProduct),
+      'and told not to improvise one')
+
+    const anonymous = A.artifactHeader(src, undefined, undefined, runId)
+    assert.ok(anonymous.includes('/srv/agent-manager/workspace'),
+      'an anonymous run still gets the shared root, not silence')
+
+    if (prev === undefined) delete process.env.AGENT_WORKSPACE_ROOT
+    else process.env.AGENT_WORKSPACE_ROOT = prev
+  }
+
+  // The browser surface is stated as a fact in the header, because the trace
+  // step twice produced no trace and no explanation and the monitor called it
+  // "silence without explanation". The instruction to declare n/a was already
+  // there; what was missing was anything concrete to declare.
+  {
+    const prev = process.env.AGENT_WORKSPACE_ROOT
+    process.env.AGENT_WORKSPACE_ROOT = '/nonexistent-workspace-for-this-test'
+    const bare = A.artifactHeader(src, undefined, 'alice', runId)
+    assert.ok(/Browser surface:/.test(bare), 'every step is told what the browser surface is')
+    assert.ok(/No Playwright config and no UI files/.test(bare),
+      'a checkout with neither must say so, in words the step can quote as its reason')
+    assert.ok(/TRACE: n\/a` is the expected outcome/.test(bare),
+      'and must name the outcome that follows, so n/a is not left as an inference')
+    if (prev === undefined) delete process.env.AGENT_WORKSPACE_ROOT
+    else process.env.AGENT_WORKSPACE_ROOT = prev
+  }
+
+  const header = A.artifactHeader(src, undefined, undefined, runId)
+  assert.ok(header.includes(`/api/runs/${runId}/artifacts`),
+    'the artifact header must name the URL the app serves this run at')
+  assert.ok(/never copy artifacts into the repository/i.test(header),
+    'the header must say plainly that artifacts are not copied into a repo')
+}
+
+{
+  const h = A.artifactHeader('/tmp/x', undefined, 'sandeep', 'run-1', { dir: '/w/ffm', branch: 'fix/CSUP-1-abc' })
+  assert.match(h, /Working checkout: \/w\/ffm on branch fix\/CSUP-1-abc/, 'agents are told which branch the runner made for them')
   assert.doesNotMatch(h, /evidence-run/, 'and nothing about copying evidence into the tree')
 }
 

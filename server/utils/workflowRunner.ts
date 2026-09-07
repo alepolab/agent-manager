@@ -6,12 +6,14 @@ import {
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
-import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, BOOT_ID } from './workflowRunStore.ts'
+import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
+import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct } from './registry.ts'
 import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
+import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch } from './workspace.ts'
 import { existsSync } from 'node:fs'
@@ -417,8 +419,20 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const runUrl = `${(process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/$/, '')}/workflows/${run.workflowSlug}?run=${run.id}`
-  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, runUrl) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined) + body
+
+  // Logged, not only handed to the agent: "why was there no browser trace" was
+  // a question that could previously only be answered by reading an agent's
+  // output, and the answer was missing from it.
+  if (step.agentSlug === 'sdlc-trace-capture') {
+    const surface = browserSurface(runWorkspace(run))
+    log.info('browser surface for the trace step', {
+      runId: run.id,
+      playwright: surface.playwright,
+      uiFilesSeen: surface.uiFiles.length,
+      expectation: surface.playwright ? 'a trace is expected' : 'TRACE: n/a is the expected outcome',
+    })
+  }
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
@@ -527,10 +541,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return true
   } catch (err) {
     markFailed(l.state, id)
+    // A failed step still spent tokens. Recording them is what keeps the run's
+    // cost honest and makes an expensive failure visible in the cost report
+    // rather than showing as free.
+    const failedUsage = err instanceof AgentResultError ? err.usage : null
+    // The MODEL as well as the usage. Recording tokens without the model that
+    // burned them made the cost report price a failed opus step at sonnet
+    // rates: one error_max_turns step showed $10.07 against a true $50.35, a
+    // $40 understatement in the direction that never prompts anyone to look.
+    // The declared model is the honest fallback when the call died before the
+    // SDK reported the one it actually resolved.
+    const failedModel = await declaredModelOf(step.agentSlug)
     Object.assign(rec, {
       status: 'failed',
       error: l.stopped ? 'Stopped by operator' : (err instanceof Error ? err.message : 'Unknown error'),
       completedAt: Date.now(),
+      ...(failedUsage ? { usage: failedUsage } : {}),
+      ...(rec.model ? {} : failedModel ? { model: failedModel } : {}),
     })
     log.error('step call threw', {
       runId: run.id, stepId: id, agentSlug: step.agentSlug,
@@ -664,7 +691,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   // instance: then the baseline, the dirty-tree facts and the run branch all
   // apply, instead of an agent committing wherever it happens to be.
   const firstRepo = product?.repos?.[0]
-  const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo)) ? checkoutDirFor(firstRepo) : undefined)
+  const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo, opts.startedBy)) ? checkoutDirFor(firstRepo, opts.startedBy) : undefined)
   const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
   // Captured BEFORE createRun, so the baseline is the project directory's
   // HEAD at the true moment execution begins — before any step, and so any
@@ -879,7 +906,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const l: Live = {
     workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
   }
-  const header = artifactHeader(runArtifactsDir(run.id))
+  const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   for (const s of run.steps) {
     state.visits[s.stepId] = s.visits ?? 0
     if (s.status !== 'completed') continue
@@ -953,14 +980,43 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (!RESTARTABLE.includes(run.status)) {
     throw new RestartError(409, `A ${run.status} run cannot be restarted; ${run.status === 'paused' ? 'continue it instead' : 'wait for it to settle'}`)
   }
-  const active = await findActiveRun(run.workflowSlug)
-  if (active && active.id !== run.id) {
-    throw new RestartError(409, 'This workflow already has a run in progress', { runId: active.id })
+  // Same scope as starting a run: what conflicts is a shared working directory.
+  const active = await findRunInWorkspace(runWorkspace(run), run.id)
+  if (active) {
+    throw new RestartError(
+      409,
+      `${active.startedBy ? `@${active.startedBy} has` : 'There is'} a run in progress in ${runWorkspace(run)}`,
+      { runId: active.id },
+    )
   }
   const l = await rehydrate(run)
   if (l.running) throw new RestartError(409, 'This run is already running')
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
+
+  // A restart re-runs steps; it does not re-create what earlier steps left on
+  // disk. Restarting a downstream step into a workspace with no checkout is how
+  // one run spent 3.26M tokens - $50 - searching a directory with no code in
+  // it, twice, because the provisioning step had already settled as `skipped`
+  // and a partial restart never re-ran it.
+  //
+  // Deliberately not keyed on any agent slug: the runner does not know which
+  // step owns the checkout, only that SOME earlier step was supposed to leave
+  // one. If it is missing, no partial restart is sound - so the reset must
+  // start from the first step, which re-runs whatever creates it.
+  // Scoped to runs that actually route to repositories. A workflow with no
+  // product resolved has no checkout to be missing, and blocking those would
+  // turn a real guard into a nuisance that gets deleted.
+  const expectsCheckout = (run.product?.repos?.length ?? 0) > 0
+  if (expectsCheckout && !hasCheckout(runWorkspace(run)) && ancestorsOf(l.graph, stepId).length > 0) {
+    throw new RestartError(
+      409,
+      `This run targets ${run.product?.repos?.join(', ')}, but there is no checkout in ${runWorkspace(run)} — `
+      + `restarting this step would run it against an empty directory. Restart from the first step so whatever `
+      + `creates the checkout runs again, or start a new run.`,
+    )
+  }
+
   const previousOutput = recOf(run, stepId).output
   for (const id of reset) {
     const rec = recOf(run, id)

@@ -21,6 +21,11 @@
   // this key rather than merging it - dropping one of these entries would quietly
   // pull node_modules back into the check.
   "exclude": [
+    // Vendored third-party skills (engineering/skills/VENDORED.md). They carry
+    // supporting files including a TypeScript EXAMPLE importing from another
+    // project - errors that are not ours and that we may not edit, since these
+    // are copied verbatim and re-copied on refresh.
+    "engineering/skills",
     "dist",
     ".data",
     ".output",

@@ -3,6 +3,48 @@ import type { Watch, TicketState, TicketDisposition } from '~~/shared/types/watc
 
 const { watches, loading, error, states, polling, fetchAll, save, setEnabled, fetchState, poll, clearEscalation, remove } = useWatches()
 const { workflows, fetchAll: fetchWorkflows } = useWorkflows()
+
+// A kill switch, and deliberately one-directional. Disabling every watch is one
+// click because it is what you reach for when something is dispatching runs you
+// did not expect; enabling them is per-watch, because arming several unattended
+// pipelines at once should take as many decisions as there are watches.
+//
+// The scheduler picks this up live — its supervisor re-reads each watch and
+// clears the timer of one that has been disabled — so this stops dispatch
+// without a redeploy. WATCHER_DISABLED=1 remains the deployment-level switch
+// that stops the poller from running at all.
+const pausingAll = ref(false)
+const enabledCount = computed(() => watches.value.filter(w => w.enabled).length)
+
+async function onPauseAll() {
+  const live = watches.value.filter(w => w.enabled)
+  if (!live.length) return
+  pausingAll.value = true
+  const failed: string[] = []
+  try {
+    // Sequential on purpose: each save round-trips the whole watch, and firing
+    // them together risks two writes racing on the same file.
+    for (const w of live) {
+      try { await setEnabled(w, false) }
+      catch { failed.push(w.name || w.id) }
+    }
+    if (failed.length) {
+      toast.add({
+        title: `Paused ${live.length - failed.length} of ${live.length}`,
+        description: `Still enabled: ${failed.join(', ')}. Try those individually.`,
+        color: 'warning',
+      })
+    }
+    else {
+      toast.add({
+        title: live.length === 1 ? 'Watch paused' : `All ${live.length} watches paused`,
+        description: 'No further runs will be dispatched. Re-enable them one at a time.',
+        color: 'success',
+      })
+    }
+  }
+  finally { pausingAll.value = false }
+}
 const toast = useToast()
 
 const expanded = ref<Record<string, boolean>>({})
@@ -191,6 +233,17 @@ function relativeTime(ms: number): string {
         <span class="text-[12px] text-meta">{{ watches.length }}</span>
       </template>
       <template #right>
+        <UButton
+          v-if="enabledCount > 0"
+          :label="enabledCount === 1 ? 'Pause watch' : `Pause all (${enabledCount})`"
+          icon="i-lucide-pause"
+          color="warning"
+          variant="outline"
+          size="sm"
+          :loading="pausingAll"
+          title="Disable every enabled watch. Nothing further is dispatched until one is turned back on."
+          @click="onPauseAll"
+        />
         <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>

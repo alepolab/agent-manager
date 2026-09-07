@@ -198,6 +198,22 @@ export function ticketText(issue: JiraIssueView): string {
 }
 
 /** For a manual run started with only a key: the ticket text, or null when Jira cannot serve it. */
+/**
+ * The Jira key a piece of text is about, or undefined.
+ *
+ * A manually started run carried no ticketKey at all - startRun accepts one and
+ * only watchRunStarter passed it - so notifyTicketOutcome never fired for a run
+ * anyone kicked off by hand, whatever JIRA_POST_ENABLED said. The prompt began
+ * "DEVOPS-15: Support running post-migrate script..." and the key was sitting
+ * in plain sight.
+ *
+ * The FIRST match wins: a ticket body often quotes other issues, and the one it
+ * is about is the one it opens with.
+ */
+export function ticketKeyFrom(text: string | undefined): string | undefined {
+  return text?.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0]
+}
+
 export async function expandTicketKey(prompt: string, env: Record<string, string> = {}, fetchImpl: FetchLike = fetch): Promise<string | null> {
   const key = prompt.trim()
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) return null

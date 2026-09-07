@@ -81,3 +81,47 @@ function workflow(slug) {
 
 console.log('OK: agent progress is throttled correctly, recorded on the run step when reported,')
 console.log('    and left absent (never fabricated) when a caller reports nothing.')
+
+// ── A failed agent call must still report what it spent ──────────────────────
+//
+// interpretResultMessage threw a bare Error on any error result, dropping the
+// usage the SDK reports alongside it. A real error_max_turns step burned 519
+// seconds and 109 assistant messages and was recorded as costing $0.00 — the
+// most expensive failures were the least visible, which is backwards for a
+// budget you are trying to hold.
+{
+  const { interpretResultMessage, AgentResultError } = await import('../server/utils/agentCaller.ts')
+
+  let thrown
+  try {
+    interpretResultMessage(
+      { subtype: 'error_max_turns', usage: { input_tokens: 1930457, output_tokens: 9526 } },
+      60,
+    )
+  }
+  catch (e) { thrown = e }
+
+  assert.ok(thrown instanceof AgentResultError,
+    'an error result must throw the typed error, so the runner can read its usage')
+  assert.equal(thrown.subtype, 'error_max_turns', 'the subtype travels with the error')
+  assert.ok(thrown.usage, 'usage reported on the error result must not be discarded')
+  assert.equal(thrown.usage.input_tokens, 1930457)
+  assert.equal(thrown.usage.output_tokens, 9526)
+  assert.match(thrown.message, /turn budget: 60/,
+    'the budget that was hit is still named in the message')
+
+  // A result with no usage at all must not invent one.
+  let noUsage
+  try { interpretResultMessage({ subtype: 'error_during_execution' }) }
+  catch (e) { noUsage = e }
+  assert.ok(noUsage instanceof AgentResultError)
+  assert.equal(noUsage.usage, null, 'no usage reported means null, never a fabricated zero')
+
+  // Success is untouched.
+  const ok = interpretResultMessage(
+    { subtype: 'success', result: 'done', usage: { input_tokens: 10, output_tokens: 2 } })
+  assert.equal(ok.output, 'done')
+  assert.equal(ok.usage.input_tokens, 10)
+
+  console.log('agent usage: a failed call reports what it spent')
+}

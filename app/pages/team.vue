@@ -14,7 +14,7 @@ interface TeamStatus {
   checkedAt: number
 }
 const status = ref<TeamStatus | null>(null)
-interface Checkout { path: string, name: string, exists: boolean, git: boolean, branch?: string, head?: string, dirty: number, dirtyFiles: string[] }
+interface Checkout { path: string, name: string, owner?: string, exists: boolean, git: boolean, branch?: string, head?: string, dirty: number, dirtyFiles: string[] }
 const checkouts = ref<Checkout[]>([])
 const confirmStash = ref<string | null>(null)
 const stashing = ref<string | null>(null)
@@ -121,7 +121,7 @@ const color = (s: Item['state']) => s === 'ok' ? 'var(--success)' : s === 'missi
           <p class="text-label mb-2">Product repositories under the workspace root. A run branches from the checkout's HEAD and carries any uncommitted change with it, so park changes that are not meant to travel.</p>
           <p v-if="!checkouts.length" class="text-label">No checkouts yet; the stack step clones a product the first time it is needed.</p>
           <div v-for="c in checkouts" :key="c.path" class="flex items-center gap-3 py-1" style="border-top: 1px solid var(--border-subtle);">
-            <span class="font-mono w-40 truncate" :title="c.path">{{ c.name }}</span>
+            <span class="font-mono w-48 truncate" :title="c.path">{{ c.owner ? `${c.owner}/` : '' }}{{ c.name }}</span>
             <span v-if="c.git" class="text-label font-mono truncate">{{ c.branch }} @ {{ c.head }}</span>
             <span v-else class="text-label">not a git checkout</span>
             <span class="ml-auto whitespace-nowrap" :style="{ color: c.dirty ? 'var(--warning)' : 'var(--success)' }" :title="c.dirtyFiles.join('\n')">{{ c.dirty ? `${c.dirty} uncommitted` : 'clean' }}</span>

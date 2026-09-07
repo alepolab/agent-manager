@@ -1,7 +1,7 @@
 import { getModelTagline } from '~/utils/models'
 import type { AgentModel } from '~/types'
 
-export const friendlyToolName: Record<string, string> = {
+export const friendlyToolName = {
   Read: 'Reading your files...',
   Write: 'Saving changes...',
   Edit: 'Editing files...',
@@ -9,7 +9,7 @@ export const friendlyToolName: Record<string, string> = {
   Grep: 'Searching file contents...',
   Bash: 'Running a command...',
   Agent: 'Working on a subtask...',
-}
+} as Record<string, string>
 
 /**
  * @deprecated Import `getModelTagline` from `~/utils/models` instead.

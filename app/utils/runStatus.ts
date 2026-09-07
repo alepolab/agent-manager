@@ -12,7 +12,7 @@
 /** Every status a WorkflowRun or one of its steps can hold. Keep exhaustive:
  *  an unlisted status falls back to the disabled grey, which reads as
  *  "nothing happened" — the wrong story for a failure. */
-export const RUN_STATUS_COLOR: Record<string, string> = {
+export const RUN_STATUS_COLOR = {
   running: 'var(--info, #3b82f6)',
   paused: 'var(--warning, #f59e0b)',
   completed: 'var(--success, #22c55e)',
@@ -21,7 +21,7 @@ export const RUN_STATUS_COLOR: Record<string, string> = {
   interrupted: 'var(--error, #ef4444)',
   pending: 'var(--text-disabled, #9ca3af)',
   skipped: 'var(--text-disabled, #9ca3af)',
-}
+} as Record<string, string>
 
 export function runStatusColor(status: string): string {
   return RUN_STATUS_COLOR[status] ?? 'var(--text-disabled, #9ca3af)'

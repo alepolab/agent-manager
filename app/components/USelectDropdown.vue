@@ -66,10 +66,10 @@ onUnmounted(() => {
     <Transition name="dropdown">
       <div
         v-if="isOpen"
-        class="absolute top-full left-0 mt-1 w-full min-w-[200px] rounded-xl overflow-hidden z-50"
+        class="absolute top-full left-0 mt-1 w-full min-w-[200px] rounded-xl overflow-hidden z-50 flex flex-col max-h-[320px]"
         style="background: var(--surface-overlay); border: 1px solid var(--border-default); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--border-subtle);"
       >
-        <div class="py-1">
+        <div class="flex-1 overflow-y-auto custom-scrollbar py-1">
           <button
             v-for="option in options"
             :key="String(option.value)"
@@ -107,6 +107,20 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--meta);
+}
+
 .dropdown-enter-active,
 .dropdown-leave-active {
   transition: all 0.15s ease;

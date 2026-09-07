@@ -13,21 +13,21 @@ const emit = defineEmits<{
 const { workingDir } = useWorkingDir()
 const prompt = ref('')
 const projectDir = ref(workingDir.value)
-const autoRun = ref(false)
+const autoRun = ref(true)
 
 function onStart() {
   if (!prompt.value.trim()) return
   emit('start', prompt.value.trim(), projectDir.value.trim() || undefined, autoRun.value)
   prompt.value = ''
   projectDir.value = ''
-  autoRun.value = false
+  autoRun.value = true
 }
 
 function onCancel() {
   emit('update:open', false)
   prompt.value = ''
   projectDir.value = workingDir.value
-  autoRun.value = false
+  autoRun.value = true
 }
 
 // On open: prefill from `initial` when cloning, else the global working dir.
@@ -35,7 +35,7 @@ watch(() => props.open, (val) => {
   if (!val) return
   prompt.value = props.initial?.prompt ?? ''
   projectDir.value = props.initial?.projectDir ?? workingDir.value
-  autoRun.value = props.initial?.autoRun ?? false
+  autoRun.value = props.initial?.autoRun ?? true
 })
 </script>
 

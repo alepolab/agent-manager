@@ -30,21 +30,40 @@ import { resolveSkillInvocation } from '../server/utils/resolveSkill.ts'
 const sdlc = agentTemplates.filter(t => t.id.startsWith('sdlc-'))
 assert.ok(sdlc.length >= 7, `expected the sdlc agents, found ${sdlc.length}`)
 
+// The resolution half of this file is a DEPLOYMENT check: it resolves against
+// the ambient CLAUDE_DIR. That is exactly the state a real agent runs in, and
+// it is why the check is worth having — but a bare CI runner has no seeded
+// config at all, so it failed there for a reason that says nothing about the
+// code, and left the branch permanently red. A suite that is always red trains
+// everyone to ignore it, and then a genuine failure hides in the noise.
+//
+// So: no seeded config at all means there is no deployment to check, and the
+// resolution half is skipped with a notice. A config that HAS skills but is
+// missing one is a real failure and still fails — that is the case this file
+// exists to catch, and the distinction is the whole point. The repo-side
+// assertions below always run, on every machine.
+const skillsDir = join(process.env.CLAUDE_DIR || join(process.env.HOME || '', '.claude'), 'skills')
+const deployed = existsSync(skillsDir) && readdirSync(skillsDir).length > 0
+
 const failures = []
 let checked = 0
 
-for (const agent of sdlc) {
-  for (const skill of agent.frontmatter.skills ?? []) {
-    checked++
-    const resolved = await resolveSkillInvocation(skill)
-    if (!resolved || !String(resolved.body ?? '').trim()) {
-      failures.push(`${agent.id} declares "${skill}" — ${resolved ? 'resolved but empty' : 'does not resolve'}`)
+if (deployed) {
+  for (const agent of sdlc) {
+    for (const skill of agent.frontmatter.skills ?? []) {
+      checked++
+      const resolved = await resolveSkillInvocation(skill)
+      if (!resolved || !String(resolved.body ?? '').trim()) {
+        failures.push(`${agent.id} declares "${skill}" — ${resolved ? 'resolved but empty' : 'does not resolve'}`)
+      }
     }
   }
+  assert.deepEqual(failures, [],
+    `every declared skill must resolve, or the agent silently runs without it:\n  ${failures.join('\n  ')}`)
+} else {
+  console.log(`SKIP resolution check — no seeded config at ${skillsDir} (expected on CI).`)
+  console.log('     Run `node scripts/sync-agents.mjs` to seed one; the repo-side checks below still run.')
 }
-
-assert.deepEqual(failures, [],
-  `every declared skill must resolve, or the agent silently runs without it:\n  ${failures.join('\n  ')}`)
 
 // The two skills this pipeline ships for itself must be wired to the agents
 // whose job they describe. Building a skill and declaring it nowhere is the
@@ -134,5 +153,5 @@ assert.ok(syncSource.includes('seedCommands()'),
   'sync-agents.mjs must call seedCommands(), or shipped commands never reach CLAUDE_DIR')
 
 console.log(
-  `agent skills: ${checked} declared skills across ${sdlc.length} agents all resolve; `
+  `agent skills: ${deployed ? `${checked} declared skills across ${sdlc.length} agents all resolve` : `resolution SKIPPED (no deployment)`}; `
   + `${vendored.length} shipped in-repo; ${commandFiles.length} commands well-formed`)

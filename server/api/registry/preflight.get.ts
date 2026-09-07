@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
   const profile = user ? await getProfile(user.login) : null
   const [artifacts, p] = await Promise.all([artifactsWritable(), text ? resolveProduct(text) : Promise.resolve(undefined)])
   const repo = p?.repos?.[0]
-  const checkout = repo ? await checkoutState(checkoutDirFor(repo)) : null
+  const checkout = repo ? await checkoutState(checkoutDirFor(repo, user?.login)) : null
   return {
     product: p ? { name: p.name, suite: p.suite ?? null, repos: p.repos, recipe: !!p.recipe } : null,
     checkout,

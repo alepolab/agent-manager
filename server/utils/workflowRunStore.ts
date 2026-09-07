@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
+import { runWorkspace } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 
@@ -160,6 +161,21 @@ export async function listRuns(workflowSlug?: string): Promise<WorkflowRun[]> {
 export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun | null> {
   const runs = await listRuns(workflowSlug)
   return runs.find(r => r.status === 'running' || r.status === 'paused') ?? null
+}
+
+/**
+ * A live run that would write the same directory as `workspace`, across EVERY
+ * workflow — because the hazard is a shared checkout, not a shared workflow
+ * definition. See server/utils/workspace.ts for why the per-workflow lock this
+ * replaces was both too strict and too loose.
+ */
+export async function findRunInWorkspace(workspace: string, excludeRunId?: string): Promise<WorkflowRun | null> {
+  const runs = await listRuns()
+  return runs.find(r =>
+    (r.status === 'running' || r.status === 'paused')
+    && r.id !== excludeRunId
+    && runWorkspace(r) === workspace,
+  ) ?? null
 }
 
 /** The workflow definition a run was started from, read from disk. The runner

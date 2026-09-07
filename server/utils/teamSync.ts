@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile, cp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 import { resolveClaudePath } from './claudeDir.ts'
@@ -81,26 +81,72 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
   const workflowsDir = resolveClaudePath('workflows')
   if (apply) await Promise.all([mkdir(agentsDir, { recursive: true }), mkdir(skillsDir, { recursive: true }), mkdir(workflowsDir, { recursive: true })])
 
+  // Two sources, and the fallback is the one that matters in a container.
+  //
+  // Agents are seeded from `agentTemplates`, which ship inside the app, so they
+  // always arrive. Skills came only from the INSTALLED plugin - and a team
+  // container installs no plugins, so a fresh instance boots "9 agents, 0
+  // skills" while every agent declares skills that cannot resolve. That failure
+  // is silent by construction: buildAgentSystemPrompt catches a per-skill
+  // resolution failure so one typo cannot stop an agent, which means an
+  // unresolvable skill looks exactly like a working one and the agent simply
+  // runs without the instructions it was supposed to have.
+  //
+  // The installed plugin stays preferred - an operator can update it
+  // independently - and the copy shipped in the product (engineering/skills/,
+  // see its VENDORED.md) is the fallback.
+  const shippedSkills = join(process.cwd(), 'engineering', 'skills')
+  const skillsSource = (plugin && existsSync(join(plugin.installPath, 'skills')))
+    ? join(plugin.installPath, 'skills')
+    : (existsSync(shippedSkills) ? shippedSkills : null)
+
   const skills: TeamStatus['skills'] = []
-  if (plugin && existsSync(join(plugin.installPath, 'skills'))) {
-    for (const name of await readdir(join(plugin.installPath, 'skills'))) {
-      const from = join(plugin.installPath, 'skills', name, 'SKILL.md')
+  if (skillsSource) {
+    for (const name of await readdir(skillsSource)) {
+      const from = join(skillsSource, name, 'SKILL.md')
       if (!existsSync(from)) continue
       const next = await readFile(from, 'utf-8')
       const to = join(skillsDir, name, 'SKILL.md')
       const current = await readOr(to)
       let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
-      if (apply && state !== 'ok') { await mkdir(join(skillsDir, name), { recursive: true }); await writeFile(to, next); state = 'ok' }
+      if (apply && state !== 'ok') {
+        // The WHOLE directory, not just SKILL.md. Several skills carry
+        // supporting files their body points at - systematic-debugging has ten
+        // (root-cause-tracing.md, find-polluter.sh and the rest),
+        // requesting-code-review has code-reviewer.md. Copying only SKILL.md
+        // seeds a skill that resolves and then refers the agent to files that
+        // are not there.
+        await cp(join(skillsSource, name), join(skillsDir, name), { recursive: true })
+        state = 'ok'
+      }
       skills.push({ name, state })
     }
   }
 
+  // Commands take the same plugin-preferred, shipped-fallback shape as skills
+  // above, and for the same reason: a team container installs no plugin, so
+  // this read seeded ZERO commands and the four the product ships - baseline,
+  // reproduce, triage, tasks-picker-infra - reached nobody.
+  //
+  // That failure was invisible from every angle we had. The boot line reports
+  // "0 commands", and 0 is a legitimate count for a repo that ships none.
+  // scripts/sync-agents.mjs, the host-side twin of this function, DOES read
+  // engineering/commands, so the host and the container disagreed about what
+  // the product contains. And test-agent-skills.mjs asserts the command files
+  // ship and are well-formed, which stayed true the whole time they were
+  // unreachable - a shipped command nobody can invoke passes every check that
+  // looks at the repo instead of at the seeded result.
+  const shippedCommands = join(process.cwd(), 'engineering', 'commands')
+  const commandsSource = (plugin && existsSync(join(plugin.installPath, 'commands')))
+    ? join(plugin.installPath, 'commands')
+    : (existsSync(shippedCommands) ? shippedCommands : null)
+
   const commands: TeamStatus['commands'] = []
   const commandsDir = resolveClaudePath('commands')
-  if (plugin && existsSync(join(plugin.installPath, 'commands'))) {
-    for (const name of await readdir(join(plugin.installPath, 'commands'))) {
+  if (commandsSource) {
+    for (const name of await readdir(commandsSource)) {
       if (!name.endsWith('.md')) continue
-      const next = await readFile(join(plugin.installPath, 'commands', name), 'utf-8')
+      const next = await readFile(join(commandsSource, name), 'utf-8')
       const to = join(commandsDir, name)
       const current = await readOr(to)
       let state: ItemState = current === next ? 'ok' : current === null ? 'missing' : 'drifted'
@@ -152,7 +198,18 @@ async function reconcile(apply: boolean): Promise<TeamStatus> {
   // state (enabled, concurrency). Seeding creates a missing watch disabled and
   // refreshes the query and cap of an existing one, never its enabled flag.
   const watches: TeamStatus['watches'] = []
-  const watchesYaml = plugin ? join(plugin.installPath, 'registry', 'watches.yaml') : null
+  // Same plugin-preferred, shipped-fallback shape as skills, commands and the
+  // product registry - and for the same reason. This read was plugin-only, so a
+  // team container seeded ZERO watches, every time, while the file sat unread in
+  // the image at engineering/registry/watches.yaml.
+  //
+  // "0 watches" is a legitimate count for a deployment that has registered none,
+  // which is exactly why it never looked wrong.
+  const pluginWatches = plugin ? join(plugin.installPath, 'registry', 'watches.yaml') : null
+  const shippedWatches = join(process.cwd(), 'engineering', 'registry', 'watches.yaml')
+  const watchesYaml = (pluginWatches && existsSync(pluginWatches))
+    ? pluginWatches
+    : (existsSync(shippedWatches) ? shippedWatches : null)
   if (watchesYaml && existsSync(watchesYaml)) {
     let defined: any[] = []
     try { defined = parse(await readFile(watchesYaml, 'utf-8'))?.watches ?? [] } catch { defined = [] }

@@ -12,6 +12,7 @@ const git = (cwd, args) => execFileSync('git', ['-c', 'commit.gpgsign=false', ..
 const W = await import('../server/utils/workspace.ts')
 
 assert.equal(W.checkoutDirFor('alepolab/ffm'), join(process.env.AGENT_WORKSPACE_ROOT, 'ffm'))
+assert.equal(W.checkoutDirFor('alepolab/ffm', 'sandeep'), join(process.env.AGENT_WORKSPACE_ROOT, 'sandeep', 'ffm'), 'a signed-in developer has their own workspace')
 assert.deepEqual(await W.listCheckouts(), [], 'no workspace root yet means no checkouts')
 
 const repo = W.checkoutDirFor('alepolab/ffm')
@@ -21,12 +22,13 @@ git(repo, ['config', 'user.email', 't@x']); git(repo, ['config', 'user.name', 't
 writeFileSync(join(repo, 'a.txt'), 'a\n'); git(repo, ['add', '.']); git(repo, ['commit', '--quiet', '-m', 'init'])
 mkdirSync(join(process.env.AGENT_WORKSPACE_ROOT, 'notes'))
 mkdirSync(join(process.env.AGENT_WORKSPACE_ROOT, '.cache'))
+const mine = W.checkoutDirFor('alepolab/pms', 'sandeep'); mkdirSync(mine, { recursive: true }); git(mine, ['init', '--quiet', '-b', 'develop'])
 
 let s = await W.checkoutState(repo)
 assert.equal(s.branch, 'develop'); assert.equal(s.dirty, 0); assert.ok(s.git && s.exists)
 assert.equal((await W.checkoutState(join(root, 'missing'))).exists, false)
 const all = await W.listCheckouts()
-assert.deepEqual(all.map(c => [c.name, c.git]), [['ffm', true], ['notes', false]], 'every directory is listed, git or not, except dot-directories')
+assert.deepEqual(all.map(c => [c.name, c.git, c.owner ?? null]), [['ffm', true, null], ['pms', true, 'sandeep']], 'shared checkouts and each developer\'s own are listed; plain directories and dot-directories are not')
 
 mkdirSync(join(repo, 'new-dir')); writeFileSync(join(repo, 'new-dir', 'x.txt'), 'x\n'); writeFileSync(join(repo, 'new-dir', 'y.txt'), 'y\n')
 s = await W.checkoutState(repo)
@@ -35,11 +37,12 @@ assert.deepEqual(s.dirtyFiles, ['new-dir/x.txt', 'new-dir/y.txt'], 'paths are wh
 
 await W.ensureRunBranch(repo, 'fix/CSUP-1-abcdef12')
 assert.equal(git(repo, ['branch', '--show-current']), 'fix/CSUP-1-abcdef12', 'the run branch is checked out')
-mkdirSync(join(repo, '.agent')); writeFileSync(join(repo, '.agent', 'plan.md'), '# plan\n')
-assert.equal(git(repo, ['status', '--porcelain', '--', '.agent']), '', 'the plan gate scratch directory is excluded from git in the checkout')
-git(repo, ['add', '-A']); assert.equal(git(repo, ['diff', '--cached', '--name-only']).includes('.agent'), false, 'even git add -A cannot stage it')
+mkdirSync(join(repo, '.agent', 'evidence-run'), { recursive: true }); writeFileSync(join(repo, '.agent', 'plan.md'), '# plan\n'); writeFileSync(join(repo, '.agent', 'evidence-run', 'meta.json'), '{}')
+git(repo, ['add', '-A']); const staged = git(repo, ['diff', '--cached', '--name-only'])
+assert.ok(staged.includes('.agent/plan.md'), 'the plan the gate requires can still be committed')
+assert.ok(!staged.includes('evidence-run'), 'an evidence copy cannot be staged even with git add -A')
 git(repo, ['reset', '-q'])
-assert.equal((await W.checkoutState(repo)).dirty, 2, 'uncommitted work rides along, as git itself does')
+{ const st = await W.checkoutState(repo); assert.equal(st.dirty, 3, 'uncommitted work and the plan the gate needs ride along, as git itself does: ' + st.dirtyFiles.join(',')) }
 
 const r = await W.stashCheckout(repo, 'sandeep')
 assert.equal(r.stashed, true); assert.match(r.message, /parked by sandeep/)

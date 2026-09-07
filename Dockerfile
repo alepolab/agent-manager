@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built application from build stage
-COPY --from=build /app/.output .output
+COPY --from=build --chown=bun:bun /app/.output .output
 
 # Bake in a curated Claude config so the image is self-contained: plugins,
 # skills, agents and settings travel with it, and a fresh host needs no
@@ -49,7 +49,34 @@ COPY --from=build /app/.output .output
 # volume from the image's contents on first creation, so these files become the
 # starting state and anything the app writes afterwards persists in the volume.
 # A bind mount would instead hide all of this.
-COPY docker/claude-config /root/.claude
+# The product's own skills. teamSync seeds a team instance from the INSTALLED
+# alepo-engineering plugin when there is one and falls back to these when there
+# is not - the normal case in a container. Without them a fresh team instance
+# boots "9 agents, 0 skills": every agent declares skills that cannot resolve,
+# and because buildAgentSystemPrompt swallows a per-skill failure by design,
+# each agent silently runs without the instructions it was supposed to have.
+COPY --chown=bun:bun engineering/skills ./engineering/skills
+
+# And its commands, for the same reason one level down. teamSync falls back to
+# these when no plugin is installed. Without this COPY the fallback finds
+# nothing and a container seeds zero commands - which is what shipped, because
+# the staged ~/.claude payload below happened to carry the operator's own
+# commands and made the gap look filled on the one box that built the image.
+COPY --chown=bun:bun engineering/commands ./engineering/commands
+
+# And the product registry. Without it resolveProduct returns undefined for
+# every ticket - no repos, no branch policy, no stack profile - and the failure
+# is indistinguishable from "no product matched".
+COPY --chown=bun:bun engineering/registry ./engineering/registry
+
+# And its scripts. The evidence step is instructed to run
+# `node engineering/scripts/assemble-bundle.mjs`, and a real run reported back:
+# "assemble-bundle.mjs is not installed anywhere in this Agent Manager
+# installation. Bundle validation cannot be executed." It was right about the
+# container - the file exists in the repo and was never shipped in the image.
+COPY --chown=bun:bun engineering/scripts ./engineering/scripts
+
+COPY --chown=bun:bun docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.
 #
@@ -78,6 +105,96 @@ RUN printf '%s\n' \
     > /usr/local/bin/git-credential-env \
     && chmod +x /usr/local/bin/git-credential-env \
     && git config --system credential."https://github.com".helper env 2>/dev/null || true
+
+# Docker CLI and the compose plugin.
+#
+# The image talks to the mounted socket itself, rather than borrowing the
+# host's binaries. docker-compose.team.yml used to bind-mount /usr/bin/docker
+# and /usr/libexec/docker/cli-plugins in, which on a podman host mounts
+# podman-docker's SHIM — a script that execs /usr/bin/podman, a binary that was
+# not mounted. The result was a container where the socket answered fine over
+# curl while every `docker` command failed with
+#
+#   /usr/bin/docker: 4: exec: /usr/bin/podman: not found
+#
+# A provisioner step reported exactly that and concluded Docker was unavailable.
+# Two mounts that looked like they gave a container Docker, and did not.
+#
+# Static binaries, pinned and checksum-verified. The tarball carries dockerd,
+# containerd and the rest; only the client is installed, because this container
+# drives someone else's daemon and has no business shipping one.
+ARG DOCKER_VERSION=29.8.0
+ARG DOCKER_SHA256=cc21815cf1e2efed867dc9c8b96b46ffed8ea176ffab32b0aacb54726ded8f25
+ARG COMPOSE_VERSION=5.5.1
+ARG COMPOSE_SHA256=db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576
+RUN set -eux; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" -o /tmp/docker.tgz; \
+    echo "${DOCKER_SHA256}  /tmp/docker.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
+    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker.tgz /tmp/docker; \
+    mkdir -p /usr/local/lib/docker/cli-plugins; \
+    curl -fsSL "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
+      -o /usr/local/lib/docker/cli-plugins/docker-compose; \
+    echo "${COMPOSE_SHA256}  /usr/local/lib/docker/cli-plugins/docker-compose" | sha256sum -c -; \
+    chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose; \
+    docker --version; \
+    docker compose version
+
+# GitHub CLI.
+#
+# sdlc-evidence-and-pr opens the pull request that is the whole pipeline's
+# deliverable. Without `gh` it would improvise against the REST API or fail
+# outright — after seven successful steps have already spent real money.
+#
+# The single binary from the release tarball, not the apt repository: apt drags
+# in a keyring and dependency closure for one executable. Pinned by version and
+# verified by checksum, so a moved tag cannot change what lands in the image.
+ARG GH_VERSION=2.100.0
+ARG GH_SHA256=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
+RUN set -eux; \
+    url="https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"; \
+    curl -fsSL "$url" -o /tmp/gh.tgz; \
+    echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tgz -C /tmp; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_amd64"; \
+    gh --version
+
+# Run as a non-root user.
+#
+# Not hygiene — a hard requirement. agentCaller.ts starts every pipeline agent
+# with permissionMode 'bypassPermissions' and allowDangerouslySkipPermissions,
+# and Claude Code refuses both when it is running as root:
+#
+#   --dangerously-skip-permissions cannot be used with root/sudo privileges
+#   for security reasons
+#
+# The SDK surfaces that only as "Claude Code process exited with code 1", so a
+# deployed team instance failed every run at its first step with no usable
+# reason. Verified both ways in the container: as uid 0 the CLI refuses, as
+# uid 1000 the same command returns normally.
+#
+# `bun` (uid 1000) already exists in the base image. Both compose files put
+# their config somewhere this user must be able to write: standalone at
+# /root/.claude, team mode at /srv/agent-manager. /root is 700 by default, so
+# it needs traverse permission as well as ownership of the directory inside it.
+#
+# A named volume created fresh inherits ownership from the image path, so a new
+# deployment is correct on its own. An EXISTING root-owned volume does not — it
+# must be chowned once, which is preferable to deleting it and losing the
+# signed-in developers' sealed tokens:
+#
+#   docker run --rm -u 0 -v <project>_team-home:/srv/agent-manager \
+#     <image> chown -R 1000:1000 /srv/agent-manager
+# Ownership comes from `COPY --chown` above, not a recursive chown here. A
+# `chown -R` over /app and /root/.claude rewrites every file into a new layer:
+# it cost 106 MB (433 -> 539) for metadata changes alone, because a layer stores
+# whole files, not the bits that differ.
+RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs \
+    && chmod 711 /root \
+    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs
+USER bun
 
 # Set environment variables
 ENV HOST=0.0.0.0
