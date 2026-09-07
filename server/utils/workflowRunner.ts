@@ -1,5 +1,5 @@
 import {
-  buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed,
+  buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
@@ -676,6 +676,20 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
 
   const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (!wave.length) {
+    // Nothing can run but steps remain: that is a stuck run, never a finished one.
+    const stuck = run.steps.filter(s => s.status === 'pending')
+    if (stuck.length) {
+      for (const s of stuck) s.status = 'skipped'
+      run.status = 'failed'
+      run.error = `No step can run: ${stuck.map(s => s.label).join(', ')} pending but not schedulable (visit limit reached or a predecessor did not complete). Restart the step you want to run.`
+      run.endedAt = Date.now()
+      run.currentStepIds = []
+      run.nextStepIds = []
+      l.running = false
+      log.warn('run stuck', { runId: run.id, pending: stuck.map(s => s.stepId) })
+      await publish(run)
+      return run
+    }
     run.status = 'completed'
     run.endedAt = Date.now()
     run.currentStepIds = []
@@ -1150,8 +1164,13 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
       { runId: active.id },
     )
   }
+  // A restart starts from what is on disk. An in-memory record left by a
+  // previous attempt carries that attempt's state, and a second restart
+  // scheduled against it found nothing to run and reported the run complete.
+  const stale = live.get(runId)
+  if (stale?.running) throw new RestartError(409, 'This run is already running')
+  if (stale) live.delete(runId)
   const l = await rehydrate(run)
-  if (l.running) throw new RestartError(409, 'This run is already running')
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
 
@@ -1200,6 +1219,15 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (l.graph.entries.includes(stepId)) armNode(l.state, stepId)
   else if ((l.graph.forwardPreds[stepId] ?? []).every(p => l.state.status[p] === 'completed')) armNode(l.state, stepId)
   else throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
+  // An operator's restart is always worth one more visit: the visit cap guards
+  // loops and monitor retries, not a person's explicit decision. A step at its
+  // cap was otherwise unschedulable, and the empty wave read as a finished run.
+  // The cap itself is fixed by the evidence schema, so the count saturates there.
+  for (const id of reset) {
+    const node = l.graph.nodes.find(n => n.id === id)
+    const cap = node ? maxVisitsOf(node) : Infinity
+    if ((l.state.visits[id] ?? 0) >= cap) l.state.visits[id] = cap - 1
+  }
 
   // An operator note rides the same channel as a monitor's retry feedback, so
   // the restarted step sees its previous attempt and the correction together.

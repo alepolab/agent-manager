@@ -949,6 +949,33 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(sk.steps.find(s => s.stepId === 'b').visits, 1, 'the skipped step was not visited again')
 }
 
+// ── 25. a restart is always worth one visit, and reads the record, not a stale memory ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const calls = []
+  let cFails = 3
+  runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); if (agentSlug === 'agent-c' && cFails-- > 0) throw new Error('c keeps failing'); return `out ${agentSlug}` })
+  let v = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  v = await runner.waitForSettled(v.id, TIMEOUT)
+  assert.equal(v.status, 'failed')
+  // Two restarts fail too, leaving c at its visit cap of 3.
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'c')).id, TIMEOUT)
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'c')).id, TIMEOUT)
+  assert.equal(v.steps.find(s => s.stepId === 'c').visits, 3, 'c is at its cap')
+  calls.length = 0
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'c')).id, TIMEOUT)
+  assert.equal(v.status, 'completed', 'a restart at the cap still runs the step once more: ' + v.error + ' calls=' + calls.join(','))
+  assert.ok(calls.includes('agent-c'), 'the capped step actually ran')
+  assert.equal(v.steps.find(s => s.stepId === 'c').visits, 3, 'the visit count saturates at the cap the evidence schema allows')
+  // The record on disk, not memory, is what a restart reads.
+  const rec = await store.getRun(v.id)
+  rec.status = 'failed'; rec.steps.find(s => s.stepId === 'd').status = 'failed'
+  await store.saveRun(rec)
+  calls.length = 0
+  v = await runner.waitForSettled((await runner.restartRun(v.id, 'd')).id, TIMEOUT)
+  assert.equal(v.status, 'completed'); assert.deepEqual(calls, ['agent-d'], 'the step marked failed on disk ran, whatever memory remembered')
+}
+
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not
