@@ -28,9 +28,15 @@ async function makeRun(overrides = {}) {
   return next
 }
 
+// `createdBy` is not decoration. A watch with no owner dispatches runs with no
+// identity, so `envForUser` finds no profile, no GH_TOKEN reaches the agent, and
+// the provisioner halts on a private clone 3.3 minutes in. runCycle now refuses
+// such a watch outright, which makes an ownerless fixture a non-runnable state
+// rather than a neutral one — every case below would silently dispatch nothing.
 const watch = {
   id: 'w1', name: 'W1', workflowSlug: 'demo', intervalSeconds: 60,
   enabled: true, maxConcurrentRuns: 10, dailyDispatchCap: 100, autoRun: false,
+  createdBy: 'test-owner',
 }
 const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
 
@@ -409,3 +415,25 @@ const t = (key) => ({ key, summary: key, description: key, updatedAt: 1 });
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('watchScheduler: all assertions passed')
+
+// ══ THE REQUIREMENT: an ownerless watch dispatches nothing at all ══════════
+// Regression for run cf6abbb5: `test-watch` had createdBy undefined because the
+// save route computed the owner and left it out of the object it persisted. The
+// cycle ran, spent budget on ticket intake, and died at `git clone ... exit 128`.
+// Refusing costs nothing and says why; dispatching costs money to reach a
+// certain failure.
+{
+  let started = 0
+  setTicketSource({ fetch: async () => { started++; return [t('OWN-1')] } })
+  sched.setRunStarter(async () => { started++; return { runId: 'never' } })
+
+  const result = await sched.runCycle({ ...watch, id: 'w-no-owner', createdBy: undefined })
+  assert.deepEqual(result.dispatched, [], 'an ownerless watch must dispatch nothing')
+  assert.deepEqual(result.failed, [], 'and must not record failures either — it never tried')
+  assert.equal(started, 0, 'it must refuse BEFORE the ticket fetch, or it has already paid the cost the guard exists to avoid')
+
+  const blank = await sched.runCycle({ ...watch, id: 'w-blank-owner', createdBy: '   ' })
+  assert.deepEqual(blank.dispatched, [], 'whitespace is not an owner')
+}
+
+console.log('watch-scheduler: ownership refusal assertions passed')

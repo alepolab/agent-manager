@@ -9,7 +9,7 @@ import {
 import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct } from './registry.ts'
-import { getModelPricing } from './models.ts'
+import { resolveModelMeta } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
@@ -175,8 +175,10 @@ function computeUsage(run: WorkflowRun): RunUsage {
     if (!s.usage) continue
     input += s.usage.input_tokens
     output += s.usage.output_tokens
-    const p = getModelPricing(s.model ?? undefined)
-    usd += (s.usage.input_tokens / 1_000_000) * p.input + (s.usage.output_tokens / 1_000_000) * p.output
+    // No list price known: the tokens still count, the dollars are left out,
+    // the same way costReport marks such a step unpriced rather than guessing.
+    const p = resolveModelMeta(s.model ?? undefined)?.pricing
+    if (p) usd += (s.usage.input_tokens / 1_000_000) * p.input + (s.usage.output_tokens / 1_000_000) * p.output
   }
   return { input_tokens: input, output_tokens: output, usd: Math.round(usd * 10000) / 10000 }
 }
@@ -1126,7 +1128,10 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const settled = (s: RunStep) => s.status === 'completed' || (s.status === 'skipped' && !!s.skipReason)
   for (const s of run.steps) {
     state.visits[s.stepId] = s.visits ?? 0
-    if (!settled(s)) continue
+    // A failed step is restored as failed, not pending: restartRun re-runs failed
+    // wave siblings by reading exactly this, and a pending-looking failure would
+    // never be picked up again.
+    if (!settled(s)) { if (s.status === 'failed') markFailed(state, s.stepId); continue }
     markCompleted(graph, state, s.stepId)
     l.outputs[s.stepId] = s.output
     // Stored input carries the artifact header; computeInput's retry branch

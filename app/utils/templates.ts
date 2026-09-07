@@ -48,6 +48,56 @@ These hold at every step in this pipeline, not just this one:
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
 - **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
 
+const SDLC_LANGUAGE_SKILLS = `## Language-matched skills
+
+The stack this run touches is named in the context packet and the product
+block. These skills are on disk at \`$SDLC_SKILLS_DIR/<name>/SKILL.md\`. Read the
+ones whose language or technology matches THIS change, before you start, and
+follow them as you would your own instructions.
+
+| Skill                          | Applies when the change is |
+|--------------------------------|---|
+| \`api-design\`                    | any REST API surface |
+| \`architecture-decision-records\` | a decision worth recording |
+| \`cpp-testing\`                   | C++ |
+| \`docker-patterns\`               | Docker or Compose |
+| \`e2e-testing\`                   | Playwright / browser E2E |
+| \`fastapi-patterns\`              | Python / FastAPI |
+| \`golang-testing\`                | Go |
+| \`java-coding-standards\`         | Java |
+| \`kubernetes-patterns\`           | Kubernetes / Helm / OpenShift |
+| \`mysql-patterns\`                | MySQL or MariaDB |
+| \`python-patterns\`               | Python |
+| \`python-testing\`                | Python |
+| \`react-patterns\`                | React |
+| \`react-performance\`             | React / Next.js |
+| \`react-testing\`                 | React |
+| \`redis-patterns\`                | Redis |
+| \`security-review\`               | auth, user input, secrets or crypto |
+| \`springboot-patterns\`           | Java / Spring Boot |
+| \`springboot-security\`           | Java / Spring Boot |
+| \`springboot-tdd\`                | Java / Spring Boot |
+| \`springboot-verification\`       | Java / Spring Boot |
+| \`tdd-workflow\`                  | any language, when no language-specific TDD skill above fits |
+| \`ui-to-vue\`                     | Vue, from a screenshot or design export |
+| \`vue-patterns\`                  | Vue |
+
+Read at most three, and only ones that match. They are on disk rather than in
+this prompt on purpose: inlining all of them would add roughly eighty thousand
+tokens to every step of every run, most of it about languages this ticket does
+not touch. Selecting is your job precisely because only you can see what the
+change is.
+
+If none matches, that is a normal outcome — say so in one line and carry on
+with the skills you already have. Reading a Java skill for a Go change is worse
+than reading none, because it is confident, detailed and wrong for the file in
+front of you.
+
+These supplement your declared skills; they never override them, and where a
+language skill and this pipeline's standing rules disagree, the standing rules
+win. In particular they do not relax "never touch a remote", the test-file
+lock, or anything under "## Stopping".`
+
 export const agentTemplates: AgentTemplate[] = [
   {
     id: 'code-reviewer',
@@ -463,6 +513,7 @@ Merge a \`stack\` key into \`meta.json\` in the run artifacts directory named at
 - A healthcheck reporting green does not mean requests succeed: healthcheck-green-but-every-request-401 is the signature of Keycloak/URM auth wiring, not the service itself. Confirm with an actual authenticated request, not just the healthcheck endpoint.
 - Config resolution here is **env first, config file second**, and \`\${VAR:-}\` in a compose file *defines* the variable as an empty string rather than leaving it unset. If you are seeding or checking a value the product treats as mandatory, confirm what the container's actual environment holds — empty, unset, and absent are three different states here and behave differently.
 
+${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -546,6 +597,7 @@ Then merge an \`oracle\` key into \`meta.json\` in that same directory with \`ki
 
 This is also why a single run is not evidence on its own: three runs distinguish a real, deterministic reproduction from a flake that happened to fail once. If the three runs disagree with each other, you have not reliably reproduced the bug — say so and keep investigating rather than reporting the run that happened to go red.
 
+${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -625,6 +677,7 @@ Then merge a \`fix\` key into \`meta.json\` in that same directory. \`fix\` is a
 
 \`files_changed\` and \`lines_changed\` are counts — get them from \`git diff --stat\` or equivalent, not from memory of what you touched. A \`model\` field was once recorded as fact by a runner that had never actually selected a model; the same failure mode is writing a plausible-looking number into \`fix\` without having run the command that would make it true. Absent-and-rejected beats present-and-wrong: if you cannot honestly compute a value here — a merge order you are not certain of, a commit sha you have not verified exists — leave it out and let the bundle validator reject it, rather than writing something that merely looks right.
 
+${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -648,7 +701,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 60,
+      maxTurns: 80,
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
@@ -684,9 +737,89 @@ Do the adversarial work for real: a two-node rerun to catch state that only brea
 
 For every other \`blast_radius\`, merge \`adversarial: null\` into \`meta.json\` explicitly — do not simply omit the key.
 
+## Deploy the fixed build and prove it runs
+
+Your tests prove the *source*. They do not prove the *artifact*. The stack the
+provisioner stood up runs a GHCR image built before this fix existed — so up to
+this point nothing in this run has shown that the code you just verified builds
+into a deployable image, or that the image starts and serves. A pull request
+that calls itself evidence-backed while never once running the fixed build is
+the gap this section closes.
+
+Do this only after your tests, lint and type gates are green. A build of code
+that does not pass its own tests proves nothing worth having.
+
+1. **Build from the fixed checkout**, tagged locally:
+
+\`\`\`
+docker build -t localhost/agent-sdlc/<repo>:<run id> <checkout path>
+\`\`\`
+
+2. **Deploy it alongside the baseline — never over it.** Use your own compose
+   project name and the local tag, and publish no host ports:
+
+\`\`\`
+TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id> -f <compose file> --profile <profile> up -d
+\`\`\`
+
+   **Why alongside, and not in place.** This step runs *in parallel* with
+   Browser Trace and Security Review — the fix step dispatches all three at
+   once. Replacing the running stack's image would swap the application out
+   from under a browser session mid-trace and yield a recording of a
+   half-restarted app: evidence that is worse than none, because it looks real.
+   Your own project name means nothing you do can reach a stack another step is
+   using. The \`TAG\` variable is the tag lever in this estate — never
+   \`IMAGE_TAG\`.
+
+   **The \`localhost/\` prefix is load-bearing, not decoration.** This host runs
+   rootless podman behind the docker CLI, and podman normalises a bare
+   \`agent-sdlc/x:y\` to \`docker.io/agent-sdlc/x:y\` — a registry name for an image
+   that exists only on this machine, which invites a pull for something no
+   registry has. \`localhost/\` is unambiguous on podman and harmless on docker.
+   Before \`up\`, confirm the tag resolves locally and quote the result:
+
+\`\`\`
+docker image inspect localhost/agent-sdlc/<repo>:<run id> --format '{{index .RepoTags 0}}'
+\`\`\`
+
+   If that fails, the build did not produce the tag you think it did — stop
+   there rather than letting compose reach for a registry.
+
+3. **Prove health from inside the stack's own network**, exactly as the
+   provisioner does: \`docker exec <container> curl -sf http://localhost:<container-port>/...\`
+   plus \`docker inspect\`, and quote their real output. You execute inside the
+   agent-manager container: host \`localhost\` and host-published ports are
+   unreachable from where you run, so a timeout there says nothing about the
+   build. A container that is running is still not a service that is serving.
+
+4. **Tear down exactly the project you created**: \`docker compose -p sdlc-<run id> down\`.
+   Never \`down -v\` or any volume prune — that destroys seeded data other runs
+   depend on and cannot be undone — and never remove anything you did not start.
+
+**Never push the image you build.** It is a local tag for this run only. A
+registry push from inside a run puts an unreviewed build somewhere other
+people's deployments can find it.
+
+### When to skip, and how to say so
+
+Skipping is legitimate here and often correct. It is legitimate only when you
+**state what you measured**:
+
+- The provisioner stood up no stack — read \`stack-report.md\` and say that it did
+  not, rather than inferring it from an empty \`docker ps\`.
+- The repository has no Dockerfile or image build path — name the paths you
+  actually looked at, and widen the search once before concluding absence.
+- The build cannot finish inside this step's budget. The C++ repositories
+  (\`ocs_cpp14\`, \`billing_cpp14\`, \`pcrf_cpp14\`) build in tens of minutes; say which
+  repository it is and that the build was declined on time, not attempted and
+  hidden.
+
+A skip with a measured reason is a pass, and the monitor will treat it as one.
+A skip because the work looked hard is not, and "seems fine" is not a finding.
+
 ## Report
 
-State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before. If \`blast_radius\` required adversarial verification, report what you did for that too.
+State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before. If \`blast_radius\` required adversarial verification, report what you did for that too. Then state, in one line, whether the fixed build was deployed and proved healthy — or, if you skipped the deploy, which of the three reasons above applied and what you measured to establish it.
 
 ## Artifacts
 
@@ -694,6 +827,8 @@ Write two files into the run artifacts directory named at the top of your input,
 
 - \`oracle-after.xml\` — three runs of the parameterised test, and every one must **PASS**. The assembler derives \`oracle_after.verdict\` from this file itself, and the bundle validator hard-rejects anything but \`oracle_after.verdict: PASS\` here — do not report PASS in prose without the file backing it.
 - \`regression.xml\` — the repo's existing test suite run.
+
+And, when you deployed the fixed build, \`deploy-report.md\`: the image tag you built, the compose project name, the health commands with their verbatim output, and the teardown command you ran. If you skipped the deploy, write the same file saying so and why — a reviewer needs to see the decision, not its absence.
 
 Then merge \`oracle_after\`, \`regression\`, and \`adversarial\` (the object above, or \`null\`) into \`meta.json\` in that same directory:
 
@@ -708,6 +843,7 @@ A test suite that stays green with the feature under test switched off entirely 
 
 Extend the same suspicion to any success signal you did not write yourself: a check that reads \`'result' in message\` is true for error results too, so every API failure can get silently recorded as an empty successful output. Read what a pass/fail field actually contains before you rely on it, not just whether it exists.
 
+${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -784,6 +920,7 @@ If there is no browser surface to trace, say so plainly and write nothing. The b
 
 A Playwright run can exit 0 with nothing meaningful behind it — no tests collected, every test skipped, a \`trace.zip\` that exists but is empty. Confirm the counts (tests run, passed, failed) before you report a result, and confirm the trace file is actually populated before you name it in your report — an exit code alone is no more evidence than "the stack is up" is evidence with no request behind it.
 
+${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -837,6 +974,7 @@ Write \`security-review.md\` into the run artifacts directory named at the top o
 
 The verdict, the findings table, and the artifact path. A high finding ends your output with \`PIPELINE-HALT: security review found <n> high severity finding(s); see security-review.md\` so the PR is not opened on top of it.
 
+${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -1251,10 +1389,12 @@ Before assembling: read \`meta.json\`'s \`fix.repos\`, and for every entry whose
 Then assemble the bundle and report its real output — do not paraphrase it:
 
 \`\`\`
-node engineering/scripts/assemble-bundle.mjs --run-dir <artifacts dir> --out <artifacts dir>/bundle.json
+node "$SDLC_SCRIPTS_DIR/assemble-bundle.mjs" --run-dir <artifacts dir> --out <artifacts dir>/bundle.json
 \`\`\`
 
 If it exits non-zero, the fields it names as missing are the finding. Report them exactly as printed, and **do not open a PR** — a PR carrying a bundle that failed assembly is worse than no PR, because it looks evidenced and is not.
+
+\`$SDLC_SCRIPTS_DIR\` is set for you and is an absolute path; the assembler lives with the app, not in the product checkout you are standing in. If the command cannot be found, or that variable is empty, **that is the same failure as a non-zero exit** — report it as a finding and do not open a PR. Do not conclude the assembler is missing from the installation and continue without it: an unvalidated bundle in a PR that claims to be evidence-backed is precisely the outcome this step exists to prevent.
 
 ## Absent beats wrong, in the bundle too
 

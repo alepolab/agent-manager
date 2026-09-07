@@ -61,7 +61,8 @@ export async function backfillSessions(run: WorkflowRun): Promise<boolean> {
 /** Text of a transcript's first user message, or of its last assistant message, read line by line. */
 async function transcriptText(path: string, which: 'first-user' | 'last-assistant'): Promise<string | null> {
   const want = which === 'first-user' ? 'user' : 'assistant'
-  const rl = createInterface({ input: createReadStream(path, { encoding: 'utf8' }) })
+  const stream = createReadStream(path, { encoding: 'utf8' })
+  const rl = createInterface({ input: stream })
   let found: string | null = null
   try {
     for await (const line of rl) {
@@ -79,5 +80,6 @@ async function transcriptText(path: string, which: 'first-user' | 'last-assistan
     return found
   } finally {
     rl.close()
+    stream.destroy() // readline.close() detaches; it does not release the descriptor
   }
 }
