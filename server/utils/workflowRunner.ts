@@ -15,6 +15,7 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
+import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
 import { existsSync } from 'node:fs'
 import { appendFile, readdir, readFile } from 'node:fs/promises'
@@ -545,7 +546,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // the moment a checkout exists, so no step ever commits on main or develop,
   // and the header below names it.
   await ensureRunCheckout(run)
-  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+    dir: run.projectDir, branch: run.branch,
+    ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
+  } : undefined) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -953,18 +957,40 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * commits to develop directly again; a real run cloned onto main and would
  * have pushed it. Idempotent: a run that already has its branch is left alone.
  */
+/** Intake's classification from meta.json, once it has written one. */
+async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string } | null> {
+  try {
+    const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
+    return meta && typeof meta === 'object' ? { work_type: meta.work_type, origin: meta.origin } : null
+  } catch { return null }
+}
+
 async function ensureRunCheckout(run: WorkflowRun): Promise<void> {
   if (run.branch) return
   const repoName = run.product?.repos?.[0]?.split('/').pop()
   const checkout = (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir : findCheckout(runWorkspace(run), repoName)
   if (!checkout) return
+  // The base branch follows the kind of work, which intake classifies into
+  // meta.json. Until it has, no step touches the code, so the branch waits:
+  // a branch cut before the classification would start from the clone's
+  // default branch, which is main for most products and wrong for a task.
+  const classified = await readClassification(run)
+  const intake = run.steps.find(s => s.agentSlug === 'sdlc-ticket-intake')
+  const intakeSettled = !intake || !['pending', 'running', 'waiting'].includes(intake.status)
+  if (!classified?.work_type && !intakeSettled) return
+  const choice = baseBranchFor(classified?.work_type, classified?.origin, run.product?.branches)
   const branch = `fix/${run.ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
   try {
-    const repos = await ensureRunBranch(checkout, branch)
+    const repos = await ensureRunBranch(checkout, branch, choice.base)
     run.branch = branch
     run.projectDir = checkout
+    run.workType = classified?.work_type
+    run.origin = classified?.origin
+    run.baseBranch = choice.base
+    // The branch starts at the base now, so the fix facts diff against it.
+    run.baseCommit = (await captureBaseline(checkout)) ?? run.baseCommit
     await saveRun(run)
-    log.info('run branch created', { runId: run.id, checkout, branch, repos: repos.length })
+    log.info('run branch created', { runId: run.id, checkout, branch, base: choice.base, reason: choice.reason, repos: repos.length })
   } catch (err) {
     log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, checkout, error: err instanceof Error ? err.message : String(err) })
   }

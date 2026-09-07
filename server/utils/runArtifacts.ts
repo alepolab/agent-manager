@@ -456,7 +456,7 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
 
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string }): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }): string {
   // The app serves this directory, so an agent can point a reviewer at it
   // instead of copying files into a product repository to make them reachable.
   const appUrl = (process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/+$/, '')
@@ -493,7 +493,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // trace and no explanation twice, and the monitor called it exactly that:
     // "silence without explanation".
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
-    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run, in the checkout and in every module repository nested under it: commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The evidence step pushes that branch and opens the pull request on that repository against the branch policy.`] : []),
+    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run, in the checkout and in every module repository nested under it: commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The evidence step pushes that branch and opens the pull request on that repository against the branch policy.${checkout.policy ? ` ${checkout.policy}` : ''}`] : []),
     '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',

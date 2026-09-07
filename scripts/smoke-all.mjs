@@ -33,6 +33,7 @@ import { parse } from 'yaml'
 
 const args = process.argv.slice(2)
 const quick = args.includes('--quick')
+const resume = args.includes('--resume')
 const wanted = args.filter(a => !a.startsWith('--'))
 const base = (process.env.BASE || 'http://localhost:3030').replace(/\/+$/, '')
 const concurrency = Math.max(1, Number(process.env.CONCURRENCY) || 1)
@@ -51,7 +52,19 @@ async function api(path, method = 'GET', body) {
 }
 
 const registry = parse(readFileSync('engineering/registry/products.yaml', 'utf8'))
-const products = Object.entries(registry.products).filter(([k]) => !wanted.length || wanted.includes(k))
+let products = Object.entries(registry.products).filter(([k]) => !wanted.length || wanted.includes(k))
+if (resume) {
+  // Products the latest sweep file already settled are not run again.
+  const { readdirSync } = await import('node:fs')
+  const dir = join(homedir(), '.agent-manager')
+  const latest = readdirSync(dir).filter(f => /^smoke-.*\.json$/.test(f)).sort().pop()
+  if (latest) {
+    const prior = JSON.parse(readFileSync(join(dir, latest), 'utf8'))
+    const done = new Set((prior.results ?? prior).filter(r => ['paused', 'completed', 'failed'].includes(r.status)).map(r => r.product))
+    products = products.filter(([k]) => !done.has(k))
+    console.log(`--resume: ${done.size} product(s) already settled in ${latest}; ${products.length} left`)
+  }
+}
 if (!products.length) { console.error('no matching products'); process.exit(2) }
 
 const RUNBOOK = 'runbook-a-ticket-to-evidence-backed-pr'

@@ -231,10 +231,20 @@ export async function stashCheckout(path: string, login: string): Promise<{ stas
  * request happen in the module, and a module left on main would be pushed
  * as main.
  */
-export async function ensureRunBranch(path: string, branch: string): Promise<string[]> {
+export async function ensureRunBranch(path: string, branch: string, base?: string): Promise<string[]> {
   const repos = [path, ...nestedRepos(path)]
   for (const r of repos) {
-    await git(r, ['checkout', '--quiet', '-B', branch])
+    // From the base branch on the remote when it has one: a fresh clone sits on
+    // the default branch and a developer's checkout on whatever they were doing,
+    // and neither is where a hotfix or a task is supposed to start. A repository
+    // without that branch (a module repository with its own naming) starts from
+    // its HEAD, which is the old behaviour.
+    let start: string | undefined
+    if (base) {
+      try { await git(r, ['fetch', '--quiet', 'origin', base]) } catch { /* no remote, or no such branch: decided below */ }
+      try { await git(r, ['rev-parse', '--verify', '--quiet', `origin/${base}`]); start = `origin/${base}` } catch { start = undefined }
+    }
+    await git(r, start ? ['checkout', '--quiet', '-B', branch, start] : ['checkout', '--quiet', '-B', branch])
     await excludeFromGit(r, '.agent/evidence-run/')
   }
   return repos
