@@ -730,11 +730,11 @@ async function ensureRunCheckout(run: WorkflowRun): Promise<void> {
   if (!checkout) return
   const branch = `fix/${run.ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
   try {
-    await ensureRunBranch(checkout, branch)
+    const repos = await ensureRunBranch(checkout, branch)
     run.branch = branch
     run.projectDir = checkout
     await saveRun(run)
-    log.info('run branch created', { runId: run.id, checkout, branch })
+    log.info('run branch created', { runId: run.id, checkout, branch, repos: repos.length })
   } catch (err) {
     log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, checkout, error: err instanceof Error ? err.message : String(err) })
   }

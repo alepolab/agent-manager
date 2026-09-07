@@ -479,7 +479,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // trace and no explanation twice, and the monitor called it exactly that:
     // "silence without explanation".
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
-    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run: commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy.`] : []),
+    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run, in the checkout and in every module repository nested under it: commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The evidence step pushes that branch and opens the pull request on that repository against the branch policy.`] : []),
     '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',

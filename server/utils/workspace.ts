@@ -169,7 +169,8 @@ export async function checkoutState(path: string): Promise<CheckoutState> {
       gitRaw(path, ['status', '--porcelain', '-uall']),
     ])
     const remote = await git(path, ['remote', 'get-url', 'origin']).catch(() => undefined)
-    const files = status.split('\n').filter(Boolean).map(l => l.slice(3))
+    // A nested repository shows up as one untracked directory in its parent; it is its own checkout, not a change here.
+    const files = status.split('\n').filter(Boolean).map(l => l.slice(3)).filter(f => !(f.endsWith('/') && existsSync(join(path, f, '.git'))))
     return { path, name, exists: true, git: true, branch, head, remote, dirty: files.length, dirtyFiles: files.slice(0, 20) }
   } catch {
     return { path, name, exists: true, git: true, dirty: 0, dirtyFiles: [] }
@@ -219,10 +220,36 @@ export async function stashCheckout(path: string, login: string): Promise<{ stas
   return { stashed: true, message }
 }
 
-/** A run works on its own branch off the checkout's current HEAD. Creating it is the runner's job, not an agent's. */
-export async function ensureRunBranch(path: string, branch: string): Promise<void> {
-  await git(path, ['checkout', '--quiet', '-B', branch])
-  await excludeFromGit(path, '.agent/evidence-run/')
+/**
+ * A run works on its own branch off the checkout's current HEAD. Creating it
+ * is the runner's job, not an agent's. A super-repo whose modules are their
+ * own repositories (ASE keeps each module under modules/<name> with its own
+ * origin) gets the branch in every one of them too: the commit and the pull
+ * request happen in the module, and a module left on main would be pushed
+ * as main.
+ */
+export async function ensureRunBranch(path: string, branch: string): Promise<string[]> {
+  const repos = [path, ...nestedRepos(path)]
+  for (const r of repos) {
+    await git(r, ['checkout', '--quiet', '-B', branch])
+    await excludeFromGit(r, '.agent/evidence-run/')
+  }
+  return repos
+}
+
+/** Git repositories one level under the checkout or under its modules/ directory. */
+export function nestedRepos(path: string): string[] {
+  const out: string[] = []
+  for (const parent of [path, join(path, 'modules')]) {
+    if (!existsSync(parent)) continue
+    try {
+      for (const e of readdirSync(parent, { withFileTypes: true })) {
+        const dir = join(parent, e.name)
+        if (e.isDirectory() && !e.name.startsWith('.') && dir !== join(path, 'modules') && existsSync(join(dir, '.git'))) out.push(dir)
+      }
+    } catch { /* unreadable: nothing nested */ }
+  }
+  return out
 }
 
 /** Evidence copies never reach a commit, whatever an agent stages: the path is excluded in the checkout itself. */
