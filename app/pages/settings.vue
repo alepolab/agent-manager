@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { Settings } from '~/types'
+import type { Settings, AgentModel } from '~/types'
+import { MODEL_OPTIONS } from '~/utils/models'
 
 const { settings, loading, load, save } = useSettings()
 const {
@@ -25,6 +26,11 @@ const rawJson = ref('')
 const saving = ref(false)
 async function toggleLabs(on: boolean) {
   await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), labs: on } } as any)
+}
+/** The model every pipeline agent runs on; empty means each agent's own file decides. Applies to the next agent call. */
+async function setAgentModel(value: string) {
+  await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), agentModel: (value || undefined) as AgentModel | undefined } } as any)
+  toast.add({ title: value ? `Pipeline agents will run on ${MODEL_OPTIONS.find(o => o.value === value)?.label ?? value}` : 'Each agent uses its own model again', color: 'success' })
 }
 /** Per-run caps for new runs. Blank returns to the default; a run that reaches its cap pauses and asks. */
 async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
@@ -335,6 +341,22 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                 <span class="field-toggle__thumb" />
               </span>
             </label>
+          </div>
+          <div class="flex items-start justify-between gap-4 py-3">
+            <div>
+              <div class="text-[13px] font-medium">Model for pipeline agents</div>
+              <div class="text-[12px] mt-0.5 text-label">
+                Every agent call in a run uses this model when set, monitors included, whatever the agent's own file says. Default lets each agent decide: the fix and test agents ship on Opus, the rest on Sonnet. Fable is the strongest and carries no list price here, so its steps show as unpriced.
+              </div>
+            </div>
+            <select
+              class="field-input w-44 text-[12px] shrink-0" aria-label="Model for pipeline agents"
+              :value="settings?.agentManager?.agentModel ?? ''"
+              @change="setAgentModel(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="">Default (each agent's own)</option>
+              <option v-for="o in MODEL_OPTIONS.filter(o => o.value)" :key="o.value" :value="o.value">{{ o.label }} · {{ o.desc }}</option>
+            </select>
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
             <div>
