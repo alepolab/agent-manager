@@ -1,5 +1,9 @@
 <script setup lang="ts">
+import DOMPurify from 'dompurify'
 import { highlightCode, renderMarkdownWithHighlighting } from '~/utils/markdown'
+
+/** Evidence is written by agents from ticket text nobody here vetted: every rendered fragment is sanitised before it reaches v-html. */
+const clean = (html: string) => DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ['target', 'rel'] })
 
 /**
  * The evidence bundle, readable: markdown rendered, JSON as a document whose
@@ -46,12 +50,12 @@ async function open(name: string) {
 async function render() {
   const k = kind.value
   jsonRendered.value = {}
-  if (k === 'markdown') { rendered.value = await renderMarkdownWithHighlighting(raw.value); return }
+  if (k === 'markdown') { rendered.value = clean(await renderMarkdownWithHighlighting(raw.value)); return }
   if (k === 'json') void renderJsonMarkdown(jsonRows.value)
   if (raw.value.length > HIGHLIGHT_MAX) { rendered.value = ''; return }
   if (k === 'json' || k === 'xml' || k === 'code') {
     const text = k === 'json' ? pretty(raw.value) : raw.value
-    rendered.value = await highlightCode(text, LANG[ext(selected.value ?? '')] ?? 'text')
+    rendered.value = clean(await highlightCode(text, LANG[ext(selected.value ?? '')] ?? 'text'))
   }
 }
 const pretty = (s: string) => { try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s } }
@@ -62,7 +66,7 @@ const jsonRendered = ref<Record<string, string>>({})
 const looksLikeMarkdown = (v: string) => v.length > 60 && /(^|\n)(#{1,6} |\|.*\||- |\d+\. |```)/.test(v)
 async function renderJsonMarkdown(rows: { path: string, value: string }[]) {
   const out: Record<string, string> = {}
-  for (const r of rows) if (looksLikeMarkdown(r.value)) out[r.path] = await renderMarkdownWithHighlighting(r.value)
+  for (const r of rows) if (looksLikeMarkdown(r.value)) out[r.path] = clean(await renderMarkdownWithHighlighting(r.value))
   jsonRendered.value = out
 }
 const jsonRows = computed(() => {
@@ -219,8 +223,25 @@ defineExpose({ refresh })
 .evidence-code pre .line { display: block; padding-left: 3rem; position: relative; }
 .evidence-code pre .line::before { counter-increment: line; content: counter(line); position: absolute; left: 0; width: 2.5rem; text-align: right; color: var(--text-disabled); }
 .evidence-wrap pre .line { white-space: pre-wrap; word-break: break-word; }
-.evidence-prose table { border-collapse: collapse; width: 100%; font-size: 12px; }
-.evidence-prose th, .evidence-prose td { border: 1px solid var(--border-subtle); padding: 4px 8px; vertical-align: top; }
-.evidence-prose th { background: var(--surface-base); }
-.evidence-prose pre { white-space: pre-wrap; word-break: break-word; }
+.evidence-prose { font-family: var(--font-sans); font-size: 13.5px; line-height: 1.65; color: var(--text-primary); max-width: 82ch; }
+.evidence-prose h1 { font-size: 1.45em; font-weight: 600; margin: 0 0 0.6em; letter-spacing: -0.01em; }
+.evidence-prose h2 { font-size: 1.2em; font-weight: 600; margin: 1.4em 0 0.5em; padding-bottom: 0.25em; border-bottom: 1px solid var(--border-subtle); }
+.evidence-prose h3 { font-size: 1.05em; font-weight: 600; margin: 1.2em 0 0.4em; }
+.evidence-prose h4 { font-size: 1em; font-weight: 600; margin: 1em 0 0.3em; color: var(--text-secondary); }
+.evidence-prose p { margin: 0 0 0.8em; }
+.evidence-prose ul, .evidence-prose ol { margin: 0 0 0.9em 1.4em; padding: 0; }
+.evidence-prose li { margin: 0.2em 0; }
+.evidence-prose li > ul, .evidence-prose li > ol { margin-bottom: 0.3em; }
+.evidence-prose strong { font-weight: 600; color: var(--text-primary); }
+.evidence-prose a { color: var(--accent); text-decoration: underline; }
+.evidence-prose blockquote { margin: 0.8em 0; padding: 0.4em 0.9em; border-left: 3px solid var(--accent); background: var(--surface-base); color: var(--text-secondary); }
+.evidence-prose hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 1.2em 0; }
+.evidence-prose code { font-family: var(--font-mono); font-size: 0.9em; padding: 0.1em 0.35em; border-radius: 4px; background: var(--surface-base); border: 1px solid var(--border-subtle); }
+.evidence-prose pre { margin: 0.6em 0 1em; padding: 0.7em 0.9em; border-radius: 8px; background: var(--surface-base); border: 1px solid var(--border-subtle); overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; }
+.evidence-prose pre code { padding: 0; border: 0; background: transparent; font-size: inherit; }
+.evidence-prose table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin: 0.6em 0 1em; display: block; overflow-x: auto; }
+.evidence-prose th, .evidence-prose td { border: 1px solid var(--border-subtle); padding: 5px 9px; vertical-align: top; text-align: left; }
+.evidence-prose th { background: var(--surface-base); font-weight: 600; }
+.evidence-prose tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--surface-base) 55%, transparent); }
+.evidence-prose img { max-width: 100%; }
 </style>
