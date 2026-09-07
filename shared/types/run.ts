@@ -27,6 +27,10 @@ export interface RunStep {
    *  model. Never guessed either way, since a wrong value here is the kind
    *  of defect that produces no error. */
   model?: string | null
+  /** The Claude Code session the latest visit ran in, and the project folder
+   *  under `~/.claude/projects` holding its transcript: together the /cli link. */
+  sessionId?: string
+  sessionProject?: string
   /** Tokens the agent call actually consumed, as the SDK reported them. */
   usage?: { input_tokens: number, output_tokens: number } | null
   /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK

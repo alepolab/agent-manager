@@ -34,7 +34,7 @@ export function useRun(id: string) {
     run, logs, error, load,
     continueRun: (note?: string) => act('continue')(note?.trim() ? { note: note.trim() } : undefined),
     respond: (reply: string) => act('respond')({ reply }),
-    sendNote: async (text: string) => { await $fetch(`/api/runs/${id}/note`, { method: 'POST', body: { text } }) },
+    sendNote: (text: string) => $fetch<{ delivered?: string[], queued?: string }>(`/api/runs/${id}/note`, { method: 'POST', body: { text } }),
     stop: () => act('stop')(),
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
   }

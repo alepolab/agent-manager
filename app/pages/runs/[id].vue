@@ -10,7 +10,10 @@ const route = useRoute()
 const id = route.params.id as string
 const { run, logs, error, load, continueRun, stop, restart, respond, sendNote } = useRun(id)
 async function onNote(text: string) {
-  try { await sendNote(text); toast.add({ title: 'Note queued for the next step', color: 'success' }) } catch (e: any) { toast.add({ title: 'Could not send the note', description: e.data?.message || e.message, color: 'error' }) }
+  try {
+    const r = await sendNote(text)
+    toast.add({ title: r.delivered?.length ? `Sent to ${r.delivered.join(', ')}` : 'Note queued for the next step', color: 'success' })
+  } catch (e: any) { toast.add({ title: 'Could not send the note', description: e.data?.message || e.message, color: 'error' }) }
 }
 const toast = useToast()
 onMounted(load)

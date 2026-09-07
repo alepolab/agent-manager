@@ -13,6 +13,7 @@ import { getModelPricing } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
+import { getProjectName } from './claudeProjects.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
@@ -107,6 +108,8 @@ interface Live {
   notes: Record<string, string>
   /** A note for whichever step starts next. */
   nextNote?: string
+  /** Per step in flight: pushes an operator note into the agent's conversation; false once the call is over. */
+  steer: Map<string, (text: string) => boolean>
   /** The step that asked the operator a question and waits for the answer. */
   waiting?: string
   /** True while this run's wave loop is actually executing in the background - the
@@ -524,7 +527,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onProgress: (progress: AgentProgress) => {
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+      // The transcript is a normal Claude Code session, so it is readable on /cli;
+      // named after the run so it is findable there among the developer's own.
+      Object.assign(rec, { sessionId, sessionProject: getProjectName(cwd) })
+      void publish(run)
+      // Loaded on demand: that module's extension-less imports do not resolve under the plain-node tests.
+      void import('./claudeCodeHistory.ts').then(m => m.setSessionName(sessionId, `${run.ticketKey ?? run.workflowSlug} · ${step.label} · run ${run.id.slice(0, 8)}`)).catch(() => {})
+    }, onProgress: (progress: AgentProgress) => {
       if (progress.line) { logLine(l, run, rec, progress.line); return }
       // Diagnostic only (see AgentProgress's doc comment) - mutated directly
       // onto the live rec and republished so the SSE stream carries it, but
@@ -664,6 +674,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return false
   } finally {
     l.aborts.delete(id)
+    l.steer.delete(id)
   }
 }
 
@@ -876,7 +887,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {},
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   live.set(run.id, l)
   // Best-effort: a filesystem problem here must not stop the run. The run
@@ -1026,11 +1037,26 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   return run
 }
 
-/** Queue a note for whichever step starts next; the operator's way to steer a run in flight. */
-export async function noteRun(runId: string, text: string): Promise<{ queued: string } | null> {
+/** The operator's way to steer a run in flight: the note goes straight into every
+ *  agent working right now, and is logged on their steps; with no agent mid-call it
+ *  waits for whichever step starts next. */
+export async function noteRun(runId: string, text: string): Promise<{ delivered: string[] } | { queued: string } | null> {
   const l = live.get(runId)
   if (!l) return null
-  l.nextNote = text.trim()
+  const note = text.trim()
+  const run = await getRun(runId)
+  const delivered: string[] = []
+  for (const [stepId, deliver] of l.steer) {
+    const rec = run?.steps.find(s => s.stepId === stepId)
+    if (!rec || !deliver(note)) continue
+    delivered.push(rec.label)
+    logLine(l, run!, rec, `[Operator] ${note}`)
+  }
+  if (delivered.length) {
+    log.info('operator note delivered to running agents', { runId, steps: delivered, preview: preview(note) })
+    return { delivered }
+  }
+  l.nextNote = note
   log.info('operator note queued', { runId, preview: preview(text) })
   return { queued: l.nextNote }
 }
@@ -1088,7 +1114,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {},
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   // A declared skip is a settled outcome, the same as completed: a restart of a

@@ -5,6 +5,8 @@ import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES } from '~/utils/runS
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
 const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string] }>()
 
+/** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
+const anyRunning = computed(() => props.run?.steps.some(s => s.status === 'running') ?? false)
 /** What the note box is for right now: a reply, an approval note, a note to the next step, or a restart note. */
 const noteMode = computed(() => {
   const r = props.run
@@ -17,7 +19,9 @@ const noteMode = computed(() => {
 const notePlaceholder = computed(() => ({
   reply: 'Your answer to the agent',
   continue: 'Optional note for the step about to run, e.g. target the SaskTel branch policy',
-  steer: 'Send a note to whichever step starts next, e.g. the plugin lives under modules/administrator',
+  steer: anyRunning.value
+    ? 'Instruction for the agent working now, e.g. the plugin lives under modules/administrator'
+    : 'Send a note to whichever step starts next, e.g. the plugin lives under modules/administrator',
   restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
 }[noteMode.value]))
 const sent = ref<string | null>(null)
@@ -211,6 +215,12 @@ const money = (n: number) => `$${n.toFixed(4)}`
           </button>
           <!-- Visible on the row itself: an action nobody has to discover by expanding. -->
           <UButton
+            v-if="step.sessionId && step.sessionProject"
+            size="xs" variant="ghost" color="neutral" icon="i-lucide-message-circle"
+            :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
+            :aria-label="`Open the ${step.label} agent's chat`" :title="`Open the ${step.label} agent's chat`"
+          />
+          <UButton
             v-if="settledRun && stepSettled(step)"
             size="xs" variant="ghost" color="neutral" icon="i-lucide-rotate-ccw"
             :aria-label="`Restart from ${step.label}`" :title="`Restart from ${step.label}`"
@@ -248,7 +258,7 @@ const money = (n: number) => `$${n.toFixed(4)}`
       <UButton v-if="noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
       <UButton v-else-if="run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="`Approve and run`" @click="send('continue')" />
       <UButton v-else-if="run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
-      <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" label="Send note to next step" :disabled="!note.trim()" @click="send('note')" />
+      <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
       <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
       <UButton v-if="run.status === 'running' || run.status === 'paused'" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
       <UButton v-if="settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
