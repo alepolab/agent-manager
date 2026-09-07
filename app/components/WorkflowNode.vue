@@ -67,6 +67,9 @@ const verdictColor: Record<string, string> = {
           </span>
         </div>
         <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <NuxtLink :to="`/agents/${data.agentSlug}`" class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" :title="`Edit agent ${data.agentSlug}`" @click.stop>
+            <UIcon name="i-lucide-pencil" class="size-3" />
+          </NuxtLink>
           <button class="p-0.5 rounded" style="color: var(--text-disabled);" title="Step settings" @click="emit('settings')">
             <UIcon name="i-lucide-settings-2" class="size-3" />
           </button>

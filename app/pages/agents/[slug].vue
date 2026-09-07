@@ -1,4 +1,5 @@
 <script setup lang="ts">
+const { promoting, promote } = usePromote()
 import type { AgentFrontmatter, AgentSkill } from '~/types'
 
 const route = useRoute()
@@ -182,6 +183,17 @@ useUnsavedChanges(isDirty)
           color="neutral"
           title="Open in Finder"
           @click="reveal(filePath)"
+        />
+        <UButton
+          label="Promote to team"
+          icon="i-lucide-git-pull-request"
+          size="sm"
+          variant="ghost"
+          color="neutral"
+          title="Open a pull request that adds this agent to the alepo-engineering plugin"
+          :loading="promoting"
+          :disabled="isDirty || promoting"
+          @click="promote('agent', slug)"
         />
         <UButton
           label="Delete"

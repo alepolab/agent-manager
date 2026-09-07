@@ -2,7 +2,7 @@
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES } from '~/utils/runStatus'
 
-const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[] }>()
+const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]> }>()
 const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [] }>()
 
 /** Optional correction handed to whichever step is restarted next. */
@@ -23,6 +23,21 @@ async function showFile(name: string) {
   fileText.value = await $fetch<string>(`/api/runs/${props.run.id}/artifacts/${name.split('/').map(encodeURIComponent).join('/')}`, { responseType: 'text' })
 }
 watch(() => props.run?.id, () => { artifacts.value = null; openFile.value = null })
+
+/** What intake left unanswered, and where the fix landed: read from the run's own artifacts. */
+const intake = ref<{ open_questions?: string[] } | null>(null)
+const prLinks = ref<string[]>([])
+async function loadFacts() {
+  if (!props.run) { intake.value = null; prLinks.value = []; return }
+  const id = props.run.id
+  try { intake.value = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/context-packet.json`, { responseType: 'text' })) } catch { intake.value = null }
+  try {
+    const meta = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/meta.json`, { responseType: 'text' }))
+    // A real pull request only: the schema forces the fix step to write a placeholder URL before one exists.
+    prLinks.value = (meta?.fix?.repos ?? []).map((r: any) => r?.pr).filter((u: unknown): u is string => typeof u === 'string' && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(u))
+  } catch { prLinks.value = [] }
+}
+watch(() => [props.run?.id, props.run?.status, props.run?.steps.filter(s => s.status === 'completed').length], loadFacts, { immediate: true })
 
 /** Restart and clone only make sense once nothing is executing. */
 const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
@@ -49,6 +64,15 @@ const progress = computed(() => {
 })
 
 const expanded = ref<string | null>(null)
+/** Live output for a step, newest last; the pre scrolls to the newest line as it arrives. */
+const liveFor = (stepId: string) => props.logs?.[stepId] ?? []
+const latest = (stepId: string) => liveFor(stepId).at(-1)?.slice(9) ?? ''
+const logPre = ref<Record<string, HTMLElement | null>>({})
+watch(() => expanded.value && liveFor(expanded.value).length, async () => {
+  await nextTick()
+  const el = expanded.value ? logPre.value[expanded.value] : null
+  if (el) el.scrollTop = el.scrollHeight
+})
 
 // Cost is fetched separately from the run record itself (GET /api/runs/[id]/cost,
 // server/utils/costReport.ts) rather than computed here: pricing lives in
@@ -102,6 +126,14 @@ const money = (n: number) => `$${n.toFixed(4)}`
       The process that was running this is gone. Its steps are frozen where they stopped.
     </p>
 
+    <div v-if="intake?.open_questions?.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <div class="font-medium" style="color: var(--text-primary);">Intake left {{ intake.open_questions.length }} question(s) open</div>
+      <ol class="list-decimal ml-4 space-y-0.5"><li v-for="q in intake.open_questions" :key="q">{{ q }}</li></ol>
+      <p class="text-label">Answer in the note below and restart the step that needs the answer.</p>
+    </div>
+    <div v-if="prLinks.length" class="flex flex-wrap gap-3 text-[11px]">
+      <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
+    </div>
     <textarea
       v-if="settledRun"
       v-model="note"
@@ -154,10 +186,15 @@ const money = (n: number) => `$${n.toFixed(4)}`
             @click="emit('restart', step.stepId, note)"
           />
         </div>
+        <div v-if="step.status === 'running' && latest(step.stepId) && expanded !== step.stepId" class="pl-4 text-[10px] font-mono truncate text-label" :title="latest(step.stepId)">{{ latest(step.stepId) }}</div>
         <div v-if="expanded === step.stepId" class="pl-4 pb-2 space-y-1">
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
+          <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
+            <div class="text-[10px] text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
+            <pre :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="text-[10px] font-mono whitespace-pre-wrap max-h-56 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">{{ liveFor(step.stepId).join('\n') }}</pre>
+          </div>
           <pre v-if="step.output" class="text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
-          <p v-else class="text-[11px] text-label">No output yet.</p>
+          <p v-else-if="!liveFor(step.stepId).length" class="text-[11px] text-label">No output yet.</p>
         </div>
       </div>
     </div>

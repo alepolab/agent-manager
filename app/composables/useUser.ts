@@ -10,10 +10,14 @@ export interface Me {
 export function useUser() {
   const me = useState<Me | null>('me', () => null)
   const checked = useState<boolean>('meChecked', () => false)
+  // During server-side rendering a plain $fetch carries none of the browser's
+  // cookies, so /api/me answered 401 and the freshly signed-in developer was
+  // sent straight back to the login page. useRequestFetch forwards them.
+  const requestFetch = useRequestFetch()
 
   async function load() {
     try {
-      me.value = await $fetch<Me>('/api/me')
+      me.value = await requestFetch<Me>('/api/me')
     } catch {
       me.value = null
     } finally {

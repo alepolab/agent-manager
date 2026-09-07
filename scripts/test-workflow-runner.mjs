@@ -781,6 +781,56 @@ assert.ok(envsSeen.every(e => e?.GH_TOKEN === 'gh-for-sandeep' && e?.JIRA_API_TO
 let anon = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
 anon = await runner.waitForSettled(anon.id, TIMEOUT)
 assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
+// ── 17. a run refuses to start without somewhere to write evidence ────────
+{
+  const saved = process.env.AGENT_RUNS_DIR
+  const blocker = join(tmpdir(), `runner-blocker-${process.pid}`)
+  writeFileSync(blocker, '')
+  process.env.AGENT_RUNS_DIR = join(blocker, 'runs')
+  await assert.rejects(runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: false }), /not writable/, 'the failure is one line at start, not an agent step later')
+  process.env.AGENT_RUNS_DIR = saved
+  rmSync(blocker, { force: true })
+}
+
+// ── 18. a run with a checkout gets its own branch and its ticket key ──────
+{
+  const projectDir = mkdtempSync(join(tmpdir(), 'runner-branch-'))
+  git(projectDir, ['init', '-q', '-b', 'develop'])
+  git(projectDir, ['config', 'user.email', 'test@example.invalid']); git(projectDir, ['config', 'user.name', 'Test'])
+  writeFileSync(join(projectDir, 'a.txt'), 'a\n'); git(projectDir, ['add', '.']); git(projectDir, ['commit', '-q', '-m', 'init'])
+  runner.setAgentCaller(async (agentSlug) => `out ${agentSlug}`)
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  let br = await runner.startRun({ workflow, initialPrompt: 'CSUP-77: labels unprintable', watch: 'direct-invocation', autoRun: false, projectDir })
+  assert.equal(br.ticketKey, 'CSUP-77', 'the ticket key is read from the prompt so the notifier can find the issue')
+  assert.equal(br.branch, `fix/CSUP-77-${br.id.slice(0, 8)}`, 'the runner names the branch')
+  assert.equal(git(projectDir, ['branch', '--show-current']), br.branch, 'and checks it out before any agent runs')
+  br = await runner.waitForSettled(br.id, TIMEOUT)
+  rmSync(projectDir, { recursive: true, force: true })
+}
+
+// ── 19. live output: every line an agent reports is kept, streamed and logged ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  runner.setAgentCaller(async (agentSlug, input, projectDir, { onProgress } = {}) => {
+    onProgress?.({ turn: 1, lastTool: 'Bash', lastActivityAt: Date.now(), line: `[Bash] echo ${agentSlug}` })
+    onProgress?.({ turn: 1, lastTool: 'Bash', lastActivityAt: Date.now(), line: '→ done' })
+    return `out ${agentSlug}`
+  })
+  const seen = []
+  let lr = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  const off = runner.subscribeLog(lr.id, (stepId, line) => seen.push([stepId, line]))
+  lr = await runner.waitForSettled(lr.id, TIMEOUT)
+  off()
+  assert.equal(lr.status, 'completed')
+  const tail = runner.getLiveLog(lr.id)
+  assert.ok(tail.a?.some(l => /\[Bash\] echo agent-a$/.test(l)), 'the tail holds the reported line, timestamped')
+  assert.ok(tail.a?.[0] && /step started, visit 1$/.test(tail.a[0]), 'and opens with the step start')
+  assert.ok(seen.some(([s, l]) => s === 'b' && /→ done$/.test(l)), 'listeners hear each line as it happens')
+  const logs = readdirSync(join(process.env.AGENT_RUNS_DIR, lr.id, 'artifacts', 'steps')).filter(f => f.endsWith('.log'))
+  assert.ok(logs.includes('step-01-agent-a.log'), `the step log is an artifact: ${logs.join(',')}`)
+  assert.match(readFileSync(join(process.env.AGENT_RUNS_DIR, lr.id, 'artifacts', 'steps', 'step-01-agent-a.log'), 'utf8'), /\[Bash\] echo agent-a/, 'holding the same lines')
+}
+
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not

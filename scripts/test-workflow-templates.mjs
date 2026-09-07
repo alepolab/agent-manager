@@ -447,6 +447,9 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   // ships a fix with nothing proving it.
   assert.ok(evidence.body.includes('.agent/plan.md'),
     'the plan file is still required in the repo by the plan gate')
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
+    assert.ok(a.body.includes('but `plan.md` is ever staged'), `${a.id} must carry the standing rule that only plan.md leaves .agent/`)
+  }
   // The provisioner owns the checkout, including when it decides no stack is
   // needed. A run reached the fix step with an empty workspace because this
   // step correctly judged a compose-only ticket needed no harness and then

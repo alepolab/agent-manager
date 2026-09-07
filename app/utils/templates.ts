@@ -41,6 +41,7 @@ These hold at every step in this pipeline, not just this one:
 
 - **Check whether it already exists before you add it — including under another name.** Before creating a service, profile, test file, script or config block, search for one that already does the job. Match on what it *does*, not on the name you were about to use: a thing named \`x-y-z\` and a thing named \`x-z-y\` are the same capability twice, and both will pass their own tests while the repository quietly carries a duplicate. If the intake step reported that the capability is already present, that report is evidence — act on it rather than re-deriving it.
 
+- **Nothing under \`.agent/\` but \`plan.md\` is ever staged.** The plan gate needs \`.agent/plan.md\`, and it travels with the commit as the statement of intent; everything else there is scratch. Evidence lives in the run artifacts directory Agent Manager serves, never in the repository. Staging the whole tree at once is never how you stage: name the files you commit.
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -602,7 +603,7 @@ Then make the **smallest** change that addresses the root cause:
 
 ## Report
 
-State: the root cause in one or two sentences naming the file and line, what you changed and why, which hypotheses you eliminated on the way, and confirmation that you did not touch the test file.
+State: the root cause in one or two sentences naming the file and line, what you changed and why, which hypotheses you eliminated on the way, and confirmation that you did not touch the test file. Then paste, verbatim, the last lines of the test command's output showing the rows passing, and the output of \`git diff --stat\` for the commit you made. A report without both is sent back for another attempt; the monitor judges evidence, not prose.
 
 ## Artifacts
 
@@ -818,7 +819,7 @@ not happen.`,
 
 Follow the \`agent-browser\` skill. In short: confirm the app is actually serving before opening a browser, use the repo's existing Playwright setup rather than scaffolding one, run with tracing on, and report the exact command, exit code, pass/fail counts and the trace artifact path so a reviewer can open it.
 
-If the repo has no Playwright setup, or the change has no UI surface, report \`n/a\` with a one-line reason. That is a successful outcome — a backend fix must not be blocked on a browser step with nothing to test. Do not install Playwright to avoid saying \`n/a\`.
+If the repo has no Playwright setup, or the change has no UI surface, report \`n/a\` with a one-line reason and the evidence behind it: quote the line of \`stack-report.md\` that says what was stood up, and paste the \`docker ps\` or \`ls\` output that shows no UI endpoint or no Playwright config. A skip asserted without a measurement is sent back for one; a real run paid a retry for exactly that. That is a successful outcome — a backend fix must not be blocked on a browser step with nothing to test. Do not install Playwright to avoid saying \`n/a\`.
 
 ## Read the run artifacts before you touch the filesystem
 
@@ -977,12 +978,15 @@ browser trace artifacts". The step was right; the review was wrong.
 End your review with exactly one line:
 
 VERDICT: CONTINUE   - the step did what it claims, with evidence in the output
-VERDICT: RETRY      - the step is recoverable and a second attempt is worth making
-VERDICT: ABORT      - the step failed in a way that makes every later step meaningless
+VERDICT: RETRY      - the work may be right but the output does not prove it, or the step is recoverable; say exactly what the next attempt must show
+VERDICT: ABORT      - the step did something no later step can undo or check: it touched a remote, edited the oracle it was told not to, worked outside the repository, contradicted the ticket, or ended with PIPELINE-HALT
 
-Prefer ABORT over CONTINUE when the step was supposed to establish something
-later steps depend on and did not. A pipeline that stops here is cheap; a pull
-request built on evidence that was never gathered is not.
+Missing evidence is a RETRY, never an ABORT. A report of passing tests without
+the test output, or a fix without its diff, costs one more attempt to prove;
+an ABORT throws away every step before it. Prefer RETRY over CONTINUE when the
+step was supposed to establish something later steps depend on and did not
+show it. A real run was aborted at the fix step for a report that lacked its
+test output while the fix itself was correct and committed.
 
 ## A declared skip is not a failure
 

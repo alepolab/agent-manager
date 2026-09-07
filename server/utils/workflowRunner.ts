@@ -15,6 +15,10 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
+import { artifactsWritable, checkoutDirFor, ensureRunBranch } from './workspace.ts'
+import { existsSync } from 'node:fs'
+import { appendFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable,
@@ -95,6 +99,8 @@ interface Live {
   /** One controller per step in flight, so stopRun can cancel the SDK call
    *  itself rather than only marking the record. */
   aborts: Map<string, AbortController>
+  /** Live output per step id: what the agent is doing right now, newest last. Capped; the full log is the step's .log artifact. */
+  logs: Record<string, string[]>
   /** True while this run's wave loop is actually executing in the background - the
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
@@ -102,6 +108,30 @@ interface Live {
 }
 const live = new Map<string, Live>()
 const subscribers = new Map<string, Set<(run: WorkflowRun) => void>>()
+
+/** Live-log listeners: one line at a time, per step. */
+const logSubscribers = new Map<string, Set<(stepId: string, line: string) => void>>()
+export function subscribeLog(runId: string, fn: (stepId: string, line: string) => void): () => void {
+  if (!logSubscribers.has(runId)) logSubscribers.set(runId, new Set())
+  logSubscribers.get(runId)!.add(fn)
+  return () => logSubscribers.get(runId)?.delete(fn)
+}
+/** The in-memory tail for a run still owned by this process; {} once it is gone. */
+export function getLiveLog(runId: string): Record<string, string[]> {
+  return live.get(runId)?.logs ?? {}
+}
+const LOG_TAIL = 400
+function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
+  const stamped = `${new Date().toISOString().slice(11, 19)} ${line}`
+  const tail = (l.logs[rec.stepId] ??= [])
+  tail.push(stamped)
+  if (tail.length > LOG_TAIL) tail.splice(0, tail.length - LOG_TAIL)
+  const index = String(run.steps.indexOf(rec) + 1).padStart(2, '0')
+  void appendFile(join(runArtifactsDir(run.id), 'steps', `step-${index}-${rec.agentSlug}.log`), stamped + '\n').catch(() => {})
+  for (const fn of logSubscribers.get(run.id) ?? []) {
+    try { fn(rec.stepId, stamped) } catch { /* a broken listener must not stop the run */ }
+  }
+}
 
 export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => void {
   if (!subscribers.has(runId)) subscribers.set(runId, new Set())
@@ -158,10 +188,8 @@ async function publish(run: WorkflowRun) {
       try {
         await finalizeRunArtifacts(run)
         log.debug('run artifacts finalized', { runId: run.id, status: run.status })
-        // Only a COMPLETED run's evidence goes into the project tree. A failed
-        // or stopped run has, by definition, evidence with a hole in it, and
-        // committing that would hand CI a bundle that looks complete because
-        // the assembler cannot tell a missing stage from an absent file.
+        // Evidence stays in the run's artifacts directory, where Agent Manager
+        // serves it; nothing is copied into the product tree.
         // Tell the ticket its run finished. Best effort and deliberately last:
         // notifyTicketOutcome is already gated - it posts nothing unless
         // JIRA_POST_ENABLED=1 and credentials resolve - so on an ordinary
@@ -418,7 +446,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id) + body
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -455,7 +483,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   l.aborts.set(id, ac)
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+    logLine(l, run, rec, `step started, visit ${rec.visits}`)
     const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onProgress: (progress: AgentProgress) => {
+      if (progress.line) { logLine(l, run, rec, progress.line); return }
       // Diagnostic only (see AgentProgress's doc comment) - mutated directly
       // onto the live rec and republished so the SSE stream carries it, but
       // never written to the step's persisted artifact JSON and never
@@ -574,7 +604,10 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
 
   // Checked between waves: a single step is bounded by its own maxTurns, and
   // the cap stops the next wave from starting rather than killing one mid-flight.
-  const over = budgetExceeded(run)
+  // A run with no step left to start is not over budget, it is finished: a real
+  // run delivered its pull request and was then marked failed by this check.
+  const anythingLeft = run.steps.some(s => s.status === 'pending' || s.status === 'running')
+  const over = anythingLeft ? budgetExceeded(run) : null
   if (over) {
     skipPending(l.state)
     for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
@@ -676,9 +709,19 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  // A run with nowhere to write evidence fails here, in one line, rather than
+  // an agent step later after it has spent its budget finding out.
+  const artifacts = await artifactsWritable()
+  if (!artifacts.ok) throw new Error(`Run artifacts directory ${artifacts.path} is not writable by this process (${artifacts.error}); set AGENT_RUNS_DIR to a writable path`)
   // Resolved once, before any agent runs, and carried on the run: agents are
   // handed registry facts rather than asked to guess which product this is.
   const product = await resolveProduct(opts.initialPrompt).catch(() => undefined)
+  // The checkout a product-routed run works in, when it is already on this
+  // instance: then the baseline, the dirty-tree facts and the run branch all
+  // apply, instead of an agent committing wherever it happens to be.
+  const firstRepo = product?.repos?.[0]
+  const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo, opts.startedBy)) ? checkoutDirFor(firstRepo, opts.startedBy) : undefined)
+  const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
   // Captured BEFORE createRun, so the baseline is the project directory's
   // HEAD at the true moment execution begins — before any step, and so any
   // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
@@ -686,7 +729,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   // fall back to a guess: an absent baseline means computeFixFacts later
   // reports nothing, rather than diffing against a branch's shared base and
   // attributing that branch's whole history to this run.
-  const baseCommit = await captureBaseline(opts.projectDir)
+  const baseCommit = await captureBaseline(projectDir)
   const run = await createRun({
     product,
     startedBy: opts.startedBy,
@@ -695,15 +738,22 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     autoRun: opts.autoRun,
     initialPrompt: opts.initialPrompt,
     watch: opts.watch,
-    ticketKey: opts.ticketKey,
-    projectDir: opts.projectDir,
+    ticketKey,
+    projectDir,
     baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
+  // The run's own branch, off whatever the checkout has at HEAD. Runner-owned
+  // so no agent ever commits to develop directly again.
+  if (projectDir && existsSync(join(projectDir, '.git'))) {
+    const branch = `fix/${ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
+    try { await ensureRunBranch(projectDir, branch); run.branch = branch; await saveRun(run) }
+    catch (err) { log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, projectDir, error: err instanceof Error ? err.message : String(err) }) }
+  }
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
   }
   live.set(run.id, l)
   // Best-effort: a filesystem problem here must not stop the run. The run
@@ -883,7 +933,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(),
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   for (const s of run.steps) {

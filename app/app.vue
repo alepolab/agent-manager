@@ -10,81 +10,12 @@ const { fetchServers, servers: mcpServers } = useMCP()
 const { styles, fetchStyles } = useOutputStyles()
 
 const initialized = ref(false)
+// Signed-out visitors see only the login page: no sidebar, no list fetches that would 401.
+const isLogin = computed(() => route.path === '/login')
 const showSearch = ref(false)
 const sidebarCollapsed = useState('sidebar-collapsed', () => false)
 const { isPanelOpen: chatOpen } = useChat()
-const { workingDir, displayPath, setWorkingDir, clearWorkingDir } = useWorkingDir()
 const colorMode = useColorMode()
-
-const showWorkingDirPopover = ref(false)
-const workingDirInput = ref('')
-const dirSuggestions = ref<{ name: string; path: string; hasChildren: boolean }[]>([])
-const selectedSuggestionIdx = ref(-1)
-let debounceTimer: ReturnType<typeof setTimeout> | null = null
-
-function openWorkingDirPopover() {
-  workingDirInput.value = workingDir.value
-  dirSuggestions.value = []
-  selectedSuggestionIdx.value = -1
-  showWorkingDirPopover.value = true
-  if (workingDirInput.value) fetchDirSuggestions(workingDirInput.value)
-}
-
-function saveWorkingDir() {
-  setWorkingDir(workingDirInput.value)
-  showWorkingDirPopover.value = false
-  dirSuggestions.value = []
-}
-
-async function fetchDirSuggestions(path: string) {
-  if (!path) { dirSuggestions.value = []; return }
-  try {
-    const data = await $fetch<{ directories: typeof dirSuggestions.value }>('/api/directories', { query: { path } })
-    dirSuggestions.value = data.directories
-    selectedSuggestionIdx.value = -1
-  } catch {
-    dirSuggestions.value = []
-  }
-}
-
-function onDirInput() {
-  if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => fetchDirSuggestions(workingDirInput.value), 150)
-}
-
-function selectSuggestion(suggestion: { name: string; path: string; hasChildren: boolean }) {
-  workingDirInput.value = suggestion.path
-  selectedSuggestionIdx.value = -1
-  if (suggestion.hasChildren) {
-    fetchDirSuggestions(suggestion.path)
-  } else {
-    dirSuggestions.value = []
-  }
-}
-
-function onDirKeydown(e: KeyboardEvent) {
-  if (!dirSuggestions.value.length) {
-    if (e.key === 'Enter') { e.preventDefault(); saveWorkingDir() }
-    return
-  }
-  if (e.key === 'ArrowDown') {
-    e.preventDefault()
-    selectedSuggestionIdx.value = Math.min(selectedSuggestionIdx.value + 1, dirSuggestions.value.length - 1)
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    selectedSuggestionIdx.value = Math.max(selectedSuggestionIdx.value - 1, -1)
-  } else if (e.key === 'Enter') {
-    e.preventDefault()
-    if (selectedSuggestionIdx.value >= 0) {
-      selectSuggestion(dirSuggestions.value[selectedSuggestionIdx.value]!)
-    } else {
-      saveWorkingDir()
-    }
-  } else if (e.key === 'Escape') {
-    dirSuggestions.value = []
-    selectedSuggestionIdx.value = -1
-  }
-}
 
 function toggleTheme() {
   colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'
@@ -104,11 +35,12 @@ if (import.meta.client) {
 
 onMounted(async () => {
   await loadConfig()
-  if (!settings.value) void loadSettings()
   // Render first, fill later: every list page owns its own loading state, and
   // waiting for all six lists here made each route show a blank spinner until
   // the slowest of them (skills, several MB) had arrived.
   initialized.value = true
+  if (isLogin.value) return
+  if (!settings.value) void loadSettings()
   void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers()])
 })
 
@@ -176,7 +108,8 @@ function badgeFor(to: string) {
 
 <template>
   <UApp>
-    <div class="flex h-screen overflow-hidden" style="background: var(--surface-base);">
+    <NuxtPage v-if="isLogin" />
+    <div v-else class="flex h-screen overflow-hidden" style="background: var(--surface-base);">
       <!-- Sidebar -->
       <aside
         class="sidebar shrink-0 flex flex-col relative h-full overflow-hidden transition-all duration-300"
@@ -225,6 +158,25 @@ function badgeFor(to: string) {
             @click="sidebarCollapsed = !sidebarCollapsed"
           >
             <UIcon :name="sidebarCollapsed ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="size-4" />
+          </button>
+        </div>
+
+        <!-- Search shortcut -->
+        <div :class="sidebarCollapsed ? 'px-1.5 pt-1 pb-1.5' : 'px-2.5 pt-1 pb-1.5'">
+          <button
+            class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
+            :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
+            style="color: var(--text-disabled); background: var(--input-bg); border: 1px solid var(--border-subtle);"
+            :title="sidebarCollapsed ? 'Search (⌘K)' : undefined"
+            @mouseenter="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-default)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-tertiary)'"
+            @mouseleave="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-subtle)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-disabled)'"
+            @click="showSearch = true"
+          >
+            <UIcon name="i-lucide-search" class="size-3.5" />
+            <template v-if="!sidebarCollapsed">
+              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
+              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
+            </template>
           </button>
         </div>
 
@@ -327,25 +279,6 @@ function badgeFor(to: string) {
           </NuxtLink>
         </nav>
 
-        <!-- Search shortcut -->
-        <div :class="sidebarCollapsed ? 'px-1.5 pb-2.5' : 'px-2.5 pb-2.5'">
-          <button
-            class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
-            :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
-            style="color: var(--text-disabled); background: var(--input-bg); border: 1px solid var(--border-subtle);"
-            :title="sidebarCollapsed ? 'Search (⌘K)' : undefined"
-            @mouseenter="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-default)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-tertiary)'"
-            @mouseleave="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-subtle)'; ($event.currentTarget as HTMLElement).style.color = 'var(--text-disabled)'"
-            @click="showSearch = true"
-          >
-            <UIcon name="i-lucide-search" class="size-3.5" />
-            <template v-if="!sidebarCollapsed">
-              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
-              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
-            </template>
-          </button>
-        </div>
-
         <!-- Chat with Claude -->
         <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
           <button
@@ -409,96 +342,6 @@ function badgeFor(to: string) {
           </ClientOnly>
         </div>
 
-        <!-- Footer: working directory -->
-        <div :class="sidebarCollapsed ? 'px-1.5 pb-2.5' : 'px-2.5 pb-2.5'" style="border-top: 1px solid var(--border-subtle); padding-top: 0.75rem;">
-          <UPopover v-model:open="showWorkingDirPopover" :ui="{ content: 'w-[280px]' }">
-            <button
-              class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
-              :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2 text-left'"
-              style="color: var(--text-disabled); border: 1px solid var(--border-subtle);"
-              :title="sidebarCollapsed ? (workingDir || 'Set project directory') : undefined"
-              @click="openWorkingDirPopover"
-            >
-              <UIcon name="i-lucide-folder" class="size-3.5 shrink-0" :style="{ color: workingDir ? 'var(--accent)' : undefined }" />
-              <template v-if="!sidebarCollapsed">
-                <div class="flex-1 min-w-0">
-                  <div v-if="workingDir" class="font-mono text-[10px] truncate" style="color: var(--text-secondary);">
-                    {{ displayPath }}
-                  </div>
-                  <div v-else class="text-[11px]" style="font-family: var(--font-sans);">
-                    Set project directory
-                  </div>
-                </div>
-                <UIcon name="i-lucide-pencil" class="size-3 shrink-0" style="color: var(--text-disabled);" />
-              </template>
-            </button>
-            <template #content>
-              <div class="p-3 space-y-3">
-                <div class="text-[13px] font-semibold" style="color: var(--text-primary); font-family: var(--font-sans);">Working Directory</div>
-                <p class="text-[11px] leading-relaxed" style="color: var(--text-secondary);">
-                  Set the project directory for all chat conversations. Claude will operate in this directory.
-                </p>
-                <div class="relative">
-                  <input
-                    v-model="workingDirInput"
-                    class="field-input text-[12px] font-mono"
-                    placeholder="/path/to/your/project"
-                    autocomplete="off"
-                    @input="onDirInput"
-                    @keydown="onDirKeydown"
-                  />
-                  <!-- Directory suggestions -->
-                  <div
-                    v-if="dirSuggestions.length"
-                    class="mt-1 rounded-lg overflow-hidden max-h-[200px] overflow-y-auto"
-                    style="border: 1px solid var(--border-subtle); background: var(--surface-raised);"
-                  >
-                    <button
-                      v-for="(suggestion, idx) in dirSuggestions"
-                      :key="suggestion.path"
-                      type="button"
-                      class="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors duration-75"
-                      :style="{
-                        background: idx === selectedSuggestionIdx ? 'var(--accent-muted)' : 'transparent',
-                        color: idx === selectedSuggestionIdx ? 'var(--text-primary)' : 'var(--text-secondary)',
-                      }"
-                      @click="selectSuggestion(suggestion)"
-                      @mouseenter="selectedSuggestionIdx = idx"
-                    >
-                      <UIcon
-                        :name="suggestion.hasChildren ? 'i-lucide-folder' : 'i-lucide-folder-dot'"
-                        class="size-3.5 shrink-0"
-                        :style="{ color: idx === selectedSuggestionIdx ? 'var(--accent)' : 'var(--text-disabled)' }"
-                      />
-                      <span class="text-[11px] font-mono truncate">{{ suggestion.name }}</span>
-                      <UIcon
-                        v-if="suggestion.hasChildren"
-                        name="i-lucide-chevron-right"
-                        class="size-3 shrink-0 ml-auto"
-                        style="color: var(--text-disabled);"
-                      />
-                    </button>
-                  </div>
-                </div>
-                <div class="flex items-center justify-between">
-                  <button
-                    v-if="workingDir"
-                    class="text-[11px] font-medium px-2 py-1 rounded hover-bg"
-                    style="color: var(--error);"
-                    @click="clearWorkingDir(); showWorkingDirPopover = false"
-                  >
-                    Clear
-                  </button>
-                  <div v-else />
-                  <UButton label="Save" size="xs" @click="saveWorkingDir" />
-                </div>
-              </div>
-            </template>
-          </UPopover>
-          <div v-if="!sidebarCollapsed" class="font-mono text-[9px] truncate tracking-wide mt-1.5 px-1" style="color: var(--text-disabled);">
-            {{ claudeDir || 'No config directory' }}
-          </div>
-        </div>
       </aside>
 
       <!-- Main content -->
@@ -517,9 +360,11 @@ function badgeFor(to: string) {
         </div>
       </main>
     </div>
-    <GlobalSearch />
-    <ChatPanel v-model:open="chatOpen" />
-    <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
+    <template v-if="!isLogin">
+      <GlobalSearch />
+      <ChatPanel v-model:open="chatOpen" />
+      <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
+    </template>
   </UApp>
 </template>
 

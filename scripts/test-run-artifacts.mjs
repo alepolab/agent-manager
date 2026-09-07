@@ -586,6 +586,12 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
     'the header must say plainly that artifacts are not copied into a repo')
 }
 
+{
+  const h = A.artifactHeader('/tmp/x', undefined, 'sandeep', 'run-1', { dir: '/w/ffm', branch: 'fix/CSUP-1-abc' })
+  assert.match(h, /Working checkout: \/w\/ffm on branch fix\/CSUP-1-abc/, 'agents are told which branch the runner made for them')
+  assert.doesNotMatch(h, /evidence-run/, 'and nothing about copying evidence into the tree')
+}
+
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('run artifacts: all checks passed')

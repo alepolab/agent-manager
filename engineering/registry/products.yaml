@@ -215,7 +215,7 @@ products:
       compose: alepo-dev-team-infra/pms
       topology_default: 1node
     tests:
-      unit: 'CONFIRM'
+      unit: 'make test'  # verified 2026-09-06: Makefile test runs test-pms, test-billing, test-rating, test-atdd-lib
     owners:
       protocol: pms-leads             # CONFIRM
       ui_parsing: pms-leads           # CONFIRM
@@ -234,7 +234,7 @@ products:
       compose: alepo-dev-team-infra/ffm
       topology_default: 1node
     tests:
-      unit: 'CONFIRM'
+      unit: 'make test'  # verified 2026-09-06: Makefile test runs test-common, test-api, test-worker
     owners:
       protocol: CONFIRM
 
@@ -272,7 +272,7 @@ products:
       compose: alepo-dev-team-infra/selfcare
       topology_default: 1node
     tests:
-      unit: 'CONFIRM'
+      unit: 'pnpm test'  # verified 2026-09-06 for selfcarenow (generate:api then jest); CONFIRM for lum-selfcare-v1
     owners:
       protocol: selfcare-leads        # CONFIRM
       ui_parsing: selfcare-leads      # CONFIRM
@@ -291,7 +291,7 @@ products:
       compose: alepo-dev-team-infra/vms
       topology_default: 1node
     tests:
-      unit: 'CONFIRM'
+      unit: 'pnpm test'  # verified 2026-09-06: pnpm workspace, root script is turbo run test
     owners:
       protocol: CONFIRM
 
@@ -456,7 +456,7 @@ products:
       compose: alepo-dev-team-infra
       topology_default: 1node
     tests:
-      unit: 'bats tests'
+      unit: 'bats --tap tests/*.bats'  # verified 2026-09-06: .github/workflows/test.yml runs exactly this
       compose_test: 'docker compose config'
     owners:
       protocol: devops

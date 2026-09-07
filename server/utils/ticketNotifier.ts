@@ -28,6 +28,7 @@ import { join } from 'node:path'
 import { plainTextToAdf } from './adf.ts'
 import { isJiraPostingEnabled, jiraAuthHeader, resolveJiraCredentials } from './jiraCredentials.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
+import { envForUser } from './users.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 import type { Watch } from '../../shared/types/watch.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
@@ -140,6 +141,13 @@ export interface NotifySource {
   name: string
 }
 
+/** The starter's own Jira identity when their profile holds one, else the instance's. The comment then reads as the developer who ran it. */
+async function credentialsFor(run: WorkflowRun) {
+  const env = await envForUser(run.startedBy).catch(() => ({} as Record<string, string>))
+  if (env.JIRA_EMAIL && env.JIRA_API_TOKEN && env.JIRA_BASE_URL) return { baseUrl: env.JIRA_BASE_URL, email: env.JIRA_EMAIL, apiToken: env.JIRA_API_TOKEN }
+  return resolveJiraCredentials()
+}
+
 export async function notifyTicketOutcome(
   watch: NotifySource,
   ticketKey: string,
@@ -170,7 +178,7 @@ export async function notifyTicketOutcome(
 
   if (isJiraPostingEnabled()) {
     try {
-      const creds = resolveJiraCredentials()
+      const creds = await credentialsFor(run)
       const res = await fetchImpl(
         `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment`,
         {

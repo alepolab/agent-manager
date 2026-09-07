@@ -89,6 +89,34 @@ export interface AgentProgress {
   turn: number
   lastTool?: string
   lastActivityAt: number
+  /** One human-readable line for the live log: a tool call, a text excerpt or a result preview. Present only on events that carry one. */
+  line?: string
+}
+
+const LINE_MAX = 200
+const squash = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, LINE_MAX)
+
+/**
+ * The live-log line for one content block, or null when the block says
+ * nothing a watcher needs. Tool inputs are summarised to the one field that
+ * says what is happening (a command, a path, a pattern), never dumped whole:
+ * a Write's content or a prompt's ticket text has no place in a log.
+ */
+export function describeBlock(block: unknown): string | null {
+  if (!block || typeof block !== 'object') return null
+  const b = block as { type?: string, text?: string, name?: string, input?: Record<string, unknown>, content?: unknown, is_error?: boolean }
+  if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) return squash(b.text)
+  if (b.type === 'tool_use' && typeof b.name === 'string') {
+    const i = b.input ?? {}
+    const detail = [i.command, i.file_path, i.path, i.pattern, i.query, i.url, i.description].find(v => typeof v === 'string' && v.trim()) as string | undefined
+    return squash(`[${b.name}] ${detail ?? ''}`)
+  }
+  if (b.type === 'tool_result') {
+    const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((c: any) => (typeof c?.text === 'string' ? c.text : '')).join(' ') : ''
+    if (!text.trim()) return null
+    return squash(`${b.is_error ? '✗' : '→'} ${text}`)
+  }
+  return null
 }
 export type OnAgentProgress = (progress: AgentProgress) => void
 
@@ -269,9 +297,21 @@ export async function callAgent(
           ) {
             lastTool = (block as { name: string }).name
           }
+          // Lines are never throttled: a watcher wants every command, not a sample.
+          const line = describeBlock(block)
+          if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
         }
       }
       emitProgress()
+    }
+    if (message.type === 'user' && onProgress) {
+      const content = (message as { message?: { content?: unknown } }).message?.content
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          const line = describeBlock(block)
+          if (line) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
+        }
+      }
     }
     if (message.type === 'result') {
       const interpreted = interpretResultMessage(message, maxTurns)

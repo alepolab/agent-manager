@@ -1,6 +1,6 @@
 import { workspaceRootFor, browserSurface } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
-import { mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -442,7 +442,7 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
 
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string }): string {
   // The app serves this directory, so an agent can point a reviewer at it
   // instead of copying files into a product repository to make them reachable.
   const appUrl = (process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/+$/, '')
@@ -478,6 +478,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // trace and no explanation twice, and the monitor called it exactly that:
     // "silence without explanation".
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
+    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run: commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy.`] : []),
     '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
@@ -507,6 +508,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
     )
   }
+  if (checkout) lines.push('', `Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. Commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy above.`)
   if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
   lines.push('', '---', '')
   return lines.join('\n')

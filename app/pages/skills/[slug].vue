@@ -1,4 +1,5 @@
 <script setup lang="ts">
+const { promoting, promote } = usePromote()
 import type { Skill, SkillFrontmatter } from '~/types'
 import InstructionEditor from '~/components/studio/InstructionEditor.vue'
 
@@ -191,6 +192,17 @@ useUnsavedChanges(isDirty)
           color="neutral"
           title="Open in Finder"
           @click="reveal(skill.filePath)"
+        />
+        <UButton
+          label="Promote to team"
+          icon="i-lucide-git-pull-request"
+          size="sm"
+          variant="ghost"
+          color="neutral"
+          title="Open a pull request that adds this skill to the alepo-engineering plugin"
+          :loading="promoting"
+          :disabled="!skill || isDirty || promoting"
+          @click="promote('skill', slug)"
         />
         <template v-if="!isImported">
           <UButton

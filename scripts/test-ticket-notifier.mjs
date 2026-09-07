@@ -103,6 +103,34 @@ function writeMeta(runId, meta) {
   assert.doesNotMatch(result.comment, /pull request is ready/)
 }
 
+// ── 6a. A run started by a developer with a stored Jira token posts as them ─
+{
+  process.env.JIRA_POST_ENABLED = '1'
+  process.env.JIRA_BASE_URL = 'https://example.atlassian.net'
+  process.env.JIRA_EMAIL = 'bot@example.com'
+  process.env.JIRA_API_TOKEN = 'bot-token'
+  process.env.AGENT_USERS_DIR = mkdtempSync(join(tmpdir(), 'notifier-users-'))
+  process.env.AGENT_MANAGER_SECRET = 'test-secret-that-is-long-enough-for-sealing-0001'
+  try {
+    const { saveProfile } = await import('../server/utils/users.ts')
+    await saveProfile('sandeep', { jiraEmail: 'sandeep@example.com', jiraTokenPlain: 'sandeep-token' })
+    const run = { id: 'run-102a', status: 'completed', error: undefined, startedBy: 'sandeep' }
+    writeMeta(run.id, { fix: { repos: [{ repo: 'alepolab/pms', commits: ['abc1234'], pr: 'https://github.com/alepolab/pms/pull/9' }] } })
+    let posted
+    const result = await notifyTicketOutcome(watch, 'CSUP-102', run, {}, async (url, init) => { posted = { url, init }; return { ok: true, status: 200, statusText: 'OK', text: async () => '' } })
+    assert.equal(result.posted, true)
+    assert.equal(posted.init.headers.Authorization, `Basic ${Buffer.from('sandeep@example.com:sandeep-token').toString('base64')}`, 'the comment is posted under the starter, not the instance')
+    const anon = { ...run, id: 'run-102b', startedBy: 'nobody' }
+    writeMeta(anon.id, { fix: { repos: [] } })
+    await notifyTicketOutcome(watch, 'CSUP-102', anon, {}, async (url, init) => { posted = { url, init }; return { ok: true, status: 200, statusText: 'OK', text: async () => '' } })
+    assert.equal(posted.init.headers.Authorization, `Basic ${Buffer.from('bot@example.com:bot-token').toString('base64')}`, 'no profile falls back to the instance identity')
+  } finally {
+    rmSync(process.env.AGENT_USERS_DIR, { recursive: true, force: true })
+    delete process.env.AGENT_USERS_DIR; delete process.env.AGENT_MANAGER_SECRET
+    delete process.env.JIRA_POST_ENABLED; delete process.env.JIRA_BASE_URL; delete process.env.JIRA_EMAIL; delete process.env.JIRA_API_TOKEN
+  }
+}
+
 // ── 6. Enabling posting flips the gate — proven with a fake fetch only ─────
 {
   process.env.JIRA_POST_ENABLED = '1'

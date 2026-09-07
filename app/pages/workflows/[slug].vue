@@ -16,7 +16,7 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
-const { run, runs, attach, start, continueRun, stop, restart } = useWorkflowRun(slug)
+const { run, runs, logs, attach, start, continueRun, stop, restart } = useWorkflowRun(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
@@ -75,6 +75,7 @@ const paletteSearch = ref('')
 const editingName = ref(false)
 const editingDescription = ref(false)
 const settingsStepId = ref<string | null>(null)
+useHead({ title: computed(() => `${name.value || 'Workflow'} | Agent Manager`) })
 
 // Load workflow
 onMounted(async () => {
@@ -270,6 +271,11 @@ const summarise = (text?: string) => {
   const oneLine = (text ?? '').replace(/\s+/g, ' ').trim()
   return oneLine.length > 90 ? `${oneLine.slice(0, 90)}…` : oneLine
 }
+const agentOptions = computed(() => agents.value.map(a => ({ value: a.slug, label: a.frontmatter.name || a.slug })))
+const settingsAgent = computed({
+  get: () => settingsStep.value?.agentSlug,
+  set: (value?: string) => { if (settingsStepId.value && value) patchStep(settingsStepId.value, { agentSlug: value }) },
+})
 const monitorOptions = computed(() => [
   { value: undefined, label: 'No monitor', description: 'Run this step unsupervised' },
   ...agents.value.map(a => ({ value: a.slug, label: a.frontmatter.name, description: summarise(a.frontmatter.description) })),
@@ -484,6 +490,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <WorkflowRunBar
           :run="run"
           :runs="runs"
+          :logs="logs"
           @continue="continueRun"
           @stop="stop"
           @restart="restart"
@@ -569,6 +576,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <WorkflowRunPanel
           :run="run"
           :runs="runs"
+          :logs="logs"
           @continue="continueRun"
           @stop="stop"
           @attach="attachRun"
@@ -592,6 +600,15 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <template #content>
         <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">{{ settingsStep.label }}</h3>
+
+          <div class="field-group">
+            <label class="field-label">Agent</label>
+            <div class="flex items-center gap-2">
+              <USelectDropdown v-model="settingsAgent" :options="agentOptions" class="flex-1" />
+              <UButton :to="`/agents/${settingsStep.agentSlug}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-pencil" label="Edit agent" />
+            </div>
+            <span class="field-hint">The agent that runs this step. Editing changes its prompt for every workflow that uses it; a promoted agent changes it for the team.</span>
+          </div>
 
           <div class="field-group">
             <label class="field-label">Monitor agent</label>
