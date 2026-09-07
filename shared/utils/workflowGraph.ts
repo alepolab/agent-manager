@@ -327,6 +327,18 @@ export function parseHalt(text: string | undefined | null): string | null {
  * Checked AFTER parseHalt: a step emitting both is in trouble, not idle, and
  * the blocking outcome is the safe one to honour.
  */
+/**
+ * A step that found the fault in code outside the run's scope says so with
+ *   PIPELINE-WIDEN: <registry product key or owner/repo> — <why>
+ * and the runner brings that code into the run instead of the step halting
+ * or asking. The last such line wins, like the other outcomes.
+ */
+export function parseWiden(text: string | undefined | null): { target: string, reason: string } | null {
+  const matches = [...(text ?? '').matchAll(/^PIPELINE-WIDEN:[^\S\n]*([\w./-]+)[^\S\n]*(?:[—:-]+[^\S\n]*)?(.*)$/gm)]
+  const last = matches[matches.length - 1]
+  return last ? { target: last[1]!.trim(), reason: last[2]!.trim() } : null
+}
+
 export function parseSkip(text: string | undefined | null): string | null {
   const matches = [...(text ?? '').matchAll(/^PIPELINE-SKIP:[^\S\n]*(\S.*)$/gm)]
   const last = matches[matches.length - 1]

@@ -50,6 +50,11 @@ export function stepCost(step: StepWithUsage): StepCost {
     return { ...base, input_tokens: null, output_tokens: null, cost_usd: null, excludedReason: 'no-usage' }
   }
 
+  // The SDK's own cost figure, when the call reported one, is the number to
+  // trust: it prices every bucket at the model's real rate, new models included.
+  if (typeof usage.usd === 'number') {
+    return { ...base, input_tokens: usage.input_tokens, output_tokens: usage.output_tokens, cost_usd: usage.usd }
+  }
   const meta = resolveModelMeta(step.model ?? undefined)
   if (!meta?.pricing) {
     return {

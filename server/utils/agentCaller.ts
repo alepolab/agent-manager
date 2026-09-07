@@ -71,6 +71,10 @@ const log = createLogger('agent')
 export interface AgentUsage {
   input_tokens: number
   output_tokens: number
+  /** Of input_tokens, the ones read back from the prompt cache (a tenth of the price). */
+  cache_read_input_tokens?: number
+  /** What the SDK itself says the call cost, in USD; the number to trust over any table here. */
+  usd?: number
 }
 
 /**
@@ -475,7 +479,7 @@ export class AgentResultError extends Error {
 }
 
 export function interpretResultMessage(
-  message: { subtype: string, is_error?: boolean, result?: string, usage?: unknown, errors?: string[] },
+  message: { subtype: string, is_error?: boolean, result?: string, usage?: unknown, errors?: string[], total_cost_usd?: unknown },
   /** The budget this call ran under, folded into the thrown message. The SDK
    *  reports `error_max_turns` with an empty `errors` array, so the bare error
    *  read "no further detail" and said nothing about WHICH limit was hit -
@@ -486,7 +490,7 @@ export function interpretResultMessage(
   maxTurns?: number,
 ): { output: string, usage: AgentUsage | null } {
   if (message.subtype === 'success' && !message.is_error) {
-    return { output: String(message.result ?? ''), usage: usageFrom(message.usage) }
+    return { output: String(message.result ?? ''), usage: usageFrom(message.usage, message.total_cost_usd) }
   }
   const errors = 'errors' in message ? message.errors : undefined
   log.warn('agent call returned an error result', () => ({
@@ -514,7 +518,7 @@ export function interpretResultMessage(
 /** Folds the SDK's usage object into AgentUsage - see that type's doc comment
  *  for which buckets are summed and why. `null` when the object isn't in the
  *  shape expected (never guessed at a partial or malformed one). */
-function usageFrom(raw: unknown): AgentUsage | null {
+function usageFrom(raw: unknown, totalCostUsd?: unknown): AgentUsage | null {
   if (!raw || typeof raw !== 'object') return null
   const u = raw as Record<string, unknown>
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -522,5 +526,7 @@ function usageFrom(raw: unknown): AgentUsage | null {
   return {
     input_tokens: num(u.input_tokens) + num(u.cache_creation_input_tokens) + num(u.cache_read_input_tokens),
     output_tokens: num(u.output_tokens),
+    cache_read_input_tokens: num(u.cache_read_input_tokens),
+    ...(typeof totalCostUsd === 'number' && Number.isFinite(totalCostUsd) ? { usd: totalCostUsd } : {}),
   }
 }

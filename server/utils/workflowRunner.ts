@@ -1,6 +1,6 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
@@ -8,7 +8,7 @@ import {
                                                // directly and cannot resolve ~~/
 import { defaultBudget, createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
-import { resolveProduct } from './registry.ts'
+import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
@@ -26,7 +26,7 @@ import {
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
-import type { WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
+import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 const log = createLogger('runner')
 
@@ -116,6 +116,8 @@ interface Live {
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
   running: boolean
+  /** A step found the fault outside the run's scope; runWave re-provisions and continues from there. */
+  widen?: { from: string, target: string, reason: string, added: string[] }
 }
 const live = new Map<string, Live>()
 const subscribers = new Map<string, Set<(run: WorkflowRun) => void>>()
@@ -171,17 +173,19 @@ export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => 
 const publishChains = new Map<string, Promise<void>>()
 
 function computeUsage(run: WorkflowRun): RunUsage {
-  let input = 0, output = 0, usd = 0
+  let input = 0, output = 0, cached = 0, usd = 0
   for (const s of run.steps) {
     if (!s.usage) continue
     input += s.usage.input_tokens
     output += s.usage.output_tokens
+    cached += s.usage.cache_read_input_tokens ?? 0
+    if (typeof s.usage.usd === 'number') { usd += s.usage.usd; continue }
     // No list price known: the tokens still count, the dollars are left out,
     // the same way costReport marks such a step unpriced rather than guessing.
     const p = resolveModelMeta(s.model ?? undefined)?.pricing
     if (p) usd += (s.usage.input_tokens / 1_000_000) * p.input + (s.usage.output_tokens / 1_000_000) * p.output
   }
-  return { input_tokens: input, output_tokens: output, usd: Math.round(usd * 10000) / 10000 }
+  return { input_tokens: input, output_tokens: output, cached_tokens: cached, usd: Math.round(usd * 10000) / 10000 }
 }
 
 /** A run over its time or token cap, with the reason; null while within budget. */
@@ -191,12 +195,42 @@ function extendBudget(run: WorkflowRun): void {
   const fresh = defaultBudget()
   const extended = {
     maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil((Date.now() - run.startedAt) / 60000) + fresh.maxMinutes),
-    maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens + spent.output_tokens + fresh.maxTokens),
+    maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens - (spent.cached_tokens ?? 0) + spent.output_tokens + fresh.maxTokens),
   }
   if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes) {
     log.info('operator extends the run budget', { runId: run.id, from: run.budget, to: extended })
     run.budget = extended
   }
+}
+
+/**
+ * Adds a product's repositories (by registry key) or one repository (owner/repo)
+ * to the run's scope. Returns what was new. Throws when the target is neither,
+ * naming the registered keys, so the step's failure says what would have worked.
+ */
+async function widenProduct(run: WorkflowRun, target: string): Promise<string[]> {
+  const entry = await productByKey(target)
+  let repos: string[]
+  let extra: NonNullable<ProductMatch['alsoInScope']>[number] | undefined
+  if (entry) {
+    repos = entry.repos
+    extra = { name: entry.name, repos: entry.repos, ...(entry.stack ? { stack: entry.stack } : {}), tests: entry.tests }
+  } else if (/^[\w.-]+\/[\w.-]+$/.test(target)) {
+    repos = [target]
+  } else {
+    throw new Error(`"${target}" is neither a registered product (${(await registeredProductKeys()).join(', ') || 'none registered'}) nor an owner/repo`)
+  }
+  const current: ProductMatch = run.product ?? { name: target, repos: [], branches: {}, stack: { compose: 'not registered', topology_default: '-' }, tests: {} }
+  const added = repos.filter(r => !current.repos.includes(r))
+  const alsoInScope = [...(current.alsoInScope ?? [])]
+  if (extra && !alsoInScope.some(p => p.name === extra!.name) && extra.name !== current.name) alsoInScope.push(extra)
+  run.product = {
+    ...current,
+    repos: [...current.repos, ...added],
+    ...(current.repos.length + added.length > 1 ? { multiRepo: true } : {}),
+    ...(alsoInScope.length ? { alsoInScope } : {}),
+  }
+  return added
 }
 
 function budgetExceeded(run: WorkflowRun): string | null {
@@ -205,9 +239,12 @@ function budgetExceeded(run: WorkflowRun): string | null {
   if (minutes > b.maxMinutes) return `Budget exceeded: ${Math.round(minutes)} min over the ${b.maxMinutes} min cap`
   // Computed here, not read from run.usage: that field is refreshed by publish(),
   // and the wave loop recurses without publishing in between.
+  // Cache reads are excluded: they cost a tenth and are what every long-context
+  // agent turn is made of, and counting them had an ordinary run hit an 8M cap
+  // fifteen minutes in.
   const u = computeUsage(run)
-  const tokens = u.input_tokens + u.output_tokens
-  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens.toLocaleString()} tokens over the ${b.maxTokens.toLocaleString()} token cap.`
+  const tokens = u.input_tokens - (u.cached_tokens ?? 0) + u.output_tokens
+  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens.toLocaleString()} uncached tokens over the ${b.maxTokens.toLocaleString()} token cap.`
   return null
 }
 
@@ -613,6 +650,31 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
     // A question stops the step where it is: the run pauses on the operator,
     // and the answer re-runs the step with its own output and the reply.
+    // The fault lives in another product's code: bring it in and carry on there,
+    // rather than halting (a dead run) or asking (a person told what a registry
+    // already knows). A real run halted on a selfcare ticket whose 500 came from
+    // the CRM, with the CRM repository one registry lookup away.
+    const widen = parseWiden(output)
+    if (widen) {
+      let added: string[]
+      try {
+        added = await widenProduct(run, widen.target)
+      } catch (err) {
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', output, model, usage, error: `Step asked to widen the run and could not: ${err instanceof Error ? err.message : String(err)}`, completedAt: Date.now() })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+      l.outputs[id] = output
+      Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
+      l.widen = { from: id, target: widen.target, reason: widen.reason, added }
+      logLine(l, run, rec, `widened the run to ${widen.target}: ${added.length ? added.join(', ') + ' added' : 'already in scope'}`)
+      log.info('step widened the run', () => ({ runId: run.id, stepId: id, target: widen.target, added, reason: preview(widen.reason) }))
+      markCompleted(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    }
+
     const ask = parseAsk(output)
     if (ask) {
       l.outputs[id] = output
@@ -832,6 +894,24 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   }
 
   // A step is waiting on the operator: nothing else starts until they answer.
+  if (l.widen) {
+    // Re-provision with the wider scope and continue from there: the same reset
+    // an operator's restart performs, with the reason handed to the first
+    // re-run step as a note. restartRun rebuilds the live state from disk, so
+    // the record is published first and this loop ends here.
+    const w = l.widen
+    l.widen = undefined
+    const provisioner = l.workflow.steps.find(s => s.agentSlug === 'sdlc-stack-provisioner')?.id ?? w.from
+    // Status stays 'running': a 'paused' publish would read as settled to anyone waiting.
+    run.currentStepIds = []
+    run.nextStepIds = [provisioner]
+    l.running = false
+    await publish(run)
+    const note = `The run was widened to ${w.target} by "${stepOf(l, w.from)?.label ?? w.from}": ${w.reason}. Repositories now in scope: ${run.product?.repos.join(', ')}. Check out what is missing, stand up what the fault needs, and continue there.`
+    log.info('run widened; re-provisioning', { runId: run.id, target: w.target, from: w.from, restartAt: provisioner })
+    return restartRun(run.id, provisioner, note, run.startedBy, { fromRunner: true })
+  }
+
   if (l.waiting) {
     run.status = 'paused'
     run.currentStepIds = [l.waiting]
@@ -1242,11 +1322,11 @@ const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted'
  * step's output, under the same run id and artifacts directory. The previous
  * attempt of each reset step is snapshotted the way monitor retries are.
  */
-export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string): Promise<WorkflowRun> {
+export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string, opts: { /** The runner itself hands a running run over (a widened run); the settled-status gate is the operator's, not its. */ fromRunner?: boolean } = {}): Promise<WorkflowRun> {
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
   if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
-  if (!RESTARTABLE.includes(run.status)) {
+  if (!opts.fromRunner && !RESTARTABLE.includes(run.status)) {
     throw new RestartError(409, `A ${run.status} run cannot be restarted; ${run.status === 'paused' ? 'continue it instead' : 'wait for it to settle'}`)
   }
   // Same scope as starting a run: what conflicts is a shared working directory.

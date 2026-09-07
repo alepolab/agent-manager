@@ -23,6 +23,12 @@ const SDLC_STANDING_RULES = `## Standing rules
 These hold at every step in this pipeline, not just this one:
 
 - **Verify against the artifact, not the description.** A doc, a \`FROM\` line, a config file, a ticket's own words — none of them are the thing itself. The SDK's own documentation once showed full model ids for an option that in practice only accepts bare aliases; the doc was wrong and the running system was right. Check the thing that will actually run, not what something says about it.
+- **The fault may live outside this run's code — widen the run, do not halt on it.** When the evidence shows the defect is in another registered product or repository (a 500 raised inside the CRM while you were handed the portal, say), end your output with
+
+      PIPELINE-WIDEN: <registry product key, or owner/repo> — <one sentence of evidence>
+
+  The runner adds that product's repositories to the run, stands its stack up, and re-runs from provisioning with your reason as the note, so the oracle and the fix land in the repository that owns the defect. A real run halted on a selfcare ticket whose 500 came from the CRM, with the CRM one registry lookup away. Widen only on evidence that names where the fault is; a guess widens the run into the wrong code.
+
 - **"Nothing to do here" is a real, honest outcome — declare it.** Your job is to reach the correct end state, not to produce a diff. If your step's work is already satisfied, or does not apply to this ticket at all, end your output with a single line:
 
       PIPELINE-SKIP: <one sentence saying what you checked and why nothing was needed>
@@ -1030,6 +1036,10 @@ as a legitimate, expected outcome, and a run must not be aborted for reaching it
   the checkout; a reason consistent with it is a good reason, and CONTINUE is
   the right verdict.
 - Any step announcing \`PIPELINE-SKIP\` with a reason.
+- A step ending with \`PIPELINE-WIDEN: <product or repo> — <evidence>\`: it found the
+  fault outside the run's code and handed the run to the runner to widen. That is
+  a correct outcome for a step whose job was to establish the cause; vote CONTINUE
+  when the evidence names where the fault is, RETRY when it is a guess.
 
 The distinction that matters is **declared and reasoned** versus **silent**. A
 step that says what it did not do and why has done its job. A step that produces

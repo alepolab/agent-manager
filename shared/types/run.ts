@@ -32,7 +32,7 @@ export interface RunStep {
   sessionId?: string
   sessionProject?: string
   /** Tokens the agent call actually consumed, as the SDK reported them. */
-  usage?: { input_tokens: number, output_tokens: number } | null
+  usage?: { input_tokens: number, output_tokens: number, /** Of input_tokens, served from the prompt cache. */ cache_read_input_tokens?: number, /** The SDK's own cost figure for the call, when it reported one. */ usd?: number } | null
   /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK
    *  message loop while this step is still `running` — see
    *  server/utils/agentCaller.ts's AgentProgress doc comment for exactly
@@ -75,7 +75,7 @@ export interface RunCi {
   error?: string
 }
 
-export interface RunUsage { input_tokens: number, output_tokens: number, usd: number }
+export interface RunUsage { input_tokens: number, output_tokens: number, /** Of input_tokens, the ones read back from the prompt cache. */ cached_tokens?: number, usd: number }
 export interface RunBudget { maxMinutes: number, maxTokens: number }
 
 /** The registry entry a run resolved to at start, or absent when nothing matched. */
@@ -89,6 +89,8 @@ export interface ProductMatch {
   stack: { compose: string, topology_default: string, liquibase?: boolean }
   tests: Record<string, string>
   recipe?: string
+  /** Products a step widened the run to, with their own stack and tests: the fault turned out to live there. */
+  alsoInScope?: { name: string, repos: string[], stack?: { compose: string, topology_default: string }, tests: Record<string, string> }[]
 }
 
 export interface WorkflowRun {
