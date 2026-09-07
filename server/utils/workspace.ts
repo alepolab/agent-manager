@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { agentRunsRoot } from './runArtifacts.ts'
@@ -74,6 +74,16 @@ export async function stashCheckout(path: string, login: string): Promise<{ stas
 /** A run works on its own branch off the checkout's current HEAD. Creating it is the runner's job, not an agent's. */
 export async function ensureRunBranch(path: string, branch: string): Promise<void> {
   await git(path, ['checkout', '--quiet', '-B', branch])
+  await excludeFromGit(path, '.agent/')
+}
+
+/** The plan gate's scratch directory never reaches a commit, whatever an agent stages: it is excluded in the checkout itself. */
+export async function excludeFromGit(path: string, pattern: string): Promise<void> {
+  const file = join(path, '.git', 'info', 'exclude')
+  const current = existsSync(file) ? await readFile(file, 'utf8') : ''
+  if (current.split('\n').some(l => l.trim() === pattern)) return
+  await mkdir(join(path, '.git', 'info'), { recursive: true })
+  await appendFile(file, `${current.endsWith('\n') || !current ? '' : '\n'}${pattern}\n`)
 }
 
 /** Somewhere to write evidence: the one precondition every run has. */

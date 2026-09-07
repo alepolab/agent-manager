@@ -1,5 +1,5 @@
 import { getClaudeDir } from './claudeDir.ts'
-import { mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -420,55 +420,9 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
   log.error('meta.json removed after a finalize failure; the assembler will see this run as absent', { runId })
 }
 
-/**
- * Copy the finalized run directory into the project's own tree at
- * `.agent/evidence-run/`, so the evidence travels with the pull request.
- *
- * This is what lets `.github/workflows/evidence-bundle.yml` actually pass. A
- * GitHub Actions artifact can only be created from inside a workflow run, and
- * this pipeline runs on an engineer's machine - so nothing was ever in a
- * position to upload `evidence-run-<sha>`, and the check could only fail with
- * "no artifact found". Committing the directory instead needs no repo secret,
- * costs nothing per pull request, and puts the evidence in the diff where a
- * reviewer reads it, rather than in an artifact that expires.
- *
- * Best effort by design: a run that produced real work must not be reported as
- * failed because a copy into the project tree did not succeed. A failure here
- * is logged and swallowed, and the consequence is visible anyway - CI finds no
- * evidence and the check fails, which is the correct outcome, arrived at
- * honestly.
- *
- * Returns the destination path when it copied, otherwise null.
- */
-export async function publishEvidenceToProject(
-  runId: string,
-  projectDir: string | undefined,
-): Promise<string | null> {
-  if (!projectDir) return null
-  try {
-    const src = runArtifactsDir(runId)
-    const dest = join(projectDir, '.agent', 'evidence-run')
-    // Replace rather than merge: a stale artifact from a previous run left
-    // beside this run's files would be assembled into the bundle as though it
-    // belonged to it, which is the fabrication this whole module exists to
-    // prevent.
-    await rm(dest, { recursive: true, force: true })
-    await mkdir(dest, { recursive: true })
-    await cp(src, dest, { recursive: true })
-    log.info('evidence published into the project tree for CI', { runId, dest })
-    return dest
-  } catch (err) {
-    log.error('could not publish evidence into the project tree; CI will find none', {
-      runId,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
-  }
-}
-
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, checkout?: { dir: string, branch?: string }): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, checkout?: { dir: string, branch?: string }, runUrl?: string): string {
   const lines = [
     '## Run artifacts directory',
     '',
@@ -498,6 +452,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       'These are registry facts, resolved before any agent ran. Use them instead of guessing.',
     )
   }
+  if (runUrl) lines.push('', `Run page: ${runUrl} — Agent Manager keeps this run's artifacts directory as the evidence bundle and shows it there; link it from the pull request body instead of committing evidence.`)
   if (checkout) lines.push('', `Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. Commit there and only there; never switch branches, reset, rebase or push. The evidence step pushes this branch and opens the pull request against the branch policy above.`)
   if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
   lines.push('', '---', '')

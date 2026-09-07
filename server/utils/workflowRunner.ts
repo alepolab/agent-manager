@@ -18,7 +18,6 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
-  publishEvidenceToProject,
   markArtifactsUnusable,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
@@ -160,11 +159,8 @@ async function publish(run: WorkflowRun) {
       try {
         await finalizeRunArtifacts(run)
         log.debug('run artifacts finalized', { runId: run.id, status: run.status })
-        // Only a COMPLETED run's evidence goes into the project tree. A failed
-        // or stopped run has, by definition, evidence with a hole in it, and
-        // committing that would hand CI a bundle that looks complete because
-        // the assembler cannot tell a missing stage from an absent file.
-        if (run.status === 'completed') await publishEvidenceToProject(run.id, run.projectDir)
+        // Evidence stays in the run's artifacts directory, where Agent Manager
+        // serves it; nothing is copied into the product tree.
         // Tell the ticket its run finished. Best effort and deliberately last:
         // notifyTicketOutcome is already gated - it posts nothing unless
         // JIRA_POST_ENABLED=1 and credentials resolve - so on an ordinary
@@ -421,7 +417,8 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
-  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined) + body
+  const runUrl = `${(process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/$/, '')}/workflows/${run.workflowSlug}?run=${run.id}`
+  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, runUrl) + body
   markRunning(l.state, id)
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,

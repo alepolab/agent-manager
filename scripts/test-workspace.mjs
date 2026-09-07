@@ -35,6 +35,10 @@ assert.deepEqual(s.dirtyFiles, ['new-dir/x.txt', 'new-dir/y.txt'], 'paths are wh
 
 await W.ensureRunBranch(repo, 'fix/CSUP-1-abcdef12')
 assert.equal(git(repo, ['branch', '--show-current']), 'fix/CSUP-1-abcdef12', 'the run branch is checked out')
+mkdirSync(join(repo, '.agent')); writeFileSync(join(repo, '.agent', 'plan.md'), '# plan\n')
+assert.equal(git(repo, ['status', '--porcelain', '--', '.agent']), '', 'the plan gate scratch directory is excluded from git in the checkout')
+git(repo, ['add', '-A']); assert.equal(git(repo, ['diff', '--cached', '--name-only']).includes('.agent'), false, 'even git add -A cannot stage it')
+git(repo, ['reset', '-q'])
 assert.equal((await W.checkoutState(repo)).dirty, 2, 'uncommitted work rides along, as git itself does')
 
 const r = await W.stashCheckout(repo, 'sandeep')

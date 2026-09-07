@@ -41,6 +41,7 @@ These hold at every step in this pipeline, not just this one:
 
 - **Check whether it already exists before you add it — including under another name.** Before creating a service, profile, test file, script or config block, search for one that already does the job. Match on what it *does*, not on the name you were about to use: a thing named \`x-y-z\` and a thing named \`x-z-y\` are the same capability twice, and both will pass their own tests while the repository quietly carries a duplicate. If the intake step reported that the capability is already present, that report is evidence — act on it rather than re-deriving it.
 
+- **\`.agent/\` is scratch, never a commit.** The plan gate needs \`.agent/plan.md\` on disk; nothing under \`.agent/\` is ever staged, and staging the whole tree at once is never how you stage: name the files you commit. Evidence lives in the run artifacts directory Agent Manager serves.
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -848,16 +849,15 @@ shape of the answer.`,
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
 
-## Commit the evidence, or CI has none
+## Evidence lives in Agent Manager, never in the repository
 
-The run directory is copied to \`.agent/evidence-run/\` in the project tree by
-the runner when the run completes. Copying is not committing: \`.github/workflows/evidence-bundle.yml\`
-reads that directory **from the pull request's checkout**, so evidence left
-untracked is evidence CI cannot see. A real run produced a full, correct bundle
-and committed only the test file — the check would have failed with "no
-evidence" while the files sat on disk beside it.
-
-So \`git add .agent/evidence-run\` and include it in your commit.
+The run artifacts directory named at the top of your input is the evidence
+bundle, and Agent Manager keeps and serves it: the run page linked at the top
+of your input shows every file to a reviewer. Nothing under \`.agent/\` is ever
+staged or committed — not \`plan.md\`, not any evidence copy. A real pull request
+shipped twenty evidence files into a product repository and had to be cleaned by
+hand. Commit the test and the fix; the PR body carries the summary and the run
+page link, and that is where a reviewer reads the evidence.
 
 ## Which branch the pull request targets
 

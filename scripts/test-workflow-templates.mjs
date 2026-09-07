@@ -435,8 +435,12 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   // sounds like its job - and it is the only step that can commit the evidence
   // CI reads from the checkout.
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
-  assert.ok(evidence.body.includes('git add .agent/evidence-run'),
-    'the evidence step must commit .agent/evidence-run, or CI checks out a branch with no evidence in it')
+  assert.ok(!evidence.body.includes('git add .agent'),
+    'the evidence step must never stage .agent: evidence lives in Agent Manager, a real PR shipped twenty evidence files by mistake')
+  assert.match(evidence.body, /never in the repository/i, 'and must say where evidence does live')
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
+    assert.ok(a.body.includes('is scratch, never a commit'), `${a.id} must carry the standing rule that .agent/ is never committed`)
+  }
   assert.ok(evidence.body.includes('Git: local only'),
     'the evidence step needs its own explicit local-only git mandate')
 }
