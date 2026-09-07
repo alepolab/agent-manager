@@ -78,13 +78,13 @@ export default defineEventHandler(async (event) => {
   // For now, assume projectName is the decoded path or we can resolve it
   let projectPath: string
   try {
-    const res = await $fetch<{ projectName: string | null }>(`/api/projects/resolve?name=${encodeURIComponent(projectName)}`)
+    const res = await $fetch<{ projectName: string | null }>(`/api/projects/resolve?name=${encodeURIComponent(projectName)}`, { headers: { cookie: getHeader(event, 'cookie') ?? '' } })
     if (!res.projectName) {
       // Fallback: maybe it's already a path
       projectPath = projectName.replace(/-/g, '/')
     } else {
       // We need the actual path. Let's look up the project.
-      const projects = await $fetch<any[]>('/api/projects')
+      const projects = await $fetch<any[]>('/api/projects', { headers: { cookie: getHeader(event, 'cookie') ?? '' } })
       const project = projects.find(p => p.name === res.projectName)
       if (!project) throw new Error('Project not found')
       projectPath = project.path

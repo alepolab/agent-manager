@@ -1,5 +1,5 @@
 import { startRun } from '../../../utils/workflowRunner'
-import { findActiveRun } from '../../../utils/workflowRunStore'
+import { findActiveRun, loadWorkflowSteps } from '../../../utils/workflowRunStore'
 import { expandTicketKey } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
@@ -22,7 +22,9 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const workflow = await $fetch<{ slug: string, name: string, steps: any[] }>(`/api/workflows/${slug}`)
+  // Read from disk, not through /api/workflows: an internal $fetch carries no
+  // session cookie, so with sign-in on it answered 401 to every run start.
+  const workflow = await loadWorkflowSteps(slug)
   if (!workflow?.steps?.length) {
     throw createError({ statusCode: 400, message: 'This workflow has no steps' })
   }

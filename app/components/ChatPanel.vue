@@ -146,6 +146,7 @@ function handleQuickAction(prompt: string) {
               <span class="text-[14px] font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">Claude</span>
               <span class="text-[9px] font-mono tracking-widest uppercase px-1.5 py-px rounded-full transition-all duration-300" :style="{ background: isStreaming ? 'var(--accent-muted)' : 'var(--badge-subtle-bg)', color: isStreaming ? 'var(--accent)' : 'var(--text-disabled)' }">{{ statusText }}</span>
             </div>
+            <div class="flex items-center gap-3 min-w-0">
             <!-- Style Selector -->
             <div class="relative">
               <button 
@@ -182,6 +183,8 @@ function handleQuickAction(prompt: string) {
                   </button>
                 </div>
               </div>
+            </div>
+            <WorkingDirPicker />
             </div>
           </div>
           <button v-if="messages.length" class="p-1.5 rounded-lg transition-all hover-bg" style="color: var(--text-disabled);" title="New conversation" @click="() => { clearChat(); clearAgent() }">

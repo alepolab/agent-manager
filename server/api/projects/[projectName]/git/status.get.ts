@@ -38,11 +38,11 @@ export default defineEventHandler(async (event): Promise<GitStatusResponse> => {
 
   let projectPath: string
   try {
-    const res = await $fetch<{ projectName: string | null }>(`/api/projects/resolve?name=${encodeURIComponent(projectName)}`)
+    const res = await $fetch<{ projectName: string | null }>(`/api/projects/resolve?name=${encodeURIComponent(projectName)}`, { headers: { cookie: getHeader(event, 'cookie') ?? '' } })
     if (!res.projectName) {
       projectPath = projectName.replace(/-/g, '/')
     } else {
-      const projects = await $fetch<any[]>('/api/projects')
+      const projects = await $fetch<any[]>('/api/projects', { headers: { cookie: getHeader(event, 'cookie') ?? '' } })
       const project = projects.find(p => p.name === res.projectName)
       if (!project) throw new Error('Project not found')
       projectPath = project.path
