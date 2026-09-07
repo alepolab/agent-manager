@@ -27,10 +27,15 @@ FROM oven/bun:1.3-slim
 WORKDIR /app
 
 # Runtime dependencies: python3 for agent scripts, curl for the healthcheck, git for pipeline steps
+# A JDK is in the image because the products the pipeline tests are Java or
+# generate code with Java tools: a real run halted with 'generate:api requires
+# Java, which is not installed', and an earlier one only passed because the
+# agent found a JDK lying in the mounted home directory.
 RUN apt-get update && apt-get install -y \
     python3 \
     git \
     curl \
+    openjdk-17-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built application from build stage
