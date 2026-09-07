@@ -214,6 +214,23 @@ export function ticketKeyFrom(text: string | undefined): string | undefined {
   return text?.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0]
 }
 
+/**
+ * The ticket behind a prompt, wherever the key sits in it: "SCN-402 Selfcare
+ * now" is about SCN-402 as much as the bare key is. Returns the text to start
+ * from, or the reason it could not be read, so the intake agent is told why
+ * instead of being left to reach Jira itself, which it cannot: agents have no
+ * shell and no Jira access, and a real run halted trying.
+ */
+export async function fetchTicketForPrompt(prompt: string, env: Record<string, string> = {}, fetchImpl: FetchLike = fetch): Promise<{ key?: string, text: string | null, reason?: string }> {
+  const key = ticketKeyFrom(prompt)
+  if (!key) return { text: null }
+  try {
+    return { key, text: ticketText(await viewIssue(key, env, fetchImpl)) }
+  } catch (err) {
+    return { key, text: null, reason: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export async function expandTicketKey(prompt: string, env: Record<string, string> = {}, fetchImpl: FetchLike = fetch): Promise<string | null> {
   const key = prompt.trim()
   if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) return null

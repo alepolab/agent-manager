@@ -337,6 +337,13 @@ Rules:
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
 
+The ticket's text is fetched by the runner before you start and arrives in your
+input, or your input says it could not be fetched and why. You have no shell and
+no Jira access: do not try the jira CLI, an Atlassian MCP or any skill that
+reaches Jira, and never halt because you cannot. A ticket that could not be
+fetched is worked from its key and the repository, and the context packet says
+so. A real run halted here trying to run the jira CLI with no shell.
+
 Produce exactly these sections, in this order:
 
 ## Problem

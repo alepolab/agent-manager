@@ -2,7 +2,7 @@ import { startRun } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
 import { findRunInWorkspace } from '../../../utils/workflowRunStore'
 import { runWorkspace } from '../../../utils/workspace'
-import { expandTicketKey, ticketKeyFrom } from '../../../utils/jiraTicketSource'
+import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
 
@@ -47,13 +47,17 @@ export default defineEventHandler(async (event) => {
 
   // Deliberately not awaited to completion: the HTTP response returns as soon
   // as the run exists, and the run continues server-side. That is the feature.
-  // A bare ticket key becomes the ticket itself when the jira CLI can serve
-  // it; otherwise the key is passed through and the intake step works from it.
-  const expanded = await expandTicketKey(body.initialPrompt, await envForUser(user?.login))
-  const bareKey = /^[A-Z][A-Z0-9]+-\d+$/.test(body.initialPrompt.trim())
-  const initialPrompt = expanded ?? (bareKey
-    ? `${body.initialPrompt.trim()}\n\nThe ticket text could not be fetched from Jira for this run. Work from the key and whatever the repository holds, and say so in the context packet. The developer can add a Jira token on the Profile page, or paste the ticket text, and restart.`
-    : body.initialPrompt)
+  // The ticket named anywhere in the prompt is fetched here, under the starter's
+  // identity, before any agent runs: agents have no shell and no Jira access, so
+  // a ticket they are left to fetch is a ticket nobody fetches. When the read
+  // fails the prompt says why, and says not to try.
+  const typed = body.initialPrompt.trim()
+  const ticket = await fetchTicketForPrompt(typed, await envForUser(user?.login))
+  const initialPrompt = ticket.text
+    ? (typed === ticket.key ? ticket.text : `${ticket.text}\n\n---\nStarted with: ${typed}`)
+    : ticket.key
+      ? `${typed}\n\nThe ticket text could not be fetched from Jira for this run (${ticket.reason}). Work from the key and whatever the repository holds, say so in the context packet, and do not try to reach Jira yourself: agents have no shell and no Jira access. The developer can add a Jira token on the Profile page, or paste the ticket text, and start again.`
+      : body.initialPrompt
 
   const run = await startRun({
     workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
