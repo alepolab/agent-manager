@@ -152,7 +152,32 @@ export function gitIdentity(profile?: Pick<UserProfile, 'login' | 'name' | 'gith
   }
 }
 
-export async function envForUser(login: string | undefined): Promise<Record<string, string>> {
+/**
+ * GitHub's verdict on a stored token, memoised per token for ten minutes. A
+ * token the developer saved months ago and has since revoked must not reach a
+ * run: with GH_TOKEN set, gh and git ignore the host's working login, and a
+ * real run lost its provisioner to "Invalid username or token" on a container
+ * that could reach GitHub fine without it. Unreachable GitHub keeps the token:
+ * nothing proved it wrong.
+ */
+const tokenVerdicts = new Map<string, { ok: boolean, reason?: string, at: number }>()
+export async function githubTokenWorks(token: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean, reason?: string }> {
+  const cached = tokenVerdicts.get(token)
+  if (cached && Date.now() - cached.at < 600_000) return cached
+  let verdict: { ok: boolean, reason?: string }
+  try {
+    const res = await fetchImpl('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-manager' },
+    })
+    verdict = res.ok ? { ok: true } : { ok: false, reason: `GitHub answered HTTP ${res.status} for the stored token` }
+  } catch (err) {
+    verdict = { ok: true, reason: `GitHub unreachable (${err instanceof Error ? err.message : String(err)}); token kept unverified` }
+  }
+  tokenVerdicts.set(token, { ...verdict, at: Date.now() })
+  return verdict
+}
+
+export async function envForUser(login: string | undefined, fetchImpl: typeof fetch = fetch): Promise<Record<string, string>> {
   // The commit identity first, and unconditionally. An anonymous run — auth
   // disabled, or a watch dispatch with no starter — still commits, and these
   // early returns were exactly the path that left git to pick an identity for
@@ -166,8 +191,15 @@ export async function envForUser(login: string | undefined): Promise<Record<stri
   const env: Record<string, string> = { ...gitIdentity(p) }
   if (p.githubToken) {
     const t = decrypt(p.githubToken)
-    env.GH_TOKEN = t
-    env.GITHUB_TOKEN = t
+    const verdict = await githubTokenWorks(t, fetchImpl)
+    if (verdict.ok) {
+      env.GH_TOKEN = t
+      env.GITHUB_TOKEN = t
+    } else {
+      // The host's own gh login (mounted into the container) applies instead;
+      // said once per token, loudly, because the developer should replace it.
+      console.warn(`[users] stored GitHub token for ${login} rejected (${verdict.reason}); the instance login applies to this run`)
+    }
   }
   if (p.jiraToken && p.jiraEmail) {
     env.JIRA_API_TOKEN = decrypt(p.jiraToken)
