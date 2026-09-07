@@ -68,7 +68,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, contextMode?: 'predecessors' | 'ancestors' }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors' }[]
 }
 
 export interface StartRunOpts {
@@ -101,6 +101,14 @@ interface Live {
   aborts: Map<string, AbortController>
   /** Live output per step id: what the agent is doing right now, newest last. Capped; the full log is the step's .log artifact. */
   logs: Record<string, string[]>
+  /** Steps the operator has approved to run (see WorkflowStep.approval). */
+  approved: Set<string>
+  /** Operator notes addressed to a step, delivered with its next input. */
+  notes: Record<string, string>
+  /** A note for whichever step starts next. */
+  nextNote?: string
+  /** The step that asked the operator a question and waits for the answer. */
+  waiting?: string
   /** True while this run's wave loop is actually executing in the background - the
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
@@ -447,6 +455,12 @@ async function runMonitor(
   }
 }
 
+/** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
+export function parseAsk(output: string): string | null {
+  const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
+  return m ? m[1]!.trim() : null
+}
+
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
   const step = stepOf(l, id)
   const rec = recOf(run, id)
@@ -458,7 +472,15 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // lastInputs WITHOUT the header keeps that branch's reconstruction clean; rec
   // and the agent call both use `input`, so the run's own record matches
   // exactly what the agent saw.
-  const body = override ?? computeInput(l, run, id, run.initialPrompt)
+  let body = override ?? computeInput(l, run, id, run.initialPrompt)
+  // A note the operator sent while the run was in flight, or attached to an
+  // approval: delivered once, with this step's input, as a correction from a person.
+  const note = l.notes[id] ?? l.nextNote
+  if (note) {
+    body += `\n\n---\nOperator note from ${run.startedBy ?? 'the operator'}, sent while the run was in flight: ${note}`
+    delete l.notes[id]
+    if (l.nextNote === note) l.nextNote = undefined
+  }
   l.lastInputs[id] = body
   // The provisioner may have cloned since the last step: the branch is made
   // the moment a checkout exists, so no step ever commits on main or develop,
@@ -534,6 +556,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       }))
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
       return false
+    }
+
+    // A question stops the step where it is: the run pauses on the operator,
+    // and the answer re-runs the step with its own output and the reply.
+    const ask = parseAsk(output)
+    if (ask) {
+      l.outputs[id] = output
+      Object.assign(rec, { status: 'waiting', output, model, usage })
+      run.question = { stepId: id, text: ask, kind: 'question', askedAt: Date.now() }
+      l.waiting = id
+      log.info('step asked the operator', () => ({ runId: run.id, stepId: id, agentSlug: step.agentSlug, question: preview(ask) }))
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
     }
 
     // A skip is a SUCCESS, not a failure: the step examined its job, found
@@ -651,6 +686,20 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return run
   }
 
+  // A step marked for approval waits for a person before it starts, run-to-completion or not.
+  const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id))
+  if (gate) {
+    const label = stepOf(l, gate)?.label ?? gate
+    run.question = { stepId: gate, text: `Approve "${label}" to run it`, kind: 'approval', askedAt: Date.now() }
+    run.status = 'paused'
+    run.currentStepIds = []
+    run.nextStepIds = wave
+    l.running = false
+    log.info('run waits for approval', { runId: run.id, stepId: gate })
+    await publish(run)
+    return run
+  }
+
   run.status = 'running'
   // currentStepIds is the whole wave, set once before anything in it runs. executeNode
   // deliberately never reassigns it (C4) - if it did, concurrent execution would leave
@@ -689,6 +738,16 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.nextStepIds = []
     l.running = false
     log.warn('run failed', { runId: run.id, workflowSlug: run.workflowSlug, failedInWave: wave })
+    await publish(run)
+    return run
+  }
+
+  // A step is waiting on the operator: nothing else starts until they answer.
+  if (l.waiting) {
+    run.status = 'paused'
+    run.currentStepIds = [l.waiting]
+    run.nextStepIds = []
+    l.running = false
     await publish(run)
     return run
   }
@@ -788,7 +847,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
+    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {},
   }
   live.set(run.id, l)
   // Best-effort: a filesystem problem here must not stop the run. The run
@@ -806,7 +865,8 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * recreate the exact coupling this feature removes, just scoped to one wave instead of
  * the whole run. Callers await waitForSettled(runId) for the outcome.
  */
-export async function continueRun(runId: string): Promise<WorkflowRun | null> {
+/** Continue a paused run. A note travels to the approved step, or to whichever step starts next. */
+export async function continueRun(runId: string, note?: string): Promise<WorkflowRun | null> {
   let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds
   // name what was executing; restarting from those is the honest resume.
@@ -838,6 +898,19 @@ export async function continueRun(runId: string): Promise<WorkflowRun | null> {
     l.running = false
     return run
   }
+  // An open question is answered, never skipped: continuing without a reply
+  // tells the agent so in words, and it decides.
+  if (run.question?.kind === 'question') {
+    l.running = false
+    return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.')
+  }
+  if (run.question?.kind === 'approval') {
+    l.approved.add(run.question.stepId)
+    if (note?.trim()) l.notes[run.question.stepId] = note.trim()
+  } else if (note?.trim()) {
+    l.nextNote = note.trim()
+  }
+  run.question = undefined
   // Persist 'running' before returning, as restartRun and respondToRun do: a
   // reader that lands between this return and the wave's first publish would
   // otherwise see the old 'paused' record and treat the run as settled.
@@ -866,6 +939,8 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   const id = run.currentStepIds[0]
   if (!id) return run
   const combined = `Previous agent output:\n${l.outputs[id] ?? ''}\n\nUser response:\n${reply}`
+  run.question = undefined
+  l.waiting = undefined
   // Flip away from 'paused' before doing any work, matching runWave and the client's
   // isRunning flip ahead of its own executeNode call in respondToStep. Without this,
   // run.status reads 'paused' for the whole duration of the reply - indistinguishable
@@ -901,6 +976,12 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
         await publish(run)
         return
       }
+      // A run-to-completion run resumes on its own once the answer is in.
+      if (run.autoRun && !l.stopped) {
+        l.running = true
+        await driveToSettlement(l, run)
+        return
+      }
       run.nextStepIds = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
       run.status = 'paused'
       await publish(run)
@@ -916,6 +997,15 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   return run
 }
 
+/** Queue a note for whichever step starts next; the operator's way to steer a run in flight. */
+export async function noteRun(runId: string, text: string): Promise<{ queued: string } | null> {
+  const l = live.get(runId)
+  if (!l) return null
+  l.nextNote = text.trim()
+  log.info('operator note queued', { runId, preview: preview(text) })
+  return { queued: l.nextNote }
+}
+
 export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   const run = await getRun(runId)
   if (!run) return null
@@ -927,7 +1017,8 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
     skipPending(l.state)
     for (const ac of l.aborts.values()) ac.abort()
   }
-  for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+  for (const s of run.steps) if (s.status === 'pending' || s.status === 'waiting') s.status = 'skipped'
+  run.question = undefined
   run.status = 'stopped'
   run.endedAt = Date.now()
   run.currentStepIds = []
@@ -968,7 +1059,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {},
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {},
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   for (const s of run.steps) {

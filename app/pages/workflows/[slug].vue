@@ -16,7 +16,7 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
-const { run, runs, logs, attach, start, continueRun, stop, restart } = useWorkflowRun(slug)
+const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote } = useWorkflowRun(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
@@ -130,6 +130,7 @@ const nodes = computed(() => {
         agentColor: agent?.frontmatter.color,
         agentModel: agent?.frontmatter.model,
         monitorLabel: agentBySlug(step.monitorSlug)?.frontmatter.name ?? step.monitorSlug,
+        approval: step.approval === true,
         maxVisits: step.maxVisits,
         status: exec?.status,
         visits: exec?.visits,
@@ -491,7 +492,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           :run="run"
           :runs="runs"
           :logs="logs"
-          @continue="continueRun"
+          @continue="continueRun()"
           @stop="stop"
           @restart="restart"
           @clone="cloneRun"
@@ -577,7 +578,9 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           :run="run"
           :runs="runs"
           :logs="logs"
-          @continue="continueRun"
+          @continue="(n) => continueRun(n)"
+          @respond="respond"
+          @note="sendNote"
           @stop="stop"
           @attach="attachRun"
           @restart="(stepId, note) => restart(stepId, note)"
@@ -617,6 +620,14 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               Reviews this step's output and replies CONTINUE, RETRY or ABORT. RETRY re-runs the step
               with the monitor's feedback. Doubles the agent calls for this step.
             </span>
+          </div>
+
+          <div class="field-group">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" :checked="settingsStep.approval === true" @change="settingsStepId && patchStep(settingsStepId, { approval: ($event.target as HTMLInputElement).checked || undefined })">
+              <span class="field-label mb-0">Ask me before this step runs</span>
+            </label>
+            <span class="field-hint">The run pauses on the run page until you approve, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>
           </div>
 
           <div class="field-group">

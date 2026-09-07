@@ -13,6 +13,8 @@ export interface WorkflowTemplateStep {
   monitorSlug?: string
   /** How many times this step may run in one execution. */
   maxVisits?: number
+  /** See WorkflowStep.approval. */
+  approval?: boolean
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
 }
@@ -71,6 +73,7 @@ export function materializeTemplateSteps(
       id: stepIds[i]!,
       agentSlug: agentSlugByTemplateId[step.agentTemplateId]!,
       label: step.label,
+      ...(step.approval ? { approval: true } : {}),
     }
     if (step.next) {
       const resolved = step.next
@@ -150,7 +153,8 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       // Security review runs beside verification and tracing; the PR waits on all three.
       { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR',
+      // The one step with an outward effect: it pushes and opens the pull request. It waits for a person.
+      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR', approval: true,
         next: [], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
     ],
   },

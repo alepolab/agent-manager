@@ -32,7 +32,9 @@ export function useRun(id: string) {
   onScopeDispose(() => source?.close())
   return {
     run, logs, error, load,
-    continueRun: () => act('continue')(),
+    continueRun: (note?: string) => act('continue')(note?.trim() ? { note: note.trim() } : undefined),
+    respond: (reply: string) => act('respond')({ reply }),
+    sendNote: async (text: string) => { await $fetch(`/api/runs/${id}/note`, { method: 'POST', body: { text } }) },
     stop: () => act('stop')(),
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
   }

@@ -21,6 +21,7 @@ export const RUN_STATUS_COLOR = {
   interrupted: 'var(--error, #ef4444)',
   pending: 'var(--text-disabled, #9ca3af)',
   skipped: 'var(--text-disabled, #9ca3af)',
+  waiting: 'var(--warning, #f59e0b)',
 } as Record<string, string>
 
 export function runStatusColor(status: string): string {

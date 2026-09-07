@@ -3,6 +3,8 @@ export type WorkflowRunStatus =
 
 export type RunStepStatus =
   | 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+  /** The step stopped to ask the operator something and waits for the answer. */
+  | 'waiting'
 
 export interface RunStep {
   stepId: string
@@ -109,6 +111,8 @@ export interface WorkflowRun {
   branch?: string
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
+  /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
+  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number }
   projectDir?: string
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */

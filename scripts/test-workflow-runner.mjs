@@ -866,6 +866,63 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   rmSync(wsRoot, { recursive: true, force: true })
 }
 
+// ── 21. an agent's question pauses the run; the answer resumes it ─────────
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const inputs = {}
+  runner.setAgentCaller(async (agentSlug, input) => {
+    inputs[agentSlug] = input
+    if (agentSlug === 'agent-a' && !/User response/.test(input)) return 'I need to know.\nPIPELINE-ASK: Which customer profile applies, SaskTel or Lum?'
+    return `out ${agentSlug}`
+  })
+  let q = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  assert.equal(q.status, 'paused', 'a question pauses the run')
+  assert.equal(q.question?.kind, 'question'); assert.match(q.question.text, /SaskTel or Lum/)
+  assert.equal(q.steps.find(s => s.stepId === 'a').status, 'waiting', 'the asking step waits rather than completing')
+  assert.deepEqual(q.currentStepIds, ['a'])
+  q = await runner.respondToRun(q.id, 'SaskTel')
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  assert.equal(q.status, 'completed', 'the answer re-runs the step and a run-to-completion run carries on')
+  assert.equal(q.question, undefined)
+  assert.match(inputs['agent-a'], /User response:\nSaskTel/, 'the step saw the answer with its own previous output')
+  assert.ok(inputs['agent-d'], 'downstream steps ran after the answer')
+}
+
+// ── 22. a step marked for approval waits for a person, note travels with the go-ahead ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const gated = { ...workflow, steps: workflow.steps.map(s => s.id === 'd' ? { ...s, approval: true } : s) }
+  const inputs = {}
+  runner.setAgentCaller(async (agentSlug, input) => { inputs[agentSlug] = input; return `out ${agentSlug}` })
+  let g = await runner.startRun({ workflow: gated, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.status, 'paused', 'run-to-completion still stops at an approval gate')
+  assert.equal(g.question?.kind, 'approval'); assert.equal(g.question.stepId, 'd')
+  assert.equal(g.steps.find(s => s.stepId === 'd').status, 'pending', 'the gated step has not started')
+  assert.equal(inputs['agent-d'], undefined)
+  g = await runner.continueRun(g.id, 'Target the SaskTel branch policy')
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.status, 'completed')
+  assert.match(inputs['agent-d'], /Operator note from the operator, sent while the run was in flight: Target the SaskTel branch policy/, 'the approval note reached the gated step')
+}
+
+// ── 23. a note sent while a step runs reaches whichever step starts next ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const inputs = {}
+  runner.setAgentCaller(async (agentSlug, input) => { inputs[agentSlug] = input; if (agentSlug === 'agent-a') await new Promise(r => setTimeout(r, 400)); return `out ${agentSlug}` })
+  let n = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  await new Promise(r => setTimeout(r, 100))
+  assert.deepEqual(await runner.noteRun(n.id, 'The plugin lives under modules/administrator'), { queued: 'The plugin lives under modules/administrator' })
+  n = await runner.waitForSettled(n.id, TIMEOUT)
+  assert.equal(n.status, 'completed')
+  assert.ok(!/modules\/administrator/.test(inputs['agent-a']), 'the step already running did not get it')
+  const carriers = ['agent-b', 'agent-c', 'agent-d'].filter(s => /Operator note .*modules\/administrator/.test(inputs[s] ?? ''))
+  assert.equal(carriers.length, 1, `exactly one later step carries the note: ${carriers.join(',')}`)
+  assert.equal(await runner.noteRun('no-such-run', 'x'), null, 'a run not in flight here cannot take a note')
+}
+
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not

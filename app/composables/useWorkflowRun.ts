@@ -77,7 +77,8 @@ export function useWorkflowRun(slug: string) {
 
   return {
     run, runs, loading, error, logs, attach, start, refreshRuns,
-    continueRun: () => act('continue')(),
+    continueRun: (note?: string) => act('continue')(note?.trim() ? { note: note.trim() } : undefined),
+    sendNote: async (text: string) => { if (run.value) await $fetch(`/api/runs/${run.value.id}/note`, { method: 'POST', body: { text } }) },
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
     respond: async (reply: string) => {
       if (!run.value) return

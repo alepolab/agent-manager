@@ -8,7 +8,10 @@ import { RUN_STATUS_COLOR } from '~/utils/runStatus'
  */
 const route = useRoute()
 const id = route.params.id as string
-const { run, logs, error, load, continueRun, stop, restart } = useRun(id)
+const { run, logs, error, load, continueRun, stop, restart, respond, sendNote } = useRun(id)
+async function onNote(text: string) {
+  try { await sendNote(text); toast.add({ title: 'Note queued for the next step', color: 'success' }) } catch (e: any) { toast.add({ title: 'Could not send the note', description: e.data?.message || e.message, color: 'error' }) }
+}
 const toast = useToast()
 onMounted(load)
 useHead({ title: computed(() => `${run.value ? (run.value.initialPrompt.split('\n')[0] ?? '').slice(0, 40) : 'Run'} | Agent Manager`) })
@@ -38,7 +41,7 @@ async function onRestart(stepId: string, note?: string) {
     <div v-if="error" class="px-6 py-4 text-[12px]" style="color: var(--error);">{{ error }}</div>
     <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 px-6 py-4" style="grid-template-columns: minmax(22rem, 2fr) minmax(0, 3fr);">
       <div class="min-h-0 overflow-y-auto pr-1">
-        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="continueRun" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
+        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
       </div>
       <RunArtifacts :run-id="id" :live="live" class="min-h-0" />
     </div>

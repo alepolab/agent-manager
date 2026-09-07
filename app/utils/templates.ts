@@ -42,6 +42,7 @@ These hold at every step in this pipeline, not just this one:
 - **Check whether it already exists before you add it — including under another name.** Before creating a service, profile, test file, script or config block, search for one that already does the job. Match on what it *does*, not on the name you were about to use: a thing named \`x-y-z\` and a thing named \`x-z-y\` are the same capability twice, and both will pass their own tests while the repository quietly carries a duplicate. If the intake step reported that the capability is already present, that report is evidence — act on it rather than re-deriving it.
 
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.** The plan gate needs \`.agent/plan.md\`, and it travels with the commit as the statement of intent; everything else there is scratch. Evidence lives in the run artifacts directory Agent Manager serves, never in the repository. Staging the whole tree at once is never how you stage: name the files you commit.
+- **Ask when only a person can answer.** If you reach a decision that is genuinely the developer's — two behaviours the ticket could mean, a credential or access you do not have, an action that cannot be undone — end your output with one line, \`PIPELINE-ASK: <one precise question>\`, and stop. The run pauses, the developer answers, and you run again with your previous output and their answer. Never ask what the ticket, the repository or the run artifacts can tell you; a question that a search would have answered wastes a person's time.
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -905,6 +906,16 @@ an ABORT throws away every step before it. Prefer RETRY over CONTINUE when the
 step was supposed to establish something later steps depend on and did not
 show it. A real run was aborted at the fix step for a report that lacked its
 test output while the fix itself was correct and committed.
+
+## A module repository is still the product
+
+A product checkout may be a super-repository whose \`modules/<name>\` directories
+are git repositories of their own, each with its own origin (ASE's \`ase_lbss\` is
+one: \`modules/administrator\` is \`alepolab/administrator_lbss\`). The registry
+names the super-repository; a commit inside one of its modules is a commit in
+the product, on the run's branch, and is exactly where the change belongs. It
+is not the wrong repository. The ABORT case is a push, or work outside the
+checkout entirely.
 
 ## A declared skip is not a failure
 

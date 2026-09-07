@@ -3,7 +3,31 @@ import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES } from '~/utils/runStatus'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
-const emit = defineEmits<{ continue: [], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [] }>()
+const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string] }>()
+
+/** What the note box is for right now: a reply, an approval note, a note to the next step, or a restart note. */
+const noteMode = computed(() => {
+  const r = props.run
+  if (!r) return 'restart'
+  if (r.status === 'paused' && r.question?.kind === 'question') return 'reply'
+  if (r.status === 'paused') return 'continue'
+  if (r.status === 'running') return 'steer'
+  return 'restart'
+})
+const notePlaceholder = computed(() => ({
+  reply: 'Your answer to the agent',
+  continue: 'Optional note for the step about to run, e.g. target the SaskTel branch policy',
+  steer: 'Send a note to whichever step starts next, e.g. the plugin lives under modules/administrator',
+  restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
+}[noteMode.value]))
+const sent = ref<string | null>(null)
+function send(kind: 'respond' | 'note' | 'continue') {
+  const text = note.value.trim()
+  if (kind === 'respond') emit('respond', text)
+  else if (kind === 'note') { emit('note', text); sent.value = text }
+  else emit('continue', text || undefined)
+  note.value = ''
+}
 
 /** Optional correction handed to whichever step is restarted next. */
 const note = ref('')
@@ -135,13 +159,19 @@ const money = (n: number) => `$${n.toFixed(4)}`
     <div v-if="prLinks.length" class="flex flex-wrap gap-3 text-[11px]">
       <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
     </div>
+    <div v-if="run.question" class="rounded-lg p-3 text-[12px] space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
+      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
+    </div>
+    <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
     <textarea
-      v-if="settledRun"
+      v-if="settledRun || run.status === 'paused' || run.status === 'running'"
       v-model="note"
       rows="2"
       class="field-input w-full resize-none text-[12px]"
-      placeholder="Optional note for the step you restart, e.g. verify from inside the container only"
-      aria-label="Note for the restarted step"
+      :placeholder="notePlaceholder"
+      :aria-label="notePlaceholder"
+      @keydown.meta.enter="noteMode === 'reply' ? send('respond') : noteMode === 'steer' ? send('note') : noteMode === 'continue' ? send('continue') : undefined"
     />
     <!-- One honest number: the run's cost so far, from server/utils/costReport.ts.
          Never fabricated - a step that hasn't reported usage, or ran on a model
@@ -215,7 +245,10 @@ const money = (n: number) => `$${n.toFixed(4)}`
     </div>
 
     <div class="flex gap-2">
-      <UButton v-if="run.status === 'paused'" size="xs" label="Continue" @click="emit('continue')" />
+      <UButton v-if="noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
+      <UButton v-else-if="run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="`Approve and run`" @click="send('continue')" />
+      <UButton v-else-if="run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
+      <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" label="Send note to next step" :disabled="!note.trim()" @click="send('note')" />
       <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
       <UButton v-if="run.status === 'running' || run.status === 'paused'" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
       <UButton v-if="settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />

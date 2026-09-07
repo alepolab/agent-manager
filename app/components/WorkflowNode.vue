@@ -11,6 +11,7 @@ const props = defineProps<{
     agentModel?: string
     monitorLabel?: string
     maxVisits?: number
+    approval?: boolean
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
@@ -57,6 +58,7 @@ const verdictColor: Record<string, string> = {
             style="background: var(--accent-glow, rgba(255,255,255,0.08)); color: var(--accent);"
             :title="`Ran ${data.visits} times`"
           >×{{ data.visits }}</span>
+          <span v-if="data.approval" class="inline-flex items-center" title="Waits for your approval before running"><UIcon name="i-lucide-hand" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.monitorLabel"
             class="text-[9px] truncate"
