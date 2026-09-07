@@ -15,7 +15,7 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
-import { artifactsWritable, checkoutDirFor, ensureRunBranch } from './workspace.ts'
+import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
 import { existsSync } from 'node:fs'
 import { appendFile, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -460,6 +460,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // exactly what the agent saw.
   const body = override ?? computeInput(l, run, id, run.initialPrompt)
   l.lastInputs[id] = body
+  // The provisioner may have cloned since the last step: the branch is made
+  // the moment a checkout exists, so no step ever commits on main or develop,
+  // and the header below names it.
+  await ensureRunCheckout(run)
   const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
@@ -714,6 +718,29 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
 }
 
 /**
+ * The run's own branch, off whatever the checkout has at HEAD, created as
+ * soon as there is a checkout to make it in. Runner-owned so no agent ever
+ * commits to develop directly again; a real run cloned onto main and would
+ * have pushed it. Idempotent: a run that already has its branch is left alone.
+ */
+async function ensureRunCheckout(run: WorkflowRun): Promise<void> {
+  if (run.branch) return
+  const repoName = run.product?.repos?.[0]?.split('/').pop()
+  const checkout = (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir : findCheckout(runWorkspace(run), repoName)
+  if (!checkout) return
+  const branch = `fix/${run.ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
+  try {
+    await ensureRunBranch(checkout, branch)
+    run.branch = branch
+    run.projectDir = checkout
+    await saveRun(run)
+    log.info('run branch created', { runId: run.id, checkout, branch })
+  } catch (err) {
+    log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, checkout, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
  * Creates and persists the run, then kicks the wave loop off in the background and
  * returns immediately — the run is owned by the server, not by this HTTP request.
  * Awaiting this only awaits the run's creation (a fast filesystem write), never the
@@ -757,13 +784,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
-  // The run's own branch, off whatever the checkout has at HEAD. Runner-owned
-  // so no agent ever commits to develop directly again.
-  if (projectDir && existsSync(join(projectDir, '.git'))) {
-    const branch = `fix/${ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
-    try { await ensureRunBranch(projectDir, branch); run.branch = branch; await saveRun(run) }
-    catch (err) { log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, projectDir, error: err instanceof Error ? err.message : String(err) }) }
-  }
+  await ensureRunCheckout(run)
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),

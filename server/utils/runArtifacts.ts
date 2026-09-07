@@ -469,7 +469,8 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // commits, files_changed and lines_changed for work that had actually been
     // done and committed — in a directory nothing else knew about.
     `Work in: ${workspaceRootFor(startedBy)}`,
-    'Clone into that directory and work there. Do not invent a checkout path and',
+    `Clone each repository into its own directory there, ${workspaceRootFor(startedBy)}/<repo name>, and work inside it.`,
+    'Never clone into the workspace directory itself. Do not invent a checkout path and',
     'do not search the filesystem for one — anything you leave elsewhere is',
     'invisible to every later step and to the evidence bundle.',
     '',

@@ -834,6 +834,38 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.deepEqual(fromDisk.a, tail.a, 'once the process that ran it is gone, the same lines come from the artifact')
 }
 
+// ── 20. a checkout cloned mid-run gets the run branch before the next step ──
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const wsRoot = mkdtempSync(join(tmpdir(), 'runner-ws-'))
+  const savedRoot = process.env.AGENT_WORKSPACE_ROOT
+  process.env.AGENT_WORKSPACE_ROOT = wsRoot
+  const cloned = join(wsRoot, 'alice', 'ase_lbss')
+  const seenBranch = {}
+  runner.setAgentCaller(async (agentSlug, input, projectDir) => {
+    if (agentSlug === 'agent-a') {
+      // The provisioner: clone into the developer's workspace, on main, no branch.
+      mkdirSync(cloned, { recursive: true })
+      git(cloned, ['init', '-q', '-b', 'main']); git(cloned, ['config', 'user.email', 't@x']); git(cloned, ['config', 'user.name', 't'])
+      writeFileSync(join(cloned, 'a.txt'), 'a\n'); git(cloned, ['add', '.']); git(cloned, ['commit', '-q', '-m', 'init'])
+    } else {
+      seenBranch[agentSlug] = { branch: git(cloned, ['branch', '--show-current']), projectDir, header: /Working checkout: .* on branch fix\/CSUP-9-/.test(input) }
+    }
+    return `out ${agentSlug}`
+  })
+  let lazy = await runner.startRun({ workflow, initialPrompt: 'CSUP-9: cloned later', watch: 'direct-invocation', autoRun: true, startedBy: 'alice' })
+  assert.equal(lazy.branch, undefined, 'nothing to branch before the clone exists')
+  lazy = await runner.waitForSettled(lazy.id, TIMEOUT)
+  assert.equal(lazy.status, 'completed')
+  assert.equal(lazy.branch, `fix/CSUP-9-${lazy.id.slice(0, 8)}`, 'the branch was made once the checkout appeared')
+  assert.equal(lazy.projectDir, cloned, 'and the run now knows its checkout')
+  assert.equal(seenBranch['agent-b'].branch, lazy.branch, 'the next step ran with the branch checked out')
+  assert.equal(seenBranch['agent-b'].projectDir, cloned, 'in that directory')
+  assert.ok(seenBranch['agent-b'].header, 'and was told so in its header')
+  process.env.AGENT_WORKSPACE_ROOT = savedRoot
+  rmSync(wsRoot, { recursive: true, force: true })
+}
+
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real
 // project directory, on a long-lived branch that already has real commits
 // ahead of main BEFORE the run starts, run through startRun itself — not

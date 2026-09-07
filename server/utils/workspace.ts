@@ -193,6 +193,22 @@ export async function listCheckouts(): Promise<(CheckoutState & { owner?: string
   return out
 }
 
+/**
+ * The git checkout inside a run's workspace: the workspace itself when an
+ * agent cloned into it, else the child named after the repo, else the only
+ * child with a .git. Undefined until something has been cloned.
+ */
+export function findCheckout(workspace: string, repoName?: string): string | undefined {
+  const ws = expand(workspace)
+  if (!existsSync(ws)) return undefined
+  if (existsSync(join(ws, '.git'))) return ws
+  if (repoName && existsSync(join(ws, repoName, '.git'))) return join(ws, repoName)
+  try {
+    const withGit = readdirSync(ws, { withFileTypes: true }).filter(e => e.isDirectory() && existsSync(join(ws, e.name, '.git'))).map(e => e.name)
+    return withGit.length === 1 ? join(ws, withGit[0]!) : undefined
+  } catch { return undefined }
+}
+
 /** Parks uncommitted work under a named stash so a run starts from a clean tree. `git stash pop` brings it back. */
 export async function stashCheckout(path: string, login: string): Promise<{ stashed: boolean, message: string }> {
   const s = await checkoutState(path)
