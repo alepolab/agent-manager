@@ -109,6 +109,7 @@ All values are environment variables. Never write them into files in this repo.
 | `AGENT_RUNS_DIR`, `AGENT_WORKSPACE_ROOT` | Where run records live and where the provisioner clones product repos. |
 | `AGENT_RUN_MAX_MINUTES`, `AGENT_RUN_MAX_TOKENS` | Per-run caps checked between steps (defaults 180 and 8,000,000). |
 | `AGENT_GH_TOKEN` | Fallback `GH_TOKEN` for agent calls when the starting user has no GitHub token. |
+| `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` | Handed to the agents' `claude` process untouched. Point them at a proxy such as teamclaude when the mounted claude.ai login alone hits its limit; the key then takes precedence over that login. |
 | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | Instance-level Jira identity for watches. A signed-in developer's own email and token override it for runs they start. |
 | `JIRA_POST_ENABLED=1` | Post the outcome comment back to the ticket when a run settles. Off by default; the comment is still written to the run's artifacts. |
 | `JIRA_DEFAULT_PROJECT` | Default project for the per-user jira-cli config agents use. |
