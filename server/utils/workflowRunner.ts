@@ -25,6 +25,7 @@ import {
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
+import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import type { WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 const log = createLogger('runner')
@@ -68,7 +69,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors' }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig }[]
 }
 
 export interface StartRunOpts {
@@ -237,7 +238,8 @@ async function publish(run: WorkflowRun) {
         // A notification failure must never change the run's outcome; the work
         // is done either way, and a run reported as failed because Jira was
         // unreachable would be a lie about the code.
-        if (run.ticketKey) {
+        // Unless a Jira step of the workflow already posted it.
+        if (run.ticketKey && !run.ticketCommented) {
           try {
             const result = await notifyTicketOutcome(
               { id: run.watch, name: run.workflowName },
@@ -536,6 +538,30 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // narrowing it to this one node would corrupt that during concurrent execution. For a
   // single-step respondToRun call it already holds [id] from the prior pause.
   await publish(run)
+
+  // A Jira step is the runner's own work: no model, no prompt, a REST call or
+  // two, and an honest sentence about each. It settles like any other step so
+  // the graph, the artifacts and the run page treat it the same.
+  if (step.jira) {
+    logLine(l, run, rec, `step started, visit ${rec.visits}`)
+    let output: string
+    try {
+      output = await runJiraStep(run, step.jira)
+    } catch (err) {
+      output = `Jira step failed: ${err instanceof Error ? err.message : String(err)}. The ticket was not changed; the run goes on.`
+    }
+    for (const line of output.split('\n')) logLine(l, run, rec, line)
+    const skip = parseSkip(output)
+    l.outputs[id] = output
+    Object.assign(rec, {
+      status: skip ? 'skipped' : 'completed', output, model: null, usage: null, completedAt: Date.now(),
+      ...(skip ? { skipReason: skip } : {}),
+    })
+    log.info('jira step done', () => ({ runId: run.id, stepId: id, output: preview(output) }))
+    markCompleted(l.graph, l.state, id)
+    try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+    return true
+  }
 
   const ac = new AbortController()
   l.aborts.set(id, ac)

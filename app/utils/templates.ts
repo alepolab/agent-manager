@@ -1185,6 +1185,32 @@ run behind a fix, the URL of each reply.
 ${SDLC_STANDING_RULES}`,
   },
   {
+    id: 'sdlc-jira-tracker',
+    icon: 'i-lucide-ticket',
+    frontmatter: {
+      name: 'sdlc-jira-tracker',
+      description: 'Runner-executed, no model call: moves the ticket to the status the step names and posts the outcome comment.',
+      model: MODEL.HAIKU,
+      color: 'gray',
+      tools: [],
+      maxTurns: 1,
+      skills: [],
+    },
+    body: `You do not run as a model. The runner executes this step itself: it takes the
+step's Jira settings (a status to move the ticket to, whether to post the
+outcome comment), calls Jira's REST API with the starter's own credentials, and
+records what happened as the step's output. Writes reach Jira only when
+JIRA_POST_ENABLED=1 on the instance; otherwise the step records what it would
+have done. A run with no ticket key ends this step with
+\`PIPELINE-SKIP: this run has no ticket key\`.
+
+If you are reading this as a model, the runner did not intercept the step. Do
+nothing to Jira yourself: end with \`PIPELINE-HALT: the Jira step reached a
+model; the runner should have executed it\`.
+
+${SDLC_STANDING_RULES}`,
+  },
+  {
     id: 'sdlc-evidence-and-pr',
     icon: 'i-lucide-git-pull-request',
     frontmatter: {

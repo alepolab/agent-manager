@@ -158,7 +158,7 @@ export interface NotifySource {
 }
 
 /** The starter's own Jira identity when their profile holds one, else the instance's. The comment then reads as the developer who ran it. */
-async function credentialsFor(run: WorkflowRun) {
+export async function credentialsFor(run: WorkflowRun) {
   const env = await envForUser(run.startedBy).catch(() => ({} as Record<string, string>))
   if (env.JIRA_EMAIL && env.JIRA_API_TOKEN && env.JIRA_BASE_URL) return { baseUrl: env.JIRA_BASE_URL, email: env.JIRA_EMAIL, apiToken: env.JIRA_API_TOKEN }
   return resolveJiraCredentials()
