@@ -122,6 +122,10 @@ All values are environment variables. Never write them into files in this repo.
 | `AGENT_REGISTRY_PATH` | Override the product registry, otherwise read from the installed plugin. |
 | `TEAM_SEED_ON_BOOT=0` | Skip applying team standards at boot. |
 
+### Smoke sweep
+
+`node scripts/smoke-all.mjs [product ...]` runs the Smoke Check workflow (one `sdlc-smoke-check` step: checkout, build, tests, registry verdict) for every registered product or the named ones, through the instance API with `AGENT_MANAGER_API_TOKEN`, two at a time, and writes the table to `~/.agent-manager/smoke-<timestamp>.json`. Run it before handing an instance to a team.
+
 ## The alepo-engineering plugin
 
 `engineering/` is a Claude Code plugin marketplace with one plugin. It carries what the pipeline enforces and what it needs to route work:
