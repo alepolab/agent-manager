@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
   // The full run first, so a late subscriber is immediately correct rather
   // than waiting for the next change.
   send({ type: 'run', run: initial })
-  send({ type: 'log-snapshot', logs: getLiveLog(id) })
+  send({ type: 'log-snapshot', logs: await getLiveLog(id) })
 
   const finished = (r: WorkflowRun) =>
     r.status !== 'running' && r.status !== 'paused'

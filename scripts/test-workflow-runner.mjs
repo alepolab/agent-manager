@@ -822,13 +822,16 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   lr = await runner.waitForSettled(lr.id, TIMEOUT)
   off()
   assert.equal(lr.status, 'completed')
-  const tail = runner.getLiveLog(lr.id)
+  const tail = await runner.getLiveLog(lr.id)
   assert.ok(tail.a?.some(l => /\[Bash\] echo agent-a$/.test(l)), 'the tail holds the reported line, timestamped')
   assert.ok(tail.a?.[0] && /step started, visit 1$/.test(tail.a[0]), 'and opens with the step start')
   assert.ok(seen.some(([s, l]) => s === 'b' && /→ done$/.test(l)), 'listeners hear each line as it happens')
   const logs = readdirSync(join(process.env.AGENT_RUNS_DIR, lr.id, 'artifacts', 'steps')).filter(f => f.endsWith('.log'))
   assert.ok(logs.includes('step-01-agent-a.log'), `the step log is an artifact: ${logs.join(',')}`)
   assert.match(readFileSync(join(process.env.AGENT_RUNS_DIR, lr.id, 'artifacts', 'steps', 'step-01-agent-a.log'), 'utf8'), /\[Bash\] echo agent-a/, 'holding the same lines')
+  runner._dropLive(lr.id)
+  const fromDisk = await runner.getLiveLog(lr.id)
+  assert.deepEqual(fromDisk.a, tail.a, 'once the process that ran it is gone, the same lines come from the artifact')
 }
 
 // THE end-to-end regression this whole change exists for (DEVOPS-15): a real

@@ -17,7 +17,7 @@ import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch } from './workspace.ts'
 import { existsSync } from 'node:fs'
-import { appendFile } from 'node:fs/promises'
+import { appendFile, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -116,9 +116,23 @@ export function subscribeLog(runId: string, fn: (stepId: string, line: string) =
   logSubscribers.get(runId)!.add(fn)
   return () => logSubscribers.get(runId)?.delete(fn)
 }
-/** The in-memory tail for a run still owned by this process; {} once it is gone. */
-export function getLiveLog(runId: string): Record<string, string[]> {
-  return live.get(runId)?.logs ?? {}
+/** The in-memory tail for a run this process ran; otherwise the step .log artifacts, so a finished run reads the same. */
+export async function getLiveLog(runId: string): Promise<Record<string, string[]>> {
+  const l = live.get(runId)
+  if (l) return l.logs
+  const run = await getRun(runId)
+  if (!run) return {}
+  const dir = join(runArtifactsDir(runId), 'steps')
+  if (!existsSync(dir)) return {}
+  const out: Record<string, string[]> = {}
+  for (const name of await readdir(dir)) {
+    const m = name.match(/^step-(\d+)-.*\.log$/)
+    const step = m ? run.steps[Number(m[1]) - 1] : undefined
+    if (!step) continue
+    const lines = (await readFile(join(dir, name), 'utf8')).split('\n').filter(Boolean)
+    out[step.stepId] = lines.slice(-LOG_TAIL)
+  }
+  return out
 }
 const LOG_TAIL = 400
 function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
