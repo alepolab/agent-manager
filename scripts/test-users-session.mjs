@@ -28,7 +28,9 @@ assert.ok(!raw.includes('jira-secret') && !raw.includes('gh-secret'), 'no plaint
 assert.deepEqual(U.toPublic(p).hasJiraToken, true)
 assert.ok(!('jiraToken' in U.toPublic(p)), 'public view carries no sealed token')
 
-const env = await U.envForUser('sandeep')
+// GitHub is never asked in a test: the stored token is vouched for by a stub.
+const githubOk = async () => new Response('{"login":"sandeep"}', { status: 200 })
+const env = await U.envForUser('sandeep', githubOk)
 assert.equal(env.GH_TOKEN, 'gh-secret'); assert.equal(env.GITHUB_TOKEN, 'gh-secret'); assert.equal(env.JIRA_API_TOKEN, 'jira-secret')
 assert.match(readFileSync(env.JIRA_CONFIG_FILE, 'utf8'), /login: sandeep@example\.com/, 'a per-user jira config names the user')
 assert.equal(env.GIT_AUTHOR_NAME, 'Sandeep', 'a run commits as the developer who started it, by display name')
@@ -40,14 +42,14 @@ assert.equal(env.GIT_AUTHOR_EMAIL, 'sandeep@users.noreply.github.com',
 // rendered a colleague's name, because GitHub matches a commit to an account by
 // its author email.
 for (const who of ['nobody', undefined]) {
-  const e = await U.envForUser(who)
+  const e = await U.envForUser(who, githubOk)
   assert.equal(e.GH_TOKEN, undefined, `no github token for ${who}`)
   assert.equal(e.JIRA_API_TOKEN, undefined, `no jira token for ${who}`)
   assert.equal(e.GIT_AUTHOR_NAME, 'github-actions[bot]', `bot identity for ${who}`)
   assert.equal(e.GIT_AUTHOR_EMAIL, '41898282+github-actions[bot]@users.noreply.github.com')
 }
 await U.saveProfile('sandeep', { jiraTokenPlain: '' })
-assert.equal((await U.envForUser('sandeep')).JIRA_API_TOKEN, undefined, 'an empty token clears it')
+assert.equal((await U.envForUser('sandeep', githubOk)).JIRA_API_TOKEN, undefined, 'an empty token clears it')
 
 assert.equal(S.isPublicApiPath('/api/health'), true)
 assert.equal(S.isPublicApiPath('/api/auth/login'), true)
