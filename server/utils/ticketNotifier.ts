@@ -27,7 +27,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { plainTextToAdf } from './adf.ts'
 import { isJiraPostingEnabled, jiraAuthHeader, resolveJiraCredentials } from './jiraCredentials.ts'
-import { runArtifactsDir } from './runArtifacts.ts'
+import { PLACEHOLDER_PR, runArtifactsDir } from './runArtifacts.ts'
 import { envForUser } from './users.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 import type { Watch } from '../../shared/types/watch.ts'
@@ -69,9 +69,19 @@ export function renderTicketComment(input: RenderInput): string {
   lines.push(input.owner ? `@${input.owner}` : '(no assignee or reporter on this ticket to mention)')
   lines.push('')
 
-  if (input.outcome.prUrls.length > 0) {
+  // Three outcomes, not two. A run can open a real pull request and STILL not
+  // finish — the budget breaker trips between waves, after the PR exists — and
+  // calling that "finished" on a ticket a customer reads overstates it in the
+  // same direction as the placeholder did.
+  const finishedCleanly = input.outcome.runStatus === 'completed'
+  if (input.outcome.prUrls.length > 0 && finishedCleanly) {
     lines.push(`Pipeline run for ${input.ticketKey} finished — a pull request is ready for review:`)
     for (const pr of input.outcome.prUrls) lines.push(pr)
+  } else if (input.outcome.prUrls.length > 0) {
+    lines.push(`Pipeline run for ${input.ticketKey} opened a pull request, but the run did not finish cleanly — review it with that in mind:`)
+    for (const pr of input.outcome.prUrls) lines.push(pr)
+    lines.push('')
+    lines.push(`Run outcome: ${input.outcome.haltReason ?? `status '${input.outcome.runStatus}'`}`)
   } else {
     lines.push(`Pipeline run for ${input.ticketKey} stopped before opening a pull request.`)
     lines.push(`Reason: ${input.outcome.haltReason ?? `run ended with status '${input.outcome.runStatus}'`}`)
@@ -111,7 +121,13 @@ async function readReportedPrUrls(runId: string): Promise<string[]> {
     const repos = Array.isArray(meta.fix?.repos) ? meta.fix!.repos! : []
     const urls = repos
       .map(r => r?.pr)
-      .filter((pr): pr is string => typeof pr === 'string' && pr.trim().length > 0)
+      // The placeholder is not a pull request. Dropping it here is the whole
+      // difference between "stopped before opening a pull request" and a real
+      // Jira comment reading "a pull request is ready for review:
+      // https://example.invalid/pending" — which is what a budget-halted run
+      // posted onto PCRFV-1855, because the evidence step that overwrites the
+      // placeholder never got to run.
+      .filter((pr): pr is string => typeof pr === 'string' && pr.trim().length > 0 && pr.trim() !== PLACEHOLDER_PR)
     return [...new Set(urls)]
   } catch {
     return []
@@ -161,7 +177,9 @@ export async function notifyTicketOutcome(
     runId: run.id,
     runStatus: run.status,
     prUrls,
-    haltReason: prUrls.length > 0 ? undefined : (run.error ?? undefined),
+    // Kept whenever the run did not complete, even with a PR present: the
+    // 'opened a PR but did not finish' branch above has to be able to say why.
+    haltReason: (prUrls.length > 0 && run.status === 'completed') ? undefined : (run.error ?? undefined),
   }
 
   const comment = renderTicketComment({

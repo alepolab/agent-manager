@@ -3,7 +3,7 @@ import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { listRuns, getRun, saveRun } from './workflowRunStore.ts'
-import { runArtifactsDir } from './runArtifacts.ts'
+import { PLACEHOLDER_PR, runArtifactsDir } from './runArtifacts.ts'
 import type { WorkflowRun, RunCi } from '~~/shared/types/run'
 
 const execFileP = promisify(execFile)
@@ -16,7 +16,6 @@ const execFileP = promisify(execFile)
  */
 export const DEFAULT_CI_POLL_SECONDS = 60
 const LOOKBACK_MS = 24 * 60 * 60 * 1000
-const PLACEHOLDER_PR = 'https://example.invalid/pending'
 
 export type CheckReader = (prUrl: string) => Promise<{ name: string, bucket: string }[]>
 
