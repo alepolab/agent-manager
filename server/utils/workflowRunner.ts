@@ -6,7 +6,7 @@ import {
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
-import { createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
+import { defaultBudget, createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
@@ -192,7 +192,7 @@ function budgetExceeded(run: WorkflowRun): string | null {
   // and the wave loop recurses without publishing in between.
   const u = computeUsage(run)
   const tokens = u.input_tokens + u.output_tokens
-  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens} tokens over the ${b.maxTokens} token cap`
+  if (tokens > b.maxTokens) return `Budget exceeded: ${tokens} tokens over the ${b.maxTokens} token cap. Restart the next step to continue with a fresh allowance.`
   return null
 }
 
@@ -1293,6 +1293,20 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
     l.retryFeedback[stepId] = `Operator note: ${note.trim()}`
   }
 
+  // A restart is a person's decision, and it comes with a fresh allowance: the
+  // caps are raised to what is already spent plus one default budget. Otherwise
+  // the check that failed the run fails it again before the restarted step runs,
+  // and a run whose PR is open is left with its follow-up never done.
+  const spent = computeUsage(run)
+  const fresh = defaultBudget()
+  const extended = {
+    maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil((Date.now() - run.startedAt) / 60000) + fresh.maxMinutes),
+    maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens + spent.output_tokens + fresh.maxTokens),
+  }
+  if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes) {
+    log.info('operator restart extends the run budget', { runId, from: run.budget, to: extended })
+    run.budget = extended
+  }
   l.stopped = false
   l.running = true
   run.status = 'running'
