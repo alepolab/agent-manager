@@ -550,8 +550,16 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
   assert.ok(evidence.body.includes('Which branch the pull request targets'),
     'the evidence step must know which branch to target')
-  assert.ok(/targets \*\*develop\*\*,\s+never main/.test(evidence.body),
-    'a defect present on main, ci-release and develop enters at develop; landing on main is reverted by the next promotion')
+  // The team's standard flow, in the words the runner header also uses: work
+  // starts from develop; a production bug is a hotfix from main, merged back
+  // into ci-release and develop; a QA bug is a hotfix from ci-release, merged
+  // back into develop. The evidence step targets the header's base, never
+  // retargeting on its own judgement.
+  assert.ok(/from \*\*develop\*\*/.test(evidence.body), 'a task or a development bug enters at develop')
+  assert.ok(/hotfix from\s+\*\*main\*\*/.test(evidence.body), 'a production bug is a hotfix from main')
+  assert.ok(/main is merged into ci-release and develop/.test(evidence.body), 'and main is merged back afterwards')
+  assert.ok(/hotfix from\s+\*\*ci-release\*\*/.test(evidence.body), 'a QA bug is a hotfix from ci-release')
+  assert.ok(/Never retarget on your own/.test(evidence.body), 'the base named in the run header is the target; a person changes it, not the step')
 }
 
 console.log('workflowTemplates: all assertions passed')

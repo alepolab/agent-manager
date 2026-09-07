@@ -382,9 +382,10 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. Three of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
+- \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch from it — a production bug is a hotfix from main, a QA bug a hotfix from ci-release, everything else starts from develop — and no code step runs before this file says which.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
@@ -1317,19 +1318,23 @@ of intent rather than an artifact of the run.
 
 ## Which branch the pull request targets
 
-Promotion in this estate runs develop -> ci-release -> main. A fix therefore
-enters at develop and is promoted; it does not land on main directly.
+The run header names it: the runner cut the run branch from the base branch the
+team's standard flow assigns to this kind of work, and the pull request targets
+that same branch.
 
-So when the defect is present on more than one protected branch — main,
-ci-release and develop all carrying it — the pull request targets **develop**,
-never main. Opening it against main would put the fix ahead of the branch every
-later release is cut from, and the next promotion from develop would silently
-revert it. State the target branch and this reasoning in the report.
+- A task, a feature, or a bug found in development: from **develop**, promoted
+  develop -> ci-release -> main with the next release.
+- A bug found in production (a customer or support incident): a hotfix from
+  **main**. After it merges, main is merged into ci-release and develop, so the
+  fix is not lost at the next promotion; say so in the PR body.
+- A bug found by QA or CI on a release candidate: a hotfix from **ci-release**,
+  merged into develop after it lands; say so in the PR body.
 
-Target main only when the repository has no develop branch at all, or when the
-brief names main explicitly. If the repository's own CLAUDE.md names a different
-default (some repos here use \`development\` or \`master\`), that file wins over
-this rule — say which one you followed and why.
+Never retarget on your own. If the header's base looks wrong for what the
+ticket describes, say so in the report and open the PR against the header's
+base anyway; a person changes the base, not the evidence step. If the
+repository's own CLAUDE.md names a different default (some repos here use
+\`development\` or \`master\`), it applies only where the header names none.
 
 ## Git: local only
 
@@ -1463,7 +1468,7 @@ merge.
 
 - Branch name: \`fix/<TICKET-KEY>\` — take the key from the context packet. If there is no key, use a short descriptive slug prefixed \`fix/\`.
 - Commit subject: \`<TICKET-KEY>: <what this lands>\` (no space before the colon). No attribution trailers.
-- **Never push to \`main\`, \`develop\` or \`ci-release\`.** Push your branch and open a PR against the branch the product block's branch policy names for this run's \`work_type\` from \`meta.json\`; with no product block, the repository's default branch.
+- **Never push to \`main\`, \`develop\` or \`ci-release\`.** Push your branch and open a PR against the base branch the run header names (the runner cut the run branch from it for this run's kind of work and origin); with no header line, the repository's default branch.
 - Write the bundle to a file and pass it with \`gh pr create --body-file\`, so nothing is lost to shell quoting.
 
 If \`gh\` is not authenticated, stop after pushing the branch and report that the PR still needs opening — the work is not lost, it just is not a PR yet.
