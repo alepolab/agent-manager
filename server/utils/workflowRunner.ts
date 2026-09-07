@@ -551,7 +551,10 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
 
   // Checked between waves: a single step is bounded by its own maxTurns, and
   // the cap stops the next wave from starting rather than killing one mid-flight.
-  const over = budgetExceeded(run)
+  // A run with no step left to start is not over budget, it is finished: a real
+  // run delivered its pull request and was then marked failed by this check.
+  const anythingLeft = run.steps.some(s => s.status === 'pending' || s.status === 'running')
+  const over = anythingLeft ? budgetExceeded(run) : null
   if (over) {
     skipPending(l.state)
     for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'

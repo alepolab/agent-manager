@@ -703,7 +703,7 @@ not happen.`,
 
 Follow the \`agent-browser\` skill. In short: confirm the app is actually serving before opening a browser, use the repo's existing Playwright setup rather than scaffolding one, run with tracing on, and report the exact command, exit code, pass/fail counts and the trace artifact path so a reviewer can open it.
 
-If the repo has no Playwright setup, or the change has no UI surface, report \`n/a\` with a one-line reason. That is a successful outcome — a backend fix must not be blocked on a browser step with nothing to test. Do not install Playwright to avoid saying \`n/a\`.
+If the repo has no Playwright setup, or the change has no UI surface, report \`n/a\` with a one-line reason and the evidence behind it: quote the line of \`stack-report.md\` that says what was stood up, and paste the \`docker ps\` or \`ls\` output that shows no UI endpoint or no Playwright config. A skip asserted without a measurement is sent back for one; a real run paid a retry for exactly that. That is a successful outcome — a backend fix must not be blocked on a browser step with nothing to test. Do not install Playwright to avoid saying \`n/a\`.
 
 ## Read the run artifacts before you touch the filesystem
 
