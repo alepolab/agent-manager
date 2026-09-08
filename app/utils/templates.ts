@@ -467,13 +467,45 @@ The deployment repo is \`alepo-dev-team-infra\`: one \`docker-compose.<product>.
 - Address services by their **container-internal service name and port**, never the host-published port. Routing container-to-container via a host IP hits the host firewall and produces a *timeout*, not a connection refused — that signature means you used the wrong address, not that the service is down.
 - Work on the host you are running on. Do not attempt to reach a shared lab host over SSH.
 
-## Product-owned stacks (not yet in the deployment repo)
+## Deployment comes from the deployment repo. Always.
 
-Not every product has a \`docker-compose.<product>.yml\` in \`alepo-dev-team-infra\` yet. When the affected product has none, do not halt on that alone: use the product's own compose from its checkout under \`~/alepo-workspace/<product>/\` and record in your report that the stack came from the product repo, not the deployment repo. Never copy a developer's \`.env\` into the run; generate every secret the compose marks required with \`openssl\` and pass secrets as shell environment for the \`up\` command, not files. Put any compose override you need in the run artifacts directory, never in a repo checkout.
+\`alepo-dev-team-infra\` is the only place a stack is ever brought up from. Not
+the product's own \`docker-compose.yml\`, not a compose file you write, not an
+image you build by hand. Clone it alongside the product repo and deploy from
+there:
+
+\`\`\`
+git clone https://github.com/alepolab/alepo-dev-team-infra.git <checkout root>/alepo-dev-team-infra
+\`\`\`
+
+The product repo is for **building and testing** the change. The deployment
+repo is for **running** it. Those are different jobs and they do not swap.
+
+This is not a preference about tidiness. The deployment repo is where the
+estate's real topology lives — the external \`alepo-shared\` network on its pinned
+subnet, the per-service env prefixes, the \`TAG\` variable, the licence mounts, the
+healthchecks, and the fact that MongoDB, MariaDB and Keycloak come from the
+\`database\` and \`sso\` stacks rather than any product's own file. A stack stood up
+from a product's own compose looks like it works and is wired differently from
+production, so everything it proves is about an environment nobody runs.
+
+**If the product has no \`docker-compose.<product>.yml\` in the deployment repo,
+that is a halt**, and the halt is the useful outcome: it names a gap in the
+deployment repo that someone must close, which is worth more than a run that
+quietly proved something about a different environment. Say which file you
+looked for. Do not substitute the product's own compose — that route has been
+deliberately removed.
+
+The same rule binds every later step. A step that rebuilds the product image and
+redeploys it to verify the fix uses the deployment repo's compose file for that
+product, under its own compose project name, with the \`TAG\` variable pointing at
+the locally built image.
+
+Never copy a developer's \`.env\` into the run; generate every secret the compose marks required with \`openssl\` and pass secrets as shell environment for the \`up\` command, not files. Put any compose override you need in the run artifacts directory, never in a repo checkout.
 
 You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. When you render a compose file for evidence, use \`docker compose ... config --no-interpolate\`: the interpolated form prints every secret the environment holds into your output, and your output is kept as evidence. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
 
-Known recipes live as files: when your input's product block names a \`Recipe:\` path, read it first and follow it. It carries the product-specific quirks (image tag policy, port overrides, healthcheck, which variables to pass through). If there is no recipe and no compose in the deployment repo, fall back to the product checkout's own compose as described above, and write what you learned into your stack report so a recipe can be made from it.
+Known recipes live as files: when your input's product block names a \`Recipe:\` path, read it first and follow it. It carries the product-specific quirks (image tag policy, port overrides, healthcheck, which variables to pass through). If there is no recipe, work from the deployment repo's compose file for the product and write what you learned into your stack report so a recipe can be made from it. If there is no compose file for it there either, halt as above rather than looking elsewhere.
 
 ## What "up" means
 
@@ -777,11 +809,16 @@ that does not pass its own tests proves nothing worth having.
 docker build -t localhost/agent-sdlc/<repo>:<run id> <checkout path>
 \`\`\`
 
-2. **Deploy it alongside the baseline — never over it.** Use your own compose
-   project name and the local tag, and publish no host ports:
+2. **Deploy it alongside the baseline — never over it.** The compose file is
+   always the deployment repo's \`docker-compose.<product>.yml\`, never the
+   product's own: you are testing the image your build produced inside the
+   topology the estate actually runs, and a product's own compose is wired
+   differently from production. Use your own compose project name and the local
+   tag, and publish no host ports:
 
 \`\`\`
-TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id> -f <compose file> --profile <profile> up -d
+TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id> \
+  -f <infra checkout>/docker-compose.<product>.yml --profile <profile> up -d
 \`\`\`
 
    **Why alongside, and not in place.** This step runs *in parallel* with
