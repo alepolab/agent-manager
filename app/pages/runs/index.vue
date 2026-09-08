@@ -91,6 +91,58 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<strin
     busy.value = null
   }
 }
+
+const canDelete = (r: WorkflowRun) => !['running', 'paused'].includes(r.status)
+
+// Delete removes the run and its evidence for good: ask once inline, like Stop.
+const confirmingDelete = ref<string | null>(null)
+let deleteTimer: ReturnType<typeof setTimeout> | null = null
+async function del(r: WorkflowRun) {
+  if (confirmingDelete.value !== r.id) {
+    confirmingDelete.value = r.id
+    if (deleteTimer) clearTimeout(deleteTimer)
+    deleteTimer = setTimeout(() => { confirmingDelete.value = null }, 4000)
+    return
+  }
+  confirmingDelete.value = null
+  busy.value = r.id
+  try {
+    await $fetch(`/api/runs/${r.id}`, { method: 'DELETE' as any })
+    await refresh()
+  } catch (e: any) {
+    toast.add({ title: 'Failed to delete', description: e.data?.message || e.message, color: 'error' })
+  } finally {
+    busy.value = null
+  }
+}
+
+// Bulk delete of every failed run currently shown. One confirm, then one request each.
+const failedShown = computed(() => shown.value.filter(r => r.status === 'failed'))
+const confirmingBulk = ref(false)
+let bulkTimer: ReturnType<typeof setTimeout> | null = null
+const bulkDeleting = ref(false)
+async function deleteFailed() {
+  if (!confirmingBulk.value) {
+    confirmingBulk.value = true
+    if (bulkTimer) clearTimeout(bulkTimer)
+    bulkTimer = setTimeout(() => { confirmingBulk.value = false }, 4000)
+    return
+  }
+  confirmingBulk.value = false
+  bulkDeleting.value = true
+  const targets = [...failedShown.value]
+  let done = 0
+  try {
+    for (const r of targets) {
+      try { await $fetch(`/api/runs/${r.id}`, { method: 'DELETE' as any }); done++ }
+      catch { /* keep going; report the total at the end */ }
+    }
+    await refresh()
+    toast.add({ title: `Deleted ${done} of ${targets.length} failed run(s)`, color: done === targets.length ? 'success' : 'warning' })
+  } finally {
+    bulkDeleting.value = false
+  }
+}
 </script>
 
 <template>
@@ -113,6 +165,13 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<strin
           <option value="">All statuses</option>
           <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
         </select>
+        <UButton
+          v-if="failedShown.length"
+          size="xs" class="ml-auto" :variant="confirmingBulk ? 'solid' : 'soft'" :color="confirmingBulk ? 'error' : 'neutral'"
+          icon="i-lucide-trash-2" :loading="bulkDeleting"
+          :label="confirmingBulk ? `Delete ${failedShown.length} failed — confirm` : `Delete ${failedShown.length} failed`"
+          @click="deleteFailed"
+        />
       </div>
 
       <div
@@ -172,6 +231,13 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<strin
                     v-if="canStop(r)"
                     size="xs" :variant="confirmingStop === r.id ? 'solid' : 'ghost'" :color="confirmingStop === r.id ? 'error' : 'neutral'"
                     :label="confirmingStop === r.id ? 'Confirm stop' : 'Stop'" :loading="busy === r.id" @click="stop(r)"
+                  />
+                  <UButton
+                    v-if="canDelete(r)"
+                    size="xs" variant="ghost" :color="confirmingDelete === r.id ? 'error' : 'neutral'"
+                    :icon="confirmingDelete === r.id ? undefined : 'i-lucide-trash-2'"
+                    :label="confirmingDelete === r.id ? 'Confirm delete' : ''" :title="`Delete run and its evidence`"
+                    :aria-label="`Delete run`" :loading="busy === r.id" @click="del(r)"
                   />
                 </div>
               </td>

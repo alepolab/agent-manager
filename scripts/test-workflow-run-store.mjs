@@ -164,4 +164,27 @@ rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
   assert.ok(read.usage.usd > 0, 'and a price from the cost report')
 }
 
+// deleteRun removes the record and its evidence, and refuses a live run.
+{
+  const { existsSync, mkdirSync, writeFileSync: wf } = await import('node:fs')
+  process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'runstore-artifacts-'))
+  const runsBase = process.env.AGENT_RUNS_DIR
+  const done = await store.createRun({ workflowSlug: 'w', workflowName: 'W', initialPrompt: 'p', watch: 'direct-invocation', steps: [{ stepId: 'a', agentSlug: 'x', label: 'A' }], autoRun: false })
+  const rec = join(process.env.CLAUDE_DIR, 'workflow-runs', `${done.id}.json`)
+  const parsed = JSON.parse(readFileSync(rec, 'utf8')); parsed.status = 'failed'; writeFileSync(rec, JSON.stringify(parsed))
+  const artifacts = join(runsBase, done.id, 'artifacts')
+  mkdirSync(artifacts, { recursive: true }); wf(join(artifacts, 'meta.json'), '{}')
+  assert.equal(await store.deleteRun(done.id), 'ok')
+  assert.ok(!existsSync(rec), 'the record is gone')
+  assert.ok(!existsSync(join(runsBase, done.id)), 'and the evidence directory with it')
+  assert.equal(await store.deleteRun(done.id), 'not-found', 'deleting a gone run is not-found, not a crash')
+
+  const live = await store.createRun({ workflowSlug: 'w', workflowName: 'W', initialPrompt: 'p', watch: 'direct-invocation', steps: [{ stepId: 'a', agentSlug: 'x', label: 'A' }], autoRun: false })
+  const lp = join(process.env.CLAUDE_DIR, 'workflow-runs', `${live.id}.json`)
+  const lr = JSON.parse(readFileSync(lp, 'utf8')); lr.status = 'paused'; lr.pid = process.pid; lr.bootId = store.BOOT_ID; writeFileSync(lp, JSON.stringify(lr))
+  assert.equal(await store.deleteRun(live.id), 'live', 'a live run is refused; stop it first')
+  assert.ok(existsSync(lp), 'and its record is untouched')
+  rmSync(runsBase, { recursive: true, force: true })
+}
+
 console.log('workflowRunStore: all assertions passed')
