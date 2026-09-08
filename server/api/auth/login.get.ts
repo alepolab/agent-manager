@@ -13,7 +13,12 @@ export default defineEventHandler(async (event) => {
   const url = new URL('https://github.com/login/oauth/authorize')
   url.searchParams.set('client_id', clientId)
   url.searchParams.set('redirect_uri', `${base}/api/auth/callback`)
-  url.searchParams.set('scope', 'read:org repo read:user user:email')
+  // read:packages is not optional for this pipeline: the products' application
+  // images live in GHCR, and the stack-provisioner pulls them with the signed-in
+  // developer's token. Without it a run reaches Stand Up Stack and halts on
+  // "cannot pull ghcr.io/alepolab/<product>" — a 403 from the registry that
+  // looks like a missing image rather than a missing scope.
+  url.searchParams.set('scope', 'read:org repo read:packages read:user user:email')
   url.searchParams.set('state', state)
   return sendRedirect(event, url.toString())
 })
