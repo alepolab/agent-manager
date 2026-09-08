@@ -5,7 +5,7 @@
  *   node scripts/test-team-sync.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, symlinkSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -231,4 +231,22 @@ rmSync(bare, { recursive: true, force: true })
   assert.equal(typeof s.instance.workspaceRoot, 'string')
 }
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
+// A config directory whose skill is a SYMLINK into another tree — the normal
+// shape when skills are shared between tools. Seeding used to die here with
+// EEXIST and abandon everything after it: no workflow, no watches.
+{
+  const skill = join(process.env.CLAUDE_DIR, 'skills', 'intent-template')
+  const elsewhere = join(process.env.CLAUDE_DIR, 'elsewhere', 'intent-template')
+  mkdirSync(elsewhere, { recursive: true })
+  writeFileSync(join(elsewhere, 'SKILL.md'), 'stale\n')
+  rmSync(skill, { recursive: true, force: true })
+  mkdirSync(join(process.env.CLAUDE_DIR, 'skills'), { recursive: true })
+  symlinkSync(elsewhere, skill)
+
+  const after = await T.teamSync()
+  assert.equal(after.drifted, 0, 'a symlinked skill is replaced, not fatal')
+  assert.ok(!lstatSync(skill).isSymbolicLink(), 'the link is replaced by the real skill')
+  assert.ok(!readFileSync(join(skill, 'SKILL.md'), 'utf8').includes('stale'), 'seeded from the plugin, not the link target')
+}
+
 console.log('teamSync: all assertions passed')

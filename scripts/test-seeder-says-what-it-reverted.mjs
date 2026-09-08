@@ -45,8 +45,10 @@ check('reverted is returned, not just computed',
 
 // The ordering is the subtle part: applying sets state to 'ok', so a check
 // written after the write can never see 'drifted' and the list is always empty.
+// The character windows below are slack for the comments that sit between the
+// two statements, not part of the invariant — ORDER is what is being asserted.
 for (const [kind, re] of [
-  ['skill', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'skill', name \}\)[\s\S]{0,600}?await cp\(/],
+  ['skill', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'skill', name \}\)[\s\S]{0,1200}?await cp\(/],
   ['command', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'command'[\s\S]{0,200}?await writeFile\(to, next\)/],
   ['agent', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'agent', name: id \}\)\n\s*if \(apply && state !== 'ok'\) \{ await writeFile/],
 ]) {
