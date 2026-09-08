@@ -120,6 +120,8 @@ export interface WorkflowRun {
   origin?: string
   /** The branch the run branch was cut from and the pull request targets (see server/utils/branchPolicy.ts). */
   baseBranch?: string
+  /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
+  reworks?: number
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
