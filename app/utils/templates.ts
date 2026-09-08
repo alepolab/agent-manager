@@ -23,6 +23,8 @@ const SDLC_STANDING_RULES = `## Standing rules
 These hold at every step in this pipeline, not just this one:
 
 - **Verify against the artifact, not the description.** A doc, a \`FROM\` line, a config file, a ticket's own words — none of them are the thing itself. The SDK's own documentation once showed full model ids for an option that in practice only accepts bare aliases; the doc was wrong and the running system was right. Check the thing that will actually run, not what something says about it.
+- **Build and test in the product's own containers, orchestrated by the dev stack — never on this host.** Every product here is released from a Docker image, and \`alepo-dev-team-infra\` carries the compose file that builds and runs it (the header's Stack line names it, the recipe explains it). Build the product's image through that compose file's build target, and run the product's tests inside that image or inside the running stack (compose run, or compose exec against the service), so the toolchain, the dependency versions and the environment are the ones the product ships with. This host is the pipeline's own container: a toolchain you install here proves nothing about the product, and a real run spent its budget installing a JDK here to run a gradle build the product's image already carries. A host build is allowed only when the product has no container build at all, and the report says so in words.
+
 - **The fault may live outside this run's code — widen the run, do not halt on it.** When the evidence shows the defect is in another registered product or repository (a 500 raised inside the CRM while you were handed the portal, say), end your output with
 
       PIPELINE-WIDEN: <registry product key, or owner/repo> — <one sentence of evidence>
@@ -884,11 +886,11 @@ not happen.`,
       maxTurns: 30,
       skills: ['agent-browser', 'using-superpowers'],
     },
-    body: `You capture browser evidence for the change, against the stack the provisioning step brought up.
+    body: `You capture browser evidence for the change, against the stack the provisioning step brought up: what the changed screen looks like and does now, seen through a real browser, so a reviewer verifies the change visually without standing anything up.
 
-Follow the \`agent-browser\` skill. In short: confirm the app is actually serving before opening a browser, use the repo's existing Playwright setup rather than scaffolding one, run with tracing on, and report the exact command, exit code, pass/fail counts and the trace artifact path so a reviewer can open it.
+Follow the \`agent-browser\` skill. Confirm the app is actually serving first: the stack report names the URL and port, \`curl -sI\` it. Then, for every route the change touches (\`plan.md\` and the changed files name them), open it with \`agent-browser\`, exercise the changed behaviour with the steps the ticket describes, and save a screenshot of each state to \`browser/<route>-<state>.png\` in the run artifacts directory — always an absolute path, the daemon resolves relative ones elsewhere. Read the console after each interaction (\`agent-browser console\`) and record every error or warning, or state that it was clean. Where the repository already has a Playwright setup, run it as well with tracing on and report the exact command, exit code, pass/fail counts and the trace artifact path; do not scaffold one to have something to run.
 
-If the repo has no Playwright setup, or the change has no UI surface, report \`n/a\` with a one-line reason and the evidence behind it: quote the line of \`stack-report.md\` that says what was stood up, and paste the \`docker ps\` or \`ls\` output that shows no UI endpoint or no Playwright config. A skip asserted without a measurement is sent back for one; a real run paid a retry for exactly that. That is a successful outcome — a backend fix must not be blocked on a browser step with nothing to test. Do not install Playwright to avoid saying \`n/a\`.
+Report \`n/a\` only when the change has no UI surface, or nothing is serving to point a browser at, with a one-line reason and the evidence behind it: quote the line of \`stack-report.md\` that says what was stood up, and paste the \`docker ps\` or \`ls\` output that shows no UI endpoint or no Playwright config. A skip asserted without a measurement is sent back for one; a real run paid a retry for exactly that. That is a successful outcome — a backend fix must not be blocked on a browser step with nothing to test. Do not install Playwright to avoid saying \`n/a\`.
 
 ## Read the run artifacts before you touch the filesystem
 
@@ -905,10 +907,13 @@ TRACE: captured
 TRACE: n/a — <one-line reason>
 \`\`\`
 
-Then the detail: for \`captured\`, the command, exit code, counts, trace path and
+Then the detail: for \`captured\`, each screenshot by file name with one line on
+what it shows and how it relates to the ticket, the console findings, and, when
+a Playwright suite ran, its command, exit code, counts, trace path and
 screenshot-diff result if a baseline exists; for \`n/a\`, what you checked to
-reach that conclusion — no Playwright config in the repo, no UI surface in the
-changed files, no serving app to point a browser at.
+reach that conclusion — no UI surface in the changed files, no serving app to
+point a browser at. A repository without Playwright is not a reason: the
+screenshots are the evidence, Playwright is a bonus.
 
 The reason is not yours to invent: the header at the top of your input carries a
 **Browser surface** line, computed by looking at the checkout before you started.
@@ -926,7 +931,7 @@ that could only produce the same silence.
 
 ## Artifacts
 
-If you captured a trace, write it to \`trace.zip\` in the run artifacts directory named at the top of your input — the assembler records its filename only if the file is actually there.
+Screenshots go under \`browser/\` in the run artifacts directory named at the top of your input, and every file you name in the report must be there. If you captured a Playwright trace, write it to \`trace.zip\` in that same directory — the assembler records its filename only if the file is actually there.
 
 If there is no browser surface to trace, say so plainly and write nothing. The bundle allows a null trace; a fabricated \`trace.zip\` standing in for evidence that was never captured is worse than an honest absence.
 
