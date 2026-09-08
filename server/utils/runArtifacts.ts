@@ -498,8 +498,10 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
     'writing it, and never write a placeholder in place of a real result.',
-    'End your output with the verbatim `ls -la` of this directory: the step monitor',
-    'sees only your output, and a file it cannot see in it is a file that does not exist.',
+    'End your output with a listing of this directory, so the step monitor — which',
+    'sees only your output — can check each file you claim is really there: the',
+    'verbatim `ls -la` if you have a shell, otherwise the file names your own tools',
+    'return (Glob `*` in it). A file the listing does not show does not exist.',
   ]
   if (product) {
     lines.push(
