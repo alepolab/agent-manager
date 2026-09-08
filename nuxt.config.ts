@@ -1,6 +1,17 @@
 export default defineNuxtConfig({
   modules: ['@nuxt/ui'],
 
+  // The app declares its fonts with explicit <link> stylesheets (fontshare, the
+  // fontsource CDN) in app.head below, so @nuxt/fonts — bundled by @nuxt/ui —
+  // has nothing to resolve. Its build-time provider fetch (Google, Bunny) only
+  // failed the docker image build on runners with no network to those hosts, so
+  // every provider is disabled: no font request leaves the build.
+  fonts: {
+    providers: {
+      google: false, googleicons: false, bunny: false, fontshare: false, fontsource: false, adobe: false,
+    },
+  },
+
   devtools: { enabled: false },
 
   future: { compatibilityVersion: 4 },
