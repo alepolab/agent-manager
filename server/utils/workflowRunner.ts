@@ -153,13 +153,40 @@ export async function getLiveLog(runId: string): Promise<Record<string, string[]
   return out
 }
 const LOG_TAIL = 400
+/** One append chain per step log file: see the comment in logLine. */
+const logChains = new Map<string, Promise<void>>()
+
+/**
+ * Waits for every pending append of this run's step logs, and forgets them.
+ *
+ * Without this a settled run's log artifact was simply INCOMPLETE: the appends
+ * are asynchronous, so a burst reported just before the last step returned was
+ * still in flight when the run finished and the artifacts were finalized. A
+ * test that reported 40 lines found 21 of them on disk. Nothing errors — the
+ * file just ends early, and it is the only copy once the live tail is dropped.
+ */
+async function flushLogs(runId: string): Promise<void> {
+  const prefix = runArtifactsDir(runId)
+  const mine = [...logChains.keys()].filter(k => k.startsWith(prefix))
+  await Promise.all(mine.map(k => logChains.get(k)?.catch(() => {})))
+  for (const k of mine) logChains.delete(k)
+}
 function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
   const stamped = `${new Date().toISOString().slice(11, 19)} ${line}`
   const tail = (l.logs[rec.stepId] ??= [])
   tail.push(stamped)
   if (tail.length > LOG_TAIL) tail.splice(0, tail.length - LOG_TAIL)
   const index = String(run.steps.indexOf(rec) + 1).padStart(2, '0')
-  void appendFile(join(runArtifactsDir(run.id), 'steps', `step-${index}-${rec.agentSlug}.log`), stamped + '\n').catch(() => {})
+  const path = join(runArtifactsDir(run.id), 'steps', `step-${index}-${rec.agentSlug}.log`)
+  // Chained per file, for the reason publishChains exists below. An unchained
+  // `void appendFile` let two lines reported in the same tick land in either
+  // order, so the step LOG ARTIFACT — the evidence a reviewer reads after the
+  // process is gone — could disagree with the live tail it is supposed to
+  // reproduce. Rare by hand, ordinary for an agent emitting a burst of tool
+  // lines, and invisible afterwards: the file looks like a normal log.
+  logChains.set(path, (logChains.get(path) ?? Promise.resolve())
+    .then(() => appendFile(path, stamped + '\n'))
+    .catch(() => {}))
   for (const fn of logSubscribers.get(run.id) ?? []) {
     try { fn(rec.stepId, stamped) } catch { /* a broken listener must not stop the run */ }
   }
@@ -269,6 +296,10 @@ async function publish(run: WorkflowRun) {
     // the run record itself.
     if (TERMINAL_STATUSES.includes(run.status)) {
       try {
+        // Before finalizing: the step logs are appended asynchronously, and an
+        // artifact that stops mid-burst is the only record left once the live
+        // tail is dropped.
+        await flushLogs(run.id)
         await finalizeRunArtifacts(run)
         log.debug('run artifacts finalized', { runId: run.id, status: run.status })
         // Evidence stays in the run's artifacts directory, where Agent Manager
