@@ -343,10 +343,10 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             </label>
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
-            <div class="min-w-0 flex-1">
+            <div class="min-w-0 flex-1 max-w-2xl">
               <div class="text-[13px] font-medium">Model for pipeline agents</div>
-              <div class="text-[12px] mt-0.5 text-label">
-                Every agent call in a run uses this model when set, monitors included, whatever the agent's own file says. Default lets each agent decide: the fix and test agents ship on Opus, the rest on Sonnet. Fable is the strongest and carries no list price here, so its steps show as unpriced.
+              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+                Runs every pipeline agent, monitors included, on one model, overriding each agent's own choice. Default keeps those choices: Opus for the fix and test agents, Sonnet for the rest. Fable is the strongest; its steps show as unpriced, since it has no list price here.
               </div>
             </div>
             <!-- field-input is full-width by design; these controls sit beside their text, so the width is pinned here. -->
@@ -360,10 +360,10 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             </select>
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
-            <div class="min-w-0 flex-1">
+            <div class="min-w-0 flex-1 max-w-2xl">
               <div class="text-[13px] font-medium">Run budget</div>
-              <div class="text-[12px] mt-0.5 text-label">
-                Caps for each new run. When a run reaches one it pauses and asks whether to continue with another allowance. Defaults 8,000,000 tokens and 180 minutes; an AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES variable on the instance overrides these.
+              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+                Caps for each new run; when one is reached the run pauses and asks whether to continue with a fresh allowance. Defaults are 8,000,000 tokens and 180 minutes, overridden by AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES on the instance.
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
@@ -381,10 +381,10 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <span class="text-[11px] text-label">min</span>
             </div>
           </div>
-          <div class="flex items-center justify-between">
-            <div>
+          <div class="flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1 max-w-2xl">
               <div class="text-[13px] font-medium">Always Thinking</div>
-              <div class="text-[12px] mt-0.5 text-label">
+              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
                 When enabled, Claude takes more time to reason through complex problems before responding. Better answers, but slower and uses more resources.
               </div>
             </div>
@@ -402,9 +402,9 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
           <!-- /tasks-picker-infra lookback window -->
           <div class="flex items-center justify-between gap-4">
-            <div>
+            <div class="min-w-0 flex-1 max-w-2xl">
               <div class="text-[13px] font-medium">Task picker window</div>
-              <div class="text-[12px] mt-0.5 text-label">
+              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
                 How far back <code>/tasks-picker-infra</code> looks for newly raised DEVOPS issues.
                 Jira cannot filter below one minute, so the command queries the window rounded up to
                 whole minutes and applies the exact seconds itself.
