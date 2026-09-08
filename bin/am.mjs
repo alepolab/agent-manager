@@ -24,8 +24,16 @@ function flag(name) {
   return v !== undefined && !v.startsWith('--') ? v : true
 }
 
+// The instance API token, when the operator's shell has one. Without it every
+// call to an instance with sign-in enabled comes back "Sign in required" — this
+// CLI sent no credential at all, which made it usable only against
+// AUTH_DISABLED=1, the one setup it is least needed in.
+const authHeaders = process.env.AGENT_MANAGER_API_TOKEN
+  ? { Authorization: `Bearer ${process.env.AGENT_MANAGER_API_TOKEN}` }
+  : {}
+
 async function api(path, init) {
-  const res = await fetch(base + path, { headers: { 'content-type': 'application/json' }, ...init })
+  const res = await fetch(base + path, { ...init, headers: { 'content-type': 'application/json', ...authHeaders, ...init?.headers } })
   const text = await res.text()
   let body; try { body = JSON.parse(text) } catch { body = text }
   if (!res.ok) throw new Error(body?.message || `${res.status} ${res.statusText}`)
