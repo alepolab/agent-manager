@@ -146,6 +146,7 @@ const nodes = computed(() => {
         agentModel: agent?.frontmatter.model,
         monitorLabel: agentBySlug(step.monitorSlug)?.frontmatter.name ?? step.monitorSlug,
         approval: step.approval === true,
+        runWhen: step.runWhen?.artifact,
         maxVisits: step.maxVisits,
         status: exec?.status,
         visits: exec?.visits,
@@ -304,6 +305,13 @@ function patchStep(stepId: string, changes: Partial<WorkflowStep>) {
 const settingsMonitor = computed({
   get: () => settingsStep.value?.monitorSlug,
   set: (value?: string) => settingsStepId.value && patchStep(settingsStepId.value, { monitorSlug: value || undefined }),
+})
+const settingsRunWhen = computed({
+  get: () => settingsStep.value?.runWhen?.artifact ?? '',
+  set: (value: string) => {
+    const artifact = value.trim()
+    if (settingsStepId.value) patchStep(settingsStepId.value, { runWhen: artifact ? { artifact } : undefined })
+  },
 })
 const settingsMaxVisits = computed({
   get: () => settingsStep.value?.maxVisits ?? DEFAULT_MAX_VISITS,
@@ -647,6 +655,20 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               <span class="field-label mb-0">Ask me before this step runs</span>
             </label>
             <span class="field-hint">The run pauses on the run page until you approve, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Run only when this artifact has content</label>
+            <input
+              v-model="settingsRunWhen" type="text" class="field-input" placeholder="approved-drafts.json"
+            >
+            <span class="field-hint">
+              A filename in the run's artifacts directory, for a step that consumes what an
+              earlier step wrote. Leave empty and the step always runs. When the file is not
+              written, or holds an empty array or object, the step is skipped and everything
+              downstream still runs. When it exists but is not valid JSON the step fails, so a
+              step that crashed mid-write is never mistaken for one with nothing to do.
+            </span>
           </div>
 
           <div v-if="settingsStep.agentSlug === 'sdlc-jira-tracker'" class="field-group">

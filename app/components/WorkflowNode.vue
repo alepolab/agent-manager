@@ -12,6 +12,7 @@ const props = defineProps<{
     monitorLabel?: string
     maxVisits?: number
     approval?: boolean
+    runWhen?: string
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
@@ -59,6 +60,12 @@ const verdictColor: Record<string, string> = {
             :title="`Ran ${data.visits} times`"
           >×{{ data.visits }}</span>
           <span v-if="data.approval" class="inline-flex items-center" title="Waits for your approval before running"><UIcon name="i-lucide-hand" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.runWhen"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Runs only when ${data.runWhen} has content`"
+          ><UIcon name="i-lucide-git-branch" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.monitorLabel"
             class="text-[9px] truncate"

@@ -258,6 +258,28 @@ export function markCompleted(graph: WorkflowGraph, state: RunState, id: string)
   }
 }
 
+/**
+ * Settle a node whose `runWhen` condition was not met: it never ran, and whatever
+ * it feeds still schedules.
+ *
+ * The graph status is 'completed' even though the run record says 'skipped',
+ * because the AND-join in markCompleted tests `status === 'completed'` on every
+ * forward predecessor - a branch that legitimately had nothing to do must not
+ * wedge the join behind it. That divergence between graph status and record
+ * status is deliberate and already load-bearing for Jira steps, which settle the
+ * same way (see the `step.jira` branch in server/utils/workflowRunner.ts).
+ *
+ * Clearing `armed` is the whole reason this is not just a markCompleted call.
+ * markCompleted does not clear it; markRunning normally does, and a condition
+ * skip deliberately never calls markRunning (nothing was attempted, so nothing
+ * may be billed as a visit). Leave `armed` set and readyNodes hands the node
+ * straight back on the next pass - the caller's resolution loop never terminates.
+ */
+export function markSkippedByCondition(graph: WorkflowGraph, state: RunState, id: string): void {
+  state.armed[id] = false
+  markCompleted(graph, state, id)
+}
+
 export function markFailed(state: RunState, id: string): void {
   state.status[id] = 'failed'
   state.armed[id] = false
@@ -356,6 +378,62 @@ export function parseSkip(text: string | undefined | null): string | null {
   const matches = [...(text ?? '').matchAll(/^PIPELINE-SKIP:[^\S\n]*(\S.*)$/gm)]
   const last = matches[matches.length - 1]
   return last ? last[1]!.trim() : null
+}
+
+export type GateResult = {
+  verdict: 'run' | 'skip' | 'error'
+  /** Reads as the predicate of a sentence about the file: "<name> <detail>." */
+  detail: string
+  /** Entries found, when the shape has a countable one. */
+  count?: number
+}
+
+/**
+ * Whether a step's `runWhen` artifact holds something worth running for.
+ *
+ * Takes the file's text rather than its path so the whole decision - every
+ * emptiness rule and every sentence a reviewer reads - stays I/O-free and
+ * testable under plain node. The caller does the reading and passes `null` when
+ * the file could not be read at all.
+ *
+ * Missing and malformed are deliberately different verdicts. A file that was
+ * never written is a legitimate "nothing to do here": the gate ran and found
+ * no work. A file that exists but is not JSON means the step that produced it
+ * crashed mid-write or wrote something nobody can consume, and reading that as
+ * "nothing to do" would let a broken gate silently complete a run having
+ * created nothing - the exact silent-nothing the rest of this pipeline is built
+ * to prevent. So it is an error, and it fails the step.
+ */
+export function gateSatisfied(raw: string | null): GateResult {
+  if (raw === null) return { verdict: 'skip', detail: 'was not written' }
+  if (!raw.trim()) return { verdict: 'skip', detail: 'is empty' }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { verdict: 'error', detail: 'exists but is not valid JSON' }
+  }
+
+  if (parsed === null) return { verdict: 'skip', detail: 'holds null' }
+  if (Array.isArray(parsed)) {
+    return parsed.length
+      ? { verdict: 'run', detail: `holds ${parsed.length} ${parsed.length === 1 ? 'entry' : 'entries'}`, count: parsed.length }
+      : { verdict: 'skip', detail: 'holds an empty array (0 entries)', count: 0 }
+  }
+  if (typeof parsed === 'string') {
+    return parsed ? { verdict: 'run', detail: 'holds a string' } : { verdict: 'skip', detail: 'holds an empty string' }
+  }
+  if (typeof parsed === 'object') {
+    const keys = Object.keys(parsed as Record<string, unknown>).length
+    return keys
+      ? { verdict: 'run', detail: `holds an object with ${keys} ${keys === 1 ? 'key' : 'keys'}`, count: keys }
+      : { verdict: 'skip', detail: 'holds an empty object', count: 0 }
+  }
+  // A bare number or boolean: falsy is nothing to do, truthy is something.
+  return parsed
+    ? { verdict: 'run', detail: `holds ${JSON.stringify(parsed)}` }
+    : { verdict: 'skip', detail: `holds ${JSON.stringify(parsed)}` }
 }
 
 const CLIP = 4000

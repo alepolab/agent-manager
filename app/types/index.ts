@@ -265,6 +265,23 @@ export interface WorkflowStep {
    * into the run's checkout before the step starts, with the reason recorded.
    */
   testsUnlocked?: boolean
+  /**
+   * Conditional routing: the step runs only when the named run artifact holds
+   * something. Absent means it always runs.
+   *
+   * `artifact` is a filename relative to the run's artifacts directory. Not
+   * written, blank, or holding an empty array / object / string / null / 0 /
+   * false, and the step is skipped - its successors still schedule, so a join
+   * downstream is not wedged behind the branch that had nothing to do. Present
+   * but not valid JSON FAILS the step, because a producer that crashed
+   * mid-write must not read as "nothing to do".
+   *
+   * Only "non-empty" is expressible, deliberately. If a negated form is ever
+   * needed ("run only when nothing was escalated"), add a mode to this object
+   * rather than a parallel `skipWhen` - two fields that gate the same step from
+   * opposite directions is a rule nobody can read off the canvas.
+   */
+  runWhen?: { artifact: string }
 }
 
 export interface Workflow {

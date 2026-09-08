@@ -1320,6 +1320,216 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.match(lost.steps.find(s => s.stepId === 'r').error, /not a step of this run/)
 }
 
+
+// ── 27. Conditional routing: a step runs only when its artifact holds work ─
+// The shape that prompted this: a Decision Gate writes two files, and each of
+// its two successors consumes one of them. Either may legitimately be empty,
+// and the empty branch must not run — nor, when it carries `approval`, ask a
+// person to approve doing nothing.
+{
+  const gateFlow = {
+    slug: 'gate-demo', name: 'Gate Demo',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['ap', 'esc'] },
+      { id: 'ap', agentSlug: 'agent-ap', label: 'Create Jira (Auto-Approved)', next: ['j'], runWhen: { artifact: 'approved-drafts.json' } },
+      { id: 'esc', agentSlug: 'agent-esc', label: 'Create Jira (Escalated)', next: ['j'], approval: true, runWhen: { artifact: 'escalated-drafts.json' } },
+      { id: 'j', agentSlug: 'agent-j', label: 'Dispatch', next: [] },
+    ],
+  }
+
+  // The gate learns where to write from the artifact header, exactly as a real
+  // agent does — the same channel poisonMetaFromInput uses.
+  function gateWriting(approved, escalated) {
+    return async (agentSlug, input) => {
+      calls.push(agentSlug)
+      if (agentSlug === 'agent-g') {
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        if (approved !== null) writeFileSync(join(dir, 'approved-drafts.json'), approved)
+        if (escalated !== null) writeFileSync(join(dir, 'escalated-drafts.json'), escalated)
+      }
+      return `output of ${agentSlug}`
+    }
+  }
+
+  // ── 27a. The reported bug: nothing escalated, so nobody is asked ─────────
+  runner.setAgentCaller(gateWriting('[{"key":"A-1"}]', '[]'))
+  calls.length = 0
+  let g1 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g1 = await runner.waitForSettled(g1.id, TIMEOUT)
+
+  // The assertion that proves the feature: NOT 'paused'. Before conditional
+  // routing this run stopped on an approval prompt for an empty file.
+  assert.equal(g1.status, 'completed', 'an empty escalated branch must not pause the run for approval')
+  assert.equal(g1.question, undefined, 'and must leave no question behind')
+  const esc1 = g1.steps.find(s => s.stepId === 'esc')
+  assert.equal(esc1.status, 'skipped', 'the branch whose artifact was empty is skipped')
+  assert.match(esc1.skipReason, /escalated-drafts\.json/, 'the reason names the file')
+  assert.match(esc1.skipReason, /empty array/, 'and what was found in it')
+  assert.equal(esc1.visits, 0, 'a condition skip spends no visit')
+  assert.equal(g1.steps.find(s => s.stepId === 'ap').status, 'completed', 'the branch with work runs')
+  assert.equal(g1.steps.find(s => s.stepId === 'j').status, 'completed', 'the join still runs')
+  assert.ok(!calls.includes('agent-esc'), 'the skipped step never reached its agent')
+  assert.deepEqual(calls.sort(), ['agent-ap', 'agent-g', 'agent-j'])
+
+  // ── 27b. Both branches empty: the join runs and is TOLD they were empty ──
+  runner.setAgentCaller(gateWriting('[]', '[]'))
+  calls.length = 0
+  let g2 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g2 = await runner.waitForSettled(g2.id, TIMEOUT)
+  assert.equal(g2.status, 'completed')
+  assert.equal(g2.steps.find(s => s.stepId === 'ap').status, 'skipped')
+  assert.equal(g2.steps.find(s => s.stepId === 'esc').status, 'skipped')
+  const join2 = g2.steps.find(s => s.stepId === 'j')
+  assert.equal(join2.status, 'completed', 'a join whose every branch was empty still runs')
+  // The point of publishing the skip as a sentence: an unset output would hand
+  // the join two empty strings, indistinguishable from steps that ran and
+  // produced nothing. The join has to be able to report that there was no work.
+  assert.match(join2.input, /approved-drafts\.json/, 'the join is told the approved branch was empty')
+  assert.match(join2.input, /escalated-drafts\.json/, 'and the escalated one too')
+  assert.deepEqual(calls.sort(), ['agent-g', 'agent-j'])
+
+  // ── 27c. A non-empty escalated branch still gates on approval ────────────
+  runner.setAgentCaller(gateWriting('[{"key":"A-1"}]', '[{"key":"E-1"}]'))
+  calls.length = 0
+  let g3 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g3 = await runner.waitForSettled(g3.id, TIMEOUT)
+  assert.equal(g3.status, 'paused', 'real escalations still wait for a person')
+  assert.equal(g3.question.kind, 'approval')
+  assert.equal(g3.question.stepId, 'esc')
+  // Documents a defect this change does NOT fix: the approval gate holds the
+  // WHOLE wave, so the auto-approved sibling waits on the human too. Conditional
+  // routing only removes the case where the escalated branch was empty.
+  assert.equal(g3.steps.find(s => s.stepId === 'ap').status, 'pending',
+    'known limitation: one gated node still holds its whole wave')
+  g3 = await runner.continueRun(g3.id)
+  g3 = await runner.waitForSettled(g3.id, TIMEOUT)
+  assert.equal(g3.status, 'completed')
+  assert.ok(calls.includes('agent-esc'), 'the approved branch runs once a person says yes')
+
+  // ── 27d. A missing artifact skips; the run does not silently look normal ─
+  runner.setAgentCaller(gateWriting(null, null))
+  calls.length = 0
+  let g4 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g4 = await runner.waitForSettled(g4.id, TIMEOUT)
+  assert.equal(g4.status, 'completed')
+  assert.match(g4.steps.find(s => s.stepId === 'ap').skipReason, /was not written/,
+    'a file nobody wrote reads differently from one that is empty')
+
+  // ── 27e. Malformed JSON FAILS the step; it never reads as "nothing to do" ─
+  runner.setAgentCaller(gateWriting('{', '[]'))
+  calls.length = 0
+  let g5 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g5 = await runner.waitForSettled(g5.id, TIMEOUT)
+  assert.equal(g5.status, 'failed', 'a producer that crashed mid-write must not complete the run quietly')
+  const ap5 = g5.steps.find(s => s.stepId === 'ap')
+  assert.equal(ap5.status, 'failed')
+  assert.match(ap5.error, /approved-drafts\.json/, 'the error names the file')
+  assert.match(ap5.error, /not valid JSON/, 'and why it could not be evaluated')
+  assert.ok(!calls.includes('agent-j'), 'nothing downstream runs')
+
+  // ── 27f. An artifact name that escapes the run directory is refused ──────
+  {
+    const escapeFlow = {
+      slug: 'gate-escape', name: 'Gate Escape',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['x'] },
+        { id: 'x', agentSlug: 'agent-x', label: 'X', next: [], runWhen: { artifact: '../../../etc/passwd' } },
+      ],
+    }
+    runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
+    let g6 = await runner.startRun({ workflow: escapeFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g6 = await runner.waitForSettled(g6.id, TIMEOUT)
+    assert.equal(g6.status, 'failed')
+    assert.match(g6.steps.find(s => s.stepId === 'x').error, /outside the run's artifacts directory/)
+  }
+
+  // ── 27g. A terminal conditional step COMPLETES the run, never "stuck" ────
+  // Guards the stuck detector: it counts steps whose record still reads
+  // 'pending', so the condition must resolve before it, not after.
+  {
+    const tailFlow = {
+      slug: 'gate-tail', name: 'Gate Tail',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['t'] },
+        { id: 't', agentSlug: 'agent-t', label: 'Tail', next: [], runWhen: { artifact: 'never-written.json' } },
+      ],
+    }
+    runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
+    let g7 = await runner.startRun({ workflow: tailFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g7 = await runner.waitForSettled(g7.id, TIMEOUT)
+    assert.equal(g7.status, 'completed', 'a workflow ending in a skipped conditional step is finished, not stuck')
+    assert.equal(g7.error, undefined, 'and reports no "No step can run" error')
+    assert.equal(g7.steps.find(s => s.stepId === 't').status, 'skipped')
+  }
+
+  // ── 27h. A monitor RETRY is not swallowed by the condition ───────────────
+  // runWhen gates a forward arming only. A retry arrives by another route and
+  // re-testing the artifact there would discard the monitor's feedback.
+  {
+    const retryFlow = {
+      slug: 'gate-retry', name: 'Gate Retry',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['r'] },
+        { id: 'r', agentSlug: 'agent-r', label: 'R', next: [], runWhen: { artifact: 'work.json' }, monitorSlug: 'mon' },
+      ],
+    }
+    let rCalls = 0
+    let verdict = 'VERDICT: RETRY'
+    runner.setAgentCaller(async (agentSlug, input) => {
+      if (agentSlug === 'agent-g') {
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        writeFileSync(join(dir, 'work.json'), '[1]')
+        return 'gate done'
+      }
+      if (agentSlug === 'mon') { const v = verdict; verdict = 'VERDICT: CONTINUE'; return v }
+      if (agentSlug === 'agent-r') {
+        rCalls++
+        // Empty the artifact after the first attempt: a re-test would now skip.
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        writeFileSync(join(dir, 'work.json'), '[]')
+        return 'r done'
+      }
+      return `output of ${agentSlug}`
+    })
+    let g8 = await runner.startRun({ workflow: retryFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g8 = await runner.waitForSettled(g8.id, TIMEOUT)
+    assert.equal(rCalls, 2, 'the monitor retry re-runs the step even though the artifact is now empty')
+    assert.equal(g8.steps.find(s => s.stepId === 'r').status, 'completed')
+  }
+
+  // ── 27i. An operator restart outranks the condition ──────────────────────
+  // Same concession as the extra visit a restart grants: a predicate guards
+  // automatic scheduling, not a person naming the step they want run. It also
+  // proves the skip rehydrates as settled — skipReason is what makes it so.
+  {
+    mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'gate-restart.json'),
+      JSON.stringify({ name: 'Gate Restart', description: '', steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['ap', 'esc'] },
+        { id: 'ap', agentSlug: 'agent-ap', label: 'AP', next: ['j'], runWhen: { artifact: 'approved-drafts.json' } },
+        { id: 'esc', agentSlug: 'agent-esc', label: 'ESC', next: ['j'], runWhen: { artifact: 'escalated-drafts.json' } },
+        { id: 'j', agentSlug: 'agent-j', label: 'J', next: [] },
+      ] }))
+    const restartFlow = { slug: 'gate-restart', name: 'Gate Restart', steps: JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'gate-restart.json'), 'utf8')).steps }
+
+    runner.setAgentCaller(gateWriting('[{"key":"A-1"}]', '[]'))
+    calls.length = 0
+    let g9 = await runner.startRun({ workflow: restartFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g9 = await runner.waitForSettled(g9.id, TIMEOUT)
+    assert.equal(g9.status, 'completed')
+    assert.equal(g9.steps.find(s => s.stepId === 'esc').status, 'skipped')
+
+    // Forget the live record, as a server restart would, then restart the very
+    // step the condition skipped. The artifact is still empty.
+    runner._dropLive(g9.id)
+    calls.length = 0
+    g9 = await runner.restartRun(g9.id, 'esc')
+    g9 = await runner.waitForSettled(g9.id, TIMEOUT)
+    assert.ok(calls.includes('agent-esc'),
+      'restarting a condition-skipped step by name runs it despite the still-empty artifact')
+    assert.equal(g9.status, 'completed')
+  }
+}
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

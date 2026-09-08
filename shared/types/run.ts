@@ -56,10 +56,18 @@ export interface RunStep {
    *  measured, so it is not asserted here. Use this to see that an agent is
    *  still moving and roughly how much it has done, never to judge how close
    *  it is to its limit. */
-  /** Why this step declared itself not applicable, when `status` is
-   *  'skipped' because the agent emitted `PIPELINE-SKIP:`. Absent for a step
-   *  the scheduler skipped after an upstream failure - those two are very
-   *  different events and the bundle must not conflate them. */
+  /** Why this step did no work, when `status` is 'skipped'. Two producers set
+   *  it: the agent emitted `PIPELINE-SKIP:` (it declared itself not
+   *  applicable), or the step's `runWhen` condition was not met (the artifact
+   *  it consumes holds nothing, so the runner never called it) - in which case
+   *  the reason names the file and what was found in it. Absent for a step the
+   *  scheduler skipped after an upstream failure. All three are very different
+   *  events and the bundle must not conflate them.
+   *
+   *  Load-bearing beyond reporting: `rehydrate` treats a step as settled only
+   *  when it is 'completed', or 'skipped' WITH a reason. A condition skip that
+   *  recorded no reason would read back as unsettled after a restart, its
+   *  successors would never be armed, and the run would wedge. */
   skipReason?: string
   assistantMessages?: number
   lastTool?: string

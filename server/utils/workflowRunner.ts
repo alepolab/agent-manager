@@ -1,7 +1,7 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
-  monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
+  monitorPrompt, MAX_CONCURRENCY, ancestorsOf, gateSatisfied, markSkippedByCondition,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
@@ -33,7 +33,7 @@ import { join } from 'node:path'
 import { getClaudeDir } from './claudeDir.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
-  markArtifactsUnusable,
+  markArtifactsUnusable, resolveRunArtifact,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
@@ -81,7 +81,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string } }[]
 }
 
 export interface StartRunOpts {
@@ -140,6 +140,11 @@ interface Live {
   widen?: { from: string, target: string, reason: string, added: string[] }
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
+  /** Steps whose `runWhen` condition is waived for one evaluation, because an
+   *  operator restarted them by name. Same concession as the extra visit a
+   *  restart grants: a predicate guards automatic scheduling, not a person's
+   *  explicit decision to run this step. Consumed on first evaluation. */
+  conditionOverride?: Set<string>
 }
 const live = new Map<string, Live>()
 const subscribers = new Map<string, Set<(run: WorkflowRun) => void>>()
@@ -953,6 +958,130 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   }
 }
 
+/**
+ * A step in `wave` failed: nothing pending will run, and the run is over.
+ * Shared by the post-wave failure path and by an unevaluable step condition,
+ * so both settle the record identically.
+ */
+async function failRunAfterWave(l: Live, run: WorkflowRun, wave: string[]): Promise<WorkflowRun> {
+  skipPending(l.state)
+  for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+  run.status = 'failed'
+  // The run's OWN reason, carried up from the step that supplied it. Without
+  // this the record read `error: (none)` on every step failure: a real
+  // provisioner burned 47.4 minutes on error_max_turns, and the step record
+  // and the container log both said so while the run itself said nothing.
+  // The most expensive failures were the ones that explained themselves
+  // least, which is exactly backwards. Joined rather than first-only because
+  // a parallel wave can fail in more than one place at once.
+  run.error = run.steps
+    .filter(s => s.status === 'failed' && s.error)
+    .map(s => `${s.label}: ${s.error}`)
+    .join(' · ')
+    || 'A step failed without recording a reason'
+  run.endedAt = Date.now()
+  run.currentStepIds = []
+  run.nextStepIds = []
+  l.running = false
+  log.warn('run failed', { runId: run.id, workflowSlug: run.workflowSlug, failedInWave: wave })
+  await publish(run)
+  return run
+}
+
+/**
+ * Settle every armed step whose `runWhen` condition is not met, before the wave
+ * is chosen.
+ *
+ * Conditional routing exists because a fan-out here is unconditional: a Decision
+ * Gate that writes an empty `escalated-drafts.json` still armed the step that
+ * consumes it, which then ran with nothing to do - and, when that step carried
+ * `approval`, asked a person to approve doing nothing.
+ *
+ * Gating on the artifact the step will actually consume, rather than on a routing
+ * token the producing agent emits, is deliberate: an agent that announces a branch
+ * while writing an empty file reproduces the original bug exactly. The file is the
+ * fact; the announcement is a claim.
+ *
+ * Returns `failed: true` when a condition could not be evaluated - the artifact
+ * exists but is not JSON, or names a path outside the run's directory. The step
+ * is marked failed and the caller fails the run through its normal path.
+ */
+async function resolveConditions(l: Live, run: WorkflowRun): Promise<{ failed: boolean, settled: boolean }> {
+  let settled = false
+  // A pass can arm further conditional steps, so this repeats; bounded by the
+  // node count because a resolution loop that cannot converge must not hang.
+  for (let pass = 0; pass <= l.graph.nodes.length; pass++) {
+    let settledThisPass = false
+    // The FULL ready set, not the MAX_CONCURRENCY slice: a step that is about to
+    // be skipped must not occupy one of the three slots a real step could use.
+    for (const id of readyNodes(l.graph, l.state)) {
+      const step = stepOf(l, id)
+      const artifact = step?.runWhen?.artifact
+      if (!artifact) continue
+      // runWhen gates a FORWARD arming only. Each of these arrives by another
+      // route, where re-testing the artifact would swallow a decision already made:
+      // a back edge feeds the step its trigger's output rather than the artifact
+      // (see computeInput); a monitor RETRY is the monitor's feedback, not a new
+      // branch; an approval is a person having already said yes; an override is a
+      // person having restarted this step by name.
+      if (l.state.triggeredBy[id]) continue
+      if (l.retryFeedback[id]) continue
+      if (l.approved.has(id)) continue
+      if (l.conditionOverride?.delete(id)) continue
+
+      const rec = recOf(run, id)
+      if (!rec) continue
+
+      const path = resolveRunArtifact(run.id, artifact)
+      const result = path === null
+        ? { verdict: 'error' as const, detail: 'names a path outside the run\'s artifacts directory' }
+        : gateSatisfied(await readFile(path, 'utf8').catch(() => null))
+
+      if (result.verdict === 'run') continue
+
+      settled = true
+      settledThisPass = true
+
+      if (result.verdict === 'error') {
+        const error = `Step condition could not be evaluated: ${artifact} ${result.detail}.`
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', error, completedAt: Date.now() })
+        logLine(l, run, rec, error)
+        log.warn('step condition unevaluable', { runId: run.id, stepId: id, artifact, detail: result.detail })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        await publish(run)
+        return { failed: true, settled }
+      }
+
+      // Published downstream as a sentence, not left empty: computeInput reads
+      // l.outputs for the join's input, and an unset entry is indistinguishable
+      // from a step that ran and produced nothing. The join must be able to
+      // report that its branches were empty.
+      const output = `Skipped: ${artifact} ${result.detail}. This step consumes that file, so it had nothing to do and was not run.`
+      l.outputs[id] = output
+      // markRunning is deliberately NOT called: no visit, no totalRuns. Nothing
+      // was attempted and no tokens were spent, and the evidence bundle's
+      // cost.attempts is the observed max visits - counting a skip there would
+      // report an attempt that never happened.
+      Object.assign(rec, {
+        status: 'skipped', skipReason: `${artifact} ${result.detail}`, output,
+        model: null, usage: null, startedAt: Date.now(), completedAt: Date.now(),
+      })
+      logLine(l, run, rec, output)
+      // 'was not written' is the case worth a warning: an empty file is a gate
+      // reporting no work, a missing one may be a gate that forgot.
+      const missing = result.detail === 'was not written'
+      const level = missing ? log.warn : log.info
+      level('step skipped by condition', { runId: run.id, stepId: id, artifact, detail: result.detail })
+      markSkippedByCondition(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+    }
+    if (!settledThisPass) break
+  }
+  if (settled) await publish(run)
+  return { failed: false, settled }
+}
+
 async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.stopped) { l.running = false; return run }
 
@@ -980,6 +1109,16 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     await publish(run)
     return run
   }
+
+  // Ordering here is load-bearing, in three directions. AFTER the budget check,
+  // so a wave of skips is never mistaken for progress against the cap. BEFORE
+  // the stuck detector below, which counts steps whose record still reads
+  // 'pending' - resolve after it and a workflow ending in a conditional step
+  // reports "No step can run" instead of completing. BEFORE the approval gate,
+  // which is the point of the feature: nobody is asked to approve a step whose
+  // input is empty.
+  const conditions = await resolveConditions(l, run)
+  if (conditions.failed) return failRunAfterWave(l, run, run.currentStepIds)
 
   const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (!wave.length && l.waiting) {
@@ -1061,28 +1200,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   }
 
   if (results.some(ok => !ok)) {
-    skipPending(l.state)
-    for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
-    run.status = 'failed'
-    // The run's OWN reason, carried up from the step that supplied it. Without
-    // this the record read `error: (none)` on every step failure: a real
-    // provisioner burned 47.4 minutes on error_max_turns, and the step record
-    // and the container log both said so while the run itself said nothing.
-    // The most expensive failures were the ones that explained themselves
-    // least, which is exactly backwards. Joined rather than first-only because
-    // a parallel wave can fail in more than one place at once.
-    run.error = run.steps
-      .filter(s => s.status === 'failed' && s.error)
-      .map(s => `${s.label}: ${s.error}`)
-      .join(' · ')
-      || 'A step failed without recording a reason'
-    run.endedAt = Date.now()
-    run.currentStepIds = []
-    run.nextStepIds = []
-    l.running = false
-    log.warn('run failed', { runId: run.id, workflowSlug: run.workflowSlug, failedInWave: wave })
-    await publish(run)
-    return run
+    return failRunAfterWave(l, run, wave)
   }
 
   // A step is waiting on the operator: nothing else starts until they answer.
@@ -1149,6 +1267,9 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return run
   }
 
+  // Deliberately NOT filtered by runWhen: this is display, resolving a condition
+  // means reading files, and a step listed here that settles as skipped the
+  // moment the run continues is informative rather than wrong.
   run.nextStepIds = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
   if (run.autoRun && !l.stopped) return runWave(l, run)
 
@@ -1799,6 +1920,12 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   else if ((l.graph.forwardPreds[stepId] ?? []).every(p => l.state.status[p] === 'completed')) armNode(l.state, stepId)
   else throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
   for (const id of readyFailed) armNode(l.state, id)
+  // By the same argument as the visit concession below, a `runWhen` condition is
+  // waived for exactly the steps this restart arms: the predicate guards
+  // automatic scheduling, not a person naming the step they want run. Without
+  // this, restarting a step that was condition-skipped would silently skip it
+  // again and read as a restart that did nothing.
+  l.conditionOverride = new Set([stepId, ...readyFailed])
   // An operator's restart is always worth one more visit: the visit cap guards
   // loops and monitor retries, not a person's explicit decision. A step at its
   // cap was otherwise unschedulable, and the empty wave read as a finished run.

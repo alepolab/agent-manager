@@ -24,6 +24,9 @@ import {
   edgeKey,
   MAX_CONCURRENCY,
   ancestorsOf,
+  gateSatisfied,
+  markSkippedByCondition,
+  markFailed,
 } from '../shared/utils/workflowGraph.ts'
 
 /**
@@ -308,6 +311,143 @@ assert.equal(joinInputs([]), '')
   const noDir = monitorPrompt({ label: 'Verify', agentSlug: 'sdlc-verifier', input: 'in', output: 'out' })
   assert.ok(noDir.includes('named in the input'), 'without a dir it still points the monitor at the files')
   assert.ok(noDir.includes('VERDICT: CONTINUE') && noDir.includes('VERDICT: ABORT'), 'the three verdicts survive')
+}
+
+// ── gateSatisfied: the emptiness rules a runWhen condition decides on ──────
+// Table-driven over the SHAPE, not over the one case that prompted this: an
+// empty escalated-drafts.json. The dimension that varies is what JSON a
+// producing step can legitimately leave behind, and every row of it must land
+// on one of the three verdicts on purpose rather than by accident.
+{
+  const cases = [
+    // raw,            verdict,  a fragment of the sentence a reviewer reads
+    [null, 'skip', /was not written/],
+    ['', 'skip', /is empty/],
+    ['   \n\t ', 'skip', /is empty/],
+    ['[]', 'skip', /empty array/],
+    ['[{}]', 'run', /1 entry/],
+    ['[1,2,3]', 'run', /3 entries/],
+    ['{}', 'skip', /empty object/],
+    ['{"a":1}', 'run', /1 key/],
+    ['{"a":1,"b":2}', 'run', /2 keys/],
+    ['""', 'skip', /empty string/],
+    ['"x"', 'run', /a string/],
+    ['null', 'skip', /null/],
+    ['0', 'skip', /0/],
+    ['5', 'run', /5/],
+    ['false', 'skip', /false/],
+    ['true', 'run', /true/],
+    ['not json', 'error', /not valid JSON/],
+    ['{', 'error', /not valid JSON/],
+    ['[1,2', 'error', /not valid JSON/],
+  ]
+  for (const [raw, verdict, detail] of cases) {
+    const got = gateSatisfied(raw)
+    assert.equal(got.verdict, verdict, `gateSatisfied(${JSON.stringify(raw)}) should be ${verdict}, got ${got.verdict}`)
+    // The detail is not decoration: it becomes the step's skipReason and the
+    // sentence the join downstream is handed, so a person has to be able to
+    // read what was actually found.
+    assert.match(got.detail, detail, `gateSatisfied(${JSON.stringify(raw)}) detail: ${got.detail}`)
+  }
+  // Missing and malformed are deliberately DIFFERENT verdicts: a file nobody
+  // wrote is "no work here"; a file that is not JSON is a producer that broke,
+  // and reading that as "no work here" would complete a run having done nothing.
+  assert.equal(gateSatisfied(null).verdict, 'skip')
+  assert.equal(gateSatisfied('{').verdict, 'error')
+  assert.equal(gateSatisfied('[]').count, 0)
+  assert.equal(gateSatisfied('[1,2,3]').count, 3)
+}
+
+// ── markSkippedByCondition clears `armed`, or the resolution loop hangs ────
+// markCompleted does not clear it; markRunning normally does, and a condition
+// skip deliberately never calls markRunning. This is the regression that
+// matters: leave `armed` set and readyNodes hands the node straight back
+// forever.
+{
+  const nodes = [step('a', { next: ['b', 'c'] }), step('b', { next: ['d'] }), step('c', { next: ['d'] }), step('d', { next: [] })]
+  const graph = buildGraph(nodes)
+  const state = initRunState(graph)
+
+  markRunning(state, 'a')
+  markCompleted(graph, state, 'a')
+  assert.deepEqual(readyNodes(graph, state).sort(), ['b', 'c'])
+
+  markSkippedByCondition(graph, state, 'b')
+  assert.equal(state.armed.b, false, 'a condition skip must disarm the node')
+  assert.equal(state.status.b, 'completed', 'graph status is completed so the join is not wedged')
+  assert.deepEqual(readyNodes(graph, state), ['c'], 'the skipped node must not come back')
+  // No visit, no billing: nothing was attempted.
+  assert.equal(state.visits.b, 0, 'a condition skip spends no visit')
+  assert.equal(state.totalRuns, 1, 'and no totalRun')
+
+  // The AND-join still waits for the branch that IS running.
+  assert.equal(state.armed.d, false, 'the join must not arm until c completes')
+  markRunning(state, 'c')
+  markCompleted(graph, state, 'c')
+  assert.deepEqual(readyNodes(graph, state), ['d'], 'the join arms once the live branch completes')
+
+  // And it still does not come back after the join runs.
+  markRunning(state, 'd')
+  markCompleted(graph, state, 'd')
+  assert.deepEqual(readyNodes(graph, state), [])
+  assert.ok(isFinished(graph, state))
+}
+
+// ── Both branches skipped: the join still runs, the graph still terminates ─
+{
+  const nodes = [step('a', { next: ['b', 'c'] }), step('b', { next: ['d'] }), step('c', { next: ['d'] }), step('d', { next: [] })]
+  const graph = buildGraph(nodes)
+  const state = initRunState(graph)
+  markRunning(state, 'a'); markCompleted(graph, state, 'a')
+  markSkippedByCondition(graph, state, 'b')
+  markSkippedByCondition(graph, state, 'c')
+  assert.deepEqual(readyNodes(graph, state), ['d'], 'a join whose every branch was empty still runs')
+  markRunning(state, 'd'); markCompleted(graph, state, 'd')
+  assert.ok(isFinished(graph, state))
+}
+
+// ── A terminal conditional step: skipping it FINISHES the run ──────────────
+// Guards the stuck detector in the runner, which reports "No step can run"
+// when something is still schedulable. A skipped tail is a completed run.
+{
+  const graph = buildGraph([step('a', { next: ['b'] }), step('b', { next: [] })])
+  const state = initRunState(graph)
+  markRunning(state, 'a'); markCompleted(graph, state, 'a')
+  markSkippedByCondition(graph, state, 'b')
+  assert.deepEqual(readyNodes(graph, state), [])
+  assert.ok(isFinished(graph, state), 'a workflow ending in a skipped conditional step is finished, not stuck')
+}
+
+// ── Wave shape: the skipped branch never appears in a wave ─────────────────
+{
+  const nodes = [step('a', { next: ['b', 'c'] }), step('b', { next: ['d'] }), step('c', { next: ['d'] }), step('d', { next: [] })]
+  const graph = buildGraph(nodes)
+  const state = initRunState(graph)
+  const waves = []
+  for (let guard = 0; guard < 100; guard++) {
+    // Mirrors runWave: conditions resolve BEFORE the wave is chosen.
+    for (const id of readyNodes(graph, state)) {
+      if (id === 'b') markSkippedByCondition(graph, state, id)
+    }
+    const wave = readyNodes(graph, state).slice(0, MAX_CONCURRENCY)
+    if (!wave.length) break
+    waves.push(wave)
+    for (const id of wave) markRunning(state, id)
+    for (const id of wave) markCompleted(graph, state, id)
+  }
+  assert.deepEqual(waves, [['a'], ['c'], ['d']], 'b is skipped before the wave, so it never occupies a slot')
+  assert.ok(isFinished(graph, state))
+}
+
+// ── A failed condition is a normal failure: disarmed, and not 'completed' ──
+{
+  const graph = buildGraph([step('a', { next: ['b'] }), step('b', { next: ['c'] }), step('c', { next: [] })])
+  const state = initRunState(graph)
+  markRunning(state, 'a'); markCompleted(graph, state, 'a')
+  markFailed(state, 'b')
+  assert.equal(state.armed.b, false)
+  assert.deepEqual(readyNodes(graph, state), [], 'an unevaluable condition must not arm anything downstream')
+  assert.equal(state.armed.c, false, 'c stays unarmed - the run fails rather than skipping past')
 }
 
 console.log('workflowGraph: all checks passed')

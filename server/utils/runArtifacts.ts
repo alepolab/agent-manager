@@ -3,7 +3,7 @@ import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { computeFixFacts } from './gitFacts.ts'
 import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import { resolveClaudePath } from './claudeDir.ts'
@@ -68,6 +68,23 @@ export function agentRunsRoot(): string {
 /** Where a run's evidence lives. The assembler's --run-dir points here. */
 export function runArtifactsDir(runId: string): string {
   return join(agentRunsRoot(), runId, 'artifacts')
+}
+
+/**
+ * Resolve a step's `runWhen.artifact` against the run's artifacts directory,
+ * or null when it would escape it.
+ *
+ * `safe()` below is the wrong tool for this: it is for filenames the runner
+ * itself composes from agent slugs, and it mangles a legitimate name by
+ * collapsing dots. This one takes a name a person typed into the workflow
+ * builder and persisted to a JSON file nothing validates, so it must reject
+ * rather than rewrite - silently reading a different file than the one the
+ * step names is worse than refusing.
+ */
+export function resolveRunArtifact(runId: string, name: string): string | null {
+  const root = resolve(runArtifactsDir(runId))
+  const target = resolve(root, name)
+  return target === root || target.startsWith(root + sep) ? target : null
 }
 
 /** Filenames come from agent slugs, which are user data. Keep them inert.
