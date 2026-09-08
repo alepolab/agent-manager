@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
 import { agentManagerSettings } from './appSettings.ts'
 import { runWorkspace } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
+import { runArtifactsDir } from './runArtifacts.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 
 /** Per-run caps: an env var on the instance wins, then the Settings page's values, then the defaults. */
@@ -147,6 +148,21 @@ export async function getRun(id: string): Promise<WorkflowRun | null> {
     // A half-written or corrupt record is a missing record, never a crash.
     return null
   }
+}
+
+/**
+ * Removes a settled run entirely: its live entry, its record and its evidence
+ * directory. Returns 'not-found', 'live' (refused — stop it first), or 'ok'.
+ * The record is unlinked before the artifacts, so a half-finished delete never
+ * leaves a record pointing at a gone bundle.
+ */
+export async function deleteRun(id: string): Promise<'ok' | 'not-found' | 'live'> {
+  const run = await getRun(id)
+  if (!run) return 'not-found'
+  if (run.status === 'running' || run.status === 'paused') return 'live'
+  await rm(runPath(id), { force: true })
+  await rm(join(runArtifactsDir(id), '..'), { recursive: true, force: true })
+  return 'ok'
 }
 
 export async function listRuns(workflowSlug?: string): Promise<WorkflowRun[]> {
