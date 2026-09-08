@@ -100,6 +100,22 @@ COPY --chown=bun:bun engineering/registry ./engineering/registry
 # container - the file exists in the repo and was never shipped in the image.
 COPY --chown=bun:bun engineering/scripts ./engineering/scripts
 
+# And the schema those scripts validate against. assemble-bundle.mjs shipped
+# without it and a real run reported: "assemble-bundle.mjs cannot run — its
+# dependency schemas/evidence-bundle.v0.1.schema.json is missing from this
+# installation (confirmed absent host-wide)". The PR itself was already open;
+# only the bundle could not be produced.
+COPY --chown=bun:bun engineering/schemas ./engineering/schemas
+
+# And the per-product recipes. registry.ts resolves them relative to the
+# registry (`<registry>/../../recipes/<key>.md`), so without them every product
+# in the container reports "no recipe" and the provisioner loses the
+# product-specific quirks it is told to read first — image tag policy, port
+# overrides, healthcheck, which variables to pass through. Unlike the schema
+# above this one fails SILENTLY: existsSync simply returns false and the run
+# carries on with less than it should have.
+COPY --chown=bun:bun engineering/recipes ./engineering/recipes
+
 COPY --chown=bun:bun docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.
