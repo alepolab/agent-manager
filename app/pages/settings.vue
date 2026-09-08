@@ -343,14 +343,15 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             </label>
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
-            <div>
+            <div class="min-w-0 flex-1">
               <div class="text-[13px] font-medium">Model for pipeline agents</div>
               <div class="text-[12px] mt-0.5 text-label">
                 Every agent call in a run uses this model when set, monitors included, whatever the agent's own file says. Default lets each agent decide: the fix and test agents ship on Opus, the rest on Sonnet. Fable is the strongest and carries no list price here, so its steps show as unpriced.
               </div>
             </div>
+            <!-- field-input is full-width by design; these controls sit beside their text, so the width is pinned here. -->
             <select
-              class="field-input w-44 text-[12px] shrink-0" aria-label="Model for pipeline agents"
+              class="field-input text-[12px]" style="width: 16rem; flex: none;" aria-label="Model for pipeline agents"
               :value="settings?.agentManager?.agentModel ?? ''"
               @change="setAgentModel(($event.target as HTMLSelectElement).value)"
             >
@@ -359,7 +360,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             </select>
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
-            <div>
+            <div class="min-w-0 flex-1">
               <div class="text-[13px] font-medium">Run budget</div>
               <div class="text-[12px] mt-0.5 text-label">
                 Caps for each new run. When a run reaches one it pauses and asks whether to continue with another allowance. Defaults 8,000,000 tokens and 180 minutes; an AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES variable on the instance overrides these.
@@ -367,13 +368,13 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <input
-                type="number" min="1" step="100000" class="field-input w-36 text-[12px]" placeholder="8000000" aria-label="Max tokens per run"
+                type="number" min="1" step="100000" class="field-input text-[12px]" style="width: 9rem; flex: none;" placeholder="8000000" aria-label="Max tokens per run"
                 :value="settings?.agentManager?.runBudget?.maxTokens ?? ''"
                 @change="setRunBudget('maxTokens', ($event.target as HTMLInputElement).value)"
               />
               <span class="text-[11px] text-label">tokens</span>
               <input
-                type="number" min="1" step="10" class="field-input w-24 text-[12px]" placeholder="180" aria-label="Max minutes per run"
+                type="number" min="1" step="10" class="field-input text-[12px]" style="width: 6rem; flex: none;" placeholder="180" aria-label="Max minutes per run"
                 :value="settings?.agentManager?.runBudget?.maxMinutes ?? ''"
                 @change="setRunBudget('maxMinutes', ($event.target as HTMLInputElement).value)"
               />
