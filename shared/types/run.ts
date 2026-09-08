@@ -85,6 +85,10 @@ export interface ProductMatch {
   /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
   multiRepo?: boolean
   repos: string[]
+  /** For a container repo whose real content is sibling repos: directory under
+   *  the parent checkout -> the repo that fills it. Cloning the parent alone
+   *  does not produce these, because it git-ignores them. */
+  modules?: Record<string, string>
   branches: Record<string, string>
   stack: { compose: string, topology_default: string, liquibase?: boolean }
   tests: Record<string, string>

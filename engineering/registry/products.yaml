@@ -37,6 +37,67 @@ products:
       projects: [CRM]
       components: [CRM, Liferay]
     repos: [alepolab/ase_lbss]
+    # ase_lbss is a CONTAINER, not the product: the parent repo tracks exactly
+    # one path under modules/ (init.gradle) and git-ignores the rest, so a fresh
+    # clone yields nothing to work on. Each entry below is its own repo that
+    # must be cloned INTO modules/<dir>. Directory and repo name differ almost
+    # everywhere and the difference is not a rule - `database` is
+    # `crm-database_lbss`, four carry no suffix at all - so an agent must read
+    # this map rather than derive a name. Clone only what the ticket touches:
+    # the full set is ~8G.
+    #
+    # Read from a populated checkout's own git remotes on 2026-09-08. CONFIRM
+    # with the CRM champion that this is the canonical set rather than one
+    # developer's working subset.
+    modules:
+      admin-config-web-fragement: alepolab/admin-config-web-fragement_lbss
+      administrator-web: alepolab/administrator-web_lbss
+      administrator: alepolab/administrator_lbss
+      alepo-client: alepolab/alepo-client_lbss
+      alepo-fsm-library: alepolab/alepo-fsm-library_lbss
+      alepo-theme: alepolab/alepo-theme_lbss
+      automation: alepolab/automation_lbss
+      billing-web: alepolab/billing-web_lbss
+      billing: alepolab/billing_lbss
+      config-management-web: alepolab/config-management-web_lbss
+      config-management: alepolab/config-management_lbss
+      control-panel: alepolab/control-panel
+      crm-artifacts: alepolab/crm-artifacts
+      database: alepolab/crm-database_lbss
+      deleted-history: alepolab/deleted-history_lbss
+      extdb: alepolab/extdb
+      import-export-web: alepolab/import-export-web_lbss
+      import-export: alepolab/import-export_lbss
+      inventory-management-web: alepolab/inventory-management-web_lbss
+      inventory-management: alepolab/inventory-management_lbss
+      jmxagent: alepolab/jmxagent_lbss
+      liferay-extension-web: alepolab/liferay-extension-web_lbss
+      liferay-extension: alepolab/liferay-extension_lbss
+      login-extension-web: alepolab/login-extension-web_lbss
+      notification-web: alepolab/notification-web_lbss
+      notification: alepolab/notification_lbss
+      payment-gateway-web: alepolab/payment-gateway-web_lbss
+      payment-gateway: alepolab/payment-gateway_lbss
+      portal-extension-web: alepolab/portal-extension-web_lbss
+      product-catalog-web: alepolab/product-catalog-web_lbss
+      product-catalog: alepolab/product-catalog_lbss
+      provisioning-web: alepolab/provisioning-web_lbss
+      provisioning: alepolab/provisioning_lbss
+      rating-charging-web: alepolab/rating-charging-web_lbss
+      rating-charging: alepolab/rating-charging_lbss
+      reports: alepolab/reports_lbss
+      reseller-management-web: alepolab/reseller-management-web_lbss
+      reseller-management: alepolab/reseller-management_lbss
+      rest-services: alepolab/rest-services_lbss
+      rest-util: alepolab/rest-util_lbss
+      sasktel-customizations: alepolab/sasktel-customizations
+      subscriber-activity: alepolab/subscriber-activity_lbss
+      subscriber-management-web: alepolab/subscriber-management-web_lbss
+      subscriber-management: alepolab/subscriber-management_lbss
+      trouble-ticket-web: alepolab/trouble-ticket-web_lbss
+      trouble-ticket: alepolab/trouble-ticket_lbss
+      utils: alepolab/utils_lbss
+      wintersky-theme: alepolab/wintersky-theme_lbss
     branches:
       bug: develop
       feature: develop

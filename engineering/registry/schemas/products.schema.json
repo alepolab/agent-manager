@@ -72,6 +72,17 @@
           },
           "description": "owner/name. Every repo listed is cloned by the registry check and must carry the plugin, AGENTS.md and REVIEW.md."
         },
+        "modules": {
+          "type": "object",
+          "description": "For a container repo whose real content is sibling repos: directory under the parent checkout -> owner/name of the repo that fills it. Cloning the parent alone does NOT produce these; they are git-ignored by it. Unlike `repos` these are not clone-checked and are not expected to carry the plugin, AGENTS.md or REVIEW.md - they are libraries, not products. Clone only the ones a ticket needs.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^/]+/[^/]+$"
+          }
+        },
         "multi_repo": {
           "type": "boolean",
           "default": false,
