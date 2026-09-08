@@ -254,7 +254,7 @@ export interface WorkflowStep {
    */
   contextMode?: 'predecessors' | 'ancestors'
   /** Present on a step the runner executes itself, without a model: move the ticket, post the outcome comment, or both. */
-  jira?: { transition?: string, comment?: boolean }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean }
 }
 
 export interface Workflow {

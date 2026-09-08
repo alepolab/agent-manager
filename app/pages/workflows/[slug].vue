@@ -640,7 +640,11 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               <input type="checkbox" :checked="settingsStep.jira?.comment === true" @change="settingsStepId && patchStep(settingsStepId, { jira: { ...(settingsStep.jira ?? {}), comment: ($event.target as HTMLInputElement).checked || undefined } })">
               <span class="field-label mb-0">Post the outcome comment</span>
             </label>
-            <span class="field-hint">Runner-executed, no model call. The status must be one the ticket can move to; when it is not, the step's output lists the ones available. Writes reach Jira only when JIRA_POST_ENABLED=1 on the instance.</span>
+            <label class="flex items-center gap-2 cursor-pointer mt-2">
+              <input type="checkbox" :checked="settingsStep.jira?.attach === true" @change="settingsStepId && patchStep(settingsStepId, { jira: { ...(settingsStep.jira ?? {}), attach: ($event.target as HTMLInputElement).checked || undefined } })">
+              <span class="field-label mb-0">Attach the run's evidence files</span>
+            </label>
+            <span class="field-hint">Runner-executed, no model call. The status is matched to the ticket's own workflow (with synonyms), so "Dev Done" lands even where the project calls it "Ready for Review"; when nothing matches, the output lists what the ticket offers. Writes reach Jira only when JIRA_POST_ENABLED=1 on the instance.</span>
           </div>
 
           <div class="field-group">

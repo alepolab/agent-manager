@@ -18,7 +18,7 @@ export interface WorkflowTemplateStep {
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
-  jira?: { transition?: string, comment?: boolean }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean }
 }
 
 export interface WorkflowTemplate {
@@ -168,7 +168,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
         next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       // `next` names a template id, and a repeated id resolves to its LAST step, which
       // is this one: the review step, not the In Progress step at the top.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Review', next: [], jira: { transition: 'In Review', comment: true }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, monitorSlug: 'sdlc-step-monitor' },
     ],
   },
 ]

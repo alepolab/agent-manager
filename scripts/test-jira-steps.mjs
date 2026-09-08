@@ -56,6 +56,33 @@ assert.match(commented, /Comment posted on CSUP-1/, commented)
 assert.ok(calls.some(c => c[0].endsWith('/rest/api/3/issue/CSUP-1/comment') && c[1] === 'POST'))
 assert.equal(run.ticketCommented, true, 'the run remembers the comment so settling does not post a second one')
 
+// 5b. "Dev Done" lands even where the project's workflow calls the state "Ready for Review".
+const reviewWf = { transitions: [{ id: '41', name: 'Ready for review', to: { name: 'Ready for Review' } }, { id: '51', name: 'Close', to: { name: 'Closed' } }] }
+const jiraReview = async (url, init) => {
+  if (String(url).endsWith('/transitions') && (init?.method ?? 'GET') === 'GET') return new Response(JSON.stringify(reviewWf), { status: 200 })
+  return new Response(null, { status: 204 })
+}
+const syn = await runJiraStep(run, { transition: 'Dev Done' }, jiraReview)
+assert.match(syn, /Moved CSUP-1 to "Ready for Review"/, `synonym match failed: ${syn}`)
+
+// 5c. attach uploads every top-level evidence file, once each, to the attachments endpoint.
+{
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'jira-attach-'))
+  const adir = join(process.env.AGENT_RUNS_DIR, run.id, 'artifacts')
+  mkdirSync(join(adir, 'steps'), { recursive: true })
+  writeFileSync(join(adir, 'bundle.json'), '{}')
+  writeFileSync(join(adir, 'security-review.md'), '# ok')
+  writeFileSync(join(adir, 'steps', 'step-01.log'), 'verbose')
+  const uploads = []
+  const out = await runJiraStep(run, { attach: true }, async (url, init) => { uploads.push([String(url), init?.method]); return new Response('[]', { status: 200 }) })
+  assert.match(out, /Attached 2 of 2 evidence file\(s\) to CSUP-1/, `attach summary wrong: ${out}`)
+  assert.ok(uploads.every(u => u[0].endsWith('/rest/api/3/issue/CSUP-1/attachments') && u[1] === 'POST'), 'each file POSTs to the attachments endpoint')
+  assert.equal(uploads.length, 2, 'only the two top-level files are attached; the steps/ log is not')
+}
+
 // 6. A Jira outage is reported, not thrown.
 const down = await runJiraStep({ ...run, ticketCommented: undefined }, { transition: 'In Progress' }, async () => new Response('', { status: 503 }))
 assert.match(down, /HTTP 503/, down)
