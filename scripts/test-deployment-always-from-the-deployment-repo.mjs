@@ -73,5 +73,27 @@ check('the verifier deploys from the deployment repo compose',
   && /never the\n?\s*product's own/.test(verif),
   'the deploy step said "-f <compose file>" without saying whose, which is an invitation to use the nearest one')
 
+// ── the Ansible layer is a data source, not a second deploy path ──────────
+check('the provisioner is told to read the per-product role defaults',
+  /deploy\/ansible\/roles\/app_<product>\/defaults\/main\.yml/.test(prov),
+  'that file names the compose file, the profile, the pinned image tag, the health container and the init order — every value this step otherwise infers')
+
+check('the specific keys are named, not just the file',
+  ['app_compose_files', 'app_compose_profiles', 'app_image_tag', 'app_health_containers', 'app_health_path']
+    .every(k => prov.includes(k)),
+  'pointing at a file without naming the keys leaves the agent to guess which of them matter')
+
+check('it is stated NOT to be a second deploy path',
+  /not a second way to deploy/.test(prov) && /drives the ones this repo\s*\n?already has/.test(prov),
+  "the layer's own docs say it does not render compose files; an agent that thinks otherwise will try to run playbooks instead of reading them")
+
+check('the "no image tag" halt is called out as no longer honest',
+  /no longer\s*\n?honest/.test(prov) && /app_image_tag/.test(prov),
+  'a real run halted on a missing tag that was sitting in the role defaults — the instruction must close that specific hole')
+
+check('absence of the ansible directory is handled',
+  /has not been merged to the branch\s*\n?you cloned/.test(prov),
+  'it currently lives on a feature branch; an instruction that assumes it is present would make every run report a false gap')
+
 console.log(failures === 0 ? '\ndeployment repo is the only source: all checks passed' : `\ndeployment repo is the only source: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

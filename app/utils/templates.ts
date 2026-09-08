@@ -501,6 +501,40 @@ redeploys it to verify the fix uses the deployment repo's compose file for that
 product, under its own compose project name, with the \`TAG\` variable pointing at
 the locally built image.
 
+### The deployment repo already answers what you would otherwise guess
+
+Under \`deploy/ansible/\` the deployment repo carries an Ansible layer, and its
+per-product data is the authoritative answer to the questions this step keeps
+having to infer. **Read it before you decide anything**, whether or not you run
+the playbooks:
+
+- \`deploy/ansible/roles/app_<product>/defaults/main.yml\` — the compose file(s)
+  (\`app_compose_files\`), the profile(s) to bring up (\`app_compose_profiles\`), the
+  image and its **pinned tag** (\`app_image\`, \`app_image_tag\`), the variable names
+  the compose expects them in (\`app_image_var\`, \`app_tag_var\`), the containers to
+  health-check (\`app_health_containers\`), the port and path that prove health
+  (\`app_host_port\`, \`app_health_path\`), and the init ordering in its header
+  comment (for pcrf-ems: \`pcrf-db-init -> pcrf-liquibase -> pcrf-ems\`).
+- \`deploy/ansible/inventory/group_vars/all.yml\` — shared layout and conventions,
+  with \`dev.yml\` and \`prod.yml\` beside it for per-environment overrides.
+- \`deploy/ansible/deploy.yml\` and the \`deploy_common\`, \`sso\` and \`preflight\` roles —
+  the ordering and the SSO gating, written out rather than folklore.
+
+**This is not a second way to deploy.** That layer's own documentation is
+explicit: it does not render compose files, it drives the ones this repo
+already has. Reading its data and invoking the repo's compose yourself is
+therefore consistent with it, not a workaround — you are using the same compose
+file with the same values it would have used.
+
+A halt of the form "no image tag available for this product" is no longer
+honest if you have not looked here: a real run halted on exactly that while
+\`app_image_tag\` sat in the role defaults with a pinned value. The same goes for
+which profile to start, which container to probe, and what to probe it on.
+
+If \`deploy/ansible/\` is not in the checkout, it has not been merged to the branch
+you cloned yet — say so in one line and work from the compose file and the
+product block as before. Do not go looking for it in another repository.
+
 Never copy a developer's \`.env\` into the run; generate every secret the compose marks required with \`openssl\` and pass secrets as shell environment for the \`up\` command, not files. Put any compose override you need in the run artifacts directory, never in a repo checkout.
 
 You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. When you render a compose file for evidence, use \`docker compose ... config --no-interpolate\`: the interpolated form prints every secret the environment holds into your output, and your output is kept as evidence. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
