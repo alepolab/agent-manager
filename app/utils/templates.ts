@@ -479,7 +479,7 @@ Known recipes live as files: when your input's product block names a \`Recipe:\`
 
 ## What "up" means
 
-A container that is running is not a service that is serving. Confirm health through each service's own healthcheck endpoint or an actual request that returns data. If a container restart-loops with an empty \`docker logs\` and exit code 0, the app is writing to a file log, not stdout — copy the log directory out of the container and read it rather than guessing.
+A container that is running is not a service that is serving. Confirm health through each service's own healthcheck endpoint or an actual request that returns data. Let Docker do the waiting, not yourself: bring the stack up with \`docker compose up -d --wait --wait-timeout <seconds>\` so a single command blocks until every service with a healthcheck is healthy and returns non-zero the moment one fails. Never poll health across turns — a \`docker exec ... curl\` in a loop, one call per turn, waiting for a slow app to boot, burns the whole turn budget on what \`--wait\` does in one command. Run your health-proof requests once, after \`--wait\` returns. If a container restart-loops with an empty \`docker logs\` and exit code 0, the app is writing to a file log, not stdout — copy the log directory out of the container and read it rather than guessing.
 
 ## Seeding
 
