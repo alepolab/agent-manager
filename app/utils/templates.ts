@@ -520,6 +520,53 @@ the playbooks:
 - \`deploy/ansible/deploy.yml\` and the \`deploy_common\`, \`sso\` and \`preflight\` roles —
   the ordering and the SSO gating, written out rather than folklore.
 
+### Configure what the stack needs, and pin where it runs
+
+Two things to settle before anything starts, and neither has a safe default.
+
+**Every variable the stack needs must actually hold a value.** The role
+defaults carry most of them, but the ones describing *this host* do not: an
+inventory entry is a name plus \`ansible_host\`, and the shipped inventory says in
+its own comment that its host entries are placeholders to be replaced. Resolve
+the address from the environment you are actually deploying into and set it
+explicitly. A placeholder left
+in place is worse than an empty value here — \`192.0.2.x\` is TEST-NET, reserved
+and unroutable, so it fails as a DNS or connect timeout minutes later and far
+from the cause, and \`\${VAR:-}\` in a compose file *defines* the variable as an
+empty string, which satisfies a mandatory-presence check while meaning nothing.
+Empty, unset and absent behave differently; say which one you are relying on.
+
+**Pin the run to one host group, and to the one host inside it.** The
+playbooks target \`hosts: "{{ target_env }}"\`, so the group is whatever
+\`target_env\` says — and the groups are \`dev\`, \`staging\` and \`prod\`.
+
+- **\`dev\` only.** Never \`staging\`, never \`prod\`, not to "see if it renders". Those
+  entries are placeholders today, and on the day they are not, a run that
+  targeted them is a production incident rather than a mistake.
+- **Then narrow to the single host.** Each \`inventory/host_vars/<host>.yml\` lists
+  that host's \`host_apps\`. Read them at run time and deploy only on the host whose
+  list contains this product; putting a product on a box that does not claim it
+  is a wrong deploy that will still report success. Pass \`--limit <host>\`.
+
+  Derive the host from the inventory in the checkout you cloned. Do not carry a
+  hostname or address from anywhere else — not from this prompt, not from a
+  previous run, not from a report you are reading. Inventories are edited, and a
+  remembered address outlives the machine it named.
+- One environment per run. Never two.
+
+State in \`stack-report.md\`, before the deploy commands, exactly which group and
+which host you pinned to and what each host-specific variable resolved to. That
+line is what makes a wrong-target deploy visible in review instead of six weeks
+later.
+
+Two constraints on how you set these. Never edit the inventory in the repo
+checkout — that is shared configuration and your run is not entitled to change
+it; write your own inventory or var file into the run artifacts directory and
+pass it with \`-i\` / \`-e\`. And the standing rule above still holds: you execute
+inside the agent-manager container and do not reach a shared lab host over SSH,
+so a run that would require connecting out to one is a halt naming the host,
+not something to attempt.
+
 **This is not a second way to deploy.** That layer's own documentation is
 explicit: it does not render compose files, it drives the ones this repo
 already has. Reading its data and invoking the repo's compose yourself is

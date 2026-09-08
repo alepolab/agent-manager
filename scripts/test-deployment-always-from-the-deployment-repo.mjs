@@ -95,5 +95,48 @@ check('absence of the ansible directory is handled',
   /has not been merged to the branch\s*\n?you cloned/.test(prov),
   'it currently lives on a feature branch; an instruction that assumes it is present would make every run report a false gap')
 
+// ── configure the env, and pin where it runs ──────────────────────────────
+check('every stack variable must hold a real value',
+  /must actually hold a value/.test(prov) && /TEST-NET/.test(prov),
+  'a 192.0.2.x placeholder is reserved and unroutable — it fails as a timeout minutes later and far from the cause')
+
+check('empty vs unset vs absent is called out',
+  /Empty, unset and absent behave differently/.test(prov),
+  '`${VAR:-}` in compose DEFINES the variable as empty, satisfying a presence check while meaning nothing')
+
+check('the run is pinned to one host group',
+  // Substrings, not regex: the source escapes every backtick as \\` (two
+  // characters), so a single `.` cannot span one and the pattern silently
+  // fails against text that is plainly there.
+  prov.includes('only.**') && prov.includes('never') && /staging[\s\S]{0,20}prod/.test(prov)
+  && prov.includes('production incident rather than a mistake'),
+  'the playbooks target hosts: "{{ target_env }}" — an unpinned target_env is a deploy to whatever the inventory happens to list')
+
+check('it narrows to a single host via host_apps',
+  /host_apps/.test(prov) && /--limit <host>/.test(prov),
+  'a product deployed to a box that does not claim it still reports success')
+
+check('one environment per run',
+  /One environment per run\. Never two\./.test(prov),
+  "the estate's standing rule, and the one a --limit mistake violates silently")
+
+check('the pinned target is recorded in the stack report',
+  /which group and\s*\n?which host you pinned to/.test(prov),
+  'a wrong-target deploy has to be visible in review, not six weeks later')
+
+check('shared inventory is never edited in place',
+  /Never edit the inventory in the repo\s*\n?checkout/.test(prov),
+  'the checkout is shared configuration; a run is not entitled to rewrite it')
+
+// The user asked for no specific hosts in the instructions: inventories are
+// edited, and an address baked into a prompt outlives the machine it named.
+check('no hostname or address is hardcoded in any agent prompt',
+  !/dev-app-0\d/.test(templates) && !/172\.16\.\d+\.\d+/.test(templates) && !/10\.79\.\d+\.\d+/.test(templates),
+  'a remembered address outlives the machine it named; the host must be derived from the inventory at run time')
+
+check('the agent is told to derive the host from the checkout',
+  /Derive the host from the inventory in the checkout you cloned/.test(prov),
+  'without this the model will happily reuse an address it saw in an example')
+
 console.log(failures === 0 ? '\ndeployment repo is the only source: all checks passed' : `\ndeployment repo is the only source: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)
