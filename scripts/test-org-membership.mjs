@@ -13,6 +13,7 @@
  * names the status, because it stops the reader investigating.
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 const { membershipFailureDetail, oauthPolicyUrl } = await import('../server/utils/orgMembership.ts')
 
@@ -51,5 +52,18 @@ assert.ok(!teapot.includes(policy), 'an unrelated status must not blame app appr
 // The org is not hardcoded: a different GITHUB_ORG must flow through.
 assert.ok(membershipFailureDetail({ status: 403, org: 'other-org', login })
   .includes('https://github.com/organizations/other-org/settings/oauth_application_policy'))
+
+// The sign-in must ask for every scope a RUN needs, not only the ones the sign-in
+// itself needs. A run reached Stand Up Stack and halted on "cannot pull
+// ghcr.io/alepolab/alepo-crm": the token was valid and the image was there — the
+// scope had never been requested, and the registry's 403 reads like a missing image.
+{
+  const login = readFileSync(new URL('../server/api/auth/login.get.ts', import.meta.url), 'utf8')
+  const scope = login.match(/set\('scope', '([^']+)'\)/)?.[1]
+  assert.ok(scope, 'the login route sets an OAuth scope')
+  for (const needed of ['read:org', 'repo', 'read:packages', 'read:user', 'user:email']) {
+    assert.ok(scope.split(' ').includes(needed), `the OAuth scope requests ${needed}`)
+  }
+}
 
 console.log('orgMembership: all assertions passed')

@@ -42,10 +42,25 @@ let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   refresh()
   timer = setInterval(() => {
-    if (runs.value.some(r => r.status === 'running' || r.status === 'paused')) refresh()
+    if (live.value.length) refresh()
   }, 5000)
+  clock = setInterval(() => { now.value = Date.now() }, 1000)
 })
-onUnmounted(() => { if (timer) clearInterval(timer) })
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+  if (clock) clearInterval(clock)
+})
+
+// Runs that can still change, newest first: the "what is happening now" list.
+// Deliberately NOT filtered by the table's filters — those exist to search
+// history, and hiding a live run behind a stale filter is how one gets
+// forgotten.
+const live = computed(() => runs.value.filter(r => r.status === 'running' || r.status === 'paused'))
+
+// The list refreshes every 5s; a run's idle time has to count up in between or
+// a card that says "12s ago" for five seconds reads as frozen.
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | null = null
 
 const STATUSES = ['running', 'paused', 'completed', 'failed', 'stopped', 'interrupted']
 const shown = computed(() => runs.value.filter(r =>
@@ -157,6 +172,18 @@ async function deleteFailed() {
       <p class="text-[13px] leading-relaxed text-label">
         Every workflow run, newest first. Open a run in its builder, restart a failed one from the step that failed, or clone its inputs into a new run.
       </p>
+
+      <!-- Live runs first and in full: the question this page is opened with is
+           almost always "what is happening right now", and answering it should
+           not require opening a run to find out. -->
+      <section v-if="live.length" class="rounded-xl overflow-hidden" style="border: 1px solid var(--border-subtle);">
+        <header class="px-4 py-2 flex items-center gap-2" style="background: var(--surface-raised);">
+          <span class="inline-block size-1.5 rounded-full" :style="{ background: RUN_STATUS_COLOR.running }" />
+          <h2 class="text-[11px] font-mono uppercase tracking-wider text-label">In flight</h2>
+          <span class="text-[11px] text-meta">{{ live.length }}</span>
+        </header>
+        <RunLiveCard v-for="r in live" :key="`live-${r.id}`" :run="r" :now="now" />
+      </section>
 
       <div class="flex gap-2 items-center">
         <input v-model="filter" placeholder="Filter by ticket, workflow, product or person..." class="field-search max-w-xs" aria-label="Filter runs" />

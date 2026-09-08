@@ -213,6 +213,11 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
         // requesting-code-review has code-reviewer.md. Copying only SKILL.md
         // seeds a skill that resolves and then refers the agent to files that
         // are not there.
+        // `cp` refuses with EEXIST when the destination is a SYMLINK rather
+        // than a directory, and one such skill aborted the WHOLE boot seed —
+        // no workflow, no watches — wherever skills are linked in from
+        // another tree. Replacing outright is what seeding means anyway.
+        await rm(join(skillsDir, name), { recursive: true, force: true })
         await cp(join(skillsSource, name), join(skillsDir, name), { recursive: true })
         state = 'ok'; changed++
       }

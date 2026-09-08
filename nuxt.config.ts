@@ -26,6 +26,12 @@ export default defineNuxtConfig({
   },
 
   nitro: {
+    // The image runs the server under Bun (`node` there is Bun's wrapper), so
+    // build for Bun. With the default node-server preset, crossws installs the
+    // NODE upgrade path: `open()` fired and the handler ran, but the 101 was
+    // never written, so every /cli chat socket hung and the page sat on
+    // "Disconnected" with a healthy-looking server log behind it.
+    preset: 'bun',
     experimental: {
       websocket: true,
     },

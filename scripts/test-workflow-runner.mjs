@@ -842,6 +842,29 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.deepEqual(fromDisk.a, tail.a, 'once the process that ran it is gone, the same lines come from the artifact')
 }
 
+// ── 19b. a burst of progress lines reaches the artifact IN ORDER ──
+// The unchained `void appendFile` reordered lines reported in one tick: the
+// live tail and the step log artifact then told different stories, and only
+// the artifact survives the process.
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const BURST = 40
+  runner.setAgentCaller(async (agentSlug, input, projectDir, { onProgress } = {}) => {
+    for (let i = 0; i < BURST; i++) onProgress?.({ turn: 1, lastTool: 'Bash', lastActivityAt: Date.now(), line: `line-${String(i).padStart(3, '0')}` })
+    return `out ${agentSlug}`
+  })
+  let lr = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  lr = await runner.waitForSettled(lr.id, TIMEOUT)
+  assert.equal(lr.status, 'completed')
+  const tail = await runner.getLiveLog(lr.id)
+  runner._dropLive(lr.id)
+  const fromDisk = await runner.getLiveLog(lr.id)
+  const nums = l => l.filter(x => /line-\d{3}$/.test(x)).map(x => x.slice(-3))
+  assert.equal(nums(fromDisk.a ?? []).length, BURST, 'every burst line reached the artifact')
+  assert.deepEqual(nums(fromDisk.a ?? []), nums(tail.a ?? []),
+    'the artifact holds the burst in the order it was reported, not the order the writes happened to finish')
+}
+
 // ── 20. a checkout cloned mid-run gets the run branch before the next step ──
 {
   for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
