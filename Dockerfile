@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     git \
     curl \
+    ca-certificates \
     chromium \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
