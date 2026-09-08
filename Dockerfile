@@ -228,4 +228,6 @@ ENV NODE_ENV=production
 EXPOSE 3030
 
 # Run the production server
-CMD ["node", ".output/server/index.mjs"]
+# Bun, explicitly: the nitro `bun` preset's entry expects it, and `node` in
+# this image is only Bun's wrapper anyway.
+CMD ["bun", ".output/server/index.mjs"]
