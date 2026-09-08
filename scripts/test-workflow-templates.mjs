@@ -541,10 +541,10 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   {
     const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
     const pr = runbook.steps.find(s => s.agentTemplateId === 'sdlc-evidence-and-pr')
-    assert.equal(pr.approval, true, 'the step that pushes and opens the PR waits for a person')
+    assert.notEqual(pr.approval, true, 'the default Runbook A opens the PR without a human gate — a broken run halts earlier, so the gate only ever paused healthy runs')
     const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
     const made = materializeTemplateSteps(runbook, slugs)
-    assert.equal(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and the flag survives materialisation')
+    assert.notEqual(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and no gate flag is materialised')
     for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) assert.ok(a.body.includes('PIPELINE-ASK:'), `${a.id} must know it may ask the operator`)
   }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
