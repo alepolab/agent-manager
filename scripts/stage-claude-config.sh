@@ -51,8 +51,14 @@ ALLOW=(
 # these in the staged tree aborts the build rather than being quietly dropped —
 # a surprise here means the allowlist above grew a hole.
 DENY_NAMES=(
-  ".credentials.json" ".claude.json" "history.jsonl"
+  ".credentials.json"
   "*.pem" "*.key" "id_rsa*" "*.p12" "*.pfx" ".env" ".env.*"
+)
+# Only dangerous as ~/.claude/<name>, same reasoning as DENY_DIRS below: a
+# third-party plugin ships its own history.jsonl as a test fixture, and denying
+# the name anywhere in the tree blocks a staging run over someone else's file.
+DENY_NAMES_TOP=(
+  ".claude.json" "history.jsonl"
 )
 DENY_DIRS=(
   "projects" "sessions" "shell-snapshots" "paste-cache" "session-env"
@@ -75,7 +81,14 @@ for entry in "${ALLOW[@]}"; do
     echo "  skip  $entry (not present)"
     continue
   fi
-  /bin/cp -a "$src" "$STAGE/$entry"
+  # -L, not a plain -a: a skill or agent under ~/.claude is often a SYMLINK
+  # into another tree (~/.agents/skills here). Preserving the link stages a
+  # pointer to a path the image does not have, so the container ships ~40
+  # dangling symlinks — and the boot seeder then dies on the first one with
+  # "EEXIST: mkdir /root/.claude/skills/<name>", abandoning the rest of the
+  # seed: no workflow, no watches, and a log line that names a skill rather
+  # than the cause.
+  /bin/cp -aL "$src" "$STAGE/$entry"
   echo "  add   $entry"
 done
 
@@ -87,15 +100,41 @@ fi
 # Plugin caches are git clones. The history is dead weight in an image and can
 # hold branches nobody meant to ship.
 find "$STAGE" -type d -name ".git" -prune -exec rm -rf {} + 2>/dev/null || true
+
+# Installed dependency trees, for the same reason. A skill or plugin that
+# vendors node_modules dwarfs everything else here — one on this host carried
+# 1.0G of them, staging 1.9G in total against the ~41M this payload is meant to
+# be — and none of it is config describing how an agent behaves. A plugin whose
+# scripts genuinely need their dependencies must install them in the image, not
+# smuggle them in through ~/.claude.
+find "$STAGE" -type d -name "node_modules" -prune -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE" -type f \( -name "*.log" -o -name ".DS_Store" \) -delete 2>/dev/null || true
 
 # ── Fail closed ───────────────────────────────────────────────────────────
 violations=()
 
+# Two exemptions, both for files that belong to a vendored dependency rather
+# than to this machine: a published package's own dotfiles under node_modules,
+# and the *.example/*.sample templates plugins ship to document their settings.
+# Neither can carry a credential of ours, and matching them aborts a staging
+# run over a file nobody here wrote.
+is_vendored() {
+  case "$1" in
+    */node_modules/*|*.example|*.sample|*.template) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 for pattern in "${DENY_NAMES[@]}"; do
   while IFS= read -r hit; do
-    [[ -n "$hit" ]] && violations+=("$hit")
+    [[ -n "$hit" ]] && ! is_vendored "$hit" && violations+=("$hit")
   done < <(find "$STAGE" -name "$pattern" 2>/dev/null || true)
+done
+
+for pattern in "${DENY_NAMES_TOP[@]}"; do
+  while IFS= read -r hit; do
+    [[ -n "$hit" ]] && violations+=("$hit")
+  done < <(find "$STAGE" -maxdepth 1 -name "$pattern" 2>/dev/null || true)
 done
 
 # Anchored to the top level of the staged tree on purpose. These names are
