@@ -495,6 +495,20 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
     ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run, in the checkout and in every module repository nested under it: commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The evidence step pushes that branch and opens the pull request on that repository against the branch policy.${checkout.policy ? ` ${checkout.policy}` : ''}`] : []),
     '',
+    // "It is not there" halted a whole run and was wrong. The provisioner
+    // reported the ticket's target file "not present in any checked-out repo"
+    // while that exact file sat in its own workspace, and every step after it
+    // was skipped on the strength of that sentence. An absence is a
+    // measurement like any other: it takes a command and an empty result. The
+    // step already has to show a directory listing before its own claims are
+    // believed; this is the same rule pointed at the opposite conclusion.
+    'Before reporting that a file, module, table or endpoint does not exist,',
+    'run the command that looks for it and paste the empty result. Search the',
+    'whole workspace, not the directory you expected it in — a module may be a',
+    'separate repository that has to be cloned, and the product block above',
+    'names those. An absence asserted without a command behind it is sent back,',
+    'and an absence that halts a run and turns out to be wrong costs the run.',
+    '',
     'This directory is the run\'s evidence. A file you do not write is evidence',
     'that does not exist — do not describe an artifact in prose instead of',
     'writing it, and never write a placeholder in place of a real result.',
@@ -515,6 +529,12 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       // which is how a provisioner step reported the repo 'is not checked out
       // anywhere on this host' after being told to clone it.
       `Checkouts: ${workspaceRootFor(startedBy)}/<repo name>; confirm each with git remote -v, and clone https://github.com/<repo>.git there if it is missing.`,
+      // A container repo needs its modules named, or the agent guesses. One did:
+      // it cloned the parent, found modules/ nearly empty, and reported the
+      // ticket's file "not present in any checked-out repo" while holding it.
+      ...(product.modules
+        ? [`Modules: this product's parent repo is a container — it git-ignores modules/, so cloning it alone gives you almost nothing. Clone ONLY the ones this ticket touches, into ${workspaceRootFor(startedBy)}/<parent repo>/modules/<dir>. Directory and repo name differ and the difference is not a rule, so read this map: ${Object.entries(product.modules).map(([dir, repo]) => `${dir}=${repo}`).join(', ')}.`]
+        : []),
       ...(product.multiRepo ? ['Multi-repo: yes. Every repo listed gets its own branch, commit and PR; plan.md must give a merge order and nothing merges until every PR in the set is approved.'] : []),
       `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
