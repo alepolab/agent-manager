@@ -891,7 +891,11 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'purple',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 30,
+      // Each agent-browser call — open, interact, screenshot, read console —
+      // is its own turn, and this step does that for every route the change
+      // touches, so its budget matches the other tool-heavy steps rather than
+      // the single-Playwright-run job it used to be. A real run hit 30 twice.
+      maxTurns: 80,
       skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You capture browser evidence for the change, against the stack the provisioning step brought up: what the changed screen looks like and does now, seen through a real browser, so a reviewer verifies the change visually without standing anything up.
