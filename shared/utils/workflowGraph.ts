@@ -362,7 +362,7 @@ const CLIP = 4000
 const clip = (text: string): string =>
   text.length > CLIP ? `${text.slice(0, CLIP)}\n...[truncated]` : text
 
-export function monitorPrompt(opts: { label: string, agentSlug: string, input: string, output: string }): string {
+export function monitorPrompt(opts: { label: string, agentSlug: string, input: string, output: string, artifactsDir?: string }): string {
   return `You are monitoring one step of an automated workflow.
 
 Step: ${opts.label} (agent: ${opts.agentSlug})
@@ -372,6 +372,9 @@ ${clip(opts.input)}
 
 --- OUTPUT IT PRODUCED ---
 ${clip(opts.output)}
+
+The step writes its evidence as files in the run artifacts directory${opts.artifactsDir ? `:
+${opts.artifactsDir}` : ' named in the input'}. The output is a summary; the files are the proof. Before you vote RETRY for missing evidence, Read the files the step names there (meta.json, *.md, *.xml) and judge on what they contain — a step whose files hold the proof has done its job even if its summary did not paste it. Vote RETRY only when the evidence is absent from both the output and the files.
 
 Judge whether the output actually satisfies the step. Give a short assessment (2-3 sentences),
 then end your reply with exactly one of these lines:

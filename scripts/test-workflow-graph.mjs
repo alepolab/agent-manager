@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import {
+  monitorPrompt,
   maxVisitsOf,
   DEFAULT_MAX_VISITS,
   buildGraph,
@@ -293,6 +294,20 @@ assert.equal(joinInputs([]), '')
   assert.equal(parseSkip(both), 'nothing to do', 'a skip is still detected alongside a halt')
   assert.equal(parseSkip('PIPELINE-HALT: blocked'), null, 'a halt alone is not a skip')
   assert.equal(parseHalt('PIPELINE-SKIP: idle'), null, 'a skip alone is not a halt')
+}
+
+// monitorPrompt carries the artifacts dir and tells the monitor to read files
+// before it sends a step back for missing proof. The largest source of wasted
+// retries was a step doing the work but not pasting the evidence into its
+// output; the monitor has a Read tool and must use it.
+{
+  const withDir = monitorPrompt({ label: 'Verify', agentSlug: 'sdlc-verifier', input: 'in', output: 'out', artifactsDir: '/runs/abc/artifacts' })
+  assert.ok(withDir.includes('/runs/abc/artifacts'), 'the prompt names the artifacts directory to read')
+  assert.match(withDir, /Read the files/i, 'and instructs reading them before a RETRY')
+  assert.match(withDir, /RETRY only when the evidence is absent from both the output and the files/i, 'RETRY only when proof is in neither')
+  const noDir = monitorPrompt({ label: 'Verify', agentSlug: 'sdlc-verifier', input: 'in', output: 'out' })
+  assert.ok(noDir.includes('named in the input'), 'without a dir it still points the monitor at the files')
+  assert.ok(noDir.includes('VERDICT: CONTINUE') && noDir.includes('VERDICT: ABORT'), 'the three verdicts survive')
 }
 
 console.log('workflowGraph: all checks passed')

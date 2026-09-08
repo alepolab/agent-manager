@@ -486,12 +486,13 @@ async function runMonitor(
   input: string,
   output: string,
   projectDir: string | undefined,
+  artifactsDir: string,
 ): Promise<{ verdict: 'CONTINUE' | 'RETRY' | 'ABORT', review: string }> {
   if (!step.monitorSlug) return { verdict: 'CONTINUE', review: '' }
   try {
     const raw = await agentCaller(
       step.monitorSlug,
-      monitorPrompt({ label: step.label, agentSlug: step.agentSlug, input, output }),
+      monitorPrompt({ label: step.label, agentSlug: step.agentSlug, input, output, artifactsDir }),
       projectDir,
     )
     const { output: review } = normalizeAgentResult(raw)
@@ -740,7 +741,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     }))
 
     if (step.monitorSlug) {
-      const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir)
+      const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id))
       if (verdict === 'ABORT') {
         markFailed(l.state, id)
         Object.assign(rec, { status: 'failed', model, error: 'Monitor aborted the workflow' })

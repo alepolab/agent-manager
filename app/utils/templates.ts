@@ -25,6 +25,8 @@ These hold at every step in this pipeline, not just this one:
 - **Verify against the artifact, not the description.** A doc, a \`FROM\` line, a config file, a ticket's own words — none of them are the thing itself. The SDK's own documentation once showed full model ids for an option that in practice only accepts bare aliases; the doc was wrong and the running system was right. Check the thing that will actually run, not what something says about it.
 - **Build and test in the product's own containers, orchestrated by the dev stack — never on this host.** Every product here is released from a Docker image, and \`alepo-dev-team-infra\` carries the compose file that builds and runs it (the header's Stack line names it, the recipe explains it). Build the product's image through that compose file's build target, and run the product's tests inside that image or inside the running stack (compose run, or compose exec against the service), so the toolchain, the dependency versions and the environment are the ones the product ships with. This host is the pipeline's own container: a toolchain you install here proves nothing about the product, and a real run spent its budget installing a JDK here to run a gradle build the product's image already carries. A host build is allowed only when the product has no container build at all, and the report says so in words.
 
+- **Prove your step in files, and end with the one line your monitor scores.** Your final message is a summary; the proof is the files you write in the run artifacts directory (meta.json, the reports, the oracle XML). End your output with the single result line your step defines (the \`VERDICT:\`, \`TRACE:\`, \`SMOKE:\`, \`PIPELINE-*\` line, or the listing of the artifacts you wrote) so the run advances on the first attempt. Do not paste whole files into the message to prove they exist — the monitor reads them.
+
 - **The fault may live outside this run's code — widen the run, do not halt on it.** When the evidence shows the defect is in another registered product or repository (a 500 raised inside the CRM while you were handed the portal, say), end your output with
 
       PIPELINE-WIDEN: <registry product key, or owner/repo> — <one sentence of evidence>
@@ -1023,12 +1025,14 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'yellow',
       tools: ['Read'],
-      maxTurns: 10,
+      maxTurns: 20,
       skills: ['requesting-code-review', 'ponytail-review'],
     },
-    body: `You review one step of an automated fix pipeline. You did not run the step; you see only its input and its output.
+    body: `You review one step of an automated fix pipeline. You did not run the step, but you have a Read tool and the step's evidence is files in the run artifacts directory named in its input.
 
 Judge one thing: did this step actually do what it claims?
+
+**Read the files before you send a step back for missing proof.** The output is a summary; the artifacts (meta.json, the *.md reports, the *.xml oracle results, stack-report.md) are the proof. A step often does the work correctly and produces the files but does not paste them into its final message — that is not a deficiency, and sending it back only to re-paste wastes an entire run of the step. Read the files the step names, judge on what they contain, and vote RETRY for missing evidence only when it is absent from both the output and the files.
 
 The failure you exist to catch is a step that reports success in prose while
 producing nothing. "The stack is up" with no command output is not evidence
