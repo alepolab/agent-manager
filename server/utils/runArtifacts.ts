@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { computeFixFacts } from './gitFacts.ts'
+import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import { resolveClaudePath } from './claudeDir.ts'
 import { createLogger } from './log.ts'
 import type { AgentUsage } from './agentCaller.ts'
@@ -207,7 +208,6 @@ export function resolveInstalledPluginVersion(pluginName = 'alepo-engineering'):
 /** Keys the RUNNER owns. An agent may write them; finalize overwrites them.
  *  Split out so there is exactly one list, used by both seed and finalize. */
 function runnerOwned(run: WorkflowRun) {
-  const ended = run.endedAt ?? Date.now()
   return {
     identity: run.startedBy ?? run.workflowSlug,
     // The runner's own fact for what dispatched this run — set once at
@@ -223,7 +223,9 @@ function runnerOwned(run: WorkflowRun) {
     cost: {
       ...tokenTotals(run),
       attempts: Math.max(1, ...run.steps.map(s => s.visits ?? 1)),
-      wall_clock_min: Math.round((ended - run.startedAt) / 60000),
+      // The run clock's execution time, matching costReport.ts exactly - see
+      // shared/utils/runClock.ts for why it is not `endedAt - startedAt`.
+      wall_clock_min: Math.round(runElapsedMinutes(run)),
     },
   }
 }

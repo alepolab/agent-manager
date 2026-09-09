@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -73,6 +73,13 @@ export async function saveProfile(login: string, patch: Partial<UserProfile> & {
   const next: UserProfile = { ...current, ...rest, login, updatedAt: Date.now() }
   if (jiraTokenPlain !== undefined) next.jiraToken = jiraTokenPlain ? encrypt(jiraTokenPlain) : undefined
   if (githubTokenPlain !== undefined) next.githubToken = githubTokenPlain ? encrypt(githubTokenPlain) : undefined
+  // A credential file must not outlive the credential. Clearing the token and
+  // leaving a docker config behind would keep a revoked value on disk and hand
+  // it to the next run, which then fails against the registry for a reason
+  // nothing on this instance can explain.
+  if (githubTokenPlain !== undefined && !githubTokenPlain) {
+    await rm(join(usersDir(), `${safe(login)}.docker`), { recursive: true, force: true })
+  }
   const p = profilePath(login)
   const tmp = `${p}.${process.pid}.tmp`
   await writeFile(tmp, JSON.stringify(next, null, 2), { mode: 0o600 })
@@ -195,6 +202,10 @@ export async function envForUser(login: string | undefined, fetchImpl: typeof fe
     if (verdict.ok) {
       env.GH_TOKEN = t
       env.GITHUB_TOKEN = t
+      // Same token, now also where docker looks for it. Gated on the same
+      // verdict: writing a credential file for a token GitHub has already
+      // rejected would turn a clear 401 into a confusing one.
+      env.DOCKER_CONFIG = await dockerConfigFor(login, t)
     } else {
       // The host's own gh login (mounted into the container) applies instead;
       // said once per token, loudly, because the developer should replace it.
@@ -212,6 +223,43 @@ export async function envForUser(login: string | undefined, fetchImpl: typeof fe
 
 /** A jira-cli config naming this user's login; the token travels in JIRA_API_TOKEN. */
 const jiraBaseUrl = () => (process.env.JIRA_BASE_URL || process.env.JIRA_SERVER || 'https://alepo.atlassian.net').replace(/\/+$/, '')
+
+/** The registry a run pulls product images from. */
+const GHCR = 'ghcr.io'
+
+/**
+ * A docker config directory holding this developer's GHCR credential, returned
+ * as the value for `DOCKER_CONFIG`.
+ *
+ * Runs could not pull a single product image before this. The token reached
+ * `git` and `gh` — `GH_TOKEN` is set a few lines above — but never the registry,
+ * because docker reads credentials from a config file and nothing wrote one. A
+ * real run spent sixty turns and fourteen minutes cycling between that and a
+ * port collision:
+ *
+ *   Error response from daemon: unable to retrieve auth token:
+ *   invalid username/password: unauthorized
+ *
+ * Written as a file rather than by having the agent run `docker login`, so the
+ * token never appears in a command line. An agent's commands land in the step
+ * log and in evidence artifacts; one already wrote GITHUB_CLIENT_SECRET into a
+ * stack report by running `env`. The agent inherits a working docker client and
+ * never handles the credential.
+ *
+ * Per developer, like the Jira config beside it, so a shared instance keeps
+ * pulls attributable rather than routing everyone through one machine account.
+ *
+ * The file is base64, not encryption — that is docker's format, not a choice —
+ * so it is written 0600 into the users directory, never into a run's artifacts
+ * directory, which is kept as evidence and travels into pull request bodies.
+ */
+async function dockerConfigFor(login: string, token: string): Promise<string> {
+  const dir = join(usersDir(), `${safe(login)}.docker`)
+  await mkdir(dir, { recursive: true })
+  const auth = Buffer.from(`${login}:${token}`).toString('base64')
+  await writeFile(join(dir, 'config.json'), JSON.stringify({ auths: { [GHCR]: { auth } } }), { mode: 0o600 })
+  return dir
+}
 
 async function jiraConfigFor(p: UserProfile): Promise<string> {
   const server = jiraBaseUrl()

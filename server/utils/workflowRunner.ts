@@ -6,6 +6,7 @@ import {
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
+import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } from '../../shared/utils/runClock.ts'
 import { defaultBudget, createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
@@ -226,7 +227,7 @@ function extendBudget(run: WorkflowRun): void {
   const spent = computeUsage(run)
   const fresh = defaultBudget()
   const extended = {
-    maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil((Date.now() - run.startedAt) / 60000) + fresh.maxMinutes),
+    maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil(runElapsedMinutes(run)) + fresh.maxMinutes),
     maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens - (spent.cached_tokens ?? 0) + spent.output_tokens + fresh.maxTokens),
   }
   if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes) {
@@ -267,7 +268,10 @@ async function widenProduct(run: WorkflowRun, target: string): Promise<string[]>
 
 function budgetExceeded(run: WorkflowRun): string | null {
   const b = run.budget
-  const minutes = (Date.now() - run.startedAt) / 60000
+  // Execution time, not wall clock: a run restarted the morning after it failed
+  // has been in existence for hours and working for minutes, and charging it the
+  // gap would pause it against its cap the instant it resumed.
+  const minutes = runElapsedMinutes(run)
   if (minutes > b.maxMinutes) return `Budget exceeded: ${Math.round(minutes)} min over the ${b.maxMinutes} min cap`
   // Computed here, not read from run.usage: that field is refreshed by publish(),
   // and the wave loop recurses without publishing in between.
@@ -281,6 +285,14 @@ function budgetExceeded(run: WorkflowRun): string | null {
 }
 
 async function publish(run: WorkflowRun) {
+  // The run clock, advanced here for the same reason finalizeRunArtifacts is
+  // called here: every status transition in this file passes through publish(),
+  // and there are too many terminal branches for per-site bookkeeping to stay
+  // correct. Running opens a stretch (idempotently - a wave publishes 'running'
+  // many times); anything else closes it, so the time a run spends failed,
+  // paused or stopped is never counted as time it worked.
+  if (run.status === 'running') startRunClock(run)
+  else settleRunClock(run)
   run.usage = computeUsage(run)
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
@@ -1226,6 +1238,9 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
     l.nextNote = note.trim()
   }
   run.question = undefined
+  // As in restartRun: close any stretch left open by a process that is gone, so
+  // resuming does not backdate this run's clock to before the interruption.
+  reconcileRunClock(run)
   // Persist 'running' before returning, as restartRun and respondToRun do: a
   // reader that lands between this return and the wave's first publish would
   // otherwise see the old 'paused' record and treat the run as settled.
@@ -1569,6 +1584,13 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   extendBudget(run)
   l.stopped = false
   l.running = true
+  // A run whose owning process died never published a settled status, so its
+  // clock stretch is still open. Close it against what the record last knew
+  // happened, BEFORE the status and endedAt below are rewritten - reopening it
+  // instead would charge this restart with every hour the run spent dead. A
+  // no-op for the runner's own hand-over (widen, rework), where the run never
+  // stopped and the stretch is still the current one.
+  reconcileRunClock(run)
   run.status = 'running'
   run.error = undefined
   run.endedAt = undefined

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { runElapsedMs } from '~~/shared/utils/runClock'
 import { currentStep, stepsDone, quietSeconds, isQuiet, shortDuration } from '~/utils/runActivity'
 
 /**
@@ -16,7 +17,9 @@ const props = defineProps<{ run: WorkflowRun, now: number }>()
 
 const current = computed(() => currentStep(props.run))
 const done = computed(() => stepsDone(props.run))
-const elapsed = computed(() => shortDuration(props.now - props.run.startedAt))
+// Time the run has been executing, not time since it was created: a run
+// restarted after sitting failed would otherwise open with an hour on its face.
+const elapsed = computed(() => shortDuration(runElapsedMs(props.run, props.now)))
 const quiet = computed(() => isQuiet(props.run, current.value, props.now))
 const quietLabel = computed(() => {
   const s = quietSeconds(current.value, props.now)
@@ -38,7 +41,6 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
       <span v-if="run.product?.name" class="text-[11px] text-meta">{{ run.product.name }}</span>
       <span class="ml-auto flex items-center gap-3 text-[11px] text-label font-mono tabular-nums">
         <span>{{ elapsed }}</span>
-        <span v-if="run.usage">${{ run.usage.usd.toFixed(2) }}</span>
         <span>{{ done }}/{{ run.steps.length }} steps</span>
       </span>
     </div>

@@ -629,9 +629,94 @@ product block as before. Do not go looking for it in another repository.
 
 Never copy a developer's \`.env\` into the run; generate every secret the compose marks required with \`openssl\` and pass secrets as shell environment for the \`up\` command, not files. Put any compose override you need in the run artifacts directory, never in a repo checkout.
 
+The same holds for **licence files** — \`license/*.lic\` and anything Padlock-signed. They are proprietary, they are deliberately \`.gitignore\`d (\`license/\` is ignored wholesale, with only a \`.gitkeep\` tracked), and a machine that has one has it because a person put it there. Mount the one already on the host if a stack needs it; never copy it into the run artifacts directory, never into another checkout, and never into anything that gets attached to a report or a pull request. An artifacts directory is kept as evidence and a bundle travels into a PR body, so a licence that lands in either has left the machine it was licensed to.
+
 You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. When you render a compose file for evidence, use \`docker compose ... config --no-interpolate\`: the interpolated form prints every secret the environment holds into your output, and your output is kept as evidence. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
 
 Known recipes live as files: when your input's product block names a \`Recipe:\` path, read it first and follow it. It carries the product-specific quirks (image tag policy, port overrides, healthcheck, which variables to pass through). If there is no recipe, work from the deployment repo's compose file for the product and write what you learned into your stack report so a recipe can be made from it. If there is no compose file for it there either, halt as above rather than looking elsewhere.
+
+### You are in a container; the daemon is not
+
+Every path you hand \`docker\` or \`docker compose\` is resolved by the **daemon on the
+host**, not by your filesystem. Your checkout at
+\`/srv/agent-manager/workspace/...\` does not exist for the daemon, so a bind mount
+declared against it fails on something that reads like a permissions problem
+and is not:
+
+\`\`\`
+making volume mountpoint for volume /srv/.../database/mariadb/scripts:
+mkdir /srv/agent-manager: permission denied
+\`\`\`
+
+Translate before you run anything that mounts. The host path for your
+workspace is the source of the mount that gives you \`/srv/agent-manager\` — read
+it rather than assuming a layout:
+
+\`\`\`
+grep ' /srv/agent-manager ' /proc/self/mountinfo | awk '{print $4}'
+\`\`\`
+
+Pass that as \`--project-directory\` to every compose invocation, and use it for
+any \`-v\` you write yourself. A real run lost minutes rediscovering this from a
+failed mount; it is a property of how this instance is deployed, not something
+to work out per ticket.
+
+### Never bring up a stack you do not own
+
+\`database\` (MariaDB, MongoDB) and \`sso\` (Keycloak, URM) are **shared**: FFM, CRM,
+PCRF and VMS all use them. \`docker compose up\` on a shared file does not mean
+"start if absent" — it **recreates** a container that is already there, which
+takes another team's database down mid-use and gives it back empty of whatever
+was in flight.
+
+So, before any \`up\` touching a shared stack:
+
+\`\`\`
+docker ps -a --filter name=<container> --format '{{.Names}} {{.Status}}'
+\`\`\`
+
+- Running → **use it**. Prove it healthy and move on. Do not recreate it to be
+  sure; that is the destructive act wearing the shape of diligence.
+- Present but stopped → it is someone else's stopped container. Report it and
+  halt. Starting it is a guess about why it is down.
+- Absent → you may bring it up, and you own tearing it down.
+
+A real run recreated \`infra-mariadb\` and left it in \`Created\` state when the start
+failed: the shared database ended the run more broken than it began.
+
+### Publish no host ports
+
+Bring run-scoped stacks up without publishing. Host ports are a single global
+namespace shared with every other stack, every developer process and the host's
+own services, and a collision fails the whole \`up\`:
+
+\`\`\`
+rootlessport listen tcp 0.0.0.0:3306: bind: address already in use
+\`\`\`
+
+Something else owns the port and you must not stop it, so the collision is not
+yours to resolve — but it is yours to avoid.
+
+**You cannot un-publish a port with an override file.** Compose merges
+sequences rather than replacing them, so a \`ports: []\` override leaves the
+original mapping in place; this was measured, not assumed. What works is the
+compose's own port variable: every mapping in the deployment repo is written
+\`"\${MARIADB_PORT:-3306}:3306"\`, so set that variable to a free port in the env
+file you already write into the run artifacts directory.
+
+Pick the port by checking, not by hoping:
+
+\`\`\`
+for p in $(seq 33060 33099); do (echo >/dev/tcp/127.0.0.1/$p) 2>/dev/null || { echo "$p"; break; }; done
+\`\`\`
+
+The published port is for your convenience only and nothing in the run should
+use it: this estate addresses services by **container-internal name and port**
+(\`http://urms:3000\`), never through the host, and you prove health with
+\`docker exec ... curl\` from inside the network. Routing container-to-container
+via a host address hits the host firewall and produces a *timeout* rather than
+a connection refused — that signature means the wrong address, not a dead
+service.
 
 ## What "up" means
 
@@ -828,6 +913,28 @@ Then make the **smallest** change that addresses the root cause:
 - Do not add error handling for cases that cannot occur, or defend against inputs the type system already constrains.
 - Do not add a feature flag or a compatibility shim unless the ticket asks for one.
 
+## Never commit a credential or a licence
+
+You are the step that runs \`git add\` and \`git commit\`, so this stops here or not at
+all.
+
+Never stage a secret, a \`.env\`, or a **licence file** (\`license/*.lic\`, anything
+Padlock-signed). These sit inside the checkouts you work in: the PCRF checkout
+on this instance carries \`license/Alepo-License-PCRF.lic\` right now. It is
+correctly ignored — \`.gitignore\` covers \`license/\` wholesale — but that is one rule
+standing between a proprietary licence and a public commit, and \`git add -A\` from
+the wrong directory is exactly the move that tests it.
+
+So: stage the files your fix actually changed, by path. Never \`git add -A\`,
+\`git add .\` or \`git commit -a\` — not because they are always wrong, but because
+they commit whatever happens to be sitting in the tree, and what is sitting in
+the tree is not something you chose. If \`git status\` shows something you did not
+create, leave it alone and say so in your report rather than sweeping it in.
+
+A licence or a credential in a commit is not fixed by a later commit removing
+it. It is in the history, the push already happened, and the remedy is a
+rotation and a rewrite that someone else has to do.
+
 ## Estate conventions that apply to a fix
 
 - Structured logging is RFC 5424 with PEN 36713 — match the surrounding code's logging shape rather than introducing a new one.
@@ -893,8 +1000,65 @@ The run artifacts directory named at the top of your input already tells you whe
 ## What to run
 
 1. The parameterised test from the test-authoring step. Every row must pass. A partial pass is a failure, and which rows failed is the important part of the report.
-2. The repo's existing test suite for the area that changed — the module's own tests at minimum, the full suite if it runs in reasonable time.
-3. The repo's own lint, format and type gates. Green unit tests with a red typecheck is the single most common way a local pass turns into a red pipeline.
+2. The tests for **what this run actually changed** — not the whole suite.
+   "Scope the regression" below says how, and how it differs by language.
+
+3. The repo's own lint, format and type gates. These stay **unscoped**: they run
+   in seconds, and green unit tests with a red typecheck is the single most
+   common way a local pass turns into a red pipeline.
+
+## Scope the regression
+
+The full suite is CI's job, not yours. It runs on the pull request, in
+parallel, on hardware that is not your run's clock — and the PR follow-up step
+watches those checks and fixes what goes red before anything merges. Running it
+here too buys nothing and costs minutes: one measured run spent 627 seconds on
+2,204 tests to prove a three-line string change.
+
+So run the tests for the files this run changed:
+
+1. Read \`fix.files_changed\` from \`meta.json\` — the runner re-asserts it from git, so
+   it is what actually changed rather than what anyone claims changed.
+2. Map each path to its nearest test target and run those.
+3. If a path will not map, **widen** to the nearest ancestor that has tests, and
+   say in your report that you widened and why. Running more than needed and
+   saying so is fine; running nothing and not noticing is not.
+
+If the product block's \`tests.unit\` names a real command, that wins — it is the
+product's own answer. Where it still reads \`CONFIRM\` it is a placeholder that was
+never filled in, so ignore it and derive as above.
+
+### The technique differs by family
+
+| Family | How to scope |
+|---|---|
+| JS/TS (vitest, jest) | Pass the changed paths to the runner: \`vitest run <dir>\`. Tests are colocated or mirror \`src/\`. No build; seconds. |
+| Python (pytest) | \`pytest <path>\` — same shape. |
+| Go | \`go test ./<pkg>/...\` |
+| Java (Maven, Gradle) | \`-Dtest=<Class>\` or \`--tests\` on the touched module only. Do not reactor-build the whole workspace to run one test. |
+| C++ (GoogleTest, CTest) | **Build the target, then filter**: build what the change touches, then \`ctest -R <module>\`. Name the targets you built. |
+
+The C++ row is different in kind, not just in command. \`ctest\` on a stale or
+partial build reports **passes for tests it never rebuilt** — a green result
+that proves nothing, which is the exact failure this step exists to catch. If
+you cannot build the target, that is a halt, not a scoped run.
+
+Your language-matched skills carry the depth (\`cpp-testing\`, \`python-testing\`,
+\`react-testing\`, \`springboot-tdd\`); this table is only enough to choose a scope.
+
+### Say what you scoped
+
+\`regression.suite\` in \`meta.json\` must name what actually ran **and** that the full
+suite is CI's. A reviewer reads that field as the regression proof, so
+\`"vitest — pcrf-ems-portal frontend (134 files)"\` is misleading when 34 tests ran
+against one directory. Write it like:
+
+\`\`\`
+scoped: frontend/src/pages — 34 tests; full suite runs in CI on the PR
+\`\`\`
+
+A scoped run described as a full one is a placeholder wearing the shape of
+evidence, and this bundle is read by people who will not re-run it.
 
 ## Evidence, not adjectives
 
@@ -1018,7 +1182,7 @@ And, when you deployed the fixed build, \`deploy-report.md\`: the image tag you 
 Then merge \`oracle_after\`, \`regression\`, and \`adversarial\` (the object above, or \`null\`) into \`meta.json\` in that same directory:
 
 - \`oracle_after\` — \`kind\`, \`path\`, \`runs\` (3), \`rows\`. Do not set \`verdict\` yourself — the assembler derives it from \`oracle-after.xml\`. \`kind\` is the same closed enum as the pre-fix oracle: exactly one of \`parameterised_test\`, \`acceptance_tests\`, \`verification_check\`, \`doc_build\`, \`reproduction\` — use whatever the test-authoring step used, since it's the same oracle run again.
-- \`regression\` — \`suite\` (string, required — the name of the suite you ran). Do not set \`passed\`/\`failed\` yourself — the assembler derives them from \`regression.xml\`.
+- \`regression\` — \`suite\` (string, required). Name what actually ran AND that the full suite is CI's, per "### Say what you scoped" above. A scoped run recorded as though it were the whole suite is the one thing this field must never do. Do not set \`passed\`/\`failed\` yourself — the assembler derives them from \`regression.xml\`.
 
 \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
 

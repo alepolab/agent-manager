@@ -33,7 +33,7 @@ async function onRestart(stepId: string, note?: string) {
       <template #subtitle>
         <p v-if="run" class="text-[11px] font-mono text-meta truncate">
           <span :style="{ color: RUN_STATUS_COLOR[run.status] }">{{ run.status }}</span>
-          · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}{{ run.usage ? ` · $${run.usage.usd.toFixed(2)}` : '' }}
+          · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}
         </p>
       </template>
       <template #right>

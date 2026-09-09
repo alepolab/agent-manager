@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR, runElapsedLabel } from '~/utils/runStatus'
 
 /**
  * The one-line run control that stays visible above the canvas. Every action a
@@ -26,12 +26,8 @@ const progress = computed(() => {
   const steps = props.run?.steps ?? []
   return { done: steps.filter(s => settledSet.has(s.status)).length, total: steps.length }
 })
-const elapsed = computed(() => {
-  const r = props.run
-  if (!r) return ''
-  const secs = Math.round(((r.endedAt ?? Date.now()) - r.startedAt) / 1000)
-  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
-})
+// The run clock, not endedAt - startedAt: see shared/utils/runClock.ts.
+const elapsed = computed(() => props.run ? runElapsedLabel(props.run) : '')
 const current = computed(() => {
   const r = props.run
   if (!r) return ''
@@ -70,7 +66,6 @@ function onStop() {
       <span class="text-[11px] text-label font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
       <span v-if="current" class="text-[11px] text-label truncate max-w-[16rem]">{{ current }}</span>
       <span class="text-[11px] text-label font-mono tabular-nums">{{ elapsed }}</span>
-      <span v-if="run.usage" class="text-[11px] text-label font-mono tabular-nums" :title="`${run.usage.input_tokens} in / ${run.usage.output_tokens} out`">${{ run.usage.usd.toFixed(2) }}</span>
       <div class="flex items-center gap-1 ml-auto">
         <UButton v-if="run.status === 'paused'" size="xs" icon="i-lucide-play" label="Continue" @click="emit('continue')" />
         <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
