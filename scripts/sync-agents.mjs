@@ -27,7 +27,7 @@ const dryRun = process.argv.includes('--dry-run')
 const claudeDir = process.env.CLAUDE_DIR || join(homedir(), '.claude')
 
 const { agentTemplates } = await import('../app/utils/templates.ts')
-const { workflowTemplates, materializeTemplateSteps } = await import('../app/utils/workflowTemplates.ts')
+const { workflowTemplates, materializeTemplateSteps, RUNBOOK_FILES } = await import('../app/utils/workflowTemplates.ts')
 const { serializeFrontmatter } = await import('../server/utils/frontmatter.ts')
 
 // Seed the plugin's own skills into CLAUDE_DIR/skills first.
@@ -105,19 +105,20 @@ for (const t of sdlc) {
   if (!dryRun) writeFileSync(path, next)
 }
 
-// The workflow's step ids are generated fresh each time, so it is never
+// A workflow's step ids are generated fresh each time, so it is never
 // byte-identical and cannot be drift-compared the way the agents are. Report
-// what it declares instead — the fields whose silent absence made the first
-// real run meaningless.
-const runbook = workflowTemplates.find(t => t.id === 'runbook-a-jira-to-diff')
-if (!runbook) { console.error('Runbook A workflow template not found.'); process.exit(2) }
-{
+// what each declares instead — the fields whose silent absence made the first
+// real run meaningless. Every shipped runbook, from the same map the server's
+// team sync seeds from.
+for (const [templateId, file] of Object.entries(RUNBOOK_FILES)) {
+  const runbook = workflowTemplates.find(t => t.id === templateId)
+  if (!runbook) { console.error(`${templateId} workflow template not found.`); process.exit(2) }
   const slugs = {}
   for (const s of runbook.steps) {
     slugs[s.agentTemplateId] = s.agentTemplateId
     if (s.monitorSlug) slugs[s.monitorSlug] = s.monitorSlug
   }
-  const wfPath = join(claudeDir, 'workflows', 'runbook-a-ticket-to-evidence-backed-pr.json')
+  const wfPath = join(claudeDir, 'workflows', `${file}.json`)
   const existing = existsSync(wfPath) ? JSON.parse(readFileSync(wfPath, 'utf8')) : null
   const steps = materializeTemplateSteps(runbook, slugs, existing?.steps?.map(s => s.id))
   if (!dryRun) {
@@ -128,7 +129,7 @@ if (!runbook) { console.error('Runbook A workflow template not found.'); process
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     }, null, 2))
   }
-  console.log('\nworkflow steps:')
+  console.log(`\n${runbook.name} steps:`)
   for (const s of steps) {
     console.log(`  ${s.agentSlug.padEnd(26)} contextMode=${s.contextMode ?? '-'} monitor=${s.monitorSlug ?? '-'}`)
   }

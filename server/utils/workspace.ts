@@ -21,7 +21,7 @@
 
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir as osHomedir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 
 /** Login sanitiser, matching users.ts: a login becomes one safe path segment. */
 const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_')
@@ -208,7 +208,8 @@ export function findCheckout(workspace: string, repoName?: string): string | und
   if (existsSync(join(ws, '.git'))) return ws
   if (repoName && existsSync(join(ws, repoName, '.git'))) return join(ws, repoName)
   try {
-    const withGit = readdirSync(ws, { withFileTypes: true }).filter(e => e.isDirectory() && existsSync(join(ws, e.name, '.git'))).map(e => e.name)
+    // A run's worktree (`<repo>@<branch>`) sits beside the clone and is never the clone.
+    const withGit = readdirSync(ws, { withFileTypes: true }).filter(e => e.isDirectory() && !e.name.includes('@') && existsSync(join(ws, e.name, '.git'))).map(e => e.name)
     return withGit.length === 1 ? join(ws, withGit[0]!) : undefined
   } catch { return undefined }
 }
@@ -223,17 +224,30 @@ export async function stashCheckout(path: string, login: string): Promise<{ stas
   return { stashed: true, message }
 }
 
+/** Where a run works: a worktree beside the clone, named after it and the run branch. */
+export const worktreeDirFor = (checkout: string, branch: string) => `${checkout}@${branch.replace(/[^A-Za-z0-9_.-]+/g, '-')}`
+
 /**
- * A run works on its own branch off the checkout's current HEAD. Creating it
- * is the runner's job, not an agent's. A super-repo whose modules are their
- * own repositories (ASE keeps each module under modules/<name> with its own
- * origin) gets the branch in every one of them too: the commit and the pull
- * request happen in the module, and a module left on main would be pushed
- * as main.
+ * A run works on its own branch in its own git worktree, made beside the
+ * clone: `<clone>@<branch>`. Creating it is the runner's job, not an agent's.
+ * A worktree rather than `checkout -B` in the clone itself, because the clone
+ * is the developer's: switching it under them was how a run's branch ended up
+ * in their editor, and why two runs on one product could not coexist. A
+ * super-repo whose modules are their own repositories (ASE keeps each module
+ * under modules/<name> with its own origin) gets a worktree for every one of
+ * them too, at the same relative path inside the run's worktree: the commit and
+ * the pull request happen in the module, and a module left on main would be
+ * pushed as main.
+ *
+ * Returns the worktree paths, the run's own first. A worktree that already
+ * exists on the branch (a restart after the runner made it but before the run
+ * recorded it) is reused, never rebuilt over work.
  */
 export async function ensureRunBranch(path: string, branch: string, base?: string): Promise<string[]> {
-  const repos = [path, ...nestedRepos(path)]
-  for (const r of repos) {
+  const root = worktreeDirFor(path, branch)
+  const out: string[] = []
+  for (const r of [path, ...nestedRepos(path)]) {
+    const wt = join(root, relative(path, r))
     // From the base branch on the remote when it has one: a fresh clone sits on
     // the default branch and a developer's checkout on whatever they were doing,
     // and neither is where a hotfix or a task is supposed to start. A repository
@@ -244,10 +258,22 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
       try { await git(r, ['fetch', '--quiet', 'origin', base]) } catch { /* no remote, or no such branch: decided below */ }
       try { await git(r, ['rev-parse', '--verify', '--quiet', `origin/${base}`]); start = `origin/${base}` } catch { start = undefined }
     }
-    await git(r, start ? ['checkout', '--quiet', '-B', branch, start] : ['checkout', '--quiet', '-B', branch])
-    await excludeFromGit(r, '.agent/evidence-run/')
+    // A worktree directory deleted by hand leaves a stale registration that blocks the branch; prune first.
+    await git(r, ['worktree', 'prune'])
+    // A `.git` entry, not the directory: a superproject's worktree materialises
+    // every submodule as an EMPTY directory, and git commands inside it answer
+    // for the parent, so the empty placeholder would have read as "already on
+    // the branch" and the module's own worktree would never have been made.
+    if (existsSync(join(wt, '.git'))) {
+      const current = await git(wt, ['branch', '--show-current']).catch(() => '')
+      if (current !== branch) throw new Error(`${wt} exists and is on ${current || 'no branch'}, not ${branch}`)
+    } else {
+      await git(r, ['worktree', 'add', '--quiet', '-B', branch, wt, ...(start ? [start] : [])])
+    }
+    await excludeFromGit(wt, '.agent/evidence-run/')
+    out.push(wt)
   }
-  return repos
+  return out
 }
 
 /** Git repositories one level under the checkout or under its modules/ directory. */
@@ -267,10 +293,12 @@ export function nestedRepos(path: string): string[] {
 
 /** Evidence copies never reach a commit, whatever an agent stages: the path is excluded in the checkout itself. */
 export async function excludeFromGit(path: string, pattern: string): Promise<void> {
-  const file = join(path, '.git', 'info', 'exclude')
+  // In a linked worktree `.git` is a file: info/exclude lives in the common dir, shared by every worktree of the clone.
+  const gitDir = await git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => join(path, '.git'))
+  const file = join(gitDir, 'info', 'exclude')
   const current = existsSync(file) ? await readFile(file, 'utf8') : ''
   if (current.split('\n').some(l => l.trim() === pattern)) return
-  await mkdir(join(path, '.git', 'info'), { recursive: true })
+  await mkdir(join(gitDir, 'info'), { recursive: true })
   await appendFile(file, `${current.endsWith('\n') || !current ? '' : '\n'}${pattern}\n`)
 }
 

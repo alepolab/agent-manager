@@ -77,17 +77,19 @@ git(projectDir, ['checkout', '-q', '-b', 'fix/SA-1203'])
  *  Content differs per call (the counter) so each scenario's commit is a
  *  genuine, non-empty diff even though the three scenarios share one repo. */
 let fixCommitCounter = 0
-function makeFixCommit() {
+/** In the run's own worktree (the `projectDir` the runner hands the agent), never the clone. */
+function makeFixCommit(workDir) {
   fixCommitCounter += 1
-  writeFileSync(join(projectDir, 'avp_parser.c'),
+  writeFileSync(join(workDir, 'avp_parser.c'),
     `int parse(void) { return 1; /* fixed, attempt ${fixCommitCounter} */ }\n`)
-  git(projectDir, ['add', '.'])
-  git(projectDir, ['commit', '-q', '-m', `fix the AVP loop bound (attempt ${fixCommitCounter})`])
+  git(workDir, ['add', '.'])
+  git(workDir, ['commit', '-q', '-m', `fix the AVP loop bound (attempt ${fixCommitCounter})`])
 }
 
 /** Ground truth for one scenario's run, computed from git independently of
- *  gitFacts.ts — against that RUN's OWN recorded baseline, not `main`. */
-function expectedFactsSince(baseCommit) {
+ *  gitFacts.ts — against that RUN's OWN recorded baseline, not `main`, in
+ *  that run's own worktree. */
+function expectedFactsSince({ baseCommit, projectDir }) {
   const commits = git(
     projectDir, ['rev-list', '--reverse', '--abbrev-commit', '--abbrev=12', `${baseCommit}..HEAD`],
   ).split('\n').map(s => s.trim()).filter(Boolean)
@@ -136,7 +138,7 @@ const makeWriters = ({ blastRadius, repos, mergeOrder, adversarial }) => ({
     writeFileSync(join(dir, 'oracle-before.xml'), xunit(4))
     mergeMeta(dir, { oracle: { kind: 'parameterised_test', path: 'tests/test_avp.py', runs: 3, rows: 4 } })
   },
-  'sdlc-fix-implementer': (dir) => {
+  'sdlc-fix-implementer': (dir, workDir) => {
     writeFileSync(join(dir, 'plan.md'), '# Plan\n\nFix the loop bound.\n')
     // The real commit this scenario's run makes, against its OWN baseline —
     // captured by startRun before this step (or any step) ran. `repos` below
@@ -144,7 +146,7 @@ const makeWriters = ({ blastRadius, repos, mergeOrder, adversarial }) => ({
     // list/counts — reconciliation must overwrite them with what this commit
     // actually did, for the one repo (ocs_cpp14) git can verify from this
     // run's projectDir.
-    makeFixCommit()
+    makeFixCommit(workDir)
     const fix = {
       repos, files_changed: 2, lines_changed: 18, test_dirs_unlocked: false, unlock_reason: null,
     }
@@ -192,8 +194,8 @@ async function runScenario(writers) {
   // scenario would silently depend on runArtifacts.ts's removed
   // DEFAULT_MODEL_ALIAS fallback to produce a valid bundle. Reporting a real
   // model id here is what makes this the acceptance test for the real path.
-  runner.setAgentCaller(async (agentSlug, input) => {
-    writers[agentSlug](dirFrom(input))
+  runner.setAgentCaller(async (agentSlug, input, workDir) => {
+    writers[agentSlug](dirFrom(input), workDir)
     return {
       output: `${agentSlug} done. EVIDENCE-FROM-${agentSlug}`,
       model: 'claude-sonnet-4-6',
@@ -252,7 +254,7 @@ async function runScenario(writers) {
   // agent's uncomputed self-report in meta.json instead — this catches that
   // even if the bundle still "validates".
   assert.ok(run.baseCommit, 'startRun captured a baseline for this run')
-  const expected1 = expectedFactsSince(run.baseCommit)
+  const expected1 = expectedFactsSince(run)
   assert.equal(expected1.commits.length, 1, 'sanity: this scenario made exactly one real commit')
   assert.equal(bundle.fix.repos.length, 1)
   assert.deepEqual(bundle.fix.repos[0].commits, expected1.commits,
@@ -308,7 +310,7 @@ async function runScenario(writers) {
   const ocsEntry = bundle.fix.repos.find(r => r.repo === 'alepolab/ocs_cpp14')
   assert.deepEqual(billingEntry.commits, ['1111111'],
     'a repo git cannot verify from this run\'s projectDir survives as the agent\'s self-report')
-  const expected2 = expectedFactsSince(run.baseCommit)
+  const expected2 = expectedFactsSince(run)
   assert.equal(expected2.commits.length, 1, 'sanity: this scenario made exactly one real commit')
   assert.deepEqual(ocsEntry.commits, expected2.commits,
     'the repo git CAN verify is git\'s own commit list since THIS run\'s baseline, never the agent\'s claim of ["2222222"]')

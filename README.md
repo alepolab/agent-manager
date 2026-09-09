@@ -22,6 +22,18 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 | PR Checks + Review | `sdlc-pr-follow-up` | Reviewer checklist answered, checks watched, automated-review blockers fixed and pushed until the PR is mergeable |
 | Jira: Dev Done | `sdlc-jira-tracker` | Runner-executed: ticket moved from In Progress to Dev Done (matched to the project's own workflow), outcome comment posted, and the run's evidence files attached. Both Jira steps write only when `JIRA_POST_ENABLED=1` |
 
+**Runbook C: ce ticket to QA-proven PR.** The same intake, stack, security and Jira steps, with the middle built on the compound-engineering skills (`ce-plan`, `ce-work`, `ce-code-review`, `ce-commit-push-pr`, read from the installed plugin at run time) and QA as the gate. Every run works in its own git worktree beside the clone (`<repo>@<branch>`), so the developer's checkout is never switched under them:
+
+| Step | Agent | Produces |
+|------|-------|----------|
+| Plan | `sdlc-ce-plan` | `plan.md` and `qa-plan.md`: numbered cases, each automated or manual, mapped to the acceptance criteria |
+| Implement Fix | `sdlc-ce-work` | The automated cases as real tests, written first; the fix; local commits on the run branch |
+| Code Review | `sdlc-ce-review` | Findings verified and graded; blockers fixed and committed; `review.md` |
+| Update Stack | `sdlc-stack-update` | The image rebuilt from the worktree and redeployed in place, proved by image id and health |
+| Automated QA | `sdlc-qa-automated` | QA plan cases, registry suites, gates and Playwright against the fixed build, as junit XML |
+| Manual QA | `sdlc-qa-manual` | Every manual case performed in a real browser: screenshot per state, verdict per case, exploratory probes; a FAIL sends the run back to Implement Fix |
+| Push + PR | `sdlc-ce-ship` | The branch pushed and the PR opened, its body quoting the QA, review and security reports |
+
 Verify, Browser Trace and Security Review run in parallel after the fix. Runs are persisted, survive server restarts, can be paused, stopped, restarted from any step with a note, or cloned. Budgets cap minutes and tokens per run.
 
 **Watches.** JQL queries in `engineering/registry/watches.yaml` feed tickets into the pipeline automatically. New watches start in shadow mode.

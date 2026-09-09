@@ -17,7 +17,7 @@ writeFileSync(join(cache, 'skills', 'intent-template', 'SKILL.md'), '---\nname: 
 writeFileSync(join(cache, 'registry', 'products.yaml'), 'products:\n  x:\n    match: { projects: [X] }\n    repos: [o/r]\n    branches: { bug: main, feature: main }\n    stack: { compose: a, topology_default: 1node }\n    tests: { unit: t }\n    owners: { docs: d }\n')
 mkdirSync(join(cache, 'commands'), { recursive: true })
 mkdirSync(join(cache, 'registry'), { recursive: true })
-writeFileSync(join(cache, 'registry', 'watches.yaml'), 'watches:\n  - id: csup-bugs\n    jql: project = CSUP AND status = Done\n    daily_dispatch_cap: 10\n    mode: shadow\n')
+writeFileSync(join(cache, 'registry', 'watches.yaml'), 'watches:\n  - id: csup-bugs\n    jql: project = CSUP AND status = Done\n    daily_dispatch_cap: 10\n    mode: shadow\n  - id: ce-features\n    jql: project = CSUP AND labels = ce\n    workflow: runbook-c-ce-ticket-to-pr\n    mode: shadow\n')
 writeFileSync(join(cache, 'commands', 'triage.md'), '# triage\n')
 writeFileSync(join(process.env.CLAUDE_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'alepo-engineering@alepo-engineering': [{ installPath: cache, version: '0.1.0' }] } }))
 
@@ -29,6 +29,7 @@ assert.equal(s.pluginVersion, '0.1.0')
 assert.ok(s.agents.length >= 8 && s.agents.every(a => a.state === 'missing'), 'a fresh directory misses every team agent')
 assert.deepEqual(s.skills, [{ name: 'intent-template', state: 'missing' }])
 assert.equal(s.workflow.state, 'missing'); assert.ok(s.workflow.steps >= 8)
+assert.deepEqual(s.workflows.map(w => [w.slug, w.state]), [['runbook-a-ticket-to-evidence-backed-pr', 'missing'], ['runbook-c-ce-ticket-to-qa-proven-pr', 'missing']], 'every shipped runbook is a team item')
 assert.equal(s.registry.ok, true); assert.equal(s.registry.products, 1)
 assert.ok(s.drifted > 8)
 
@@ -72,10 +73,13 @@ assert.ok(existsSync(join(process.env.CLAUDE_DIR, 'commands', 'triage.md')), 'pl
   }
   assert.equal(w.dailyDispatchCap, 10)
   assert.equal(w.query, 'project = CSUP AND status = Done')
+  const ce = (await (await import('../server/utils/watchConfig.ts')).listWatches()).find(x => x.id === 'ce-features')
+  assert.equal(ce?.workflowSlug, 'runbook-c-ce-ticket-to-qa-proven-pr', 'a registry watch that names a runbook is seeded into that runbook, not Runbook A')
   assert.equal(typeof s.instance.auth, 'string', 'instance facts are reported')
   assert.ok(s.registry.items.every(i => typeof i.key === 'string'), 'registry products are listed')
 }
 const wf = JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'runbook-a-ticket-to-evidence-backed-pr.json'), 'utf8'))
+assert.equal(JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'runbook-c-ce-ticket-to-qa-proven-pr.json'), 'utf8')).steps.length, 13, 'Runbook C is seeded beside Runbook A')
 const ids = wf.steps.map(x => x.id)
 
 writeFileSync(join(process.env.CLAUDE_DIR, 'agents', 'sdlc-verifier.md'), 'edited locally')

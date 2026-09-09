@@ -296,7 +296,9 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 
   const sdlcIds = ['sdlc-ticket-intake', 'sdlc-stack-provisioner', 'sdlc-test-author',
                     'sdlc-fix-implementer', 'sdlc-verifier', 'sdlc-trace-capture',
-                    'sdlc-evidence-and-pr']
+                    'sdlc-evidence-and-pr',
+                    'sdlc-ce-plan', 'sdlc-ce-work', 'sdlc-ce-review', 'sdlc-stack-update',
+                    'sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-ce-ship']
   const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
   for (const id of sdlcIds) {
     assert.ok(body(id).includes(standingRules),
@@ -560,6 +562,61 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.ok(/main is merged into ci-release and develop/.test(evidence.body), 'and main is merged back afterwards')
   assert.ok(/hotfix from\s+\*\*ci-release\*\*/.test(evidence.body), 'a QA bug is a hotfix from ci-release')
   assert.ok(/Never retarget on your own/.test(evidence.body), 'the base named in the run header is the target; a person changes it, not the step')
+}
+
+// ── 14. Runbook C: QA is the gate, the ce skills are read from disk, and every
+//    rework target the new bodies name is a step label of this runbook — a
+//    `PIPELINE-REWORK: <label>` naming a step that does not exist sends the run
+//    nowhere. ────────────────────────────────────────────────────────────────
+{
+  const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-c-ce-ticket-to-pr')
+  assert.ok(runbook, 'the Runbook C template exists')
+  const body = id => AGENT_TEMPLATES.find(a => a.id === id).body
+  for (const s of runbook.steps) {
+    assert.ok(AGENT_TEMPLATES.find(a => a.id === s.agentTemplateId), `${s.agentTemplateId} is a shipped agent template`)
+  }
+
+  const slugs = Object.fromEntries(runbook.steps.map(s => [s.agentTemplateId, s.agentTemplateId]))
+  slugs['sdlc-step-monitor'] = 'sdlc-step-monitor'
+  const steps = materializeTemplateSteps(runbook, slugs)
+  for (const s of steps) assert.equal(s.monitorSlug, 'sdlc-step-monitor', `${s.label} is monitored`)
+  const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
+  const id = label => byLabel[label].id
+  assert.deepEqual(byLabel['Implement Fix'].next, [id('Code Review')], 'review before anything is deployed')
+  assert.deepEqual(byLabel['Code Review'].next, [id('Update Stack')], 'the stack is rebuilt from the reviewed fix')
+  assert.deepEqual([...byLabel['Update Stack'].next].sort(), [id('Automated QA'), id('Manual QA'), id('Security Review')].sort(),
+    'both halves of QA and the security review run against the rebuilt stack, in one wave')
+  for (const l of ['Automated QA', 'Manual QA', 'Security Review']) assert.deepEqual(byLabel[l].next, [id('Push + PR')], `${l} gates the PR`)
+  assert.equal(byLabel['Push + PR'].contextMode, 'ancestors', 'the PR body quotes evidence from several hops upstream')
+  assert.equal(byLabel['PR Checks + Review'].maxVisits, 3)
+
+  const labels = new Set(runbook.steps.map(s => s.label))
+  for (const agent of ['sdlc-ce-work', 'sdlc-ce-review', 'sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review']) {
+    for (const m of body(agent).matchAll(/PIPELINE-REWORK: ([^—\n]+?) —/g)) {
+      if (m[1].trim().startsWith('<')) continue // the standing rules' own placeholder
+      assert.ok(labels.has(m[1].trim()), `${agent} sends work back to "${m[1].trim()}", which is not a step label of Runbook C`)
+    }
+  }
+
+  for (const [agent, skill] of [['sdlc-ce-plan', 'ce-plan'], ['sdlc-ce-work', 'ce-work'], ['sdlc-ce-review', 'ce-code-review'], ['sdlc-ce-ship', 'ce-commit-push-pr']]) {
+    assert.match(body(agent), new RegExp(`\\$CE_SKILLS_DIR/${skill}/SKILL\\.md`), `${agent} reads ${skill} from disk`)
+    const declared = AGENT_TEMPLATES.find(a => a.id === agent).frontmatter.skills ?? []
+    assert.ok(!declared.some(s => s.startsWith('ce-')), `${agent} must not declare a ce skill: declared skills are inlined whole into every prompt`)
+  }
+
+  // The artifact contract between the steps, by file name.
+  assert.match(body('sdlc-ce-plan'), /qa-plan\.md/)
+  assert.match(body('sdlc-ce-work'), /qa-plan\.md/); assert.match(body('sdlc-ce-work'), /implementation\.md/)
+  assert.match(body('sdlc-ce-review'), /review\.md/)
+  assert.match(body('sdlc-stack-update'), /deploy-report\.md/)
+  assert.match(body('sdlc-qa-automated'), /qa-automated\.xml/); assert.match(body('sdlc-qa-automated'), /deploy-report\.md/)
+  assert.match(body('sdlc-qa-manual'), /qa-manual\.md/); assert.match(body('sdlc-qa-manual'), /deploy-report\.md/)
+  assert.match(body('sdlc-ce-ship'), /qa-manual\.md/); assert.match(body('sdlc-ce-ship'), /security-review\.md/); assert.match(body('sdlc-ce-ship'), /pr\.md/)
+  for (const agent of ['sdlc-ce-plan', 'sdlc-ce-work', 'sdlc-ce-review', 'sdlc-stack-update', 'sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-ce-ship']) {
+    assert.match(body(agent), /PIPELINE-HALT/, `${agent} must know how to stop the run`)
+  }
+  assert.match(body('sdlc-qa-manual'), /PIPELINE-REWORK: Implement Fix/, 'a failed manual case sends the run back to the implementer')
+  assert.match(body('sdlc-ce-ship'), /git push -u origin/, 'the ship step is the one allowed to push')
 }
 
 console.log('workflowTemplates: all assertions passed')

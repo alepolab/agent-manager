@@ -93,6 +93,7 @@ async function createBlank() {
         <input
           v-model="searchQuery"
           placeholder="Search workflows..."
+          aria-label="Search workflows"
           class="field-search max-w-xs"
         />
       </div>
@@ -104,7 +105,8 @@ async function createBlank() {
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ error }}</span>
+        <span class="text-[12px] flex-1" style="color: var(--error);">{{ error }}</span>
+        <UButton size="xs" variant="ghost" color="neutral" label="Try again" :loading="loading" @click="fetchAll()" />
       </div>
 
       <!-- Loading -->
@@ -189,8 +191,9 @@ async function createBlank() {
           <h3 class="text-page-title">New Workflow</h3>
           <form class="space-y-3" @submit.prevent="createBlank">
             <div>
-              <label class="text-[12px] font-medium text-label block mb-1">Name</label>
+              <label for="wf-name" class="text-[12px] font-medium text-label block mb-1">Name</label>
               <input
+                id="wf-name"
                 v-model="newName"
                 placeholder="My Workflow"
                 class="field-input w-full"
@@ -198,8 +201,9 @@ async function createBlank() {
               />
             </div>
             <div>
-              <label class="text-[12px] font-medium text-label block mb-1">Description</label>
+              <label for="wf-desc" class="text-[12px] font-medium text-label block mb-1">Description</label>
               <input
+                id="wf-desc"
                 v-model="newDescription"
                 placeholder="What does this workflow do?"
                 class="field-input w-full"

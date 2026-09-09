@@ -32,12 +32,13 @@ const developSha = git(seed, ['rev-parse', 'origin/develop']); const mainSha = g
 const clone = join(root, 'clone'); git(root, ['clone', '--quiet', '--branch', 'main', remote, clone])
 assert.equal(git(clone, ['rev-parse', 'HEAD']), mainSha, 'the clone sits on main, as a fresh clone would')
 
-await W.ensureRunBranch(clone, 'fix/T-1-aaaaaaaa', 'develop')
-assert.equal(git(clone, ['branch', '--show-current']), 'fix/T-1-aaaaaaaa')
-assert.equal(git(clone, ['rev-parse', 'HEAD']), developSha, 'the run branch starts at the base branch on the remote, not at the checkout\'s HEAD')
+const [wt1] = await W.ensureRunBranch(clone, 'fix/T-1-aaaaaaaa', 'develop')
+assert.equal(git(wt1, ['branch', '--show-current']), 'fix/T-1-aaaaaaaa')
+assert.equal(git(wt1, ['rev-parse', 'HEAD']), developSha, 'the run branch starts at the base branch on the remote, not at the checkout\'s HEAD')
+assert.equal(git(clone, ['rev-parse', 'HEAD']), mainSha, 'the clone stays where it was')
 
-await W.ensureRunBranch(clone, 'fix/T-2-bbbbbbbb', 'ci-release')
-assert.equal(git(clone, ['branch', '--show-current']), 'fix/T-2-bbbbbbbb')
-assert.equal(git(clone, ['rev-parse', 'HEAD']), developSha, 'a base the remote does not have falls back to the current HEAD instead of failing the run')
+const [wt2] = await W.ensureRunBranch(clone, 'fix/T-2-bbbbbbbb', 'ci-release')
+assert.equal(git(wt2, ['branch', '--show-current']), 'fix/T-2-bbbbbbbb')
+assert.equal(git(wt2, ['rev-parse', 'HEAD']), mainSha, 'a base the remote does not have falls back to the clone\'s HEAD instead of failing the run')
 
 console.log('branch policy: all checks passed')

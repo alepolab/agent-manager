@@ -495,7 +495,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // trace and no explanation twice, and the monitor called it exactly that:
     // "silence without explanation".
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
-    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. The runner made this branch for the run, in the checkout and in every module repository nested under it: commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The evidence step pushes that branch and opens the pull request on that repository against the branch policy.${checkout.policy ? ` ${checkout.policy}` : ''}`] : []),
+    ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. This directory is a git worktree the runner made for this run, beside the clone and sharing its repository and remote, with the same done for every module repository nested under it: work here and only here, and leave the clone itself alone. Commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The PR step pushes that branch and opens the pull request on that repository against the branch policy.${checkout.policy ? ` ${checkout.policy}` : ''}`] : []),
     '',
     // "It is not there" halted a whole run and was wrong. The provisioner
     // reported the ticket's target file "not present in any checked-out repo"
