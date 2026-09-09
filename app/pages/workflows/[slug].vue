@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Edge } from '@vue-flow/core'
-import { VueFlow, Handle, Position, MarkerType } from '@vue-flow/core'
+import { VueFlow, Handle, Position, MarkerType, useVueFlow } from '@vue-flow/core'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import '@vue-flow/core/dist/style.css'
@@ -67,6 +67,9 @@ const workflow = ref<Workflow | null>(null)
 const workflowSteps = ref<WorkflowStep[]>([])
 const name = ref('')
 const description = ref('')
+// Edges are deleted by a click and nodes moved by a drag; leaving discards both silently without this.
+const isDirty = computed(() => !!workflow.value && JSON.stringify({ n: name.value, d: description.value, s: workflowSteps.value }) !== JSON.stringify({ n: workflow.value.name, d: workflow.value.description, s: workflow.value.steps }))
+useUnsavedChanges(isDirty)
 const saving = ref(false)
 const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
@@ -114,7 +117,19 @@ const monitorGroups = computed(() => {
   return groups
 })
 
-const defaultPosition = (i: number) => ({ x: i * 220, y: 100 })
+// Unpositioned steps wrap into rows of five: a 13-step runbook in one row is 2,860px wide and unreadable once fitted.
+const defaultPosition = (i: number) => ({ x: (i % 5) * 220, y: 100 + Math.floor(i / 5) * 150 })
+
+// Fit once, when both the pane and the nodes are measured. `fit-view-on-init`
+// consumes itself against a pane that is still hidden behind app.vue's v-show
+// (the workflow often loads before /api/config does) and never retries.
+const { fitView, onPaneReady, onNodesInitialized } = useVueFlow()
+let paneReady = false
+let fitted = false
+// Only once the pane is measured: fitView on an unmeasured pane is a no-op that logs a warning.
+const fitOnce = async () => { if (paneReady && !fitted && await fitView()) fitted = true }
+onPaneReady(() => { paneReady = true; void fitOnce() })
+onNodesInitialized(fitOnce)
 
 const nodes = computed(() => {
   const stepNodes = workflowSteps.value.map((step, i) => {
@@ -309,6 +324,7 @@ async function save() {
       lastModified: lastModified.value ?? undefined,
     } as any)
     lastModified.value = (saved as any).lastModified ?? null
+    workflow.value = saved as any
     toast.add({ title: 'Workflow saved', color: 'success' })
   } catch (e: any) {
     if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
@@ -361,7 +377,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       class="h-14 flex items-center gap-3 px-4 shrink-0 sticky top-0 z-10"
       style="border-bottom: 1px solid var(--border-subtle); background: var(--surface-base);"
     >
-      <NuxtLink to="/workflows" class="p-1.5 rounded-lg hover-bg focus-ring">
+      <NuxtLink to="/workflows" class="p-1.5 rounded-lg hover-bg focus-ring" aria-label="Back to workflows">
         <UIcon name="i-lucide-arrow-left" class="size-4 text-meta" />
       </NuxtLink>
 
@@ -412,7 +428,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         @click="() => { showRunModal = true }"
       />
       <UButton label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
-      <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" @click="deleteWorkflow" />
+      <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
     </div>
 
     <!-- Description -->
@@ -455,16 +471,19 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           <input
             v-model="paletteSearch"
             placeholder="Filter..."
+            aria-label="Filter agents"
             class="field-search w-full text-[11px]"
           />
         </div>
         <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
-          <div
+          <button
             v-for="agent in filteredAgents"
             :key="agent.slug"
+            type="button"
             draggable="true"
-            class="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-grab active:cursor-grabbing hover-bg transition-colors"
+            class="w-full text-left flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-grab active:cursor-grabbing hover-bg transition-colors focus-ring"
             @dragstart="(e: DragEvent) => { e.dataTransfer?.setData('agentSlug', agent.slug) }"
+            @click="addStep(agent.slug)"
           >
             <div
               class="size-2 rounded-full shrink-0"
@@ -474,13 +493,13 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               {{ agent.frontmatter.name }}
             </span>
             <UIcon name="i-lucide-grip-vertical" class="size-3 ml-auto text-meta opacity-50" />
-          </div>
+          </button>
           <div v-if="!filteredAgents.length" class="text-[11px] text-center py-4 text-meta">
             No agents found
           </div>
         </div>
-        <div class="px-3 py-2 text-[10px] leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-disabled);">
-          Drag a handle to link steps. Several links out of one step run in parallel; a link back to an
+        <div class="px-3 py-2 text-[10px] leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-tertiary);">
+          Click or drag an agent to add a step. Drag a handle to link steps. Several links out of one step run in parallel; a link back to an
           earlier step loops. Click a link to delete it.
         </div>
       </div>
@@ -499,11 +518,11 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           @close="closeRun"
           @details="showRunDetails = true"
         />
-        <div class="flex-1 min-h-[300px]">
+        <div class="flex-1 min-h-[300px] relative">
           <VueFlow
+            id="workflow-canvas"
             :nodes="nodes"
             :edges="edges"
-            fit-view-on-init
             :min-zoom="0.3"
             :max-zoom="2"
             :nodes-connectable="!isRunning"
@@ -677,6 +696,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           <input
             v-model="paletteSearch"
             placeholder="Search agents..."
+            aria-label="Search agents"
             class="field-search w-full"
           />
           <div class="space-y-1 max-h-64 overflow-y-auto">

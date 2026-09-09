@@ -32,7 +32,7 @@
   /* Text */
   --text-primary: #111118;
   --text-secondary: #53535f;
-  --text-tertiary: #82828e;
+  --text-tertiary: #6b6b78;
   --text-disabled: #ababb5;
   --text-accent: #b45309;
   --text-indigo: #6366f1;
@@ -59,8 +59,8 @@
   --model-haiku: #d97706;
 
   /* Semantic */
-  --success: #059669;
-  --warning: #d97706;
+  --success: #047857;
+  --warning: #a16207;
   --error: #dc2626;
 
   /* Mode-dependent helpers */
@@ -110,7 +110,7 @@
   /* Text */
   --text-primary: #f0f0f5;
   --text-secondary: #9d9daa;
-  --text-tertiary: #6b6b78;
+  --text-tertiary: #8a8a97;
   --text-disabled: #4a4a55;
 
   /* Accent */
@@ -575,7 +575,7 @@ optgroup {
 /* Hint text below fields */
 .field-hint {
   font-size: 11px;
-  color: var(--text-disabled);
+  color: var(--text-tertiary);
   font-family: var(--font-sans);
 }
 

@@ -68,21 +68,21 @@ const verdictColor: Record<string, string> = {
             <UIcon name="i-lucide-shield" class="size-2.5 -mt-px" />
           </span>
         </div>
-        <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
           <NuxtLink :to="`/agents/${data.agentSlug}`" class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" :title="`Edit agent ${data.agentSlug}`" @click.stop>
             <UIcon name="i-lucide-pencil" class="size-3" />
           </NuxtLink>
-          <button class="p-0.5 rounded" style="color: var(--text-disabled);" title="Step settings" @click="emit('settings')">
+          <button class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Step settings" aria-label="Step settings" @click="emit('settings')">
             <UIcon name="i-lucide-settings-2" class="size-3" />
           </button>
-          <button class="p-0.5 rounded" style="color: var(--text-disabled);" title="Remove step" @click="emit('remove')">
+          <button class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Remove step" aria-label="Remove step" @click="emit('remove')">
             <UIcon name="i-lucide-x" class="size-3" />
           </button>
         </div>
       </div>
       <div class="text-[11px] font-medium truncate" style="color: var(--text-primary);">{{ data.label }}</div>
       <div class="flex items-center justify-between">
-        <span class="text-[9px]" style="color: var(--text-disabled);">{{ modelLabel }}</span>
+        <span class="text-[9px]" style="color: var(--text-tertiary);">{{ modelLabel }}</span>
         <span v-if="data.maxVisits" class="text-[9px] font-mono" style="color: var(--text-disabled);" title="Max visits per run">
           ≤{{ data.maxVisits }}
         </span>
