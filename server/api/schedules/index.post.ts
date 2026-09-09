@@ -16,6 +16,9 @@ function slugify(name: string): string {
  * the three things that would otherwise fail silently at 2am with nobody
  * watching: an unparseable expression, a workflow that is not there, and a
  * workflow whose required inputs this schedule does not state.
+ *
+ * The input check is skipped for a save that DISABLES the schedule - see
+ * below. Turning something off must always succeed.
  */
 export default defineEventHandler(async (event) => {
   const body = await readBody<Partial<Schedule>>(event)
@@ -26,13 +29,18 @@ export default defineEventHandler(async (event) => {
   if (!body?.cron?.trim()) throw createError({ statusCode: 400, message: 'cron is required' })
   if (!body?.initialPrompt?.trim()) throw createError({ statusCode: 400, message: 'initialPrompt is required' })
 
+  // Read ONCE for both the id dedupe and the stored-value fallbacks below.
+  // Two reads of an unlocked file in one request can see two different states,
+  // and then the record assembled from the second contradicts the id chosen
+  // from the first.
+  const all = await listSchedules()
+
   let id = body.id?.trim()
   if (!id) {
-    const existing = await listSchedules()
     const base = slugify(body.name)
     id = base
     let counter = 2
-    while (existing.some(s => s.id === id)) {
+    while (all.some(s => s.id === id)) {
       id = `${base}-${counter}`
       counter++
     }
@@ -46,7 +54,7 @@ export default defineEventHandler(async (event) => {
   // omits it must not silently move the schedule to server-local time, which
   // changes WHEN IT FIRES and would report nothing. An explicit empty string
   // is how a caller clears it back to local time.
-  const stored = (await listSchedules()).find(s => s.id === id)
+  const stored = all.find(s => s.id === id)
   const timezone = body.timezone === undefined
     ? stored?.timezone
     : body.timezone.trim() || undefined
@@ -77,16 +85,24 @@ export default defineEventHandler(async (event) => {
   // use, so a workflow that declares projectDir as required stays schedulable -
   // see realScheduleStarter, which substitutes the same value at fire time.
   const { [RESERVED_PARAM_PROJECT_DIR]: _notStored, ...supplied } = body.parameters ?? existing?.parameters ?? {}
-  const { missing } = resolveParameters(workflow.parameters, {
-    ...supplied,
-    [RESERVED_PARAM_PROJECT_DIR]: scheduleWorkspace({ id, createdBy } as Schedule),
-  })
-  if (missing.length) {
-    throw createError({
-      statusCode: 400,
-      message: `Workflow "${workflow.slug}" needs ${missing.join(', ')}; state ${missing.length === 1 ? 'it' : 'them'} on the schedule`,
-      data: { missing },
+  // Skipped when the caller is turning the schedule OFF, and that exception is
+  // the whole point of the branch: a workflow that gains a required input
+  // leaves every existing schedule failing this check, and since setEnabled
+  // round-trips the whole record, the disable toggle 400d too. The operator
+  // could see the nightly error and had no way to stop it short of deleting
+  // the schedule. Turning something off must always succeed.
+  if (body.enabled !== false) {
+    const { missing } = resolveParameters(workflow.parameters, {
+      ...supplied,
+      [RESERVED_PARAM_PROJECT_DIR]: scheduleWorkspace({ id, createdBy } as Schedule),
     })
+    if (missing.length) {
+      throw createError({
+        statusCode: 400,
+        message: `Workflow "${workflow.slug}" needs ${missing.join(', ')}; state ${missing.length === 1 ? 'it' : 'them'} on the schedule`,
+        data: { missing },
+      })
+    }
   }
 
   // Every field falls back to the STORED value before the default, because
