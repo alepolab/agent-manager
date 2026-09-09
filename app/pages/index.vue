@@ -165,7 +165,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
               <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
               <span class="truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
               <div class="w-24 shrink-0"><RunProgressBar :steps="r.steps" /></div>
-              <span class="ml-auto text-label whitespace-nowrap">{{ r.usage ? '$' + r.usage.usd.toFixed(2) : '' }} · {{ ago(r.startedAt) }}</span>
+              <span class="ml-auto text-label whitespace-nowrap">{{ ago(r.startedAt) }}</span>
             </NuxtLink>
           </div>
         </section>
