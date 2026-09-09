@@ -257,4 +257,35 @@ const armed = d => writeFileSync(join(d, '.agent/source-edited'), '1')
   }
 }
 
+// ── A command is judged against itself, not the whole line ──────────────────
+// Every one of these was denied before command-segments.mjs, and none of them
+// touches an oracle. The last two are the shapes a real bypass has, and stay
+// denied: the mutation and its target in the SAME segment.
+{
+  const dir = workspace()
+  armed(dir)
+  const bash = (command) => runHook('test-lock.mjs', { cwd: dir, tool_name: 'Bash', tool_input: { command } })
+
+  assert.equal(
+    bash('git checkout -q -b feat/x origin/main\ngit add engineering/scripts/test-secrets-guard.mjs').code, 0,
+    'creating a branch, then staging a test file in a separate command, is not a restore of the oracle')
+  assert.equal(bash('git switch -c feat/x origin/main').code, 0, 'git switch -c creates a branch, it restores nothing')
+  assert.equal(bash('git checkout -b feat/x').code, 0, 'git checkout -b creates a branch too')
+  assert.equal(
+    bash('for t in tests/parser.test.ts; do out=$(node "$t" 2>&1); done').code, 0,
+    '2>&1 duplicates a file descriptor and writes to no file')
+  assert.equal(
+    bash('sed -i s/a/b/ src/a.ts && cat tests/parser.test.ts').code, 0,
+    'mutating source in one command and reading a test in another is not touching the oracle')
+
+  // Still denied: same segment, real mutation, oracle target.
+  assert.equal(bash('sed -i s/a/b/ tests/parser.test.ts').code, 2, 'sed -i on a test is still denied')
+  assert.equal(bash('echo x > tests/parser.test.ts').code, 2, 'redirecting into a test is still denied')
+  assert.equal(bash('rm tests/parser.test.ts').code, 2, 'deleting a test is still denied')
+  assert.equal(bash('git checkout -- tests/').code, 2, 'restoring the test directory is still denied')
+  assert.equal(bash('true && sed -i s/a/b/ tests/parser.test.ts').code, 2,
+    'a mutation in a later segment is still denied')
+  rmSync(dir, { recursive: true, force: true })
+}
+
 console.log('hooks: all assertions passed')

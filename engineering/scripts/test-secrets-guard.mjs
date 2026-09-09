@@ -70,4 +70,17 @@ assert.equal(bash('docker compose --env-file .env up -d && base64 .env.local').c
 assert.match(bash('docker compose --env-file .env up -d && cat .env.docker').err, /\.env\.docker/,
   'the denial names the real offender, not the exempt token')
 
+// ── A reader convicts only what is in its own command ───────────────────────
+// The rule matched a reader anywhere on the line against a secret path
+// anywhere else, so two unrelated commands convicted each other.
+assert.equal(bash('head -3 README.md && ls -la .env').code, 0,
+  'a reader in one command and a secret path merely listed in another is allowed')
+assert.equal(bash('tail -5 /var/log/app.log; stat .env').code, 0,
+  'stat is not a reader, and the reader before it took a different file')
+
+// Same segment, real print: unchanged.
+assert.equal(bash('cat .env | tail -1').code, 2, 'a reader taking the secret file is still denied')
+assert.equal(bash('echo hi > /tmp/x; cat .env').code, 2, 'a print in a later segment is still denied')
+assert.equal(bash('docker compose up -d && base64 .env').code, 2, 'encoding it in a later segment is still denied')
+
 console.log('secrets guard: all assertions passed')

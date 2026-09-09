@@ -36,6 +36,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { looksLikeOracle } from './oracle-paths.mjs'
+import { commandSegments, segmentTokens } from './command-segments.mjs'
 
 const STATE = '.agent/source-edited'
 const UNLOCK = '.agent/test-unlock.json'
@@ -49,35 +50,48 @@ const UNLOCK = '.agent/test-unlock.json'
  * goes wrong — the first version of this function matched `sed -i`'s *script*
  * instead of its filename and let the most obvious bypass straight through.
  *
- * The tradeoff is a false positive when a command mutates one file and merely
- * reads a test path (`sed -i ... src/a.ts && cat tests/b.test.ts`). That denies
- * something harmless, which is the right way for this control to be wrong.
+ * Matching is per COMMAND SEGMENT (see command-segments.mjs), so a mutation in
+ * one command no longer convicts a path in another: `sed -i ... src/a.ts && cat
+ * tests/b.test.ts` mutates source and merely reads a test, and is allowed. Every
+ * real bypass puts the mutation and its target in the same segment - `sed -i
+ * tests/x`, `> tests/x`, `git checkout -- tests/` - and those stay denied.
  */
 const MUTATORS = [
   { re: /\bsed\b[^|;&]*\s-i\b/, what: 'sed -i' },
-  { re: />>?[^>]/, what: 'shell redirection' },
+  // Not `2>&1` or `>&2`: duplicating a file descriptor writes to no file.
+  // `out=$(node "$t" 2>&1)` over a loop of test files was denied as though it
+  // rewrote them.
+  { re: />>?\s*(?!&)[^>]/, what: 'shell redirection' },
   { re: /\btee\b/, what: 'tee' },
   { re: /\b(?:cp|mv|install)\b/, what: 'cp/mv' },
   { re: /\brm\b/, what: 'rm' },
   { re: /\bpatch\b/, what: 'patch' },
   { re: /\btruncate\b/, what: 'truncate' },
-  { re: /\bgit\s+(?:checkout|restore)\b/, what: 'git checkout/restore' },
+  // `git checkout`/`git switch` that CREATES a branch restores nothing, and
+  // denying it stopped a session from even starting a branch for its fix.
+  { re: /\bgit\s+(?:checkout|restore)\b(?![^\n]*\s-(?:b|B|c|C)\b)(?![^\n]*--orphan\b)/, what: 'git checkout/restore' },
   { re: /\b(?:dd|shred)\b/, what: 'dd/shred' },
 ]
 
 function bashTargetsOracle(command) {
   if (!command) return null
-  const mutator = MUTATORS.find(m => m.re.test(command))
-  if (!mutator) return null
 
-  // Any token in the command that looks like an oracle path.
-  const tokens = command.split(/[\s'"]+/).filter(Boolean)
-  const hit = tokens.find(t => looksLikeOracle(t))
-  if (hit) return { what: mutator.what, path: hit }
+  // Per SEGMENT, not per line. The mutation and the oracle path have to belong
+  // to the same command for one to be doing anything to the other; matching
+  // across a whole multi-command string convicted commands of each other's
+  // arguments. This is still two coarse steps inside a segment - the reasoning
+  // in MUTATORS about not parsing each utility's grammar is unchanged.
+  for (const segment of commandSegments(command)) {
+    const mutator = MUTATORS.find(m => m.re.test(segment))
+    if (!mutator) continue
 
-  // A whole-suite reset that names the directory rather than a file.
-  if (/\bgit\s+(?:checkout|restore)\b[^|;&]*\b(tests?|spec|specs)\b/i.test(command)) {
-    return { what: 'git restore of a test path', path: '(test directory)' }
+    const hit = segmentTokens(segment).find(t => looksLikeOracle(t))
+    if (hit) return { what: mutator.what, path: hit }
+
+    // A whole-suite reset that names the directory rather than a file.
+    if (/\bgit\s+(?:checkout|restore)\b[^|;&\n]*\b(tests?|spec|specs)\b/i.test(segment)) {
+      return { what: 'git restore of a test path', path: '(test directory)' }
+    }
   }
   return null
 }

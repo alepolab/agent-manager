@@ -18,6 +18,7 @@
  * reason denies. Internal errors allow — a broken hook must not wedge the estate.
  */
 import { readFileSync } from 'node:fs'
+import { commandSegments, segmentTokens } from './command-segments.mjs'
 
 const SECRET_FILE = /(^|[\\/])(\.env(\.[A-Za-z0-9_-]+)?|\.credentials(\.json)?|credentials\.json|\.netrc|\.npmrc|id_(rsa|ed25519|ecdsa))$/
 const ALLOWED_SUFFIX = /\.(example|sample|template|dist)$/i
@@ -47,31 +48,27 @@ export function denyReason(call) {
     if (/\bcompose\b[^|;&]*\bconfig\b/.test(cmd) && !/--no-interpolate/.test(cmd)) {
       return 'docker compose config without --no-interpolate is denied: the interpolated form prints every secret the environment holds. Add --no-interpolate; the structure you need is still rendered.'
     }
-    const tokens = cmd.split(/\s+/)
-    // `--env-file <path>` hands the file to compose, which is the interpolation
-    // this hook's own denial message tells you to use. Nothing is printed:
-    // compose reads the file and substitutes into what it applies.
+    // Per SEGMENT, not per line. The reader and the secret path have to be in
+    // the same command for one to be printing the other; matching across a
+    // whole string convicted commands of each other's arguments - a trailing
+    // "| tail -6" was enough to deny a compose up.
     //
-    // Without this exemption the guard denied the invocation written in the
-    // team's own compose headers - "--profile sso-stack --env-file .env up -d" -
-    // because `.env` appears as a token and some reader-shaped word appears
-    // anywhere else on the line, a trailing "| tail -6" being enough. Nothing
-    // required the reader to actually take the secret file as its argument. A
-    // control that denies the documented happy path gets worked around, and a
-    // worked-around control protects nothing.
-    //
-    // Narrow on purpose: only on a compose invocation, and only the single
-    // token after the flag. `cat --env-file .env` is not compose and stays
-    // denied; so does a second, non-exempt `.env` later in the same line. The
-    // interpolation rule above runs first and never consults this.
-    const isCompose = /\b(docker|podman)\s+compose\b|\bdocker-compose\b/.test(cmd)
-    const exempt = new Set()
-    if (isCompose) {
-      tokens.forEach((t, i) => { if (t === '--env-file' && tokens[i + 1]) exempt.add(i + 1) })
-    }
-    const offending = tokens.findIndex((t, i) => !exempt.has(i) && isSecretPath(t))
-    if (READERS.test(cmd) && offending !== -1) {
-      return `Printing or copying a secrets file is denied (${tokens[offending]}). Pass values through compose interpolation or shell environment, never through your output or a file you write.`
+    // `--env-file <path>` is exempt within a compose segment: it hands the file
+    // to compose, which is the interpolation this hook's own denial message
+    // tells you to use, and nothing is printed. Narrow on purpose - only the
+    // single token after the flag, and only on a compose invocation, so a plain
+    // reader with the same flag stays denied.
+    for (const segment of commandSegments(cmd)) {
+      const tokens = segmentTokens(segment)
+      const isCompose = /\b(docker|podman)\s+compose\b|\bdocker-compose\b/.test(segment)
+      const exempt = new Set()
+      if (isCompose) {
+        tokens.forEach((t, i) => { if (t === '--env-file' && tokens[i + 1]) exempt.add(i + 1) })
+      }
+      const offending = tokens.findIndex((t, i) => !exempt.has(i) && isSecretPath(t))
+      if (READERS.test(segment) && offending !== -1) {
+        return `Printing or copying a secrets file is denied (${tokens[offending]}). Pass values through compose interpolation or shell environment, never through your output or a file you write.`
+      }
     }
   }
   return null
