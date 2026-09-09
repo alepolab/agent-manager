@@ -47,4 +47,27 @@ assert.equal(bash('git status').code, 0)
 const garbage = spawnSync('node', [hook], { input: 'not json', encoding: 'utf8' })
 assert.equal(garbage.status, 0, 'malformed input allows: a broken hook must not wedge the estate')
 
+// ── --env-file is interpolation, not a print ────────────────────────────────
+// The guard denied the invocation the team's own compose headers document,
+// because `.env` was a token and a reader-shaped word appeared somewhere else
+// on the line. Nothing required the reader to take the secret file as its
+// argument, and a trailing "| tail -6" was enough to trip it. A control that
+// blocks the documented happy path gets worked around instead of obeyed.
+assert.equal(
+  bash('docker compose -f docker-compose.sso.yml --profile sso-stack --env-file .env up -d 2>&1 | tail -6').code, 0,
+  'compose up with --env-file is allowed even when the line pipes into a reader')
+assert.equal(bash('docker compose --env-file .env up -d').code, 0, 'compose up with --env-file is allowed')
+assert.equal(bash('docker-compose --env-file .env up -d | head -3').code, 0, 'the hyphenated form is allowed too')
+assert.equal(bash('podman compose --env-file .env up -d | tail -1').code, 0, 'podman compose is allowed too')
+
+// The exemption is exactly one token wide, and only for compose. These are the
+// ways it could have become a hole.
+assert.equal(bash('cat --env-file .env').code, 2, 'a non-compose reader is still denied, flag or no flag')
+assert.equal(bash('docker compose --env-file .env up -d && cat .env').code, 2,
+  'a second, non-exempt .env on the same line is still denied')
+assert.equal(bash('docker compose --env-file .env up -d && base64 .env.local').code, 2,
+  'a different secrets file on the same line is still denied')
+assert.match(bash('docker compose --env-file .env up -d && cat .env.docker').err, /\.env\.docker/,
+  'the denial names the real offender, not the exempt token')
+
 console.log('secrets guard: all assertions passed')

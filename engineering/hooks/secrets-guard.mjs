@@ -48,8 +48,30 @@ export function denyReason(call) {
       return 'docker compose config without --no-interpolate is denied: the interpolated form prints every secret the environment holds. Add --no-interpolate; the structure you need is still rendered.'
     }
     const tokens = cmd.split(/\s+/)
-    if (READERS.test(cmd) && tokens.some(t => isSecretPath(t))) {
-      return `Printing or copying a secrets file is denied (${tokens.find(t => isSecretPath(t))}). Pass values through compose interpolation or shell environment, never through your output or a file you write.`
+    // `--env-file <path>` hands the file to compose, which is the interpolation
+    // this hook's own denial message tells you to use. Nothing is printed:
+    // compose reads the file and substitutes into what it applies.
+    //
+    // Without this exemption the guard denied the invocation written in the
+    // team's own compose headers - "--profile sso-stack --env-file .env up -d" -
+    // because `.env` appears as a token and some reader-shaped word appears
+    // anywhere else on the line, a trailing "| tail -6" being enough. Nothing
+    // required the reader to actually take the secret file as its argument. A
+    // control that denies the documented happy path gets worked around, and a
+    // worked-around control protects nothing.
+    //
+    // Narrow on purpose: only on a compose invocation, and only the single
+    // token after the flag. `cat --env-file .env` is not compose and stays
+    // denied; so does a second, non-exempt `.env` later in the same line. The
+    // interpolation rule above runs first and never consults this.
+    const isCompose = /\b(docker|podman)\s+compose\b|\bdocker-compose\b/.test(cmd)
+    const exempt = new Set()
+    if (isCompose) {
+      tokens.forEach((t, i) => { if (t === '--env-file' && tokens[i + 1]) exempt.add(i + 1) })
+    }
+    const offending = tokens.findIndex((t, i) => !exempt.has(i) && isSecretPath(t))
+    if (READERS.test(cmd) && offending !== -1) {
+      return `Printing or copying a secrets file is denied (${tokens[offending]}). Pass values through compose interpolation or shell environment, never through your output or a file you write.`
     }
   }
   return null
