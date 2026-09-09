@@ -15,13 +15,11 @@ const toast = useToast()
 
 const runs = ref<WorkflowRun[]>([])
 const escalated = ref<{ key: string, watchId: string, lastError?: string, updatedAt: number }[]>([])
-const team = ref<{ pluginVersion: string | null, drifted: number, registry: { ok: boolean, products: number } } | null>(null)
 const loaded = ref(false)
 
 async function refresh() {
-  const [r, t] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs'), $fetch<typeof team.value>('/api/team/status')])
+  const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs')])
   if (r.status === 'fulfilled') runs.value = r.value
-  if (t.status === 'fulfilled') team.value = t.value
   try {
     const watches = await $fetch<{ id: string }[]>('/api/watches')
     const states = await Promise.all(watches.map(w => $fetch<Record<string, { key: string, watchId: string, disposition: string, lastError?: string, updatedAt: number }>>(`/api/watches/${w.id}/state`).catch(() => ({}))))
@@ -57,13 +55,6 @@ async function dismiss(ids: string[]) {
 /** Everything settled in the queue; a paused run still needs a decision, so it stays. */
 const dismissable = computed(() => attention.value.filter(r => r.status !== 'paused'))
 const mine = computed(() => runs.value.filter(r => r.startedBy && r.startedBy === me.value?.login).slice(0, 8))
-const dayAgo = Date.now() - 86_400_000, weekAgo = Date.now() - 7 * 86_400_000
-const cost = computed(() => ({
-  today: runs.value.filter(r => r.startedAt >= dayAgo).reduce((a, r) => a + (r.usage?.usd ?? 0), 0),
-  week: runs.value.filter(r => r.startedAt >= weekAgo).reduce((a, r) => a + (r.usage?.usd ?? 0), 0),
-  runsWeek: runs.value.filter(r => r.startedAt >= weekAgo).length,
-}))
-
 const ticket = ref('')
 const starting = ref(false)
 /** Where the registry would route this ticket; shown before Start so the wrong stack is never a surprise. */
@@ -174,27 +165,13 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
               <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
               <span class="truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
               <div class="w-24 shrink-0"><RunProgressBar :steps="r.steps" /></div>
-              <span class="ml-auto text-label whitespace-nowrap">{{ r.usage ? '$' + r.usage.usd.toFixed(2) : '' }} · {{ ago(r.startedAt) }}</span>
+              <span class="ml-auto text-label whitespace-nowrap">{{ ago(r.startedAt) }}</span>
             </NuxtLink>
           </div>
         </section>
 
-        <!-- Team + cost -->
+        <!-- Setup -->
         <section class="space-y-3">
-          <div class="rounded-xl p-4 text-[12px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <div class="text-section-label mb-1">Cost</div>
-            <div class="flex justify-between"><span class="text-label">Today</span><span class="font-mono tabular-nums">${{ cost.today.toFixed(2) }}</span></div>
-            <div class="flex justify-between"><span class="text-label">This week</span><span class="font-mono tabular-nums">${{ cost.week.toFixed(2) }} · {{ cost.runsWeek }} runs</span></div>
-          </div>
-          <NuxtLink to="/team" class="block rounded-xl p-4 text-[12px] space-y-1 focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <div class="text-section-label mb-1">Team standards</div>
-            <template v-if="team">
-              <div class="flex justify-between"><span class="text-label">Plugin</span><span>{{ team.pluginVersion ?? 'not installed' }}</span></div>
-              <div class="flex justify-between"><span class="text-label">Registry</span><span>{{ team.registry.ok ? `${team.registry.products} products` : 'unreadable' }}</span></div>
-              <div class="flex justify-between"><span class="text-label">Drift</span><span :style="{ color: team.drifted ? 'var(--warning)' : 'var(--success)' }">{{ team.drifted ? `${team.drifted} item(s)` : 'in sync' }}</span></div>
-            </template>
-            <span v-else class="text-label">Checking…</span>
-          </NuxtLink>
           <div class="rounded-xl p-4 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <div class="text-section-label mb-1">Setup</div>
             <div class="grid grid-cols-2 gap-x-3 gap-y-1">

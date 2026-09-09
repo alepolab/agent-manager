@@ -102,7 +102,7 @@ watch(() => expanded.value && liveFor(expanded.value).length, async () => {
   if (el) el.scrollTop = el.scrollHeight
 })
 
-// Cost is fetched separately from the run record itself (GET /api/runs/[id]/cost,
+// Usage totals are fetched separately from the run record (GET /api/runs/[id]/cost,
 // server/utils/costReport.ts) rather than computed here: pricing lives in
 // server/utils/models.ts only, and this component has no business re-deriving
 // it from raw token counts. Re-fetched on the run's id (a different run
@@ -120,7 +120,6 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     costError.value = true
   }
 }, { immediate: true })
-const money = (n: number) => `$${n.toFixed(4)}`
 </script>
 
 <template>
@@ -180,26 +179,15 @@ const money = (n: number) => `$${n.toFixed(4)}`
     <p v-if="settledRun && run.steps.some(s => s.sessionId)" class="text-[11px] text-label">
       Questions or feedback for a step's agent go to its chat: expand the step and choose Ask this agent, or use the speech bubble on its row. The conversation continues with everything the agent saw. A note typed here goes to the step you restart.
     </p>
-    <!-- One honest number: the run's cost so far, from server/utils/costReport.ts.
-         Never fabricated - a step that hasn't reported usage, or ran on a model
-         with no pricing entry, makes this a stated PARTIAL total, not a silent
-         one. See RunCostSummary's `note` (title on the badge) for the caveats. -->
-    <div v-if="cost" class="flex items-center gap-2 text-[11px]" data-testid="run-cost-summary">
-      <span class="font-mono tabular-nums" style="color: var(--text-primary);" :title="cost.note">
-        {{ money(cost.totals.cost_usd) }}
-      </span>
+    <!-- Tokens against the budget cap. The cost figure that used to lead this
+         row was removed on request; the totals still come from
+         server/utils/costReport.ts, which is the only place that aggregates
+         per-step usage, and the cap is what the run pauses against. -->
+    <div v-if="cost" class="flex items-center gap-2 text-[11px]" data-testid="run-usage-summary">
       <span class="text-label">{{ (cost.totals.input_tokens + cost.totals.output_tokens).toLocaleString() }} tokens</span>
       <span v-if="run.budget" class="text-label" :title="`Cap ${run.budget.maxTokens.toLocaleString()} tokens, ${run.budget.maxMinutes} min. Set in Settings; the run pauses and asks when it is reached.`">of {{ run.budget.maxTokens.toLocaleString() }}</span>
-      <span
-        v-if="!cost.totals.complete"
-        class="text-[10px] px-1.5 py-0.5 rounded"
-        :style="{ color: STATUS_COLOR.failed, background: 'rgba(239, 68, 68, 0.1)' }"
-        :title="`${cost.totals.unmeasured_step_count} step(s) with no observed usage, ${cost.totals.unpriced_step_count} on an unpriced model - excluded from this total`"
-      >
-        partial: {{ cost.totals.unmeasured_step_count + cost.totals.unpriced_step_count }} step(s) excluded
-      </span>
     </div>
-    <p v-else-if="costError" class="text-[11px] text-label">Cost unavailable.</p>
+    <p v-else-if="costError" class="text-[11px] text-label">Usage unavailable.</p>
 
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">

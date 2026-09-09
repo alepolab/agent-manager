@@ -230,7 +230,6 @@ async function deleteFailed() {
               <th class="px-3 py-2 font-medium">Status</th>
               <th class="px-3 py-2 font-medium">Started</th>
               <th class="px-3 py-2 font-medium">Duration</th>
-              <th class="px-3 py-2 font-medium">Cost</th>
               <th class="px-3 py-2 font-medium w-40">Steps</th>
               <th class="px-3 py-2 font-medium">Prompt</th>
               <th class="px-3 py-2 font-medium text-right">Actions</th>
@@ -246,7 +245,6 @@ async function deleteFailed() {
               </td>
               <td class="px-3 py-2 text-label whitespace-nowrap">{{ new Date(r.startedAt).toLocaleString() }}</td>
               <td class="px-3 py-2 text-label whitespace-nowrap">{{ duration(r) }}</td>
-              <td class="px-3 py-2 text-label whitespace-nowrap font-mono tabular-nums" :title="r.usage ? `${r.usage.input_tokens} in / ${r.usage.output_tokens} out` : ''">{{ r.usage ? '$' + r.usage.usd.toFixed(2) : '' }}</td>
               <td class="px-3 py-2"><RunProgressBar :steps="r.steps" /></td>
               <td class="px-3 py-2 text-label truncate max-w-[12rem]" :title="r.initialPrompt">{{ r.initialPrompt }}</td>
               <td class="px-3 py-2">

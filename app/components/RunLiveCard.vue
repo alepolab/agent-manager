@@ -38,7 +38,6 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
       <span v-if="run.product?.name" class="text-[11px] text-meta">{{ run.product.name }}</span>
       <span class="ml-auto flex items-center gap-3 text-[11px] text-label font-mono tabular-nums">
         <span>{{ elapsed }}</span>
-        <span v-if="run.usage">${{ run.usage.usd.toFixed(2) }}</span>
         <span>{{ done }}/{{ run.steps.length }} steps</span>
       </span>
     </div>
