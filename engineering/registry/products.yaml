@@ -317,14 +317,38 @@ products:
     owners:
       protocol: CONFIRM
 
-  selfcare:
-    # Two products under one project: selfcarenow, and lum-selfcare-v1 for LUM.
+  # Two products share the SCN project and were one entry with one compose —
+  # the LUM one — so a selfcarenow ticket halted at "no compose for the app
+  # this ticket changes". One entry per product, each with its own compose.
+  # selfcarenow comes first and takes an unqualified SCN ticket; a LUM
+  # component word routes to lum-selfcare.
+  selfcarenow:
     suite: bss
     match:
       projects: [SCN]
-      components: [Selfcare, SelfcareNow, LUM]
-    repos: [alepolab/selfcarenow, alepolab/lum-selfcare-v1]
-    multi_repo: true
+      components: [SelfcareNow, Selfcare]
+    repos: [alepolab/selfcarenow]
+    branches:
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      compose: alepo-dev-team-infra/selfcarenow
+      topology_default: 1node
+    tests:
+      unit: 'pnpm test'  # verified 2026-09-06 (generate:api then jest)
+    owners:
+      protocol: selfcare-leads        # CONFIRM
+      ui_parsing: selfcare-leads      # CONFIRM
+
+  lum-selfcare:
+    suite: bss
+    match:
+      projects: [SCN]
+      # "LUM Selfcare" outweighs selfcarenow's "Selfcare" when a ticket says both;
+      # the longest matching component word decides within a shared project.
+      components: [LUM, LUM Selfcare]
+    repos: [alepolab/lum-selfcare-v1]
     branches:
       bug: develop
       feature: develop
@@ -333,7 +357,7 @@ products:
       compose: alepo-dev-team-infra/selfcare
       topology_default: 1node
     tests:
-      unit: 'pnpm test'  # verified 2026-09-06 for selfcarenow (generate:api then jest); CONFIRM for lum-selfcare-v1
+      unit: 'pnpm test'  # CONFIRM
     owners:
       protocol: selfcare-leads        # CONFIRM
       ui_parsing: selfcare-leads      # CONFIRM

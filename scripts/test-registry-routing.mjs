@@ -53,7 +53,9 @@ assert.equal(infra.branches.bug, 'develop', 'a fix enters at develop and is prom
 // mentioning docker still resolves to pcrf: the project-key tier is decided
 // before any component word is considered.
 assert.equal(await routes('PCRFV-88: policy engine drops a session, seen in the docker logs'), 'pcrf')
-assert.equal(await routes('SCN-402: selfcare page blank'), 'selfcare')
+assert.equal(await routes('SCN-402: selfcare page blank'), 'selfcarenow')
+// Two products share the SCN project; only a LUM component word reaches the LUM one.
+assert.equal(await routes('SCN-77: LUM selfcare invoice download'), 'lum-selfcare')
 
 // Every product in the registry routes, and each Jira project reaches the repo
 // the product owner named.
@@ -66,7 +68,8 @@ for (const [text, want] of [
   ['WPM-31 partner onboarding', 'pms'],
   ['FFM-4 task plugin retry', 'ffm'],
   ['ANS-9 notification seeds', 'ans'],
-  ['SCN-402 selfcare page blank', 'selfcare'],
+  ['SCN-402 selfcare page blank', 'selfcarenow'],
+  ['SCN-77 LUM selfcare invoice download', 'lum-selfcare'],
   ['VMS-3 voucher batch', 'vms'],
   ['MPOS-224 receipt printing', 'mpos'],
   ['WSO2-2 MI sequence', 'wso2'],
