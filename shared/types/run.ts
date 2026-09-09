@@ -31,6 +31,8 @@ export interface RunStep {
    *  under `~/.claude/projects` holding its transcript: together the /cli link. */
   sessionId?: string
   sessionProject?: string
+  /** When this visit continued an earlier SDK session rather than starting one, that session's id. */
+  resumedFrom?: string
   /** Tokens the agent call actually consumed, as the SDK reported them. */
   usage?: { input_tokens: number, output_tokens: number, /** Of input_tokens, served from the prompt cache. */ cache_read_input_tokens?: number, /** The SDK's own cost figure for the call, when it reported one. */ usd?: number } | null
   /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK
@@ -137,6 +139,12 @@ export interface WorkflowRun {
    * workflow will ask for. A `fail` here stops the run in seconds instead of
    * a step discovering it forty minutes in. Diagnostics, not provenance.
    */
+  /**
+   * Consecutive times a server restart froze this run mid-step. Reset the
+   * moment a step completes. Above a small bound the run pauses and asks
+   * rather than being resumed into the same wall again.
+   */
+  interruptions?: number
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
