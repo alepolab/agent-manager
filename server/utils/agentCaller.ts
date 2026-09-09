@@ -7,6 +7,7 @@ import { getClaudeDir, resolveClaudePath } from './claudeDir.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import { resolveTools, resolveMaxTurns } from './agentToolPolicy.ts'
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
+import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
 import type { AgentFrontmatter } from '~/types'
 
@@ -274,6 +275,10 @@ export async function callAgent(
   const toolsOption = resolveTools(frontmatter)
   const maxTurns = resolveMaxTurns(frontmatter)
 
+  // Resolved before the call, and deliberately not caught: a missing guardrail
+  // is a reason not to start, not a warning to run past. See agentHooks.ts.
+  const { hooks, registered } = await pipelineHooks()
+
   const startedAt = Date.now()
   log.debug('agent call starting', () => ({
     agentSlug,
@@ -281,6 +286,7 @@ export async function callAgent(
     modelRequested: declaredModel ?? '(sdk default)',
     modelSource: override ? 'settings override' : frontmatter?.model ? 'agent file' : 'sdk default',
     toolCount: toolsOption ? toolsOption.length : '(sdk default)',
+    guardrails: registered.join(', '),
     maxTurns,
     inputLength: input.length,
     inputPreview: preview(input),
@@ -372,6 +378,29 @@ export async function callAgent(
       maxTurns,
       ...(declaredModel ? { model: declaredModel } : {}),
       ...(toolsOption ? { tools: toolsOption } : {}),
+      // A pipeline agent gets a deliberate environment, not the developer's.
+      //
+      // The SDK used to read this instance's own `~/.claude` settings, which
+      // put a person's interactive session into every step: the ponytail
+      // persona, the explanatory output style, every discovered skill and
+      // CLAUDE.md. Measured in a real worktree with the tool list an agent
+      // declares: 30,516 tokens on turn one, re-paid on all 100-200 turns of
+      // the step, against 13,157 with this empty. Over the ten runs recorded
+      // when this was measured that inheritance cost ~59M input tokens, 31%
+      // of everything the pipeline had spent.
+      //
+      // It also silently defeated `tools`: an agent declaring six tools had
+      // THIRTY-THREE registered, because inherited settings re-add plugin and
+      // MCP tools. Narrowing an agent's tools is a safety statement, not a
+      // preference, so that alone would justify this.
+      //
+      // The guardrails the pipeline does need — plan gate, test lock, secrets
+      // guard — arrived by the same inheritance, so they are now registered
+      // explicitly from the plugin's own hooks.json. `pipelineHooks()` throws
+      // when it cannot find them, and callAgent lets that through: an agent
+      // editing a product repository without them is worse than no run.
+      settingSources: [],
+      hooks,
       systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     },
   })) {
