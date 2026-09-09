@@ -12,6 +12,10 @@ export interface AgentFrontmatter {
   tools?: AgentTool[]
   /** Tool-call budget for one turn of this agent. Absent means the server default. */
   maxTurns?: number
+  /** Wall-clock budget in milliseconds for one call of this agent. Absent means
+   *  the server default. Bounds what maxTurns cannot: a single turn stuck in one
+   *  long-running command. */
+  maxDurationMs?: number
 }
 
 export interface Agent {
