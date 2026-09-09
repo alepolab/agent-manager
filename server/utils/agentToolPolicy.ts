@@ -73,3 +73,24 @@ export function resolveMaxTurns(frontmatter?: Pick<AgentFrontmatter, 'maxTurns'>
   if (typeof declared === 'number' && Number.isInteger(declared) && declared > 0) return declared
   return DEFAULT_MAX_TURNS
 }
+
+/** Wall-clock ceiling for one agent call.
+ *
+ *  The turn budget alone does NOT bound a step: one turn can sit inside a
+ *  single Bash command indefinitely, so an agent waiting on a deploy that will
+ *  never converge burns wall-clock without spending turns. Before this existed
+ *  `maxTurns` was the only bound in the system - there is no timeout in the
+ *  runner - and a real stack-provisioner ran 47.4 minutes before its turns ran
+ *  out.
+ *
+ *  30 minutes because the longest step that has ever SUCCEEDED here took 10.5
+ *  minutes: roughly three times the observed need, while still ending a
+ *  runaway inside one coffee break rather than one working day. */
+export const DEFAULT_MAX_DURATION_MS = 30 * 60_000
+
+/** An agent's wall-clock budget. Only a positive integer overrides the default. */
+export function resolveMaxDurationMs(frontmatter?: Pick<AgentFrontmatter, 'maxDurationMs'>): number {
+  const declared = frontmatter?.maxDurationMs
+  if (typeof declared === 'number' && Number.isInteger(declared) && declared > 0) return declared
+  return DEFAULT_MAX_DURATION_MS
+}
