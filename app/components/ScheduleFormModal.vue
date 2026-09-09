@@ -21,6 +21,8 @@ const props = defineProps<{
   workflows?: Workflow[]
   /** Pins the workflow: no picker, and create lands on this slug. */
   lockedWorkflowSlug?: string
+  /** Its display name, for the read-only line that replaces the picker. */
+  lockedWorkflowName?: string
   /**
    * The declared inputs to collect, when the caller already holds them.
    *
@@ -59,8 +61,10 @@ const form = reactive({
 
 const workflowOptions = computed(() => (props.workflows ?? []).map(w => ({ value: w.slug, label: w.name })))
 
-const lockedWorkflowName = computed(() =>
-  (props.workflows ?? []).find(w => w.slug === props.lockedWorkflowSlug)?.name || props.lockedWorkflowSlug)
+const pinnedName = computed(() =>
+  props.lockedWorkflowName
+  || (props.workflows ?? []).find(w => w.slug === props.lockedWorkflowSlug)?.name
+  || props.lockedWorkflowSlug)
 
 /**
  * The declared inputs, minus the reserved one: a directory is collected by the
@@ -173,7 +177,7 @@ async function onSave() {
                  they are scheduling. -->
             <div v-if="lockedWorkflowSlug" class="field-group">
               <label class="field-label">Workflow</label>
-              <p class="text-[12px] font-mono text-label">{{ lockedWorkflowName }}</p>
+              <p class="text-[12px] font-mono text-label">{{ pinnedName }}</p>
             </div>
             <div v-else class="field-group">
               <label class="field-label">Workflow</label>

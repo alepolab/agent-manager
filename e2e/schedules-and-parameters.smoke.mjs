@@ -97,11 +97,15 @@ async function killServer(proc) {
 }
 
 const SLUG = 'smoke-security-scan'
-let claudeDir, serverProc, browser, serverLog = ''
+let claudeDir, scanTarget, serverProc, browser, serverLog = ''
 
 async function main() {
   // ── 1. Seed a disposable CLAUDE_DIR ─────────────────────────────────────
   claudeDir = mkdtempSync(join(tmpdir(), 'smoke-params-'))
+  // A real directory for the Working directory field: the save route refuses
+  // one that does not exist, because agents silently fall back to ~/.claude.
+  // Deliberately NOT under claudeDir, which is refused for the same reason.
+  scanTarget = mkdtempSync(join(tmpdir(), 'smoke-scan-target-'))
   mkdirSync(join(claudeDir, 'workflows'), { recursive: true })
   mkdirSync(join(claudeDir, 'schedule-state'), { recursive: true })
 
@@ -267,6 +271,64 @@ ${modal}`)
   assert.equal(await start.isDisabled(), false, 'stating the required input enables Start')
   await page.screenshot({ path: join(shots, 'run-modal-ready.png'), fullPage: true })
 
+  // ── 6. The workflow's own Schedule tab ──────────────────────────────────
+  // The deep link WITHOUT a click first, because that is the breakable part:
+  // applyQueryIntent() strips the query when it consumes a one-shot intent,
+  // and ?tab= has to survive that.
+  await page.goto(`${baseUrl}/workflows/${SLUG}?tab=schedule`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  await page.locator('[data-testid="schedule-card"]').first().waitFor({ state: 'visible', timeout: VISIBLE_TIMEOUT_MS })
+  const tabBody = await page.locator('body').innerText()
+  assert.ok(tabBody.includes('Seeded Nightly Scan'),
+    'a ?tab=schedule link lands on the Schedule tab with the workflow\'s schedule shown, without a click')
+  assert.ok(tabBody.includes('0 2 * * *'), 'and the card carries the expression')
+  assert.ok(/schedule\s*\(1\)/i.test(tabBody), 'the tab label counts this workflow\'s schedules')
+  await page.screenshot({ path: join(shots, 'workflow-schedule-tab.png'), fullPage: true })
+
+  // The workflow is pinned here, so the form must not offer a picker.
+  await page.locator('button', { hasText: 'New schedule' }).first().click()
+  await page.waitForFunction(
+    () => document.documentElement.textContent.includes('Working directory'),
+    null, { timeout: VISIBLE_TIMEOUT_MS })
+  // A UModal portals, so innerText comes back empty - read the document.
+  const formText = await page.evaluate(() => document.documentElement.textContent)
+  assert.ok(formText.includes('Smoke Security Scan'), 'the pinned workflow is shown, not hidden')
+  assert.ok(!formText.includes('Pick a workflow'), 'and there is no workflow picker on a workflow\'s own tab')
+  assert.ok(formText.includes('jira_project'), 'the declared input is collected here too')
+  await page.screenshot({ path: join(shots, 'workflow-schedule-form.png'), fullPage: true })
+
+  // Saving with a stated directory, and the global page agreeing about it -
+  // the two surfaces read one store, so they cannot disagree.
+  await page.locator('input[placeholder="Nightly security scan"]').fill('Tab Created Scan')
+  await page.locator('textarea').first().fill('Scan it')
+  await page.locator('input[placeholder="leave empty for a directory of its own"]').fill(scanTarget)
+  await page.locator('button', { hasText: 'Create' }).first().click()
+  await page.waitForFunction(
+    () => document.body.innerText.includes('Tab Created Scan'),
+    null, { timeout: VISIBLE_TIMEOUT_MS })
+  const afterCreate = await page.locator('body').innerText()
+  assert.ok(afterCreate.includes('Created disabled'),
+    'a new schedule says it is disabled, where the new row is - not only in a toast')
+  assert.ok(/schedule\s*\(2\)/i.test(afterCreate), 'and the tab count follows')
+
+  await page.goto(`${baseUrl}/schedules`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  await page.locator('[data-testid="schedule-card"]').first().waitFor({ state: 'visible', timeout: VISIBLE_TIMEOUT_MS })
+  const globalBody = await page.locator('body').innerText()
+  assert.ok(globalBody.includes('Tab Created Scan'),
+    'a schedule created on the workflow tab is on the global page too - one store, not two')
+  assert.ok(globalBody.includes(scanTarget), 'and the directory it states is reported there')
+
+  // Switching tabs must not destroy the canvas: it is v-show, because VueFlow
+  // fits the view on init and a remount would discard the pan and zoom.
+  await page.goto(`${baseUrl}/workflows/${SLUG}`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  await page.locator('[data-testid="workflow-tab-schedule"]').click()
+  await page.locator('[data-testid="schedule-card"]').first().waitFor({ state: 'visible', timeout: VISIBLE_TIMEOUT_MS })
+  await page.locator('[data-testid="workflow-tab-canvas"]').click()
+  await page.waitForFunction(
+    () => document.body.innerText.includes('Scan'),
+    null, { timeout: VISIBLE_TIMEOUT_MS })
+  assert.ok((await page.locator('body').innerText()).includes('Scan'),
+    'coming back to the canvas still shows the step - the graph was hidden, not thrown away')
+
   console.log('schedules + parameters smoke: all assertions passed')
   console.log(`screenshots: ${shots}`)
 }
@@ -281,4 +343,5 @@ try {
   if (browser) await browser.close().catch(() => {})
   await killServer(serverProc)
   if (claudeDir) rmSync(claudeDir, { recursive: true, force: true })
+  if (scanTarget) rmSync(scanTarget, { recursive: true, force: true })
 }

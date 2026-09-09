@@ -18,6 +18,10 @@ const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
 const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote } = useWorkflowRun(slug)
+// The PAGE fetches, not the panel: the tab's own label carries the count, so it
+// is needed before the panel mounts.
+const { fetchAll: fetchSchedules, forWorkflow } = useSchedules()
+const scheduleRows = forWorkflow(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string> } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
@@ -34,7 +38,10 @@ function applyQueryIntent() {
     showRunModal.value = true
   }
   if (q.start === '1') { runInitial.value = undefined; showRunModal.value = true }
-  if (q.run || q.clone || q.start) router.replace({ path: route.path })
+  // `tab` is carried through rather than stripped with the intents: it is a
+  // link target, not a one-shot, so ?run=X&tab=schedule must not lose the tab
+  // when the intent is consumed.
+  if (q.run || q.clone || q.start) router.replace({ path: route.path, query: q.tab ? { tab: q.tab } : {} })
 }
 const showRunDetails = ref(false)
 function cloneRun() {
@@ -78,6 +85,18 @@ const saving = ref(false)
 const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
 const showParameters = ref(false)
+/**
+ * Seeded once at setup, before any await, the way explore.vue does it - and
+ * never written back on click. A query param the page both reads and writes
+ * can interleave with applyQueryIntent()'s replace on first paint and either
+ * lose an intent or resurrect a consumed one. A link sets the tab; a click
+ * does not need the URL to know.
+ */
+const activeTab = ref<'canvas' | 'schedule'>(route.query.tab === 'schedule' ? 'schedule' : 'canvas')
+/** The declaration as the server has it. The Inputs editor mutates
+ *  workflowParameters; a schedule is validated against THIS, so the two are
+ *  tracked separately and the difference is what warns the Schedule tab. */
+const savedParameters = ref<WorkflowParameter[]>([])
 const showMobileAgentPicker = ref(false)
 const paletteSearch = ref('')
 const editingName = ref(false)
@@ -93,6 +112,7 @@ onMounted(async () => {
     lastModified.value = (data as any).lastModified ?? null
     workflowSteps.value = [...data.steps]
     workflowParameters.value = [...(data.parameters ?? [])]
+    savedParameters.value = [...(data.parameters ?? [])]
     name.value = data.name
     description.value = data.description
   } catch {
@@ -104,7 +124,13 @@ onMounted(async () => {
   // one-shot intent in the URL, which may point at a finished run instead.
   await attach()
   applyQueryIntent()
+  // Fire-and-forget: the tab label's count can arrive a moment later, and
+  // nothing above it should wait on a schedule read.
+  void fetchSchedules()
 })
+
+const parametersDirty = computed(() =>
+  JSON.stringify(workflowParameters.value.filter(p => p.name.trim())) !== JSON.stringify(savedParameters.value))
 
 const graph = computed(() => buildGraph(workflowSteps.value))
 const stepById = (id: string) => workflowSteps.value.find(s => s.id === id)
@@ -411,6 +437,9 @@ async function save() {
     } as any)
     lastModified.value = (saved as any).lastModified ?? null
     workflow.value = saved as any
+    // The baseline a schedule is checked against moves with the save, which is
+    // what clears the Schedule tab's unsaved-inputs warning.
+    savedParameters.value = workflowParameters.value.filter(p => p.name.trim())
     toast.add({ title: 'Workflow saved', color: 'success' })
   } catch (e: any) {
     if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
@@ -553,8 +582,35 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       </span>
     </div>
 
-    <!-- Body: palette + canvas -->
-    <div class="flex-1 flex min-h-0">
+    <!-- Canvas / Schedule. A hand-rolled strip, matching studio/EditorPanel:
+         nothing in this app uses UTabs, and its chrome would not match these
+         CSS-var styles. -->
+    <div class="shrink-0 flex" style="border-bottom: 1px solid var(--border-subtle);">
+      <button
+        v-for="tab in (['canvas', 'schedule'] as const)"
+        :key="tab"
+        class="px-4 py-2.5 text-[12px] font-medium capitalize transition-all relative"
+        :style="{ color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-tertiary)' }"
+        :data-testid="`workflow-tab-${tab}`"
+        @click="activeTab = tab"
+      >
+        {{ tab }}<!-- Omitted rather than shown as (0) while the fetch is in
+             flight: a wrong zero on a workflow that IS scheduled is worse than
+             no number. -->
+        <span v-if="tab === 'schedule' && scheduleRows.length" class="ml-1 text-meta">({{ scheduleRows.length }})</span>
+        <div
+          v-if="activeTab === tab"
+          class="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+          style="background: var(--accent);"
+        />
+      </button>
+    </div>
+
+    <!-- Body: palette + canvas.
+         v-show, not v-if: VueFlow fits the view on init, so a remount would
+         throw away the pan and zoom the person set. The panel below is v-if
+         because it should not mount until it is looked at. -->
+    <div v-show="activeTab === 'canvas'" class="flex-1 flex min-h-0">
       <!-- Left palette (hidden on mobile) -->
       <div
         class="hidden md:flex flex-col w-[200px] shrink-0 overflow-hidden"
@@ -683,6 +739,17 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
 
       </div>
     </div>
+
+    <!-- When this workflow runs on its own. Mounted lazily, unlike the canvas. -->
+    <WorkflowSchedulePanel
+      v-if="activeTab === 'schedule'"
+      class="flex-1 min-h-0 overflow-y-auto"
+      :workflow-slug="slug"
+      :workflow-name="name"
+      :parameters="savedParameters"
+      :schedulable="workflowSteps.length > 0"
+      :parameters-dirty="parametersDirty"
+    />
 
     <!-- Run detail: live per-agent rows while a run is active, run history otherwise -->
     <USlideover v-model:open="showRunDetails" title="Run details">

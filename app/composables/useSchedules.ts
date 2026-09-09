@@ -103,5 +103,25 @@ export function useSchedules() {
     return result
   }
 
-  return { schedules, loading, error, firing, fetchAll, save, setEnabled, fire, remove }
+  /**
+   * One workflow's schedules, out of the single shared list.
+   *
+   * Deliberately a filter and not a `?workflowSlug=` fetch. `schedules` is one
+   * useState('schedules') bucket, so a filtered fetch would assign a filtered
+   * array into the key the global Schedules page also reads: opening a
+   * workflow's Schedule tab would leave that page showing one workflow's rows,
+   * and the two surfaces' fetches would race for the bucket. The alternatives
+   * are a second state key - two lists that can disagree, which is what
+   * putting schedules on the workflow was meant to stop - or a params-keyed
+   * cache, which is a rewrite for a list of tens of rows out of one file.
+   *
+   * It is also what makes the two surfaces agree by construction rather than
+   * by discipline: save() refetches the whole list, so the global page is
+   * already correct by the time anyone navigates to it.
+   */
+  function forWorkflow(slug: MaybeRefOrGetter<string>) {
+    return computed(() => schedules.value.filter(s => s.workflowSlug === toValue(slug)))
+  }
+
+  return { schedules, loading, error, firing, fetchAll, save, setEnabled, fire, remove, forWorkflow }
 }
