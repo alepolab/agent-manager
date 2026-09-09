@@ -83,7 +83,12 @@ watch(ticket, (t) => {
 // watching a run, and pure friction when you are not. A failed step, a
 // PIPELINE-HALT or a monitor voting ABORT still stops the run either way.
 const autoRun = ref(true)
-const runbook = computed(() => workflows.value.find(w => w.slug.startsWith('runbook')) ?? workflows.value[0])
+// Which workflow the ticket runs. Defaults to the first runbook, but every
+// workflow on the instance is offered: the dashboard used to run Runbook A
+// and nothing else, so a second shipped runbook was unreachable from here.
+const workflowSlug = ref<string | undefined>()
+watch(workflows, (list) => { if (!list.some(w => w.slug === workflowSlug.value)) workflowSlug.value = (list.find(w => w.slug.startsWith('runbook')) ?? list[0])?.slug }, { immediate: true })
+const runbook = computed(() => workflows.value.find(w => w.slug === workflowSlug.value))
 async function startFromTicket() {
   if (!ticket.value.trim() || !runbook.value) return
   starting.value = true
@@ -115,9 +120,12 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
       <!-- Primary action -->
       <form class="rounded-xl p-4 flex flex-wrap items-end gap-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
         <div class="flex-1 min-w-[16rem]">
-          <label class="field-label">Start a run from a ticket</label>
-          <input v-model="ticket" class="field-input w-full" placeholder="SCN-402, or paste the ticket text" :disabled="!runbook" />
-          <span class="field-hint">{{ runbook ? `Runs ${runbook.name}. A bare key is expanded from Jira when your profile has a token.` : 'Create a workflow first.' }}</span>
+          <label class="field-label" for="ticket">Start a run from a ticket</label>
+          <input id="ticket" v-model="ticket" class="field-input w-full" placeholder="SCN-402, or paste the ticket text" :disabled="!runbook" />
+          <select v-if="workflows.length > 1" v-model="workflowSlug" class="field-input field-select mt-2" aria-label="Workflow to run">
+            <option v-for="w in workflows" :key="w.slug" :value="w.slug">{{ w.name }} ({{ w.steps.length }} steps)</option>
+          </select>
+          <span class="field-hint"><template v-if="runbook">{{ workflows.length > 1 ? '' : `Runs ${runbook.name}. ` }}A bare key is expanded from Jira when your profile has a token.</template><template v-else>Create a <NuxtLink to="/workflows" class="underline">workflow</NuxtLink> first.</template></span>
           <span v-if="routing" class="field-hint block" style="color: var(--success);">Routes to {{ routing.name }}{{ routing.suite ? ` (${routing.suite})` : '' }}: {{ routing.repos.join(', ') || 'no repos listed' }}{{ routing.recipe ? '' : ', no recipe yet' }}</span>
           <span v-else-if="routing === null" class="field-hint block" style="color: var(--warning);">No product in the registry matches this ticket. Intake will work from the text alone; add the project key or a product label to route it.</span>
           <template v-if="preflight">
@@ -153,7 +161,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
               <span class="text-label truncate">{{ why(r) }}</span>
               <span class="ml-auto text-label whitespace-nowrap">{{ r.startedBy || '' }} · {{ ago(r.startedAt) }}</span>
             </NuxtLink>
-            <button v-if="r.status !== 'paused'" class="p-1 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
+            <button v-if="r.status !== 'paused'" class="p-1.5 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
           </div>
           <NuxtLink v-for="t in escalated" :key="t.watchId + t.key" to="/watches" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <span class="font-mono uppercase text-[11px] w-20 shrink-0" style="color: var(--error);">escalated</span>

@@ -108,6 +108,12 @@ export function materializeTemplateSteps(
   })
 }
 
+/** The runbooks the team ships: template id -> the file name each is seeded as under the config dir's workflows/. Shared by the server's team sync and scripts/sync-agents.mjs. */
+export const RUNBOOK_FILES: Record<string, string> = {
+  'runbook-a-jira-to-diff': 'runbook-a-ticket-to-evidence-backed-pr',
+  'runbook-c-ce-ticket-to-pr': 'runbook-c-ce-ticket-to-qa-proven-pr',
+}
+
 export const workflowTemplates: WorkflowTemplate[] = [
   {
     id: 'code-review-pipeline',
@@ -168,6 +174,33 @@ export const workflowTemplates: WorkflowTemplate[] = [
         next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       // `next` names a template id, and a repeated id resolves to its LAST step, which
       // is this one: the review step, not the In Progress step at the top.
+      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'runbook-c-ce-ticket-to-pr',
+    name: 'Runbook C — ce Ticket to QA-Proven PR',
+    description: 'Paste a ticket: stands up the stack, plans the change and its QA cases, implements and reviews the way the compound-engineering skills do, rebuilds the stack from the fix, runs automated and manual QA against it, and opens the PR carrying all of it.',
+    icon: 'i-lucide-workflow',
+    steps: [
+      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
+      // The runner makes the run's worktree beside the clone as soon as this step has cloned it; every step after works there.
+      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', next: ['sdlc-ce-plan'], monitorSlug: 'sdlc-step-monitor' },
+      // ce-plan: the implementation plan and the QA plan (automated and manual cases) the run is judged by.
+      { agentTemplateId: 'sdlc-ce-plan', label: 'Plan', next: ['sdlc-ce-work'], monitorSlug: 'sdlc-step-monitor' },
+      // Labelled as in Runbook A on purpose: the security review and the QA steps send work back to "Implement Fix".
+      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
+      // Rebuilds the image from the worktree and redeploys in place, alone, before anything tests it.
+      { agentTemplateId: 'sdlc-stack-update', label: 'Update Stack', next: ['sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
+      // QA is the gate: both halves and the security review run against the rebuilt stack in one wave, and a FAIL sends the run back to Implement Fix.
+      { agentTemplateId: 'sdlc-qa-automated', label: 'Automated QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-qa-manual', label: 'Manual QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
+      // The one step with an outward effect: pushes the branch and opens the PR quoting the QA, review and security reports.
+      { agentTemplateId: 'sdlc-ce-ship', label: 'Push + PR', next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, monitorSlug: 'sdlc-step-monitor' },
     ],
   },

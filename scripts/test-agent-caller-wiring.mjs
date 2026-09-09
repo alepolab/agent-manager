@@ -33,7 +33,20 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'agent-caller-wiring-'))
 // Import exactly as server/api/workflows/[slug]/runs.post.ts does: relative,
 // no extension, no separate side-effect import of agentCaller.ts.
 const runner = await import('../server/utils/workflowRunner.ts')
-const { callAgent } = await import('../server/utils/agentCaller.ts')
+const { callAgent, ceSkillsDir } = await import('../server/utils/agentCaller.ts')
+
+// CE_SKILLS_DIR: the compound-engineering plugin's skills, or empty — never a guess.
+{
+  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  assert.equal(await ceSkillsDir(), '', 'no installed_plugins.json means no plugin, and an empty value the ce steps halt on')
+  mkdirSync(join(process.env.CLAUDE_DIR, 'plugins'), { recursive: true })
+  const installed = join(process.env.CLAUDE_DIR, 'plugins', 'installed_plugins.json')
+  writeFileSync(installed, JSON.stringify({ plugins: { 'superpowers@x': [{ installPath: '/p/super' }], 'compound-engineering@compound-engineering-plugin': [{ installPath: '/p/ce/3.21.1' }] } }))
+  assert.equal(await ceSkillsDir(), '/p/ce/3.21.1/skills', 'the compound-engineering entry, whichever marketplace it came from')
+  writeFileSync(installed, '{ not json')
+  assert.equal(await ceSkillsDir(), '', 'a broken registry reads as no plugin')
+  rmSync(installed)
+}
 
 // ── 1. Importing workflowRunner.ts alone wires the real caller ────────────
 // No setAgentCaller() call has happened yet in this process. If the wiring

@@ -17,7 +17,7 @@ import { authDisabled } from './session.ts'
 import { workspaceRootFor } from './workspace.ts'
 import type { Watch } from '../../shared/types/watch.ts'
 import { agentTemplates } from '../../app/utils/templates.ts'
-import { workflowTemplates, materializeTemplateSteps } from '../../app/utils/workflowTemplates.ts'
+import { workflowTemplates, materializeTemplateSteps, RUNBOOK_FILES } from '../../app/utils/workflowTemplates.ts'
 
 const execFileP = promisify(execFile)
 
@@ -42,7 +42,10 @@ export interface TeamStatus {
   agents: ({ id: string } & TeamItem)[]
   skills: ({ name: string } & TeamItem)[]
   commands: ({ name: string } & TeamItem)[]
+  /** Runbook A, the first of `workflows`; kept for the callers that read one. */
   workflow: { slug: string, state: ItemState, steps: number, diff?: string }
+  /** Every workflow the team ships, seeded from `workflowTemplates`. */
+  workflows: { slug: string, name: string, state: ItemState, steps: number, diff?: string }[]
   /** Items an apply OVERWROTE because they were edited locally. A seeded item that
    *  differs from the team version is rewritten at every boot, and that loss used
    *  to be silent: invisible from the UI, the boot line and the filesystem after. */
@@ -66,7 +69,7 @@ export interface TeamStatus {
   checkedAt: number
 }
 
-const RUNBOOK_SLUG = 'runbook-a-ticket-to-evidence-backed-pr'
+const RUNBOOK_SLUG = RUNBOOK_FILES['runbook-a-jira-to-diff']!
 const shippedDir = () => join(process.cwd(), 'engineering')
 const appliedPath = () => resolveClaudePath('.team-applied.json')
 
@@ -118,8 +121,8 @@ async function item(state: ItemState, current: string | null, next: string): Pro
   return state === 'drifted' ? { state, diff: await diffOf(current ?? '', next) } : { state }
 }
 
-function runbookSteps(existingIds?: string[]) {
-  const runbook = workflowTemplates.find(t => t.id === 'runbook-a-jira-to-diff')
+function runbookSteps(templateId: string, existingIds?: string[]) {
+  const runbook = workflowTemplates.find(t => t.id === templateId)
   if (!runbook) return null
   const slugs: Record<string, string> = {}
   for (const s of runbook.steps) {
@@ -157,7 +160,7 @@ function enforcement(plugin: { installPath: string } | null): Promise<TeamStatus
 interface ReconcileOptions {
   /** Who is applying; recorded as the audit line. */
   by?: string
-  /** Apply only these items, keyed `agent:<id>`, `skill:<name>`, `command:<name>`, `workflow`, `watch:<id>`. Absent means every drifted item. */
+  /** Apply only these items, keyed `agent:<id>`, `skill:<name>`, `command:<name>`, `workflow` (every runbook) or `workflow:<slug>`, `watch:<id>`. Absent means every drifted item. */
   only?: string[]
   /** The caller, for the workspace path the page shows. */
   login?: string
@@ -296,35 +299,36 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     if (!shippedIds.has(id)) await seedAgent(id, next)
   }
 
-  const wfPath = join(workflowsDir, `${RUNBOOK_SLUG}.json`)
-  const existingRaw = await readOr(wfPath)
-  // A file that does not parse is drift, not a crash: it is exactly what Apply is for.
-  let existing: any = null
-  let wfBroken = false
-  if (existingRaw) { try { existing = JSON.parse(existingRaw) } catch { wfBroken = true } }
-  const existingSteps: any[] = Array.isArray(existing?.steps) ? existing.steps : []
-  const built = runbookSteps(existingSteps.map((s: any) => s.id))
-  let wfState: ItemState = 'missing'
-  let stepCount = 0
-  let wfDiff: string | undefined
-  if (built) {
-    stepCount = built.steps.length
+  const workflows: TeamStatus['workflows'] = []
+  for (const [templateId, slug] of Object.entries(RUNBOOK_FILES)) {
+    const wfPath = join(workflowsDir, `${slug}.json`)
+    const existingRaw = await readOr(wfPath)
+    // A file that does not parse is drift, not a crash: it is exactly what Apply is for.
+    let existing: any = null
+    let wfBroken = false
+    if (existingRaw) { try { existing = JSON.parse(existingRaw) } catch { wfBroken = true } }
+    const existingSteps: any[] = Array.isArray(existing?.steps) ? existing.steps : []
+    const built = runbookSteps(templateId, existingSteps.map((s: any) => s.id))
+    if (!built) continue
     // A step's canvas position is the operator's layout, not a team standard:
     // it is ignored in the comparison and carried over on write, so moving a
     // node does not read as drift and Apply does not undo the layout.
     const positions = new Map(existingSteps.map((s: any) => [s.id, s.position]))
     const strip = (steps: any[]) => steps.map(({ position: _p, ...s }) => s)
     const same = existing && JSON.stringify(strip(existingSteps)) === JSON.stringify(built.steps) && existing.name === built.runbook.name
-    wfState = same ? 'ok' : (existing || wfBroken) ? 'drifted' : 'missing'
+    let state: ItemState = same ? 'ok' : (existing || wfBroken) ? 'drifted' : 'missing'
     const next = JSON.stringify({
       name: built.runbook.name,
       description: built.runbook.description,
       steps: built.steps.map(s => positions.get(s.id) ? { ...s, position: positions.get(s.id) } : s),
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     }, null, 2)
-    if (wfState === 'drifted') wfDiff = await diffOf(existingRaw ?? '', next)
-    if (want('workflow') && wfState !== 'ok') { await writeFile(wfPath, next); wfState = 'ok'; wfDiff = undefined; changed++ }
+    let diff: string | undefined
+    if (state === 'drifted') diff = await diffOf(existingRaw ?? '', next)
+    if ((want('workflow') || want(`workflow:${slug}`)) && state !== 'ok') { await writeFile(wfPath, next); state = 'ok'; diff = undefined; changed++ }
+    workflows.push({ slug, name: built.runbook.name, state, steps: built.steps.length, ...(diff ? { diff } : {}) })
   }
+  const wf = workflows[0] ?? { slug: RUNBOOK_SLUG, name: '', state: 'missing' as ItemState, steps: 0 }
 
   // Watches: the registry names the queues; the instance holds their runtime
   // state (enabled, concurrency). Seeding creates a missing watch disabled and
@@ -356,7 +360,7 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
       if (want(`watch:${d.id}`) && state !== 'ok') {
         const next: Watch = cur
           ? { ...cur, ...team }
-          : { id: d.id, name: d.id, workflowSlug: RUNBOOK_SLUG, intervalSeconds: 300, enabled: false, maxConcurrentRuns: 1, autoRun: false, ...team }
+          : { id: d.id, name: d.id, workflowSlug: RUNBOOK_FILES[String(d.workflow ?? '')] ?? RUNBOOK_SLUG, intervalSeconds: 300, enabled: false, maxConcurrentRuns: 1, autoRun: false, ...team }
         await saveWatch(next)
         state = 'ok'; changed++
       }
@@ -385,7 +389,7 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
       console.log(`[teamSync] ${by} applied ${changed} item(s)${only ? ` (${only.join(', ')})` : ''}`)
     }
   }
-  const drifted = [...agents, ...skills, ...commands, ...watches].filter(i => i.state !== 'ok').length + (wfState !== 'ok' ? 1 : 0)
+  const drifted = [...agents, ...skills, ...commands, ...watches, ...workflows].filter(i => i.state !== 'ok').length
   const shipped = await readJsonOr<{ version?: string }>(join(shippedDir(), '.claude-plugin', 'plugin.json'))
   return {
     pluginVersion: plugin?.version ?? null,
@@ -393,7 +397,8 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     shippedVersion: shipped?.version ? String(shipped.version) : null,
     sources: { skills: sourceOf(skillsSource), commands: sourceOf(commandsSource), watches: sourceOf(watchesYaml), registry: sourceOf(reg?.path ?? null) },
     agents, skills, commands,
-    workflow: { slug: RUNBOOK_SLUG, state: wfState, steps: stepCount, ...(wfDiff ? { diff: wfDiff } : {}) },
+    workflow: { slug: wf.slug, state: wf.state, steps: wf.steps, ...(wf.diff ? { diff: wf.diff } : {}) },
+    workflows,
     watches,
     registry: { ok: !!reg, products: items.length, path: reg?.path ?? null, items },
     unresolvedSkills,

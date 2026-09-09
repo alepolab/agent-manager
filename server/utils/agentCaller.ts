@@ -48,6 +48,23 @@ export function sdlcSkillsDir(): string {
   return resolveClaudePath('skills')
 }
 
+/**
+ * Absolute path to the compound-engineering plugin's skills directory, handed
+ * to every agent as `CE_SKILLS_DIR`. The ce runbook's steps read `ce-plan`,
+ * `ce-work`, `ce-code-review` and `ce-commit-push-pr` from there at run time,
+ * for the reason SDLC_SKILLS_DIR exists: those four alone are ~240,000 bytes,
+ * and declaring them would inline all of it into every step's prompt. Empty
+ * when the plugin is not installed; a ce step halts on that rather than
+ * improvising the skill from memory.
+ */
+export async function ceSkillsDir(): Promise<string> {
+  try {
+    const installed = JSON.parse(await readFile(resolveClaudePath('plugins', 'installed_plugins.json'), 'utf-8'))
+    const entry = Object.entries<any>(installed?.plugins ?? {}).find(([k]) => k.startsWith('compound-engineering@'))?.[1]?.[0]
+    return entry?.installPath ? join(entry.installPath, 'skills') : ''
+  } catch { return '' }
+}
+
 const log = createLogger('agent')
 
 /**
@@ -338,6 +355,7 @@ export async function callAgent(
         ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
         SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
         SDLC_SKILLS_DIR: sdlcSkillsDir(),
+        CE_SKILLS_DIR: await ceSkillsDir(),
         ...userEnv,
       },
       abortController,

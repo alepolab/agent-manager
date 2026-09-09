@@ -49,6 +49,10 @@
           "$ref": "#/$defs/blast_radius",
           "description": "Above this label the ticket is never dispatched, however green the evidence."
         },
+        "workflow": {
+          "type": "string",
+          "description": "The shipped runbook this watch dispatches into, by workflow template id (runbook-a-jira-to-diff, runbook-c-ce-ticket-to-pr). Absent means Runbook A."
+        },
         "daily_dispatch_cap": {
           "type": "integer",
           "minimum": 0,

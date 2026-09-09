@@ -11,6 +11,7 @@ interface TeamStatus {
   skills: Item[]
   commands: Item[]
   workflow: { slug: string, state: State, steps: number, diff?: string }
+  workflows: { slug: string, name: string, state: State, steps: number, diff?: string }[]
   watches: Item[]
   registry: { ok: boolean, products: number, path: string | null, items: { key: string, suite?: string, repos: string[], recipe: boolean }[] }
   unresolvedSkills: string[]
@@ -22,7 +23,7 @@ interface TeamStatus {
 }
 const status = ref<TeamStatus | null>(null)
 interface Checkout { path: string, name: string, owner?: string, exists: boolean, git: boolean, branch?: string, head?: string, dirty: number, dirtyFiles: string[] }
-const checkouts = ref<Checkout[]>([])
+const checkouts = ref<Checkout[] | null>(null)
 const checkoutsError = ref<string | null>(null)
 const stashing = ref<string | null>(null)
 async function loadCheckouts() {
@@ -63,7 +64,7 @@ const attention = computed<Attention[]>(() => {
   for (const a of s.agents) if (a.state !== 'ok') rows.push({ key: `agent:${a.id}`, kind: 'agent', label: a.id!, state: a.state, diff: a.diff, to: editable(a.state, `/agents/${a.id}`) })
   for (const x of s.skills) if (x.state !== 'ok') rows.push({ key: `skill:${x.name}`, kind: 'skill', label: x.name!, state: x.state, diff: x.diff, to: editable(x.state, `/skills/${x.name}`) })
   for (const c of s.commands) if (c.state !== 'ok') rows.push({ key: `command:${c.name}`, kind: 'command', label: `/${c.name}`, state: c.state, diff: c.diff, to: editable(c.state, `/commands/${c.name}`) })
-  if (s.workflow.state !== 'ok') rows.push({ key: 'workflow', kind: 'workflow', label: s.workflow.slug, state: s.workflow.state, diff: s.workflow.diff, to: editable(s.workflow.state, `/workflows/${s.workflow.slug}`) })
+  for (const w of s.workflows) if (w.state !== 'ok') rows.push({ key: `workflow:${w.slug}`, kind: 'workflow', label: w.slug, state: w.state, diff: w.diff, to: editable(w.state, `/workflows/${w.slug}`) })
   for (const w of s.watches) if (w.state !== 'ok') rows.push({ key: `watch:${w.id}`, kind: 'watch', label: w.id!, state: w.state, diff: w.diff, to: editable(w.state, '/watches') })
   return rows
 })
@@ -73,7 +74,8 @@ async function apply(only?: string[]) {
   const drifted = rows.filter(r => r.state === 'drifted').length
   const missing = rows.length - drifted
   const what = [drifted ? `overwrite ${drifted} locally changed item(s)` : '', missing ? `add ${missing} missing item(s)` : ''].filter(Boolean).join(' and ')
-  if (!confirm(`This will ${what} on this shared instance.${drifted ? '\n\nLocal edits are lost. Promote them to the team first if they should be kept.' : ''}`)) return
+  // Adding a missing item overwrites nothing; only a drifted item's local edit is lost, and that is the case worth a confirmation.
+  if (drifted && !confirm(`This will ${what} on this shared instance.\n\nLocal edits are lost. Promote them to the team first if they should be kept.`)) return
   syncing.value = only?.[0] ?? 'all'
   try {
     status.value = await $fetch<TeamStatus>('/api/team/sync', { method: 'POST', body: only ? { only } : {} })
@@ -132,7 +134,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
           <div>
             <div class="text-label">Enforcement</div>
             <div class="font-medium" :style="{ color: status.enforcement.ok ? 'var(--success)' : 'var(--error)' }" :title="enforcementTitle">{{ enforcementText }}</div>
-            <div class="text-[11px] text-label mt-0.5">plan gate, test lock, on this instance</div>
+            <div class="text-[11px] text-label mt-0.5">{{ status.enforcement.checks.map(c => c.name).join(', ') || 'on this instance' }}</div>
           </div>
           <div>
             <div class="text-label">Plugin</div>
@@ -146,9 +148,11 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <div class="text-[11px] text-label mt-0.5">{{ sourceLabel(status.sources.registry) }}</div>
           </div>
           <div>
-            <div class="text-label">Workflow</div>
-            <div class="font-medium" :style="{ color: color(status.workflow.state) }">{{ status.workflow.state }} · {{ status.workflow.steps }} steps</div>
-            <NuxtLink :to="`/workflows/${status.workflow.slug}`" class="text-[11px] text-label underline focus-ring">open</NuxtLink>
+            <div class="text-label">Workflows</div>
+            <div v-for="w in status.workflows" :key="w.slug" class="font-medium" :style="{ color: color(w.state) }" :title="w.name">
+              {{ w.state }} · {{ w.steps }} steps
+              <NuxtLink :to="`/workflows/${w.slug}`" class="text-[11px] text-label underline focus-ring font-normal">{{ w.name }}</NuxtLink>
+            </div>
           </div>
         </div>
 
@@ -159,7 +163,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
         </div>
 
         <div v-if="attention.length" :class="card" :style="cardStyle" data-testid="attention">
-          <div class="text-[12px] font-medium mb-1" style="color: var(--text-primary);">Needs attention</div>
+          <h2 class="text-[12px] font-medium mb-1" style="color: var(--text-primary);">Needs attention</h2>
           <p class="text-[11px] text-label mb-2">A drifted item was changed on this instance. Open it to keep or promote the local version, or apply the team version. A missing item is safe to add.</p>
           <div v-for="r in attention" :key="r.key" class="py-1.5 text-[12px]" style="border-top: 1px solid var(--border-subtle);">
             <div class="flex items-center gap-3">
@@ -171,7 +175,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             </div>
             <details v-if="r.diff" class="mt-1 ml-[4.75rem]">
               <summary class="text-[11px] text-label cursor-pointer focus-ring">What differs</summary>
-              <pre class="mt-1 p-2 rounded text-[11px] leading-snug overflow-x-auto font-mono" style="background: var(--surface-base);"><div v-for="(l, i) in r.diff.split('\n')" :key="i" :style="{ color: lineColor(l) }">{{ l }}</div></pre>
+              <pre class="mt-1 p-2 rounded text-[11px] leading-snug overflow-x-auto font-mono" style="background: var(--surface-base);"><span v-for="(l, i) in r.diff.split('\n')" :key="i" class="block" :style="{ color: lineColor(l) }">{{ l }}</span></pre>
             </details>
             <p v-else-if="r.state === 'missing'" class="text-[11px] text-label mt-0.5 ml-[4.75rem]">Not on this instance yet.</p>
           </div>
@@ -179,7 +183,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
 
         <div class="grid md:grid-cols-3 gap-4">
           <div :class="card" :style="cardStyle">
-            <div class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Agents</div>
+            <h2 class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Agents</h2>
             <div v-for="a in byState(status.agents)" :key="a.id" class="flex items-center justify-between gap-2 text-[12px] py-0.5">
               <NuxtLink v-if="a.state !== 'missing'" :to="`/agents/${a.id}`" class="font-mono truncate focus-ring" :title="a.id">{{ a.id }}</NuxtLink>
               <span v-else class="font-mono truncate" :title="a.id">{{ a.id }}</span>
@@ -187,7 +191,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             </div>
           </div>
           <div :class="card" :style="cardStyle">
-            <div class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Skills</div>
+            <h2 class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Skills</h2>
             <p class="text-[11px] text-label mb-2">{{ sourceLabel(status.sources.skills) }}</p>
             <p v-if="!status.skills.length" class="text-[12px] text-label">None shipped.</p>
             <div v-for="s in byState(status.skills)" :key="s.name" class="flex items-center justify-between gap-2 text-[12px] py-0.5">
@@ -197,7 +201,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             </div>
           </div>
           <div :class="card" :style="cardStyle">
-            <div class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Commands</div>
+            <h2 class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Commands</h2>
             <p class="text-[11px] text-label mb-2">{{ sourceLabel(status.sources.commands) }}</p>
             <p v-if="!status.commands.length" class="text-[12px] text-label">None shipped.</p>
             <div v-for="c in byState(status.commands)" :key="c.name" class="flex items-center justify-between gap-2 text-[12px] py-0.5">
@@ -209,7 +213,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
         </div>
         <div class="grid md:grid-cols-2 gap-4">
           <div :class="card" :style="cardStyle">
-            <div class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Watches</div>
+            <h2 class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Watches</h2>
             <p class="text-[11px] text-label mb-2">{{ sourceLabel(status.sources.watches) }}</p>
             <p v-if="!status.watches.length" class="text-[12px] text-label">None defined in the registry.</p>
             <div v-for="w in byState(status.watches)" :key="w.id" class="flex items-center justify-between text-[12px] py-0.5">
@@ -218,7 +222,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <p class="text-[11px] text-label mt-2">Seeded disabled. Enable one on the Watches page once its query has been checked against real tickets.</p>
           </div>
           <div :class="card" :style="cardStyle">
-            <div class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Products</div>
+            <h2 class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Products</h2>
             <p v-if="!status.registry.items.length" class="text-[12px] text-label">Registry not readable{{ status.registry.path ? ` at ${status.registry.path}` : '' }}.</p>
             <div v-for="p in status.registry.items" :key="p.key" class="flex items-center gap-2 text-[12px] py-0.5">
               <span class="font-mono">{{ p.key }}</span>
@@ -234,8 +238,8 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
         <div class="font-medium mb-1" style="color: var(--text-primary);">Checkouts</div>
         <p class="text-label mb-2">Product repositories under the workspace root. A run branches from the checkout's HEAD and carries any uncommitted change with it, so park changes that are not meant to travel.</p>
         <p v-if="checkoutsError" style="color: var(--error);">{{ checkoutsError }}</p>
-        <p v-else-if="!checkouts.length" class="text-label">No checkouts yet; the stack step clones a product the first time it is needed.</p>
-        <div v-for="c in checkouts" :key="c.path" class="py-1" style="border-top: 1px solid var(--border-subtle);">
+        <p v-else-if="checkouts && !checkouts.length" class="text-label">No checkouts yet; the stack step clones a product the first time it is needed.</p>
+        <div v-for="c in checkouts ?? []" :key="c.path" class="py-1" style="border-top: 1px solid var(--border-subtle);">
           <div class="flex items-center gap-3">
             <span class="font-mono w-48 truncate" :title="c.path">{{ c.owner ? `${c.owner}/` : '' }}{{ c.name }}</span>
             <span v-if="c.git" class="text-label font-mono truncate">{{ c.branch }} @ {{ c.head }}</span>
