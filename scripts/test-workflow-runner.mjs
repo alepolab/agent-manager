@@ -873,6 +873,18 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(git(br.projectDir, ['branch', '--show-current']), br.branch, 'checked out there before any agent runs')
   assert.equal(git(projectDir, ['branch', '--show-current']), 'develop', 'while the clone stays on its own branch')
   br = await runner.waitForSettled(br.id, TIMEOUT)
+
+  // 18b. a step that owns its tests gets the plugin's unlock file in the checkout it works in, before it starts
+  const seenUnlock = {}
+  runner.setAgentCaller(async (agentSlug, input, dir) => { seenUnlock[agentSlug] = dir && existsSync(join(dir, '.agent', 'test-unlock.json')); return `out ${agentSlug}` })
+  const unlocked = { ...workflow, slug: 'unlock-demo', steps: workflow.steps.map(s => s.id === 'b' ? { ...s, testsUnlocked: true } : s) }
+  let ul = await runner.startRun({ workflow: unlocked, initialPrompt: 'CSUP-78: unlock', watch: 'direct-invocation', autoRun: true, projectDir })
+  ul = await runner.waitForSettled(ul.id, TIMEOUT)
+  assert.equal(ul.status, 'completed')
+  assert.equal(seenUnlock['agent-a'], false, 'a step without the flag sees no unlock file')
+  assert.equal(seenUnlock['agent-b'], true, 'the flagged step finds .agent/test-unlock.json in its worktree')
+  const unlock = JSON.parse(readFileSync(join(ul.projectDir, '.agent', 'test-unlock.json'), 'utf8'))
+  assert.match(unlock.reason, /writes tests and code together/, 'with the reason recorded for the evidence')
   rmSync(projectDir, { recursive: true, force: true })
 }
 
@@ -979,6 +991,30 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(q.question, undefined)
   assert.match(inputs['agent-a'], /User response:\nSaskTel/, 'the step saw the answer with its own previous output')
   assert.ok(inputs['agent-d'], 'downstream steps ran after the answer')
+}
+
+// ── 21b. a step that asks again after an answer pauses again; it never turns into a stuck run ──
+// A real run died here: the answered step asked a second question, the
+// run-to-completion loop found no schedulable step and failed the run as stuck
+// with the question still on the record.
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  let asks = 0
+  runner.setAgentCaller(async (agentSlug, input) => {
+    if (agentSlug === 'agent-a' && asks < 2) { asks++; return `PIPELINE-ASK: question number ${asks}?` }
+    return `out ${agentSlug}`
+  })
+  let q = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  assert.equal(q.status, 'paused'); assert.match(q.question.text, /number 1/)
+  q = await runner.respondToRun(q.id, 'first answer')
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  assert.equal(q.status, 'paused', `a second question pauses the run again, it does not fail it: ${q.error ?? ''}`)
+  assert.match(q.question?.text ?? '', /number 2/, 'and the new question is the one on the record')
+  assert.equal(q.steps.find(s => s.stepId === 'a').status, 'waiting')
+  q = await runner.respondToRun(q.id, 'second answer')
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  assert.equal(q.status, 'completed', 'the second answer lets the run finish')
 }
 
 // ── 22. a step marked for approval waits for a person, note travels with the go-ahead ──
