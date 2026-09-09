@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { runLastActivityAt } from '~~/shared/utils/runClock'
 
 /**
  * Home answers "what needs me" first, then "what did I run", then "how is
@@ -40,8 +41,11 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
 const hasContent = computed(() => agents.value.length > 0 || commands.value.length > 0 || skills.value.length > 0)
 
-const attention = computed(() => runs.value.filter(r =>
-  !r.dismissed && (['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing')))
+const attention = computed(() => runs.value
+  .filter(r => !r.dismissed && (['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
+  // Most recently active first, for the same reason as `mine` below: a
+  // restarted run is as recent as its last attempt, not as its first.
+  .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a)))
 const dismissing = ref(false)
 async function dismiss(ids: string[]) {
   dismissing.value = true
@@ -54,7 +58,24 @@ async function dismiss(ids: string[]) {
 }
 /** Everything settled in the queue; a paused run still needs a decision, so it stays. */
 const dismissable = computed(() => attention.value.filter(r => r.status !== 'paused'))
-const mine = computed(() => runs.value.filter(r => r.startedBy && r.startedBy === me.value?.login).slice(0, 8))
+/**
+ * My runs, most recently ACTIVE first - not most recently started.
+ *
+ * /api/runs sorts by startedAt, which is the right order for the run-history
+ * table (it shows a Started column) and the wrong one here: a restart resumes
+ * an old run id, so the run that just ran can be the one that started three
+ * days ago, and sorting by startedAt buries it under runs that have done
+ * nothing since. The timestamp shown on each row is the same figure this
+ * sorts by, so the list reads in the order it is written in.
+ */
+const mine = computed(() => runs.value
+  .filter(r => r.startedBy && r.startedBy === me.value?.login)
+  .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a))
+  .slice(0, 8))
+
+/** A run's first line, whole. Cutting at 60 characters in the markup produced
+ *  "... routing f" with no ellipsis; the columns below truncate properly. */
+const headline = (r: WorkflowRun) => r.initialPrompt.split('\n')[0] ?? ''
 const ticket = ref('')
 const starting = ref(false)
 /** Where the registry would route this ticket; shown before Start so the wrong stack is never a surprise. */
@@ -137,21 +158,29 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
         <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
         <p v-else-if="!attention.length && !escalated.length" class="text-[13px] text-label">Nothing waiting on you.</p>
         <div v-else class="space-y-1">
+          <!-- Same four columns on every row, run or escalation, including the
+               dismiss slot: it is absent on a paused run, and reserving its
+               width is what keeps that row's fields level with the others. -->
           <div v-for="r in attention" :key="r.id" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <NuxtLink :to="`/runs/${r.id}`" class="flex-1 min-w-0 flex items-center gap-3 focus-ring">
-              <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
-              <span class="font-medium truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
-              <span class="text-label truncate">{{ why(r) }}</span>
-              <span class="ml-auto text-label whitespace-nowrap">{{ r.startedBy || '' }} · {{ ago(r.startedAt) }}</span>
+            <NuxtLink :to="`/runs/${r.id}`" class="flex-1 min-w-0 grid grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 focus-ring">
+              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="font-medium truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
+              <span class="text-label truncate" :title="why(r)">{{ why(r) }}</span>
+              <span class="text-label text-right truncate" :title="`Started ${new Date(r.startedAt).toLocaleString()}`">{{ r.startedBy || '' }} · {{ ago(runLastActivityAt(r)) }}</span>
             </NuxtLink>
-            <button v-if="r.status !== 'paused'" class="p-1 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
+            <span class="w-6 shrink-0 flex justify-center">
+              <button v-if="r.status !== 'paused'" class="p-1 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
+            </span>
           </div>
-          <NuxtLink v-for="t in escalated" :key="t.watchId + t.key" to="/watches" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <span class="font-mono uppercase text-[11px] w-20 shrink-0" style="color: var(--error);">escalated</span>
-            <span class="font-medium truncate" style="color: var(--text-primary);">{{ t.key }}</span>
-            <span class="text-label truncate">{{ t.lastError || 'attempts exhausted; clear the escalation on the watch to retry' }}</span>
-            <span class="ml-auto text-label whitespace-nowrap">{{ t.watchId }} · {{ ago(t.updatedAt) }}</span>
-          </NuxtLink>
+          <div v-for="t in escalated" :key="t.watchId + t.key" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+            <NuxtLink to="/watches" class="flex-1 min-w-0 grid grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 focus-ring">
+              <span class="font-mono uppercase text-[11px] truncate" style="color: var(--error);">escalated</span>
+              <span class="font-medium truncate" style="color: var(--text-primary);">{{ t.key }}</span>
+              <span class="text-label truncate" :title="t.lastError || ''">{{ t.lastError || 'attempts exhausted; clear the escalation on the watch to retry' }}</span>
+              <span class="text-label text-right truncate">{{ t.watchId }} · {{ ago(t.updatedAt) }}</span>
+            </NuxtLink>
+            <span class="w-6 shrink-0" />
+          </div>
         </div>
       </section>
 
@@ -160,20 +189,33 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
         <section class="md:col-span-2">
           <h2 class="text-section-label mb-2">My recent runs</h2>
           <p v-if="loaded && !mine.length" class="text-[13px] text-label">No runs started by you yet.</p>
+          <!-- Grid, not flex: the progress bar used to sit wherever the title
+               ended, so it landed in a different place on every row. Fixed
+               columns line the four fields up down the list. -->
           <div v-else class="space-y-1">
-            <NuxtLink v-for="r in mine" :key="r.id" :to="`/runs/${r.id}`" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-              <span class="font-mono uppercase text-[11px] w-20 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
-              <span class="truncate" style="color: var(--text-primary);">{{ (r.initialPrompt.split('\n')[0] ?? '').slice(0, 60) }}</span>
-              <div class="w-24 shrink-0"><RunProgressBar :steps="r.steps" /></div>
-              <span class="ml-auto text-label whitespace-nowrap">{{ ago(r.startedAt) }}</span>
+            <NuxtLink
+              v-for="r in mine" :key="r.id" :to="`/runs/${r.id}`"
+              class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring"
+              style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+            >
+              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
+              <RunProgressBar :steps="r.steps" />
+              <span
+                class="text-label text-right whitespace-nowrap"
+                :title="`Started ${new Date(r.startedAt).toLocaleString()}`"
+              >{{ ago(runLastActivityAt(r)) }}</span>
             </NuxtLink>
           </div>
         </section>
 
-        <!-- Setup -->
-        <section class="space-y-3">
-          <div class="rounded-xl p-4 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <div class="text-section-label mb-1">Setup</div>
+        <!-- Setup. The heading sits OUTSIDE the card, matching "My recent
+             runs" beside it: with it inside, this column's card started level
+             with the other column's heading and every row sat half a line
+             high of its neighbour. -->
+        <section>
+          <h2 class="text-section-label mb-2">Setup</h2>
+          <div class="rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1">
               <NuxtLink to="/agents" class="flex justify-between focus-ring"><span class="text-label">Agents</span><span>{{ agents.length }}</span></NuxtLink>
               <NuxtLink to="/commands" class="flex justify-between focus-ring"><span class="text-label">Commands</span><span>{{ commands.length }}</span></NuxtLink>

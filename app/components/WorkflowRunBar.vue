@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR, runElapsedLabel } from '~/utils/runStatus'
 
 /**
  * The one-line run control that stays visible above the canvas. Every action a
@@ -26,12 +26,8 @@ const progress = computed(() => {
   const steps = props.run?.steps ?? []
   return { done: steps.filter(s => settledSet.has(s.status)).length, total: steps.length }
 })
-const elapsed = computed(() => {
-  const r = props.run
-  if (!r) return ''
-  const secs = Math.round(((r.endedAt ?? Date.now()) - r.startedAt) / 1000)
-  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
-})
+// The run clock, not endedAt - startedAt: see shared/utils/runClock.ts.
+const elapsed = computed(() => props.run ? runElapsedLabel(props.run) : '')
 const current = computed(() => {
   const r = props.run
   if (!r) return ''

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
 const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string] }>()
@@ -70,6 +70,14 @@ watch(() => [props.run?.id, props.run?.status, props.run?.steps.filter(s => s.st
 /** Restart and clone only make sense once nothing is executing. */
 const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
 const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
+
+/** A live run's timer has to advance between the run updates that arrive over
+ *  SSE, or it reads as frozen while an agent works. One second, cleared with
+ *  the component. */
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | null = null
+onMounted(() => { clock = setInterval(() => { now.value = Date.now() }, 1000) })
+onUnmounted(() => { if (clock) clearInterval(clock) })
 
 const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
   if (!s.startedAt) return ''
@@ -144,7 +152,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <span class="text-[11px] text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">
         {{ progress.done }} / {{ progress.total }}
       </span>
-      <span class="text-[11px] text-label">{{ elapsed({ startedAt: run.startedAt, completedAt: run.endedAt }) }}</span>
+      <span class="text-[11px] text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(run, now) }}</span>
     </div>
 
     <!-- One segment per step, coloured by that step's status. See `progress`. -->
@@ -272,7 +280,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     <button v-for="r in runs.slice(0, 10)" :key="r.id" class="w-full flex items-center gap-2 text-[12px] py-1 text-left" @click="emit('attach', r.id)">
       <span class="w-2 h-2 rounded-full" :style="{ background: STATUS_COLOR[r.status] }" />
       <span>{{ new Date(r.startedAt).toLocaleString() }}</span>
-      <span class="text-[10px] text-label">{{ elapsed({ startedAt: r.startedAt, completedAt: r.endedAt }) }}</span>
+      <span class="text-[10px] text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(r, now) }}</span>
       <span class="ml-auto text-[10px] font-mono text-label">{{ r.status }}</span>
     </button>
     <p v-if="runs.length > 10" class="text-[11px] text-label pt-1">

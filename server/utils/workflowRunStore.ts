@@ -100,6 +100,7 @@ function applyDefaults(run: WorkflowRun): WorkflowRun {
 
 export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
   await ensureDir()
+  const now = Date.now()
   const run: WorkflowRun = {
     id: randomUUID(),
     workflowSlug: input.workflowSlug,
@@ -119,7 +120,12 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     })),
     currentStepIds: [],
     nextStepIds: [],
-    startedAt: Date.now(),
+    startedAt: now,
+    // The run clock starts with the run; publish() takes it from here. Both
+    // fields are set explicitly rather than left absent, because absent is how
+    // the clock recognises a record written before it existed.
+    activeMs: 0,
+    runningSince: now,
     pid: process.pid,
     bootId: BOOT_ID,
     budget: defaultBudget(),
