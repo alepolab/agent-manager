@@ -811,7 +811,9 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   let br = await runner.startRun({ workflow, initialPrompt: 'CSUP-77: labels unprintable', watch: 'direct-invocation', autoRun: false, projectDir })
   assert.equal(br.ticketKey, 'CSUP-77', 'the ticket key is read from the prompt so the notifier can find the issue')
   assert.equal(br.branch, `fix/CSUP-77-${br.id.slice(0, 8)}`, 'the runner names the branch')
-  assert.equal(git(projectDir, ['branch', '--show-current']), br.branch, 'and checks it out before any agent runs')
+  assert.equal(br.projectDir, `${projectDir}@fix-CSUP-77-${br.id.slice(0, 8)}`, 'and works in a worktree beside the clone')
+  assert.equal(git(br.projectDir, ['branch', '--show-current']), br.branch, 'checked out there before any agent runs')
+  assert.equal(git(projectDir, ['branch', '--show-current']), 'develop', 'while the clone stays on its own branch')
   br = await runner.waitForSettled(br.id, TIMEOUT)
   rmSync(projectDir, { recursive: true, force: true })
 }
@@ -880,7 +882,7 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
       git(cloned, ['init', '-q', '-b', 'main']); git(cloned, ['config', 'user.email', 't@x']); git(cloned, ['config', 'user.name', 't'])
       writeFileSync(join(cloned, 'a.txt'), 'a\n'); git(cloned, ['add', '.']); git(cloned, ['commit', '-q', '-m', 'init'])
     } else {
-      seenBranch[agentSlug] = { branch: git(cloned, ['branch', '--show-current']), projectDir, header: /Working checkout: .* on branch fix\/CSUP-9-/.test(input) }
+      seenBranch[agentSlug] = { branch: git(projectDir, ['branch', '--show-current']), projectDir, header: /Working checkout: .* on branch fix\/CSUP-9-/.test(input) }
     }
     return `out ${agentSlug}`
   })
@@ -889,9 +891,10 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   lazy = await runner.waitForSettled(lazy.id, TIMEOUT)
   assert.equal(lazy.status, 'completed')
   assert.equal(lazy.branch, `fix/CSUP-9-${lazy.id.slice(0, 8)}`, 'the branch was made once the checkout appeared')
-  assert.equal(lazy.projectDir, cloned, 'and the run now knows its checkout')
+  assert.equal(lazy.projectDir, `${cloned}@fix-CSUP-9-${lazy.id.slice(0, 8)}`, 'and the run now knows its worktree, beside the clone')
   assert.equal(seenBranch['agent-b'].branch, lazy.branch, 'the next step ran with the branch checked out')
-  assert.equal(seenBranch['agent-b'].projectDir, cloned, 'in that directory')
+  assert.equal(seenBranch['agent-b'].projectDir, lazy.projectDir, 'in that worktree')
+  assert.equal(git(cloned, ['branch', '--show-current']), 'main', 'and the clone was left on main')
   assert.ok(seenBranch['agent-b'].header, 'and was told so in its header')
   process.env.AGENT_WORKSPACE_ROOT = savedRoot
   rmSync(wsRoot, { recursive: true, force: true })

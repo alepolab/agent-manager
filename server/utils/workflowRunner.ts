@@ -1049,10 +1049,30 @@ async function readClassification(run: WorkflowRun): Promise<{ work_type?: strin
   } catch { return null }
 }
 
-async function ensureRunCheckout(run: WorkflowRun): Promise<void> {
-  if (run.branch) return
+// Wave siblings start together and each asks for the checkout; git takes one
+// index lock at a time, and the second `worktree add` used to fail into the
+// silent fallback. One creation per run at a time, the others await it.
+const checkoutInFlight = new Map<string, Promise<void>>()
+function ensureRunCheckout(run: WorkflowRun): Promise<void> {
+  const pending = checkoutInFlight.get(run.id)
+  if (pending) return pending
+  const p = ensureRunCheckoutOnce(run).finally(() => checkoutInFlight.delete(run.id))
+  checkoutInFlight.set(run.id, p)
+  return p
+}
+
+async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
+  // A run that has its worktree is left alone. One whose worktree is gone (a
+  // developer ran `git worktree remove` after the PR merged, then restarted
+  // the run) gets it back from the clone: without this, agentCaller fell back
+  // to the Claude config directory as cwd and every step ran in the wrong
+  // place while the header still named the deleted path.
+  if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
   const repoName = run.product?.repos?.[0]?.split('/').pop()
-  const checkout = (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir : findCheckout(runWorkspace(run), repoName)
+  const recordedClone = run.branch && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
+  const checkout = (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
+    : (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir
+      : findCheckout(runWorkspace(run), repoName)
   if (!checkout) return
   // The base branch follows the kind of work, which intake classifies into
   // meta.json. Until it has, no step touches the code, so the branch waits:
@@ -1061,23 +1081,31 @@ async function ensureRunCheckout(run: WorkflowRun): Promise<void> {
   const classified = await readClassification(run)
   const intake = run.steps.find(s => s.agentSlug === 'sdlc-ticket-intake')
   const intakeSettled = !intake || !['pending', 'running', 'waiting'].includes(intake.status)
-  if (!classified?.work_type && !intakeSettled) return
+  if (!run.branch && !classified?.work_type && !intakeSettled) return
   const choice = baseBranchFor(classified?.work_type, classified?.origin, run.product?.branches)
-  const branch = `fix/${run.ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
+  const branch = run.branch ?? `fix/${run.ticketKey ?? 'run'}-${run.id.slice(0, 8)}`
+  const base = run.branch ? run.baseBranch : choice.base
+  let worktrees: string[]
   try {
-    const repos = await ensureRunBranch(checkout, branch, choice.base)
-    run.branch = branch
-    run.projectDir = checkout
-    run.workType = classified?.work_type
-    run.origin = classified?.origin
-    run.baseBranch = choice.base
-    // The branch starts at the base now, so the fix facts diff against it.
-    run.baseCommit = (await captureBaseline(checkout)) ?? run.baseCommit
-    await saveRun(run)
-    log.info('run branch created', { runId: run.id, checkout, branch, base: choice.base, reason: choice.reason, repos: repos.length })
+    worktrees = await ensureRunBranch(checkout, branch, base)
   } catch (err) {
-    log.warn('could not create the run branch; agents commit where the checkout is', { runId: run.id, checkout, error: err instanceof Error ? err.message : String(err) })
+    // Loudly, never quietly. The old fallback let the run go on in the clone,
+    // on whatever branch the developer had left it, with a header that still
+    // promised a worktree; a stale worktree on another branch is the one way
+    // to get here, and only a person can decide what to do with it.
+    throw new Error(`could not create the run worktree for ${branch} beside ${checkout}: ${err instanceof Error ? err.message : String(err)}. Resolve it (git worktree list / git worktree remove) and restart the run from its first step.`)
   }
+  run.branch = branch
+  // The run's own worktree, beside the clone: every step from here works
+  // there, and the clone stays on whatever branch the developer left it on.
+  run.projectDir = worktrees[0] ?? checkout
+  run.workType = run.workType ?? classified?.work_type
+  run.origin = run.origin ?? classified?.origin
+  run.baseBranch = base
+  // The branch starts at the base now, so the fix facts diff against it.
+  run.baseCommit = (await captureBaseline(run.projectDir)) ?? run.baseCommit
+  await saveRun(run)
+  log.info('run worktree ready', { runId: run.id, checkout, worktree: run.projectDir, branch, base, reason: choice.reason, repos: worktrees.length })
 }
 
 /**
