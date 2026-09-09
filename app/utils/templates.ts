@@ -933,8 +933,65 @@ The run artifacts directory named at the top of your input already tells you whe
 ## What to run
 
 1. The parameterised test from the test-authoring step. Every row must pass. A partial pass is a failure, and which rows failed is the important part of the report.
-2. The repo's existing test suite for the area that changed — the module's own tests at minimum, the full suite if it runs in reasonable time.
-3. The repo's own lint, format and type gates. Green unit tests with a red typecheck is the single most common way a local pass turns into a red pipeline.
+2. The tests for **what this run actually changed** — not the whole suite.
+   "Scope the regression" below says how, and how it differs by language.
+
+3. The repo's own lint, format and type gates. These stay **unscoped**: they run
+   in seconds, and green unit tests with a red typecheck is the single most
+   common way a local pass turns into a red pipeline.
+
+## Scope the regression
+
+The full suite is CI's job, not yours. It runs on the pull request, in
+parallel, on hardware that is not your run's clock — and the PR follow-up step
+watches those checks and fixes what goes red before anything merges. Running it
+here too buys nothing and costs minutes: one measured run spent 627 seconds on
+2,204 tests to prove a three-line string change.
+
+So run the tests for the files this run changed:
+
+1. Read \`fix.files_changed\` from \`meta.json\` — the runner re-asserts it from git, so
+   it is what actually changed rather than what anyone claims changed.
+2. Map each path to its nearest test target and run those.
+3. If a path will not map, **widen** to the nearest ancestor that has tests, and
+   say in your report that you widened and why. Running more than needed and
+   saying so is fine; running nothing and not noticing is not.
+
+If the product block's \`tests.unit\` names a real command, that wins — it is the
+product's own answer. Where it still reads \`CONFIRM\` it is a placeholder that was
+never filled in, so ignore it and derive as above.
+
+### The technique differs by family
+
+| Family | How to scope |
+|---|---|
+| JS/TS (vitest, jest) | Pass the changed paths to the runner: \`vitest run <dir>\`. Tests are colocated or mirror \`src/\`. No build; seconds. |
+| Python (pytest) | \`pytest <path>\` — same shape. |
+| Go | \`go test ./<pkg>/...\` |
+| Java (Maven, Gradle) | \`-Dtest=<Class>\` or \`--tests\` on the touched module only. Do not reactor-build the whole workspace to run one test. |
+| C++ (GoogleTest, CTest) | **Build the target, then filter**: build what the change touches, then \`ctest -R <module>\`. Name the targets you built. |
+
+The C++ row is different in kind, not just in command. \`ctest\` on a stale or
+partial build reports **passes for tests it never rebuilt** — a green result
+that proves nothing, which is the exact failure this step exists to catch. If
+you cannot build the target, that is a halt, not a scoped run.
+
+Your language-matched skills carry the depth (\`cpp-testing\`, \`python-testing\`,
+\`react-testing\`, \`springboot-tdd\`); this table is only enough to choose a scope.
+
+### Say what you scoped
+
+\`regression.suite\` in \`meta.json\` must name what actually ran **and** that the full
+suite is CI's. A reviewer reads that field as the regression proof, so
+\`"vitest — pcrf-ems-portal frontend (134 files)"\` is misleading when 34 tests ran
+against one directory. Write it like:
+
+\`\`\`
+scoped: frontend/src/pages — 34 tests; full suite runs in CI on the PR
+\`\`\`
+
+A scoped run described as a full one is a placeholder wearing the shape of
+evidence, and this bundle is read by people who will not re-run it.
 
 ## Evidence, not adjectives
 
@@ -1058,7 +1115,7 @@ And, when you deployed the fixed build, \`deploy-report.md\`: the image tag you 
 Then merge \`oracle_after\`, \`regression\`, and \`adversarial\` (the object above, or \`null\`) into \`meta.json\` in that same directory:
 
 - \`oracle_after\` — \`kind\`, \`path\`, \`runs\` (3), \`rows\`. Do not set \`verdict\` yourself — the assembler derives it from \`oracle-after.xml\`. \`kind\` is the same closed enum as the pre-fix oracle: exactly one of \`parameterised_test\`, \`acceptance_tests\`, \`verification_check\`, \`doc_build\`, \`reproduction\` — use whatever the test-authoring step used, since it's the same oracle run again.
-- \`regression\` — \`suite\` (string, required — the name of the suite you ran). Do not set \`passed\`/\`failed\` yourself — the assembler derives them from \`regression.xml\`.
+- \`regression\` — \`suite\` (string, required). Name what actually ran AND that the full suite is CI's, per "### Say what you scoped" above. A scoped run recorded as though it were the whole suite is the one thing this field must never do. Do not set \`passed\`/\`failed\` yourself — the assembler derives them from \`regression.xml\`.
 
 \`meta.json\` already exists — read it, merge your keys into the object, and write the whole object back. Never overwrite it.
 
