@@ -6,9 +6,10 @@ import { MiniMap } from '@vue-flow/minimap'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
-import type { Workflow, WorkflowStep } from '~/types'
+import type { Workflow, WorkflowStep, WorkflowParameter } from '~/types'
 import { getAgentColor } from '~/utils/colors'
 import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
+import { isValidParameterName, RESERVED_PARAM_PROJECT_DIR } from '~~/shared/utils/workflowParameters'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,7 +18,7 @@ const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
 const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote } = useWorkflowRun(slug)
-const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
+const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string> } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
  *  Consumed then removed from the URL so a reload does not repeat them. */
@@ -29,7 +30,7 @@ function applyQueryIntent() {
   }
   if (typeof q.clone === 'string') {
     const src = runs.value.find(r => r.id === q.clone)
-    runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun } : undefined
+    runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun, parameters: src.parameters } : undefined
     showRunModal.value = true
   }
   if (q.start === '1') { runInitial.value = undefined; showRunModal.value = true }
@@ -38,7 +39,7 @@ function applyQueryIntent() {
 const showRunDetails = ref(false)
 function cloneRun() {
   if (!run.value) return
-  runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun }
+  runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun, parameters: run.value.parameters }
   showRunModal.value = true
 }
 
@@ -65,6 +66,9 @@ function closeRun() {
 
 const workflow = ref<Workflow | null>(null)
 const workflowSteps = ref<WorkflowStep[]>([])
+/** The workflow's declared inputs. Edited here, collected by the run modal,
+ *  and stated to every step by the runner. */
+const workflowParameters = ref<WorkflowParameter[]>([])
 const name = ref('')
 const description = ref('')
 // Edges are deleted by a click and nodes moved by a drag; leaving discards both silently without this.
@@ -73,6 +77,7 @@ useUnsavedChanges(isDirty)
 const saving = ref(false)
 const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
+const showParameters = ref(false)
 const showMobileAgentPicker = ref(false)
 const paletteSearch = ref('')
 const editingName = ref(false)
@@ -87,6 +92,7 @@ onMounted(async () => {
     workflow.value = data
     lastModified.value = (data as any).lastModified ?? null
     workflowSteps.value = [...data.steps]
+    workflowParameters.value = [...(data.parameters ?? [])]
     name.value = data.name
     description.value = data.description
   } catch {
@@ -371,6 +377,27 @@ const settingsMaxVisits = computed({
   },
 })
 
+function addParameter() {
+  workflowParameters.value.push({ name: '' })
+}
+
+function removeParameter(index: number) {
+  workflowParameters.value.splice(index, 1)
+}
+
+/** A name that is not an identifier reads as two tokens in a step header and
+ *  cannot be referred to, so it is flagged here rather than silently dropped
+ *  on save. */
+function parameterNameError(index: number): string | null {
+  const param = workflowParameters.value[index]
+  if (!param) return null
+  const name = param.name.trim()
+  if (!name) return null
+  if (!isValidParameterName(name)) return 'Letters, digits and _ only, starting with a lowercase letter'
+  if (workflowParameters.value.some((other, i) => i !== index && other.name.trim() === name)) return 'Declared twice'
+  return null
+}
+
 async function save() {
   if (!workflow.value) return
   saving.value = true
@@ -379,6 +406,7 @@ async function save() {
       name: name.value,
       description: description.value,
       steps: workflowSteps.value,
+      parameters: workflowParameters.value.filter(p => p.name.trim()),
       lastModified: lastModified.value ?? undefined,
     } as any)
     lastModified.value = (saved as any).lastModified ?? null
@@ -402,10 +430,10 @@ async function deleteWorkflow() {
   }
 }
 
-async function startRun(prompt: string, projectDir?: string, autoRun = false) {
+async function startRun(prompt: string, projectDir?: string, autoRun = false, parameters?: Record<string, string>) {
   showRunModal.value = false
   if (!workflow.value) return
-  await start(prompt, projectDir, autoRun)
+  await start(prompt, projectDir, autoRun, parameters)
   try {
     await update(slug, { lastRunAt: new Date().toISOString() } as any)
   } catch {
@@ -484,6 +512,14 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         size="sm"
         :disabled="!canRun"
         @click="() => { showRunModal = true }"
+      />
+      <UButton
+        :label="workflowParameters.length ? `Inputs (${workflowParameters.length})` : 'Inputs'"
+        icon="i-lucide-sliders-horizontal"
+        size="sm"
+        variant="ghost"
+        color="neutral"
+        @click="() => { showParameters = true }"
       />
       <UButton label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
       <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
@@ -671,9 +707,79 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     <WorkflowRunModal
       :open="showRunModal"
       :initial="runInitial"
+      :parameters="workflowParameters"
       @update:open="showRunModal = $event"
       @start="startRun"
     />
+
+    <!-- Workflow inputs: what an operator (or a schedule) must state before a
+         run starts, instead of hoping it was buried in the prompt. -->
+    <UModal :open="showParameters" @update:open="showParameters = $event">
+      <template #content>
+        <div class="p-6 space-y-4 bg-overlay">
+          <h3 class="text-page-title">Workflow inputs</h3>
+          <p class="text-[12px] text-label">
+            Named values collected when a run starts and stated to every step. Declare what this
+            workflow needs - which repository, which Jira project - so no agent has to work it out
+            from the prompt.
+          </p>
+
+          <div v-if="!workflowParameters.length" class="text-[12px]" style="color: var(--text-disabled);">
+            No inputs declared. Runs are started with just the prompt.
+          </div>
+
+          <div v-for="(param, index) in workflowParameters" :key="index" class="field-group">
+            <div class="flex items-start gap-2">
+              <div class="flex-1 space-y-2">
+                <input
+                  v-model="param.name"
+                  placeholder="name, e.g. jira_project"
+                  class="field-input w-full"
+                >
+                <span v-if="parameterNameError(index)" class="field-hint" style="color: var(--text-error, #dc2626);">
+                  {{ parameterNameError(index) }}
+                </span>
+                <input
+                  v-model="param.description"
+                  placeholder="what it is for (shown to whoever starts the run)"
+                  class="field-input w-full"
+                >
+                <div class="flex items-center gap-3">
+                  <input
+                    v-model="param.default"
+                    placeholder="default (optional)"
+                    class="field-input flex-1"
+                  >
+                  <label class="flex items-center gap-2 cursor-pointer shrink-0">
+                    <input v-model="param.required" type="checkbox" class="shrink-0">
+                    <span class="field-label mb-0">Required</span>
+                  </label>
+                </div>
+                <span v-if="param.name.trim() === RESERVED_PARAM_PROJECT_DIR" class="field-hint">
+                  Reserved name: this one becomes the run's project folder, and replaces that field
+                  in the run dialog. Everything else is stated to the agents as text.
+                </span>
+              </div>
+              <UButton
+                icon="i-lucide-trash-2"
+                size="sm"
+                variant="ghost"
+                color="error"
+                @click="removeParameter(index)"
+              />
+            </div>
+          </div>
+
+          <div class="flex justify-between gap-2 pt-3">
+            <UButton label="Add input" icon="i-lucide-plus" size="sm" variant="soft" @click="addParameter" />
+            <div class="flex gap-2">
+              <UButton label="Close" variant="ghost" color="neutral" size="sm" @click="() => { showParameters = false }" />
+              <UButton label="Save" icon="i-lucide-save" size="sm" :loading="saving" @click="save" />
+            </div>
+          </div>
+        </div>
+      </template>
+    </UModal>
 
     <!-- Step settings -->
     <UModal :open="!!settingsStepId" @update:open="settingsStepId = $event ? settingsStepId : null">

@@ -97,6 +97,9 @@ const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
  * filling left to right would imply progress the run never made.
  */
 const settled = SETTLED_STATUSES
+/** The run's declared inputs, as pairs, so the template stays declarative. */
+const statedParameters = computed(() => Object.entries(props.run?.parameters ?? {}))
+
 const progress = computed(() => {
   const steps = props.run?.steps ?? []
   return { done: steps.filter(s => settled.has(s.status)).length, total: steps.length }
@@ -160,6 +163,15 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
 
     <!-- One segment per step, coloured by that step's status. See `progress`. -->
     <RunProgressBar :steps="run.steps" :aria-label="`${progress.done} of ${progress.total} steps settled`" />
+
+    <!-- What this run was actually given. Shown because a reader deciding
+         whether to clone or restart needs to know the inputs, and the prompt
+         alone no longer carries them. -->
+    <div v-if="statedParameters.length" class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono" data-testid="run-parameters">
+      <span v-for="[name, value] in statedParameters" :key="name" class="text-label">
+        <span style="color: var(--text-tertiary);">{{ name }}:</span> {{ value }}
+      </span>
+    </div>
 
     <p v-if="run.status === 'interrupted'" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">
       The process that was running this is gone. Its steps are frozen where they stopped.

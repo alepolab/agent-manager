@@ -39,6 +39,11 @@ export interface QueuedDispatch {
   startedBy?: string
   parentRunId: string
   ticketKey?: string
+  /** The child's own declared inputs, already resolved against the parent's
+   *  values by the dispatch step. Absent on an item queued before this field
+   *  existed, which readQueue tolerates the way it tolerates any other
+   *  older entry. */
+  parameters?: Record<string, string>
   queuedAt: number
 }
 

@@ -1,3 +1,7 @@
+import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
+
+export type { WorkflowParameter }
+
 export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
 export type AgentTool = 'Read' | 'Grep' | 'Glob' | 'Bash' | 'Write' | 'Edit'
@@ -314,6 +318,18 @@ export interface Workflow {
   name: string
   description: string
   steps: WorkflowStep[]
+  /**
+   * Inputs this workflow needs stated before it runs, instead of hoping the
+   * operator buried them in the prompt and every agent parses them out the
+   * same way. Resolved once at start (shared/utils/workflowParameters.ts) and
+   * stated to every step by artifactHeader.
+   *
+   * Only declared names reach a run: a value nothing declared is dropped, not
+   * passed along. `projectDir` is the one name the runner acts on rather than
+   * merely states - it supplies the run's working directory, so a workflow
+   * cannot end up naming that directory twice in two places that disagree.
+   */
+  parameters?: WorkflowParameter[]
   createdAt: string
   lastRunAt?: string
   filePath: string
@@ -323,6 +339,8 @@ export interface WorkflowPayload {
   name: string
   description: string
   steps: WorkflowStep[]
+  /** See Workflow.parameters. */
+  parameters?: WorkflowParameter[]
 }
 
 export interface StepExecution {

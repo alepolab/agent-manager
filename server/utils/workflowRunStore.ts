@@ -8,6 +8,7 @@ import { runWorkspace } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
+import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
 
 /** Per-run caps: an env var on the instance wins, then the Settings page's values, then the defaults. */
 export function defaultBudget(): RunBudget {
@@ -111,6 +112,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     watch: input.watch,
     ticketKey: input.ticketKey,
     projectDir: input.projectDir,
+    parameters: input.parameters,
     product: input.product,
     startedBy: input.startedBy,
     parentRunId: input.parentRunId,
@@ -205,13 +207,15 @@ export async function findRunInWorkspace(workspace: string, excludeRunId?: strin
 }
 
 /** The workflow definition a run was started from, read from disk. The runner
- *  needs it to rebuild scheduling state for a run it has never seen in memory. */
-export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, steps: any[] } | null> {
+ *  needs it to rebuild scheduling state for a run it has never seen in memory,
+ *  and the dispatch step needs a target's `parameters` to work out which of the
+ *  parent's values that child actually declares. */
+export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, steps: any[], parameters?: WorkflowParameter[] } | null> {
   const path = resolveClaudePath('workflows', `${slug}.json`)
   if (!existsSync(path)) return null
   try {
     const data = JSON.parse(await readFile(path, 'utf-8'))
-    return { slug, name: data.name ?? slug, steps: data.steps ?? [] }
+    return { slug, name: data.name ?? slug, steps: data.steps ?? [], parameters: data.parameters ?? [] }
   } catch {
     return null
   }

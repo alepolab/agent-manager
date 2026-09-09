@@ -110,6 +110,13 @@ async function startFromTicket() {
     await navigateTo(`/workflows/${run.workflowSlug}?run=${run.id}`)
   } catch (e: any) {
     if (e?.statusCode === 409 && e?.data?.data?.runId) await navigateTo(`/workflows/${runbook.value.slug}?run=${e.data.data.runId}`)
+    // The workflow declares inputs this box cannot collect. Open the run dialog,
+    // which can: a toast alone would say what is missing and leave nowhere to
+    // put it.
+    else if (e?.statusCode === 400 && e?.data?.data?.missing?.length) {
+      toast.add({ title: 'This workflow needs its inputs', description: e.data.message, color: 'warning' })
+      await navigateTo(`/workflows/${runbook.value.slug}?start=1`)
+    }
     else toast.add({ title: 'Could not start the run', description: e.data?.message || e.message, color: 'error' })
   } finally {
     starting.value = false

@@ -119,12 +119,14 @@ export interface WorkflowRun {
   autoRun: boolean
   initialPrompt: string
   /** What triggered this run: the id of the watch (registry/watches.yaml)
-   *  that dispatched it, or the reserved literal 'direct-invocation' for a
-   *  run started manually (the API route, run-ticket.mjs). Set once at
-   *  creation by the runner itself — never inferred from, or left to, an
-   *  agent's self-report. Non-nullable on purpose: "what triggered this?"
-   *  always has an honest answer, and 'direct-invocation' is it when
-   *  nothing did. */
+   *  that dispatched it, `schedule:<id>` for a cron fire
+   *  (server/utils/scheduleRunStarter.ts),
+   *  `workflow-trigger:<parentRunId>` for a child a triggerWorkflow step
+   *  dispatched, or the reserved literal 'direct-invocation' for a run started
+   *  manually (the API route, run-ticket.mjs). Set once at creation by the
+   *  runner itself — never inferred from, or left to, an agent's self-report.
+   *  Non-nullable on purpose: "what triggered this?" always has an honest
+   *  answer, and 'direct-invocation' is it when nothing did. */
   watch: string
   /** The ticket this run is for (e.g. 'DEVOPS-15'), when the caller knows it.
    *  Runner-owned like `watch`: stated once at creation, never inferred from
@@ -160,6 +162,21 @@ export interface WorkflowRun {
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
+  /**
+   * The workflow's declared inputs, resolved to values once when this run
+   * started, and stated to every step by artifactHeader's `## Run parameters`
+   * block.
+   *
+   * Runner-owned, exactly like `watch`, `ticketKey` and `baseCommit`: the
+   * starter states them, they are persisted here, and nothing re-derives them
+   * later or reads them back out of an agent's output. A step that wants to
+   * change one cannot - which is the point, since a run whose stated inputs
+   * drift halfway through has no honest answer to "what was this run given?".
+   *
+   * Only names the workflow declared are here: see
+   * shared/utils/workflowParameters.ts.
+   */
+  parameters?: Record<string, string>
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
   startedBy?: string
@@ -307,6 +324,9 @@ export interface NewRunInput {
    *  straight onto the persisted run, unmodified. */
   ticketKey?: string
   projectDir?: string
+  /** See WorkflowRun.parameters - the caller resolves them, createRun carries
+   *  them straight onto the persisted run, unmodified. */
+  parameters?: Record<string, string>
   product?: ProductMatch
   startedBy?: string
   /** See WorkflowRun.parentRunId — the caller states it, createRun carries it

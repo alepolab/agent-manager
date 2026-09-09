@@ -39,6 +39,9 @@ import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import { dispatchOrQueue, drainPipelineQueue, type ChildStarter, type QueuedDispatch } from './pipelineQueue.ts'
+// Relative, not an alias, for the same reason workflowGraph.ts above is: the
+// node test scripts import this module directly and resolve no aliases.
+import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { workspaceRootFor } from './workspace.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
@@ -104,6 +107,14 @@ export interface StartRunOpts {
   /** See WorkflowRun.parentRunId - the run whose triggerWorkflow step started
    *  this one. Threaded straight to createRun, like `watch`. */
   parentRunId?: string
+  /** See WorkflowRun.parameters - the workflow's declared inputs, ALREADY
+   *  resolved by the caller against its declarations
+   *  (shared/utils/workflowParameters.ts). Resolved there rather than here
+   *  because the caller is the only one that can answer a missing required
+   *  input: the route 400s, the schedule records it and starts nothing, the
+   *  dispatch step reports it against its own entry. Threaded straight to
+   *  createRun, like `watch`. */
+  parameters?: Record<string, string>
 }
 
 /** In-memory scheduling state, keyed by run id. Lost on restart — which is
@@ -669,7 +680,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined) + body
+  } : undefined, run.parameters) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -1146,7 +1157,7 @@ async function dispatchAncestry(run: WorkflowRun): Promise<string[]> {
 /** One path segment, from a key that came out of an artifact a person wrote.
  *  Rejecting is not an option here - every entry must get a workspace - so
  *  this rewrites, and the result is only ever a directory name. */
-const workspaceSegment = (key: string) =>
+export const workspaceSegment = (key: string) =>
   key.replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^\.+/, '_').slice(0, 80) || 'entry'
 
 /**
@@ -1192,6 +1203,10 @@ const childStarter: ChildStarter = async (item) => {
     ticketKey: item.ticketKey,
     autoRun: true,
     projectDir: item.projectDir,
+    // Resolved when the item was built, not now: a workflow re-saved with a
+    // new required parameter between queueing and promotion must not turn a
+    // queued child into a failure the operator cannot see the cause of.
+    parameters: item.parameters,
     startedBy: item.startedBy,
     parentRunId: item.parentRunId,
   })
@@ -1244,11 +1259,15 @@ async function runDispatchStep(
   }
 
   // Every target workflow is checked before any child starts, so a typo in one
-  // route cannot leave half a batch in flight and half of it dropped.
+  // route cannot leave half a batch in flight and half of it dropped. The
+  // definitions are kept, not discarded: a child's own `parameters` decide
+  // which of this run's stated inputs it inherits.
+  const targets = new Map<string, { steps: any[], parameters?: WorkflowParameter[] }>()
   for (const slug of [...new Set(plan.targets.map(t => t.slug))]) {
     const wf = await loadWorkflowSteps(slug)
     if (!wf) return fail(`Dispatch failed: there is no workflow "${slug}" on this instance, so nothing was dispatched.`)
     if (!wf.steps.length) return fail(`Dispatch failed: workflow "${slug}" has no steps, so nothing was dispatched.`)
+    targets.set(slug, wf)
   }
 
   // Each child gets its own checkout. runWorkspace() honours an explicit
@@ -1257,16 +1276,36 @@ async function runDispatchStep(
   // being changed at all. Sharing the parent's directory would hand N
   // concurrent pipelines one working tree, which is precisely the hazard.
   const root = workspaceRootFor(run.startedBy)
-  const items: QueuedDispatch[] = plan.targets.map(t => ({
-    key: t.key,
-    slug: t.slug,
-    initialPrompt: childPrompt(t, run.id),
-    projectDir: join(root, workspaceSegment(t.key)),
-    startedBy: run.startedBy,
-    parentRunId: run.id,
-    ticketKey: /^[A-Z][A-Z0-9]+-\d+$/.test(t.key) ? t.key : undefined,
-    queuedAt: Date.now(),
-  }))
+  const items: QueuedDispatch[] = []
+  // A child that declares a required input this run cannot supply is reported
+  // against its OWN entry, exactly as an unstartable one is, rather than
+  // failing the batch: nineteen fix pipelines must not be lost because the
+  // twentieth routes to a workflow asking for something nobody stated.
+  const unsatisfiable: { key: string, slug: string, missing: string[] }[] = []
+  // Only what the CHILD declares crosses over; resolveParameters drops the
+  // rest, which is what makes handing a whole parent map to a child safe at
+  // all. projectDir never crosses: each child works in its own directory,
+  // decided below, and inheriting the parent's would put N pipelines in one
+  // working tree - the very hazard the line above avoids.
+  const { [RESERVED_PARAM_PROJECT_DIR]: _parentDir, ...inheritable } = run.parameters ?? {}
+  for (const t of plan.targets) {
+    const child = resolveParameters(targets.get(t.slug)?.parameters, inheritable)
+    if (child.missing.length) {
+      unsatisfiable.push({ key: t.key, slug: t.slug, missing: child.missing })
+      continue
+    }
+    items.push({
+      key: t.key,
+      slug: t.slug,
+      initialPrompt: childPrompt(t, run.id),
+      projectDir: join(root, workspaceSegment(t.key)),
+      startedBy: run.startedBy,
+      parentRunId: run.id,
+      ticketKey: /^[A-Z][A-Z0-9]+-\d+$/.test(t.key) ? t.key : undefined,
+      ...(Object.keys(child.values).length ? { parameters: child.values } : {}),
+      queuedAt: Date.now(),
+    })
+  }
 
   const outcomes = await dispatchOrQueue(items, childStarter)
   const started = outcomes.filter(o => o.runId)
@@ -1278,14 +1317,19 @@ async function runDispatchStep(
     else if (o.position) lines.push(`Queued ${o.item.key} for ${o.item.slug} (position ${o.position}, waiting for a slot).`)
     else lines.push(`Could not dispatch ${o.item.key} to ${o.item.slug}: ${o.error}.`)
   }
+  for (const u of unsatisfiable) {
+    lines.push(`Could not dispatch ${u.key} to ${u.slug}: it needs ${u.missing.join(', ')}, which this run was not given.`)
+  }
   const stuck = outcomes.filter(o => o.error)
   // Started none AND queued none: every entry errored, so the step produced
-  // nothing and must say so as a failure.
-  if (!started.length && stuck.length === outcomes.length) {
+  // nothing and must say so as a failure. An entry whose child asked for an
+  // input nobody stated counts here too - it produced no child either.
+  if (!started.length && stuck.length + unsatisfiable.length === plan.targets.length) {
     return fail(`Dispatch failed: nothing could be started.\n${lines.join('\n')}`)
   }
   log.info('dispatched child runs', {
-    runId: run.id, started: started.length, queued: outcomes.filter(o => o.position).length, failed: stuck.length,
+    runId: run.id, started: started.length, queued: outcomes.filter(o => o.position).length,
+    failed: stuck.length, unsatisfiable: unsatisfiable.length,
   })
   return { output: lines.join('\n'), failed: false }
 }
@@ -1611,6 +1655,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     watch: opts.watch,
     ticketKey,
     projectDir,
+    parameters: opts.parameters,
     parentRunId: opts.parentRunId,
     baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
@@ -1938,7 +1983,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const l: Live = {
     workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
-  const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
+  const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id, undefined, run.parameters)
   // A declared skip is a settled outcome, the same as completed: a restart of a
   // later step must not run it again. A real restart re-ran the provisioner,
   // which cloned the product a second time beside the checkout the fix step

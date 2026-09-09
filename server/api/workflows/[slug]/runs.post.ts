@@ -1,5 +1,6 @@
 import { startRun } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
+import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
 import { findRunInWorkspace } from '../../../utils/workflowRunStore'
 import { runWorkspace } from '../../../utils/workspace'
 import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
@@ -8,10 +9,46 @@ import { envForUser } from '../../../utils/users'
 
 export default defineEventHandler(async (event) => {
   const slug = getRouterParam(event, 'slug')!
-  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string }>(event)
+  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string, parameters?: Record<string, string> }>(event)
   if (!body?.initialPrompt?.trim()) {
     throw createError({ statusCode: 400, message: 'initialPrompt is required' })
   }
+
+  const user = await currentUser(event)
+
+  // Read from disk, never over our own HTTP API: a server-to-self $fetch sends
+  // no cookies, so the auth middleware answered this with 401 "Sign in
+  // required" and every run start in team mode died on an unhandled
+  // FetchError. Standalone mode hid it because AUTH_DISABLED makes the
+  // middleware a no-op.
+  //
+  // This has to happen before the workspace lock below, not after it as it
+  // once did: a declared `projectDir` parameter decides WHICH directory gets
+  // locked, and a lock taken on the wrong directory protects nothing.
+  const workflow = await readWorkflow(slug)
+  if (!workflow) {
+    throw createError({ statusCode: 404, message: 'Workflow not found' })
+  }
+  if (!workflow.steps?.length) {
+    throw createError({ statusCode: 400, message: 'This workflow has no steps' })
+  }
+
+  // Refused here rather than started and left for an agent to discover: a run
+  // missing a stated input produces a step that guesses, and a guess is what
+  // declaring the parameter was meant to remove.
+  const { values: parameters, missing } = resolveParameters(workflow.parameters, body.parameters)
+  if (missing.length) {
+    throw createError({
+      statusCode: 400,
+      message: `This workflow needs ${missing.length === 1 ? 'a value' : 'values'} for ${missing.join(', ')}`,
+      data: { missing },
+    })
+  }
+  // The one parameter the runner acts on instead of merely stating. An
+  // explicit value wins over the request's own projectDir, because the
+  // workflow declared this input and the modal collects it in that field's
+  // place. See RESERVED_PARAM_PROJECT_DIR.
+  const projectDir = parameters[RESERVED_PARAM_PROJECT_DIR]?.trim() || body.projectDir
 
   // Locked on the DIRECTORY a run will write, not on the workflow. Two runs
   // sharing a checkout corrupt each other; two developers working on unrelated
@@ -20,8 +57,7 @@ export default defineEventHandler(async (event) => {
   //
   // The check has to come after the user is known, because an unset projectDir
   // resolves to that developer's own workspace root.
-  const user = await currentUser(event)
-  const workspace = runWorkspace({ projectDir: body.projectDir, startedBy: user?.login })
+  const workspace = runWorkspace({ projectDir, startedBy: user?.login })
   const active = await findRunInWorkspace(workspace)
   if (active) {
     throw createError({
@@ -30,19 +66,6 @@ export default defineEventHandler(async (event) => {
         + ` (${active.workflowName ?? active.workflowSlug}). Wait for it, stop it, or start this one against a different project directory.`,
       data: { runId: active.id },
     })
-  }
-
-  // Read from disk, never over our own HTTP API: a server-to-self $fetch sends
-  // no cookies, so the auth middleware answered this with 401 "Sign in
-  // required" and every run start in team mode died on an unhandled
-  // FetchError. Standalone mode hid it because AUTH_DISABLED makes the
-  // middleware a no-op.
-  const workflow = await readWorkflow(slug)
-  if (!workflow) {
-    throw createError({ statusCode: 404, message: 'Workflow not found' })
-  }
-  if (!workflow.steps?.length) {
-    throw createError({ statusCode: 400, message: 'This workflow has no steps' })
   }
 
   // Deliberately not awaited to completion: the HTTP response returns as soon
@@ -71,7 +94,8 @@ export default defineEventHandler(async (event) => {
     // fires for a manual run - the key was in the prompt and nothing looked.
     ticketKey: ticketKeyFrom(body.initialPrompt),
     autoRun: body.autoRun === true,
-    projectDir: body.projectDir,
+    projectDir,
+    parameters,
     startedBy: user?.login,
   })
   return run

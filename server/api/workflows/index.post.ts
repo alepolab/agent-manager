@@ -30,6 +30,7 @@ export default defineEventHandler(async (event) => {
     name: body.name.trim(),
     description: body.description || '',
     steps: body.steps || [],
+    parameters: body.parameters || [],
     createdAt: new Date().toISOString(),
   }
 

@@ -475,7 +475,7 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
 
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }, parameters?: Record<string, string>): string {
   // The app serves this directory, so an agent can point a reviewer at it
   // instead of copying files into a product repository to make them reachable.
   const appUrl = (process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/+$/, '')
@@ -536,6 +536,22 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     'verbatim `ls -la` if you have a shell, otherwise the file names your own tools',
     'return (Glob `*` in it). A file the listing does not show does not exist.',
   ]
+  const stated = Object.entries(parameters ?? {}).filter(([, v]) => v !== '')
+  if (stated.length) {
+    lines.push(
+      '',
+      '## Run parameters',
+      '',
+      // Named inputs the operator (or a schedule) stated for THIS run. Before
+      // this block existed the only place to put "which repo", "which Jira
+      // project" was the prompt, where each agent re-derived it from prose and
+      // two steps could reach different answers from the same sentence.
+      ...stated.map(([name, value]) => `${name}: ${value}`),
+      '',
+      'These are the inputs stated for this run, given before any agent ran.',
+      'Use them instead of guessing, and do not re-derive them from the prompt.',
+    )
+  }
   if (product) {
     lines.push(
       '',
