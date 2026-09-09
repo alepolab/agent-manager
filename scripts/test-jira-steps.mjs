@@ -83,6 +83,47 @@ assert.match(syn, /Moved CSUP-1 to "Ready for Review"/, `synonym match failed: $
   assert.equal(uploads.length, 2, 'only the two top-level files are attached; the steps/ log is not')
 }
 
+// 5c. No name or synonym, but Jira's status category says which transition starts work.
+//     A project whose only in-progress status reachable from here is "In Analysis" moves there.
+const withStatus = (current, category, list) => async (url, init) => {
+  record(url, init)
+  const u = String(url)
+  if (u.endsWith('?fields=status')) return new Response(JSON.stringify({ fields: { status: { name: current, statusCategory: { key: category } } } }), { status: 200 })
+  if (u.endsWith('/transitions') && (init?.method ?? 'GET') === 'GET') return new Response(JSON.stringify({ transitions: list }), { status: 200 })
+  return new Response(null, { status: 204 })
+}
+const st = (name, key) => ({ name, statusCategory: { key } })
+calls = []
+const byCategory = await runJiraStep(run, { transition: 'In Progress' }, withStatus('Open', 'new', [
+  { id: '21', name: 'Analyse', to: st('In Analysis', 'indeterminate') }, { id: '51', name: 'Close', to: st('Closed', 'done') },
+]))
+assert.match(byCategory, /Moved CSUP-1 to "In Analysis"/, `category fallback failed: ${byCategory}`)
+assert.match(byCategory, /only in-progress status/, 'and says why that status was chosen')
+assert.deepEqual(calls.map(c => c[1]), ['GET', 'GET', 'POST'], 'transitions, current status, one write')
+
+// 5d. Several in-progress statuses and none reads as development: the ticket is left where it is, and the message names them.
+calls = []
+const ambiguous = await runJiraStep(run, { transition: 'In Progress' }, withStatus('Open', 'new', [
+  { id: '1', name: 'Close', to: st('Closed', 'done') }, { id: '2', name: 'Analyse', to: st('Business Analysis', 'indeterminate') },
+  { id: '3', name: 'Accept', to: st('PDM Accepted', 'new') }, { id: '4', name: 'Refine', to: st('Under PdM  Refinement', 'indeterminate') },
+]))
+assert.match(ambiguous, /"Business Analysis", "Under PdM  Refinement"/, ambiguous)
+assert.match(ambiguous, /left as is/)
+assert.ok(!calls.some(c => c[1] === 'POST'), 'nothing was posted')
+
+// 5e. Several in-progress statuses, exactly one of which reads as development work.
+calls = []
+const dev = await runJiraStep(run, { transition: 'In Progress' }, withStatus('Open', 'new', [
+  { id: '2', name: 'Analyse', to: st('Business Analysis', 'indeterminate') }, { id: '5', name: 'Develop', to: st('In Development', 'indeterminate') },
+]))
+assert.match(dev, /Moved CSUP-1 to "In Development"/, dev)
+
+// 5f. Already in an in-progress status (moved by hand): nothing to do, no write.
+calls = []
+const already = await runJiraStep(run, { transition: 'In Progress' }, withStatus('In Development', 'indeterminate', [{ id: '31', name: 'Done', to: st('Done', 'done') }]))
+assert.match(already, /already in "In Development"/, already)
+assert.ok(!calls.some(c => c[1] === 'POST'), 'nothing was posted')
+
 // 6. A Jira outage is reported, not thrown.
 const down = await runJiraStep({ ...run, ticketCommented: undefined }, { transition: 'In Progress' }, async () => new Response('', { status: 503 }))
 assert.match(down, /HTTP 503/, down)
