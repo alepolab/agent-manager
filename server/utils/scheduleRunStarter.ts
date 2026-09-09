@@ -12,23 +12,37 @@ import { findRunInWorkspace, loadWorkflowSteps } from './workflowRunStore.ts'
 import { startRun, workspaceSegment, WorkspaceBusyError } from './workflowRunner.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../shared/utils/workflowParameters.ts'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import type { Schedule, ScheduleState } from '../../shared/types/schedule.ts'
 
 /**
  * Where a scheduled run works: one directory per schedule, under its owner's
  * workspace root.
  *
- * Derived, never configured, and that is the whole point. The run lock is on
- * the directory a run writes, so a schedule pointed at a developer's checkout
- * would either block their manual run or be blocked by it, at 2am, with nobody
- * watching. Its own directory means the only thing it can ever contend with is
- * its own previous run — which is a case with an obvious right answer.
- *
- * The cost, accepted deliberately: a schedule cannot be aimed at a checkout
- * somebody is already working in.
+ * This is the DERIVED answer specifically, not the effective one — a schedule
+ * may name its own directory instead (see scheduleProjectDir). Kept separate
+ * because it is what "its own private directory" means: derived from the id,
+ * so the only run it can ever contend with is that schedule's own previous
+ * one, which is a case with an obvious right answer.
  */
-export function scheduleWorkspace(schedule: Schedule): string {
+export function scheduleWorkspace(schedule: Pick<Schedule, 'id' | 'createdBy'>): string {
   return join(workspaceRootFor(schedule.createdBy), workspaceSegment(schedule.id))
+}
+
+/**
+ * The directory this schedule's runs will actually work in: the one it states,
+ * else the derived one.
+ *
+ * Exported and shared by all three callers deliberately — the starter, the
+ * list route's `workspace`, and POST /api/schedules' parameter pre-check.
+ * Those three MUST agree: the directory the pre-check accepts a schedule
+ * against, the one the page shows an operator, and the one the run takes its
+ * lock on are one answer. Three copies of `projectDir?.trim() || derived` is
+ * how they drift apart, and the symptom would be a page reporting a directory
+ * the run does not use.
+ */
+export function scheduleProjectDir(schedule: Pick<Schedule, 'id' | 'createdBy' | 'projectDir'>): string {
+  return schedule.projectDir?.trim() || scheduleWorkspace(schedule)
 }
 
 export async function realScheduleStarter(schedule: Schedule): Promise<ScheduleState> {
@@ -40,13 +54,20 @@ export async function realScheduleStarter(schedule: Schedule): Promise<ScheduleS
     return { lastOutcome: 'error', lastDetail: `workflow "${schedule.workflowSlug}" has no steps` }
   }
 
-  const projectDir = scheduleWorkspace(schedule)
+  const projectDir = scheduleProjectDir(schedule)
 
-  // A projectDir the schedule stated is REPLACED by the derived directory, not
-  // dropped. Dropping it looked equivalent and was not: a workflow that
+  // A stated directory that has gone missing since it was saved is reported,
+  // not recreated: an empty directory where a checkout used to be would scan
+  // nothing and call it a pass. A derived one is startRun's to create.
+  if (schedule.projectDir?.trim() && !existsSync(projectDir)) {
+    return { lastOutcome: 'error', lastDetail: `${projectDir} does not exist any more` }
+  }
+
+  // A projectDir inside `parameters` is REPLACED by the effective directory,
+  // not dropped. Dropping it looked equivalent and was not: a workflow that
   // declares projectDir as required would then have no value for it and could
   // never be scheduled at all, while the run it would have produced was always
-  // going to work in the derived directory anyway. Substituting keeps the
+  // going to work in the effective directory anyway. Substituting keeps the
   // parameter satisfied AND keeps what the agents are told identical to where
   // they actually work - the value here is the same one `Work in:` names.
   const supplied = { ...(schedule.parameters ?? {}), [RESERVED_PARAM_PROJECT_DIR]: projectDir }

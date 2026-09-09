@@ -1,7 +1,8 @@
 import { listSchedules, saveSchedule } from '../../utils/scheduleConfig.ts'
 import { isValidCron, nextFireAt } from '../../utils/scheduleRunner.ts'
 import { loadWorkflowSteps } from '../../utils/workflowRunStore.ts'
-import { scheduleWorkspace } from '../../utils/scheduleRunStarter.ts'
+import { scheduleProjectDir } from '../../utils/scheduleRunStarter.ts'
+import { canonicalProjectDir } from '../../utils/workspace.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../shared/utils/workflowParameters.ts'
 import { currentUser } from '../../utils/session'
 import type { Schedule } from '../../../shared/types/schedule.ts'
@@ -13,9 +14,10 @@ function slugify(name: string): string {
 /**
  * Creates or updates a schedule. `saveSchedule` is what forces a brand-new id
  * to `enabled: false`; this route resolves the id, fills defaults, and refuses
- * the three things that would otherwise fail silently at 2am with nobody
- * watching: an unparseable expression, a workflow that is not there, and a
- * workflow whose required inputs this schedule does not state.
+ * the things that would otherwise fail silently at 2am with nobody watching:
+ * an unparseable expression, a workflow that is not there, a workflow whose
+ * required inputs this schedule does not state, and a working directory a run
+ * could not actually use.
  *
  * The input check is skipped for a save that DISABLES the schedule - see
  * below. Turning something off must always succeed.
@@ -58,6 +60,23 @@ export default defineEventHandler(async (event) => {
   const timezone = body.timezone === undefined
     ? stored?.timezone
     : body.timezone.trim() || undefined
+  // Same stored-value rule as the zone above, and for the same reason: an edit
+  // form that omits this must not silently move the schedule back to its
+  // derived directory, which changes WHERE IT WORKS and would report nothing.
+  // An explicit empty string is how a caller clears it back to derived.
+  //
+  // Canonicalised, not just trimmed, because the run lock compares directory
+  // strings and a `~` path would take callAgent's silent fallback into the
+  // Claude config directory. See canonicalProjectDir.
+  let projectDir = body.projectDir === undefined ? stored?.projectDir : body.projectDir.trim() || undefined
+  if (projectDir) {
+    const checked = canonicalProjectDir(projectDir)
+    if ('error' in checked) {
+      throw createError({ statusCode: 400, message: `That working directory cannot be used: ${checked.error}` })
+    }
+    projectDir = checked.path
+  }
+
   if (!isValidCron(cron, timezone)) {
     throw createError({
       statusCode: 400,
@@ -79,11 +98,12 @@ export default defineEventHandler(async (event) => {
   // POST /api/watches states at length.
   const createdBy = existing?.createdBy ?? body.createdBy ?? user?.login
 
-  // A projectDir value is not stored: the directory is derived from the id, so
-  // keeping one would be storing a setting that does nothing. It is still
-  // SUPPLIED to the check below as the directory this schedule will actually
-  // use, so a workflow that declares projectDir as required stays schedulable -
-  // see realScheduleStarter, which substitutes the same value at fire time.
+  // A projectDir is not stored inside `parameters`: the field is the one place
+  // a directory is stated, so there is one answer rather than two that can
+  // disagree. It is still SUPPLIED to the check below as the directory this
+  // schedule will actually use, so a workflow that declares projectDir as
+  // required stays schedulable - see realScheduleStarter, which substitutes
+  // the same value at fire time through the same resolver.
   const { [RESERVED_PARAM_PROJECT_DIR]: _notStored, ...supplied } = body.parameters ?? existing?.parameters ?? {}
   // Skipped when the caller is turning the schedule OFF, and that exception is
   // the whole point of the branch: a workflow that gains a required input
@@ -94,7 +114,7 @@ export default defineEventHandler(async (event) => {
   if (body.enabled !== false) {
     const { missing } = resolveParameters(workflow.parameters, {
       ...supplied,
-      [RESERVED_PARAM_PROJECT_DIR]: scheduleWorkspace({ id, createdBy } as Schedule),
+      [RESERVED_PARAM_PROJECT_DIR]: scheduleProjectDir({ id, createdBy, projectDir }),
     })
     if (missing.length) {
       throw createError({
@@ -116,6 +136,7 @@ export default defineEventHandler(async (event) => {
     workflowSlug: workflow.slug,
     cron,
     timezone,
+    projectDir,
     // A brand-new schedule is forced disabled by saveSchedule regardless; this
     // only decides what an UPDATE omitting `enabled` does, and the answer is
     // "leave it as it is" rather than "turn it off".

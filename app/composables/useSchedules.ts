@@ -6,6 +6,9 @@ export interface SchedulePayload {
   workflowSlug: string
   cron: string
   timezone?: string
+  /** See Schedule.projectDir. Omitted keeps the stored value; '' clears it
+   *  back to the derived directory. */
+  projectDir?: string
   enabled?: boolean
   initialPrompt: string
   parameters?: Record<string, string>
@@ -17,7 +20,9 @@ export interface SchedulePayload {
 export interface ScheduleRow extends Schedule {
   /** ISO, or null when the expression will not parse. */
   nextFireAt: string | null
-  /** The derived directory its runs work in. Read-only by design. */
+  /** The directory its runs will actually work in: the one it states
+   *  (`projectDir`), else the one derived from its id. Server-derived, so it
+   *  cannot disagree with where the run takes its lock. */
   workspace: string
   state: ScheduleState
 }
@@ -68,6 +73,7 @@ export function useSchedules() {
       workflowSlug: schedule.workflowSlug,
       cron: schedule.cron,
       timezone: schedule.timezone,
+      projectDir: schedule.projectDir,
       initialPrompt: schedule.initialPrompt,
       parameters: schedule.parameters,
       autoRun: schedule.autoRun,

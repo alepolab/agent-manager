@@ -162,13 +162,17 @@ const base = {
   assert.match(run.projectDir, /nightly/, 'named after the schedule')
   assert.equal(run.startedBy, 'test-owner', 'under its owner, whose tokens its agents get')
 
-  // ── 5d. a stated projectDir is replaced by the derived one, not honoured ─
+  // ── 5d. a projectDir in `parameters` is not where a directory is stated ─
+  // The FIELD steers a run (5g); a key in the parameters map does not. The
+  // save route strips that key, so the only way to get one is a hand-edit of
+  // schedules.json - which is exactly the path with no validation behind it.
   const pinned = { ...base, id: 'pinned', parameters: { jira_project: 'DEVOPS', projectDir: '/somewhere/else' } }
   const wontMove = await starterMod.realScheduleStarter(pinned)
   const pinnedRun = await store.getRun(wontMove.lastRunId)
   assert.notEqual(pinnedRun.projectDir, '/somewhere/else',
-    'a schedule cannot be aimed at a directory: that is the point of deriving it')
-  assert.equal(pinnedRun.projectDir, starterMod.scheduleWorkspace(pinned))
+    'a directory in parameters is ignored: the projectDir FIELD is the one place it is stated')
+  assert.equal(pinnedRun.projectDir, starterMod.scheduleWorkspace(pinned),
+    'with no field set, the effective directory is still the derived one')
   assert.equal(pinnedRun.parameters.projectDir, undefined,
     'and the value it asked for is not stated to the agents either, which would be a lie')
 
@@ -193,6 +197,22 @@ const base = {
     'the stated value and the run directory are one answer, not two')
   await runner.waitForSettled(dirRun.lastRunId, 5000)
 
+  // The same rule for the STATED case. This is the regression the field can
+  // introduce: substituting the DERIVED path into the parameters while
+  // starting the run in the stated one, so the agents are told to work
+  // somewhere they are not.
+  const statedDir = join(process.env.AGENT_WORKSPACE_ROOT, 'a-real-checkout')
+  mkdirSync(statedDir, { recursive: true })
+  const needsDirStated = { ...base, id: 'needs-dir-stated', workflowSlug: 'needs-dir', projectDir: statedDir, parameters: {} }
+  const statedRes = await starterMod.realScheduleStarter(needsDirStated)
+  assert.equal(statedRes.lastOutcome, 'started', statedRes.lastDetail ?? '')
+  const statedRun = await store.getRun(statedRes.lastRunId)
+  assert.equal(statedRun.projectDir, statedDir,
+    'a required projectDir is satisfied by the directory the schedule STATES')
+  assert.equal(statedRun.parameters.projectDir, statedDir,
+    'and the agents are told that same directory - one answer holds for the stated case too')
+  await runner.waitForSettled(statedRes.lastRunId, 5000)
+
   // ── 5f. THE TRAP: the directory a run is TOLD it works in must exist ────
   // callAgent resolves its cwd as
   // `projectDir && existsSync(projectDir) ? projectDir : claudeDir`, so a
@@ -212,6 +232,66 @@ const base = {
     assert.equal(freshRun.projectDir, derived,
       'and the run still records the directory its header names')
     await runner.waitForSettled(first.lastRunId, 5000)
+  }
+
+  // ── 5g. the directory a schedule STATES is where its runs work ──────────
+  // Without this a scan workflow pointed at a checkout by hand would, on a
+  // schedule, work in an empty derived directory and find nothing to scan.
+  {
+    const aimedDir = join(process.env.AGENT_WORKSPACE_ROOT, 'aimed-checkout')
+    mkdirSync(aimedDir, { recursive: true })
+    const aimed = { ...base, id: 'aimed', projectDir: aimedDir, parameters: { jira_project: 'DEVOPS' } }
+    const res = await starterMod.realScheduleStarter(aimed)
+    assert.equal(res.lastOutcome, 'started', res.lastDetail ?? '')
+    const aimedRun = await store.getRun(res.lastRunId)
+    assert.equal(aimedRun.projectDir, aimedDir, 'the directory a schedule states is where its runs work')
+    assert.notEqual(aimedRun.projectDir, starterMod.scheduleWorkspace(aimed), 'and it is not the derived one')
+    await runner.waitForSettled(res.lastRunId, 5000)
+
+    // The resolver every caller shares. Three copies of this rule is how the
+    // save pre-check, the page and the run lock drift apart.
+    assert.equal(starterMod.scheduleProjectDir(aimed), aimedDir)
+    assert.equal(starterMod.scheduleProjectDir(base), starterMod.scheduleWorkspace(base),
+      'no field means derived')
+    assert.equal(starterMod.scheduleProjectDir({ ...base, projectDir: '   ' }), starterMod.scheduleWorkspace(base),
+      'whitespace is not a directory')
+    assert.equal(starterMod.scheduleProjectDir({ ...base, projectDir: '/a', parameters: { projectDir: '/b' } }), '/a',
+      'the field beats a parameters entry')
+    assert.equal(starterMod.scheduleWorkspace({ ...base, projectDir: '/a' }), starterMod.scheduleWorkspace(base),
+      'the DERIVED answer stays untainted by the field - the assertions above depend on it')
+
+    // A stated directory that has gone missing is reported, not recreated: an
+    // empty directory where a checkout used to be would scan nothing and pass.
+    const gone = { ...base, id: 'gone', projectDir: join(process.env.AGENT_WORKSPACE_ROOT, 'deleted-checkout'), parameters: { jira_project: 'DEVOPS' } }
+    const goneRes = await starterMod.realScheduleStarter(gone)
+    assert.equal(goneRes.lastOutcome, 'error', 'a stated directory that no longer exists is an error')
+    assert.match(goneRes.lastDetail, /does not exist/)
+    assert.equal(goneRes.lastRunId, undefined, 'and no run was started')
+  }
+
+  // ── 5h. TWO schedules aimed at ONE checkout: the loser is skipped ───────
+  // The safety claim the stated-directory decision rests on. The guard keys on
+  // the directory (findRunInWorkspace), not on the schedule id, so it should
+  // hold for two different schedules sharing one checkout.
+  {
+    runner.setAgentCaller((agentSlug, input, projectDir, { signal } = {}) => new Promise((resolve, reject) => {
+      const t = setTimeout(() => resolve(`late ${agentSlug}`), 4000)
+      signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')) })
+    }))
+    const shared = join(process.env.AGENT_WORKSPACE_ROOT, 'shared-checkout')
+    mkdirSync(shared, { recursive: true })
+    const nightly = { ...base, id: 'shared-a', projectDir: shared, parameters: { jira_project: 'DEVOPS' } }
+    const weekly = { ...base, id: 'shared-b', projectDir: shared, parameters: { jira_project: 'DEVOPS' } }
+    const held = await starterMod.realScheduleStarter(nightly)
+    assert.equal(held.lastOutcome, 'started', held.lastDetail ?? '')
+    const blocked = await starterMod.realScheduleStarter(weekly)
+    assert.equal(blocked.lastOutcome, 'skipped',
+      'two schedules aimed at one checkout: the loser is skipped, not run concurrently over the same files')
+    assert.equal(blocked.lastRunId, held.lastRunId,
+      "and points at the OTHER schedule's run, so the skip is attributable")
+    await runner.stopRun(held.lastRunId)
+    await runner.waitForSettled(held.lastRunId, 5000)
+    runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
   }
 
   await runner.waitForSettled(started.lastRunId, 5000)

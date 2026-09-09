@@ -21,6 +21,22 @@ export interface Schedule {
   /** IANA zone (e.g. 'Asia/Kolkata'). Absent means the server's local time. */
   timezone?: string
   /**
+   * Where its runs work. Absent means the directory derived from its id - see
+   * scheduleWorkspace - which nothing else touches but which starts empty.
+   *
+   * Stating one is how a schedule scans a REAL repository. Without it a scan
+   * workflow pointed at a checkout by hand would, on a schedule, work in an
+   * empty derived directory and find nothing to scan, which is the whole
+   * reason declared inputs exist.
+   *
+   * The cost is accepted, and the run lock is what makes it safe to accept: a
+   * fire landing while anything else is working there degrades to `skipped`
+   * carrying the other run's id, which is a visible, attributable outcome
+   * rather than two runs editing one checkout. Canonicalised on save
+   * (canonicalProjectDir), because that lock compares directory strings.
+   */
+  projectDir?: string
+  /**
    * New schedules start disabled and enabling is a second, deliberate save -
    * the same invariant watchConfig.ts enforces, for the same reason: a
    * schedule saved with a mistyped expression must not fire before the person
@@ -32,13 +48,12 @@ export interface Schedule {
    * Values for the workflow's declared parameters, resolved against those
    * declarations at fire time.
    *
-   * A `projectDir` key is never stored here, and at fire time the derived
-   * directory is substituted for it: a scheduled run's directory comes from
-   * its id (see scheduleWorkspace), never from configuration, so a schedule
-   * can never contend with a developer's manual run for a checkout. It is
-   * substituted rather than dropped so a workflow that declares `projectDir`
-   * as required is still schedulable, and so what the agents are told matches
-   * where they actually work.
+   * A `projectDir` key is never stored here: the field above is the one place
+   * a directory is stated, so there is one answer rather than two that can
+   * disagree. At fire time the EFFECTIVE directory - stated, else derived - is
+   * substituted for it (see scheduleProjectDir). Substituted rather than
+   * dropped so a workflow that declares `projectDir` as required is still
+   * schedulable, and so what the agents are told matches where they work.
    */
   parameters?: Record<string, string>
   autoRun: boolean
