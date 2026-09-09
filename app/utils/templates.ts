@@ -586,6 +586,8 @@ product block as before. Do not go looking for it in another repository.
 
 Never copy a developer's \`.env\` into the run; generate every secret the compose marks required with \`openssl\` and pass secrets as shell environment for the \`up\` command, not files. Put any compose override you need in the run artifacts directory, never in a repo checkout.
 
+The same holds for **licence files** — \`license/*.lic\` and anything Padlock-signed. They are proprietary, they are deliberately \`.gitignore\`d (\`license/\` is ignored wholesale, with only a \`.gitkeep\` tracked), and a machine that has one has it because a person put it there. Mount the one already on the host if a stack needs it; never copy it into the run artifacts directory, never into another checkout, and never into anything that gets attached to a report or a pull request. An artifacts directory is kept as evidence and a bundle travels into a PR body, so a licence that lands in either has left the machine it was licensed to.
+
 You execute inside the agent-manager container, not on the host shell: host \`localhost\` and host-published ports (such as 3100) are unreachable from where you run, and a timeout there says nothing about the stack. When you render a compose file for evidence, use \`docker compose ... config --no-interpolate\`: the interpolated form prints every secret the environment holds into your output, and your output is kept as evidence. Prove health from inside the stack's own network: \`docker exec <container> curl -sf http://localhost:<container-port>/...\` and \`docker inspect\`, and quote their real output. A stack left running by an earlier run does not exempt you: re-prove its health with commands quoted in THIS output and write \`stack-report.md\` and the override into THIS run's artifacts directory. A report that points at another run's artifacts or at a prior result is prose, not evidence, and the monitor will reject it.
 
 Known recipes live as files: when your input's product block names a \`Recipe:\` path, read it first and follow it. It carries the product-specific quirks (image tag policy, port overrides, healthcheck, which variables to pass through). If there is no recipe, work from the deployment repo's compose file for the product and write what you learned into your stack report so a recipe can be made from it. If there is no compose file for it there either, halt as above rather than looking elsewhere.
@@ -867,6 +869,28 @@ Then make the **smallest** change that addresses the root cause:
 - Do not refactor surrounding code, rename things, or tidy while you are in there.
 - Do not add error handling for cases that cannot occur, or defend against inputs the type system already constrains.
 - Do not add a feature flag or a compatibility shim unless the ticket asks for one.
+
+## Never commit a credential or a licence
+
+You are the step that runs \`git add\` and \`git commit\`, so this stops here or not at
+all.
+
+Never stage a secret, a \`.env\`, or a **licence file** (\`license/*.lic\`, anything
+Padlock-signed). These sit inside the checkouts you work in: the PCRF checkout
+on this instance carries \`license/Alepo-License-PCRF.lic\` right now. It is
+correctly ignored — \`.gitignore\` covers \`license/\` wholesale — but that is one rule
+standing between a proprietary licence and a public commit, and \`git add -A\` from
+the wrong directory is exactly the move that tests it.
+
+So: stage the files your fix actually changed, by path. Never \`git add -A\`,
+\`git add .\` or \`git commit -a\` — not because they are always wrong, but because
+they commit whatever happens to be sitting in the tree, and what is sitting in
+the tree is not something you chose. If \`git status\` shows something you did not
+create, leave it alone and say so in your report rather than sweeping it in.
+
+A licence or a credential in a commit is not fixed by a later commit removing
+it. It is in the history, the push already happened, and the remedy is a
+rotation and a rewrite that someone else has to do.
 
 ## Estate conventions that apply to a fix
 
