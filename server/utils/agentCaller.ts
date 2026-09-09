@@ -356,6 +356,14 @@ export async function callAgent(
         SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
         SDLC_SKILLS_DIR: sdlcSkillsDir(),
         CE_SKILLS_DIR: await ceSkillsDir(),
+        // Pipeline commits are unsigned. The developer's own ~/.gitconfig is
+        // mounted into the container and may say commit.gpgsign=true, but the
+        // agents hold no signing key and the image has no gpg: a real run
+        // finished its fix and then halted at `git commit`. Environment config
+        // outranks every file, so this holds for every git the agent runs.
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'commit.gpgsign',
+        GIT_CONFIG_VALUE_0: 'false',
         ...userEnv,
       },
       abortController,

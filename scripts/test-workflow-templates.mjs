@@ -588,6 +588,8 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     'both halves of QA and the security review run against the rebuilt stack, in one wave')
   for (const l of ['Automated QA', 'Manual QA', 'Security Review']) assert.deepEqual(byLabel[l].next, [id('Push + PR')], `${l} gates the PR`)
   assert.equal(byLabel['Push + PR'].contextMode, 'ancestors', 'the PR body quotes evidence from several hops upstream')
+  assert.equal(byLabel['Implement Fix'].testsUnlocked, true, 'ce-work writes tests and code in one step, so the test lock is lifted for it')
+  assert.equal(byLabel['Code Review'].testsUnlocked, undefined, 'and for that step only')
   assert.equal(byLabel['PR Checks + Review'].maxVisits, 3)
 
   const labels = new Set(runbook.steps.map(s => s.label))

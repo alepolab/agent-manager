@@ -19,7 +19,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
 import { existsSync } from 'node:fs'
-import { appendFile, readdir, readFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
@@ -561,6 +561,23 @@ async function runMonitor(
   }
 }
 
+/**
+ * The plugin's test lock denies test edits once source has been edited, unless
+ * `.agent/test-unlock.json` exists in the checkout; a person is meant to write
+ * it with a reason. A step declared `testsUnlocked` owns both its tests and its
+ * code by design, so the runner writes that file for it and the reason rides
+ * with the run. Never staged: nothing under .agent/ but plan.md is.
+ */
+async function unlockTests(run: WorkflowRun, label: string): Promise<void> {
+  const dir = join(run.projectDir!, '.agent')
+  try {
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'test-unlock.json'), JSON.stringify({ reason: `The "${label}" step of ${run.workflowName} writes tests and code together by design.`, run: run.id, step: label, at: new Date().toISOString() }, null, 2))
+  } catch (err) {
+    log.warn('could not write the test unlock; the plugin lock will stop the step at its first test edit', { runId: run.id, dir, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
@@ -592,6 +609,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // the moment a checkout exists, so no step ever commits on main or develop,
   // and the header below names it.
   await ensureRunCheckout(run)
+  if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
   const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
@@ -888,6 +906,16 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   }
 
   const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
+  if (!wave.length && l.waiting) {
+    // Nothing can run because a step is waiting on the operator: that is a
+    // pause with a question, never a stuck run.
+    run.status = 'paused'
+    run.currentStepIds = [l.waiting]
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    return run
+  }
   if (!wave.length) {
     // Nothing can run but steps remain: that is a stuck run, never a finished one.
     const stuck = run.steps.filter(s => s.status === 'pending')
@@ -1302,6 +1330,16 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
         run.status = 'completed'
         run.endedAt = Date.now()
         run.currentStepIds = []
+        run.nextStepIds = []
+        await publish(run)
+        return
+      }
+      // The answered step asked again: pause on the new question. Driving on
+      // instead found no schedulable step and failed the run as stuck — a real
+      // run died that way with its question still on the record.
+      if (l.waiting) {
+        run.status = 'paused'
+        run.currentStepIds = [l.waiting]
         run.nextStepIds = []
         await publish(run)
         return

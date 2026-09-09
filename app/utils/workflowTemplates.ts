@@ -19,6 +19,8 @@ export interface WorkflowTemplateStep {
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
   jira?: { transition?: string, comment?: boolean, attach?: boolean }
+  /** See WorkflowStep.testsUnlocked. */
+  testsUnlocked?: boolean
 }
 
 export interface WorkflowTemplate {
@@ -104,6 +106,7 @@ export function materializeTemplateSteps(
     if (step.maxVisits !== undefined) materialized.maxVisits = step.maxVisits
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     if (step.jira !== undefined) materialized.jira = step.jira
+    if (step.testsUnlocked) materialized.testsUnlocked = true
     return materialized
   })
 }
@@ -190,7 +193,10 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // ce-plan: the implementation plan and the QA plan (automated and manual cases) the run is judged by.
       { agentTemplateId: 'sdlc-ce-plan', label: 'Plan', next: ['sdlc-ce-work'], monitorSlug: 'sdlc-step-monitor' },
       // Labelled as in Runbook A on purpose: the security review and the QA steps send work back to "Implement Fix".
-      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], monitorSlug: 'sdlc-step-monitor' },
+      // ce-work writes each test before the code that passes it, in one step, so the
+      // test lock that guards Runbook A's separate fix step would stop it after the
+      // first source edit; a real run asked the operator for the unlock and stalled.
+      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], monitorSlug: 'sdlc-step-monitor', testsUnlocked: true },
       { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
       // Rebuilds the image from the worktree and redeploys in place, alone, before anything tests it.
       { agentTemplateId: 'sdlc-stack-update', label: 'Update Stack', next: ['sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
