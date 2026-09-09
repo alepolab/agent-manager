@@ -131,6 +131,13 @@ export interface WorkflowRun {
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
   ticketCommented?: boolean
   /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
+  /**
+   * What the runner checked before any agent ran: the compose file, the
+   * checkout, git as the agents see it, docker, the Jira statuses this
+   * workflow will ask for. A `fail` here stops the run in seconds instead of
+   * a step discovering it forty minutes in. Diagnostics, not provenance.
+   */
+  preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
   product?: ProductMatch

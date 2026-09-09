@@ -18,6 +18,15 @@ import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
+import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+
+/**
+ * Preflight, overridable the way the agent caller is. A runner check is about
+ * the runner; whether THIS machine has a checkout, a docker daemon or the
+ * plugin installed is what scripts/test-preflight.mjs is for.
+ */
+let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
+export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -1198,16 +1207,35 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
   await ensureRunCheckout(run)
+  // Before the gate below, not after: a run that fails preflight is precisely
+  // the one whose reason has to be readable afterwards, and the artifacts
+  // directory is where the run page and the assembler look for it.
+  try { await initRunArtifacts(run, opts.workflow.name) } catch { /* absence is the signal */ }
+
+  // Everything an agent should never discover by spending its budget: the
+  // compose file, the checkout, git as the agents will see it, docker, the
+  // Jira statuses this workflow will ask for. Four real runs died on four
+  // such things, each after twenty to sixty minutes of paid model work.
+  run.preflight = await preflight(run, opts.workflow.steps)
+  const blocked = preflightFailure(run.preflight)
+  if (blocked) {
+    run.status = 'failed'
+    run.error = `Preflight: ${blocked}`
+    run.endedAt = Date.now()
+    for (const s of run.steps) s.status = 'skipped'
+    run.currentStepIds = []
+    run.nextStepIds = []
+    await saveRun(run)
+    log.warn('run failed preflight; no agent ran', { runId: run.id, reason: blocked })
+    return run
+  }
+
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
     outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   live.set(run.id, l)
-  // Best-effort: a filesystem problem here must not stop the run. The run
-  // still executes; what it loses is its evidence, and the assembler will
-  // say so plainly rather than the run failing for an unrelated reason.
-  try { await initRunArtifacts(run, opts.workflow.name) } catch { /* absence is the signal */ }
   void driveToSettlement(l, run)
   return run
 }
@@ -1576,6 +1604,17 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
       + `restarting this step would run it against an empty directory. Restart from the first step so whatever `
       + `creates the checkout runs again, or start a new run.`,
     )
+  }
+
+  // The same gate the start does, for the same reason: a restart after a fix
+  // to the environment should say so in seconds, and a restart into an
+  // environment still missing its compose file or its Jira status should not
+  // spend a step's budget rediscovering that.
+  run.preflight = await preflight(run, l.workflow.steps)
+  const blocked = preflightFailure(run.preflight)
+  if (blocked) {
+    await saveRun(run)
+    throw new RestartError(409, `Preflight: ${blocked}`)
   }
 
   const previousOutput = recOf(run, stepId).output

@@ -27,6 +27,32 @@ import type { AgentFrontmatter } from '~/types'
  * only sign was one line inside a step's output. An absolute path costs
  * nothing and cannot be read relative to the wrong tree.
  */
+/**
+ * The environment every pipeline agent runs in. Exported because preflight has
+ * to ask git the same questions the AGENTS will ask it: a `commit.gpgsign` read
+ * from this shell answers for the wrong process, and that is exactly how a run
+ * finished its fix and then halted at `git commit`.
+ */
+export async function agentEnvFor(_startedBy?: string): Promise<Record<string, string>> {
+  return {
+    ...process.env as Record<string, string>,
+    // A bot identity for git and gh, when one is configured, so agent pushes
+    // and PRs are not attributed to whoever runs the server.
+    ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
+    SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
+    SDLC_SKILLS_DIR: sdlcSkillsDir(),
+    CE_SKILLS_DIR: await ceSkillsDir(),
+    // Pipeline commits are unsigned. The developer's own ~/.gitconfig is
+    // mounted into the container and may say commit.gpgsign=true, but the
+    // agents hold no signing key and the image has no gpg: a real run
+    // finished its fix and then halted at `git commit`. Environment config
+    // outranks every file, so this holds for every git the agent runs.
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'commit.gpgsign',
+    GIT_CONFIG_VALUE_0: 'false',
+  }
+}
+
 export function sdlcScriptsDir(): string {
   return join(process.cwd(), 'engineering', 'scripts')
 }
@@ -356,22 +382,7 @@ export async function callAgent(
       // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
       // including the no-credential one; a conditional env is exactly how a
       // variable goes missing in the configuration nobody tests.
-      env: {
-        ...process.env,
-        ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
-        SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
-        SDLC_SKILLS_DIR: sdlcSkillsDir(),
-        CE_SKILLS_DIR: await ceSkillsDir(),
-        // Pipeline commits are unsigned. The developer's own ~/.gitconfig is
-        // mounted into the container and may say commit.gpgsign=true, but the
-        // agents hold no signing key and the image has no gpg: a real run
-        // finished its fix and then halted at `git commit`. Environment config
-        // outranks every file, so this holds for every git the agent runs.
-        GIT_CONFIG_COUNT: '1',
-        GIT_CONFIG_KEY_0: 'commit.gpgsign',
-        GIT_CONFIG_VALUE_0: 'false',
-        ...userEnv,
-      },
+      env: { ...(await agentEnvFor()), ...userEnv },
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

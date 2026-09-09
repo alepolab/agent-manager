@@ -55,6 +55,9 @@ watch(() => props.run?.id, () => { artifacts.value = null; openFile.value = null
 /** What intake left unanswered, and where the fix landed: read from the run's own artifacts. */
 const intake = ref<{ open_questions?: string[] } | null>(null)
 const prLinks = ref<string[]>([])
+
+/** Only the preflight checks that need a person; an all-clear is the silent, expected case. */
+const preflightNotable = computed(() => (props.run?.preflight?.checks ?? []).filter(c => c.level === 'fail' || c.level === 'warn'))
 async function loadFacts() {
   if (!props.run) { intake.value = null; prLinks.value = []; return }
   const id = props.run.id
@@ -161,6 +164,16 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     <p v-if="run.status === 'interrupted'" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">
       The process that was running this is gone. Its steps are frozen where they stopped.
     </p>
+
+    <!-- What the runner checked before any agent ran. Only the checks that need
+         a person: an all-clear is the silent, expected case. -->
+    <div v-if="preflightNotable.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <div class="font-medium" style="color: var(--text-primary);">Preflight</div>
+      <div v-for="c in preflightNotable" :key="c.name" class="flex gap-2">
+        <span class="font-mono shrink-0" :style="{ color: c.level === 'fail' ? STATUS_COLOR.failed : 'var(--warning)' }">{{ c.name }}</span>
+        <span class="text-label">{{ c.detail }}</span>
+      </div>
+    </div>
 
     <div v-if="intake?.open_questions?.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
       <div class="font-medium" style="color: var(--text-primary);">Intake left {{ intake.open_questions.length }} question(s) open</div>
