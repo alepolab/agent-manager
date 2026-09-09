@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
+import { isLiveStatus, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
@@ -71,7 +71,7 @@ async function loadFacts() {
 watch(() => [props.run?.id, props.run?.status, props.run?.steps.filter(s => s.status === 'completed').length], loadFacts, { immediate: true })
 
 /** Restart and clone only make sense once nothing is executing. */
-const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
+const settledRun = computed(() => !!props.run && !isLiveStatus(props.run.status))
 const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
 
 /** A live run's timer has to advance between the run updates that arrive over
@@ -292,7 +292,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <UButton v-else-if="run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
       <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
       <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
-      <UButton v-if="run.status === 'running' || run.status === 'paused'" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
+      <UButton v-if="isLiveStatus(run.status)" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
       <UButton v-if="settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
     </div>
   </div>

@@ -13,7 +13,17 @@ import { currentStep, stepsDone, quietSeconds, isQuiet, shortDuration } from '~/
  * request of its own. The decisions behind the display live in
  * ~/utils/runActivity, where they can be tested.
  */
-const props = defineProps<{ run: WorkflowRun, now: number }>()
+const props = defineProps<{
+  run: WorkflowRun, now: number,
+  /** Its group's occupancy, when the page knows it: what a queued run is
+   *  waiting behind. Absent renders the wait without the numbers. */
+  load?: { name: string, inFlight: number, maxConcurrent: number },
+}>()
+
+/** A run that has not started has no step to report and no elapsed work. What
+ *  it has is a wait, and a reason for it. */
+const queued = computed(() => props.run.status === 'queued')
+const waitedFor = computed(() => shortDuration(props.now - (props.run.queuedAt ?? props.run.startedAt)))
 
 const current = computed(() => currentStep(props.run))
 const done = computed(() => stepsDone(props.run))
@@ -40,8 +50,9 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
       <span class="text-[11px] text-meta">{{ run.workflowName }}</span>
       <span v-if="run.product?.name" class="text-[11px] text-meta">{{ run.product.name }}</span>
       <span class="ml-auto flex items-center gap-3 text-[11px] text-label font-mono tabular-nums">
-        <span>{{ elapsed }}</span>
-        <span>{{ done }}/{{ run.steps.length }} steps</span>
+        <span>{{ queued ? `waiting ${waitedFor}` : elapsed }}</span>
+        <span v-if="run.usage && !queued">${{ run.usage.usd.toFixed(2) }}</span>
+        <span>{{ queued ? `${run.steps.length} steps` : `${done}/${run.steps.length} steps` }}</span>
       </span>
     </div>
 
@@ -53,6 +64,16 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
       <span :style="{ color: RUN_STATUS_COLOR.paused }">Waiting for you:</span>
       <span class="text-label truncate">{{ question }}</span>
       <UButton size="xs" variant="soft" label="Answer" :to="`/runs/${run.id}`" class="ml-auto shrink-0" />
+    </div>
+
+    <!-- A queued run: say what it is waiting for, not "step 1 of 7". Without
+         this branch currentStep() falls through to the first pending step and
+         the card reads as though work had begun. -->
+    <div v-else-if="queued" class="flex items-center gap-2 text-[12px] min-w-0">
+      <UIcon name="i-lucide-hourglass" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR.queued }" />
+      <span :style="{ color: RUN_STATUS_COLOR.queued }">Waiting for a slot</span>
+      <span v-if="load" class="text-label truncate">in {{ load.name }} — {{ load.inFlight }} of {{ load.maxConcurrent }} running</span>
+      <span v-else class="text-label truncate">in {{ run.group || 'the default group' }}</span>
     </div>
 
     <div v-else-if="current" class="flex items-center gap-2 text-[12px] min-w-0">
@@ -67,7 +88,10 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
     </div>
 
     <!-- The moving parts, kept on their own line so the step name stays readable. -->
-    <div v-if="current && !question" class="flex items-center gap-3 text-[11px] text-meta font-mono">
+    <!-- Telemetry, so only for a run that has actually called an agent. A
+         queued run would otherwise report "no activity reported yet", which is
+         true and reads as a stall. -->
+    <div v-if="current && !question && !queued" class="flex items-center gap-3 text-[11px] text-meta font-mono">
       <span v-if="current.lastTool" class="truncate">{{ current.lastTool }}</span>
       <span v-if="current.assistantMessages">{{ current.assistantMessages }} msgs</span>
       <span v-if="quietLabel" :style="quiet ? { color: RUN_STATUS_COLOR.paused } : undefined">

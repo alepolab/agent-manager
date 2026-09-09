@@ -38,9 +38,10 @@ import {
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
-import { dispatchOrQueue, drainPipelineQueue, type ChildStarter, type QueuedDispatch } from './pipelineQueue.ts'
+import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
+import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { workspaceRootFor } from './workspace.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
@@ -86,6 +87,9 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
+  /** See Workflow.group (app/types/index.ts) - the concurrency group this
+   *  workflow's runs count against. Absent means the default group. */
+  group?: string
   steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig }[]
 }
 
@@ -363,7 +367,15 @@ async function publish(run: WorkflowRun) {
     // finalizeRunArtifacts is a read-merge-write, so repeating it is harmless.
     // Placed AFTER saveRun so a failure to write artifacts can never cost us
     // the run record itself.
-    if (TERMINAL_STATUSES.includes(run.status)) {
+    //
+    // Gated on any step having actually run, not just on the status. A run
+    // cancelled while it was QUEUED reaches 'stopped' with every step still
+    // pending: finalizeRunArtifacts would succeed and write a meta.json for a
+    // run that did nothing, notifyTicketOutcome would comment "run stopped" on
+    // the ticket, and notify.ts's webhook would fire - all about work that
+    // never started. The same was already true, less visibly, of a real run
+    // stopped before its first step completed.
+    if (TERMINAL_STATUSES.includes(run.status) && run.steps.some(s => s.status !== 'pending')) {
       try {
         // Before finalizing: the step logs are appended asynchronously, and an
         // artifact that stops mid-burst is the only record left once the live
@@ -419,13 +431,16 @@ async function publish(run: WorkflowRun) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
     onRunTransition(run)
-    // A settled run has given its pipeline slot back, so whatever a dispatch
-    // step queued behind it can start. Here rather than in notify.ts, which
-    // cannot reach startRun without an import cycle. Not awaited: the drain
-    // starts runs of its own, and publish() must not block on them.
-    if (TERMINAL_STATUSES.includes(run.status)) {
-      void drainPipelineQueue(childStarter).catch(err =>
-        log.warn('draining the pipeline queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    // A settled run has given its slot back, so whatever is waiting in its
+    // group can start. Here rather than in notify.ts, which cannot reach
+    // startRun without an import cycle. Not awaited: the drain starts runs of
+    // its own, and publish() must not block on them.
+    // mightHaveWaiting() first, because a sweep costs a listRuns() - every run
+    // record parsed and every owning pid signalled - and the overwhelmingly
+    // common case is a run settling with nothing queued behind it anywhere.
+    if (TERMINAL_STATUSES.includes(run.status) && mightHaveWaiting()) {
+      void drainRunQueue(launchQueuedRun).catch(err =>
+        log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
     }
   })
   publishChains.set(run.id, next)
@@ -1207,14 +1222,28 @@ function childPrompt(target: DispatchTarget, parentRunId: string): string {
   ].filter(Boolean).join('\n\n')
 }
 
-/** Starts one child run. The seam pipelineQueue.ts calls, both for a dispatch
- *  happening now and for one promoted off the queue later. */
-const childStarter: ChildStarter = async (item) => {
+/** One entry a dispatch step will turn into a child run. */
+interface DispatchItem {
+  /** The entry this came from - a ticket key, or its position. Names the child's workspace. */
+  key: string
+  slug: string
+  initialPrompt: string
+  /** The child's own checkout, distinct per child: see the dispatch branch. */
+  projectDir: string
+  startedBy?: string
+  parentRunId: string
+  ticketKey?: string
+  /** The child's own declared inputs, already resolved against the parent's values. */
+  parameters?: Record<string, string>
+}
+
+/** Starts one child run, or records it as waiting for a slot in its group. */
+async function startChild(item: DispatchItem): Promise<{ run: WorkflowRun, queued: boolean }> {
   const wf = await loadWorkflowSteps(item.slug)
   if (!wf) throw new Error(`there is no workflow "${item.slug}" on this instance`)
   if (!wf.steps.length) throw new Error(`workflow "${item.slug}" has no steps`)
-  const child = await startRun({
-    workflow: { slug: wf.slug, name: wf.name, steps: wf.steps },
+  return startOrQueue({
+    workflow: { slug: wf.slug, name: wf.name, group: wf.group, steps: wf.steps },
     initialPrompt: item.initialPrompt,
     // An honest third answer to "what triggered this?", carrying the run that
     // did. `watch` is a free string in the evidence bundle schema - only
@@ -1223,14 +1252,14 @@ const childStarter: ChildStarter = async (item) => {
     ticketKey: item.ticketKey,
     autoRun: true,
     projectDir: item.projectDir,
-    // Resolved when the item was built, not now: a workflow re-saved with a
-    // new required parameter between queueing and promotion must not turn a
-    // queued child into a failure the operator cannot see the cause of.
+    // Resolved now and frozen on the run: a workflow re-saved with a new
+    // required parameter between queueing and launch must not turn a queued
+    // child into a failure the operator cannot see the cause of. Its STEPS are
+    // re-read at launch; what it was given is not. See launchQueuedRun.
     parameters: item.parameters,
     startedBy: item.startedBy,
     parentRunId: item.parentRunId,
   })
-  return { id: child.id }
 }
 
 /**
@@ -1296,7 +1325,7 @@ async function runDispatchStep(
   // being changed at all. Sharing the parent's directory would hand N
   // concurrent pipelines one working tree, which is precisely the hazard.
   const root = workspaceRootFor(run.startedBy)
-  const items: QueuedDispatch[] = []
+  const items: DispatchItem[] = []
   // A child that declares a required input this run cannot supply is reported
   // against its OWN entry, exactly as an unstartable one is, rather than
   // failing the batch: nineteen fix pipelines must not be lost because the
@@ -1323,32 +1352,53 @@ async function runDispatchStep(
       parentRunId: run.id,
       ticketKey: /^[A-Z][A-Z0-9]+-\d+$/.test(t.key) ? t.key : undefined,
       ...(Object.keys(child.values).length ? { parameters: child.values } : {}),
-      queuedAt: Date.now(),
     })
   }
 
-  const outcomes = await dispatchOrQueue(items, childStarter)
-  const started = outcomes.filter(o => o.runId)
-  rec.childRunIds = started.map(o => o.runId!)
-
+  // One at a time, in order: the admission gate is serialised anyway, and
+  // sequential calls are what makes the queue's order match the entries'.
+  // A child that cannot be started is reported against its OWN entry and does
+  // not stop the others - one unstartable ticket must not strand the batch.
   const lines = [`${cfg.source} ${plan.detail}.`]
-  for (const o of outcomes) {
-    if (o.runId) lines.push(`Dispatched ${o.item.key} to ${o.item.slug} (run ${o.runId}).`)
-    else if (o.position) lines.push(`Queued ${o.item.key} for ${o.item.slug} (position ${o.position}, waiting for a slot).`)
-    else lines.push(`Could not dispatch ${o.item.key} to ${o.item.slug}: ${o.error}.`)
+  const childRunIds: string[] = []
+  let queuedCount = 0
+  const stuck: string[] = []
+  for (const item of items) {
+    try {
+      const { run: child, queued } = await startChild(item)
+      // Both started and queued children are recorded. A queued child used to
+      // be untraceable from its parent until it started; now the link exists
+      // from the moment it is admitted, which is the whole point of a waiting
+      // run being a real run.
+      childRunIds.push(child.id)
+      if (queued) {
+        queuedCount++
+        // Deliberately no position: it is stale the instant anything else
+        // queues, and this line is written once into an artifact. /runs
+        // computes the live position instead.
+        lines.push(`Queued ${item.key} for ${item.slug} (run ${child.id}, waiting for a slot in ${groupOf(child)}).`)
+      } else {
+        lines.push(`Dispatched ${item.key} to ${item.slug} (run ${child.id}).`)
+      }
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err)
+      stuck.push(item.key)
+      lines.push(`Could not dispatch ${item.key} to ${item.slug}: ${why}.`)
+    }
   }
+  rec.childRunIds = childRunIds
+
   for (const u of unsatisfiable) {
     lines.push(`Could not dispatch ${u.key} to ${u.slug}: it needs ${u.missing.join(', ')}, which this run was not given.`)
   }
-  const stuck = outcomes.filter(o => o.error)
-  // Started none AND queued none: every entry errored, so the step produced
+  // Produced no child at all - started or queued - so the step produced
   // nothing and must say so as a failure. An entry whose child asked for an
-  // input nobody stated counts here too - it produced no child either.
-  if (!started.length && stuck.length + unsatisfiable.length === plan.targets.length) {
+  // input nobody stated counts here too.
+  if (!childRunIds.length) {
     return fail(`Dispatch failed: nothing could be started.\n${lines.join('\n')}`)
   }
   log.info('dispatched child runs', {
-    runId: run.id, started: started.length, queued: outcomes.filter(o => o.position).length,
+    runId: run.id, started: childRunIds.length - queuedCount, queued: queuedCount,
     failed: stuck.length, unsatisfiable: unsatisfiable.length,
   })
   return { output: lines.join('\n'), failed: false }
@@ -1639,6 +1689,22 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  const resolved = await resolveStart(opts)
+  return beginRun(opts.workflow, resolved, baseCommit =>
+    createRun({ ...newRunInput(opts, resolved), status: 'running', baseCommit }))
+}
+
+/** What a start decides before it is known whether the run begins now or waits
+ *  for a slot. Both paths need every field: a queued run without a resolved
+ *  `projectDir` has no workspace for the next fire to dedupe against. */
+interface ResolvedStart {
+  product?: ProductMatch
+  projectDir?: string
+  ticketKey?: string
+  workspace: string
+}
+
+async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
   // A run with nowhere to write evidence fails here, in one line, rather than
   // an agent step later after it has spent its budget finding out.
   const artifacts = await artifactsWritable()
@@ -1657,6 +1723,44 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const firstRepo = product?.repos?.[0]
   const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo, opts.startedBy)) ? checkoutDirFor(firstRepo, opts.startedBy) : undefined)
   const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
+  return { product, projectDir, ticketKey, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }) }
+}
+
+/** The run record's fields, shared by the start-now and queue-it paths so the
+ *  two cannot drift in what they state about the same run. */
+function newRunInput(opts: StartRunOpts, resolved: ResolvedStart) {
+  return {
+    product: resolved.product,
+    startedBy: opts.startedBy,
+    workflowSlug: opts.workflow.slug,
+    workflowName: opts.workflow.name,
+    // Snapshotted here rather than looked up later: see WorkflowRun.group.
+    group: opts.workflow.group,
+    autoRun: opts.autoRun,
+    initialPrompt: opts.initialPrompt,
+    watch: opts.watch,
+    ticketKey: resolved.ticketKey,
+    projectDir: resolved.projectDir,
+    parameters: opts.parameters,
+    parentRunId: opts.parentRunId,
+    steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
+  }
+}
+
+/**
+ * Takes the workspace, captures the baseline, brings the run record into
+ * existence (or takes over one that was waiting), and drives it.
+ *
+ * One copy of this, shared by a start and a queue launch, because everything in
+ * it is about the moment execution actually begins — which for a queued run is
+ * hours after it was admitted. `make` is the only difference between the two:
+ * createRun for a fresh run, or flipping a queued record to `running`.
+ */
+async function beginRun(
+  workflow: WorkflowLike,
+  resolved: ResolvedStart,
+  make: (baseCommit?: string) => Promise<WorkflowRun>,
+): Promise<WorkflowRun> {
   // Reserved synchronously, before the first await below, and held until the
   // run record exists.
   //
@@ -1669,7 +1773,12 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   // the lock exists to prevent. Now that a schedule can name its own
   // directory, two schedules sharing one on the same cron minute is an
   // ordinary configuration rather than a mistimed accident.
-  const workspace = runWorkspace({ projectDir, startedBy: opts.startedBy })
+  //
+  // Process-local, like the lock it closes the window on: a second server
+  // process on the same config directory is the same non-guarantee
+  // findRunInWorkspace has always had, and the same one schedules.json and
+  // watches.json live with.
+  const { workspace } = resolved
   if (starting.has(workspace)) throw new WorkspaceBusyError(workspace)
   starting.add(workspace)
 
@@ -1684,29 +1793,16 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
 
   let run: WorkflowRun
   try {
-    // Captured BEFORE createRun, so the baseline is the project directory's
-    // HEAD at the true moment execution begins — before any step, and so any
-    // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
-    // and shared/types/run.ts's WorkflowRun.baseCommit for why this can never
-    // fall back to a guess: an absent baseline means computeFixFacts later
-    // reports nothing, rather than diffing against a branch's shared base and
-    // attributing that branch's whole history to this run.
-    const baseCommit = await captureBaseline(projectDir)
-    run = await createRun({
-      product,
-      startedBy: opts.startedBy,
-      workflowSlug: opts.workflow.slug,
-      workflowName: opts.workflow.name,
-      autoRun: opts.autoRun,
-      initialPrompt: opts.initialPrompt,
-      watch: opts.watch,
-      ticketKey,
-      projectDir,
-      parameters: opts.parameters,
-      parentRunId: opts.parentRunId,
-      baseCommit,
-      steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
-    })
+    // Captured HERE, at the moment execution begins — before any step, and so
+    // any agent, has had a chance to touch the directory. See gitFacts.ts's
+    // captureBaseline and shared/types/run.ts's WorkflowRun.baseCommit for why
+    // this can never fall back to a guess: an absent baseline means
+    // computeFixFacts later reports nothing, rather than diffing against a
+    // branch's shared base and attributing that branch's whole history to this
+    // run. For a queued run this is also why it cannot be captured at
+    // admission: a baseline from four hours ago names a HEAD that has moved.
+    const baseCommit = await captureBaseline(resolved.projectDir)
+    run = await make(baseCommit)
   } finally {
     // Released once the run is persisted (or failed to be): from here on
     // findRunInWorkspace can see it, so the reservation has done its job.
@@ -1716,13 +1812,13 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   // Before the gate below, not after: a run that fails preflight is precisely
   // the one whose reason has to be readable afterwards, and the artifacts
   // directory is where the run page and the assembler look for it.
-  try { await initRunArtifacts(run, opts.workflow.name) } catch { /* absence is the signal */ }
+  try { await initRunArtifacts(run, workflow.name) } catch { /* absence is the signal */ }
 
   // Everything an agent should never discover by spending its budget: the
   // compose file, the checkout, git as the agents will see it, docker, the
   // Jira statuses this workflow will ask for. Four real runs died on four
   // such things, each after twenty to sixty minutes of paid model work.
-  run.preflight = await preflight(run, opts.workflow.steps)
+  run.preflight = await preflight(run, workflow.steps)
   const blocked = preflightFailure(run.preflight)
   if (blocked) {
     run.status = 'failed'
@@ -1736,14 +1832,146 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     return run
   }
 
-  const graph = buildGraph(opts.workflow.steps)
+  const graph = buildGraph(workflow.steps)
   const l: Live = {
-    workflow: opts.workflow, graph, state: initRunState(graph),
+    workflow, graph, state: initRunState(graph),
     outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   live.set(run.id, l)
   void driveToSettlement(l, run)
   return run
+}
+
+/**
+ * Records a run that will wait for a slot in its group, and returns without
+ * starting it.
+ *
+ * Everything `beginRun` does is deliberately NOT done here: no workspace
+ * reservation (it holds no checkout while it waits), no baseline (the HEAD it
+ * would name is going to move), no live entry and no wave loop. Only the
+ * artifacts directory is created, because that costs a mkdir and one small
+ * file and makes a queued run uniform for the artifacts routes and for
+ * finalizeRunArtifacts.
+ */
+export async function enqueueRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  const resolved = await resolveStart(opts)
+  const run = await createRun({ ...newRunInput(opts, resolved), status: 'queued' })
+  noteQueued()
+  try { await initRunArtifacts(run, opts.workflow.name) } catch { /* absence is the signal */ }
+  log.info('run queued for a slot', { runId: run.id, workflowSlug: run.workflowSlug, group: groupOf(run) })
+  return run
+}
+
+/**
+ * Starts one queued run, if it can start now. The `Launcher` the queue drains
+ * with — see runQueue.ts's LaunchOutcome for what each answer commits to.
+ *
+ * The workflow definition is RE-READ rather than taken from the run record: a
+ * record snapshots only each step's id, label and agent, while buildGraph needs
+ * `next`, `monitorSlug`, `maxVisits`, `approval`, `runWhen`, `jira` and
+ * `triggerWorkflow`. Since it is re-read, the steps are also refreshed from it:
+ * a queued run has executed nothing, so there is no completed work to preserve
+ * and the current definition is simply the right one. (This is why
+ * `alignStepIds`, which refuses a changed shape, is not used here — its whole
+ * job is protecting completed steps.) `parameters` deliberately stay frozen at
+ * admission: what a run was GIVEN must not change under it, even when what it
+ * will DO can.
+ */
+export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcome> {
+  const fail = async (run: WorkflowRun, why: string): Promise<LaunchOutcome> => {
+    run.status = 'failed'
+    run.error = why
+    run.endedAt = Date.now()
+    run.currentStepIds = []
+    run.nextStepIds = []
+    log.warn('a queued run can never start; failing it', { runId: run.id, error: why })
+    await publish(run)
+    return 'failed'
+  }
+
+  // Re-read: this run has been sitting on disk, and between the queue listing
+  // it and this call it may have been stopped, or launched by another process.
+  const run = await getRun(queued.id)
+  if (!run) return 'failed'
+  if (run.status !== 'queued') return 'deferred'
+
+  const wf = await loadWorkflowSteps(run.workflowSlug)
+  if (!wf) return fail(run, `the workflow "${run.workflowSlug}" was deleted while this run waited for a slot`)
+  if (!wf.steps.length) return fail(run, `the workflow "${run.workflowSlug}" lost all its steps while this run waited for a slot`)
+
+  // A live run took the directory while this one waited. Not this run's
+  // failure and not a race it entered: it keeps its place and the next sweep
+  // tries again.
+  const workspace = runWorkspace(run)
+  if (starting.has(workspace)) return 'deferred'
+  if (await findRunInWorkspace(workspace, run.id)) return 'deferred'
+
+  run.steps = wf.steps.map((s: any) => ({
+    stepId: s.id, label: s.label, agentSlug: s.agentSlug,
+    status: 'pending' as const, input: '', output: '', visits: 0,
+  }))
+
+  try {
+    await beginRun({ slug: wf.slug, name: wf.name, group: wf.group, steps: wf.steps }, {
+      product: run.product, projectDir: run.projectDir, ticketKey: run.ticketKey, workspace,
+    }, async (baseCommit) => {
+      run.baseCommit = baseCommit
+      // Ownership moves to this process now. Until this point pid/bootId named
+      // whoever queued the run, which may have been a boot ago.
+      run.pid = process.pid
+      run.bootId = BOOT_ID
+      // THE ONE THAT MATTERS: the budget, the wall clock and the cost report
+      // are all measured from startedAt. A run that waited four hours and kept
+      // its admission time would pause on a spent budget having done no work.
+      // `queuedAt` keeps the record of how long it waited.
+      run.startedAt = Date.now()
+      run.status = 'running'
+      await saveRun(run)
+      return run
+    })
+    return 'launched'
+  } catch (err) {
+    if (err instanceof WorkspaceBusyError) return 'deferred'
+    return fail(run, err instanceof Error ? err.message : String(err))
+  }
+}
+
+/**
+ * The entry point every AUTOMATED starter uses: start the run if its group has
+ * room, else record it as queued and let the drain start it.
+ *
+ * The manual paths (the API route, scripts/run-ticket.mjs) deliberately call
+ * startRun directly and ignore the cap. A person clicking Start is present,
+ * can see what is running, and would read a silently queued run as a broken
+ * button. They still OCCUPY a slot — see runQueue.ts's inFlightForGroup — so
+ * ignoring the cap means never waiting for it, not never counting against it.
+ */
+export async function startOrQueue(opts: StartRunOpts): Promise<{ run: WorkflowRun, queued: boolean }> {
+  const { workspace } = await resolveStart(opts)
+  return admit({
+    group: opts.workflow.group?.trim() || DEFAULT_GROUP_ID,
+    // Refuses when anything is already AIMED at this directory, queued runs
+    // included - a different question from the lock, which asks what is
+    // WORKING there (see findRunInWorkspace's includeQueued). Without it, a
+    // schedule whose group is full queues at 2am, cannot see itself at 3am,
+    // queues again, and by morning eight runs are pointed at one checkout for
+    // the drain to launch into each other. Two parents dispatching the same
+    // ticket key collide the same way, since a child's directory comes from
+    // that key.
+    //
+    // Inside admit's serialised section, not before it: run outside, two fires
+    // a millisecond apart both see an idle directory, and a cap of 2 then lets
+    // both start. Thrown rather than returned because every caller already
+    // answers WorkspaceBusyError in its own idiom - the schedule records a
+    // skip, the dispatch step reports against the entry, the route 409s.
+    guard: async () => {
+      if (await findRunInWorkspace(workspace, undefined, { includeQueued: true })) {
+        throw new WorkspaceBusyError(workspace)
+      }
+    },
+    start: () => startRun(opts),
+    enqueue: () => enqueueRun(opts),
+  })
 }
 
 /**

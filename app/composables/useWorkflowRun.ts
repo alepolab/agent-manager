@@ -1,4 +1,4 @@
-import type { WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 
 /**
  * Subscribes to a server-owned run. It does not drive anything — the server
@@ -38,7 +38,9 @@ export function useWorkflowRun(slug: string) {
   /** Attach to whatever is already running, if anything. Called on page load. */
   async function attach() {
     await refreshRuns()
-    const active = runs.value.find(r => r.status === 'running' || r.status === 'paused')
+    // Includes a queued run: it is this workflow's current run, and the SSE
+    // stream follows it into `running` on its own.
+    const active = runs.value.find(r => isLiveStatus(r.status))
     if (active) { run.value = active; listen(active.id) }
   }
 

@@ -15,6 +15,10 @@ import { runElapsedMs, type RunClockRecord } from '../../shared/utils/runClock.t
  *  an unlisted status falls back to the disabled grey, which reads as
  *  "nothing happened" — the wrong story for a failure. */
 export const RUN_STATUS_COLOR = {
+  /** Waiting for a slot in its concurrency group. Not the disabled grey a
+   *  settled run gets, and not the blue of one that is working: it is going to
+   *  run, it has not started. */
+  queued: 'var(--text-secondary, #6b7280)',
   running: 'var(--info, #3b82f6)',
   paused: 'var(--warning, #f59e0b)',
   completed: 'var(--success, #22c55e)',

@@ -330,6 +330,17 @@ export interface Workflow {
    * cannot end up naming that directory twice in two places that disagree.
    */
   parameters?: WorkflowParameter[]
+  /**
+   * The concurrency group this workflow's runs count against
+   * (shared/types/workflowGroup.ts). Absent or empty means the default group,
+   * never "uncapped" — see DEFAULT_GROUP_ID.
+   *
+   * Held here rather than as a list of members on the group, so a workflow
+   * carries its own membership: renaming or deleting a workflow cannot leave a
+   * dangling entry in the registry, and one file is the answer to "which group
+   * is this in?".
+   */
+  group?: string
   createdAt: string
   lastRunAt?: string
   filePath: string
@@ -341,6 +352,9 @@ export interface WorkflowPayload {
   steps: WorkflowStep[]
   /** See Workflow.parameters. */
   parameters?: WorkflowParameter[]
+  /** See Workflow.group. Sent as '' rather than omitted to clear it: the PUT
+   *  route is a shallow merge, so an absent key keeps the stored value. */
+  group?: string
 }
 
 export interface StepExecution {

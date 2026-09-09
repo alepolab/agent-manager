@@ -9,7 +9,7 @@
  */
 import { workspaceRootFor } from './workspace.ts'
 import { findRunInWorkspace, loadWorkflowSteps } from './workflowRunStore.ts'
-import { startRun, workspaceSegment, WorkspaceBusyError } from './workflowRunner.ts'
+import { startOrQueue, workspaceSegment, WorkspaceBusyError } from './workflowRunner.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../shared/utils/workflowParameters.ts'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -79,22 +79,30 @@ export async function realScheduleStarter(schedule: Schedule): Promise<ScheduleS
     }
   }
 
-  // The schedule's own previous run is still going. Skipped, not queued and
-  // not an error: a nightly scan has a next fire by definition, and one that
-  // starts at 10am because it waited for yesterday's produces evidence whose
-  // timestamp contradicts its name.
-  const active = await findRunInWorkspace(projectDir)
+  // The schedule's own previous run is still going, or a run it queued earlier
+  // has not started yet. Skipped, not queued again, and not an error: a nightly
+  // scan has a next fire by definition, and one that starts at 10am because it
+  // waited for yesterday's produces evidence whose timestamp contradicts its
+  // name.
+  //
+  // `includeQueued` is what keeps a full group from turning one schedule into a
+  // backlog. Without it, 2am queues, 3am cannot see that queued run and queues
+  // a second, 4am a third, and by morning the drain launches eight runs at one
+  // directory. At most one fire of a schedule is ever outstanding.
+  const active = await findRunInWorkspace(projectDir, undefined, { includeQueued: true })
   if (active) {
     return {
       lastOutcome: 'skipped',
-      lastDetail: `a run started ${new Date(active.startedAt).toISOString()} is still working in ${projectDir}`,
+      lastDetail: active.status === 'queued'
+        ? `a fire from ${new Date(active.queuedAt ?? active.startedAt).toISOString()} is already queued for ${projectDir}`
+        : `a run started ${new Date(active.startedAt).toISOString()} is still working in ${projectDir}`,
       lastRunId: active.id,
     }
   }
 
   try {
-    const run = await startRun({
-      workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
+    const { run, queued } = await startOrQueue({
+      workflow: { slug: workflow.slug, name: workflow.name, group: workflow.group, steps: workflow.steps },
       initialPrompt: schedule.initialPrompt,
       parameters: values,
       projectDir,
@@ -104,7 +112,11 @@ export async function realScheduleStarter(schedule: Schedule): Promise<ScheduleS
       // the reserved 'direct-invocation'. See WorkflowRun.watch.
       watch: `schedule:${schedule.id}`,
     })
-    return { lastOutcome: 'started', lastRunId: run.id }
+    // Reported as what it is. Calling a queue 'started' would make the
+    // Schedules page say the nightly scan ran at 2am when it in fact began
+    // waiting at 2am - and the run id is the same either way, so the operator
+    // can follow it.
+    return { lastOutcome: queued ? 'queued' : 'started', lastRunId: run.id }
   } catch (err) {
     // Another start already holds this directory and has not persisted its run
     // yet, so the check above could not see it. Same outcome as finding a

@@ -333,7 +333,15 @@ const base = {
 // proceeded, which is two runs editing one checkout: exactly the corruption
 // the lock exists to prevent, reached by passing the lock.
 {
-  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  // A slow agent, so the first fire's run is unambiguously still working when
+  // the second is decided. With an instant stub the first run can complete
+  // inside the window and the second starting is then correct rather than a
+  // defect - which tests nothing. What must never happen is TWO LIVE RUNS in
+  // one directory, and that needs the first one to still be live.
+  runner.setAgentCaller((agentSlug, input, projectDir, { signal } = {}) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve(`late ${agentSlug}`), 4000)
+    signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')) })
+  }))
   const s = { ...base, id: 'racing', parameters: { jira_project: 'DEVOPS' } }
 
   // Started together, so neither can see the other's run record yet.
@@ -353,7 +361,68 @@ const base = {
   const inDir = (await store.listRuns()).filter(r => r.projectDir === starterMod.scheduleWorkspace(s))
   assert.equal(inDir.length, 1, 'one run exists in the directory, not two racing over the same files')
   assert.equal(inDir[0].id, winner.lastRunId)
+  await runner.stopRun(winner.lastRunId)
   await runner.waitForSettled(winner.lastRunId, 5000)
+  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+}
+
+// ══ 6c. A full concurrency group queues the fire, and says so ═════════════
+//
+// Reported as 'queued', never 'started': the run exists and has an id, but it
+// has not begun, and a Schedules page claiming the nightly scan ran at 2am
+// would be describing work that was still waiting. And a schedule never
+// queues twice - otherwise a group that stays full turns one nightly schedule
+// into a morning stampede, which is what the "no catch-up" rule forbids.
+{
+  const groups = await import('../server/utils/workflowGroups.ts')
+  await groups.replaceGroups([{ id: 'nightly', name: 'Nightly', maxConcurrent: 1 }])
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'grouped.json'), JSON.stringify({
+    name: 'Grouped', group: 'nightly',
+    steps: [{ id: 'a', agentSlug: 'agent-a', label: 'A' }],
+  }))
+
+  // Fill the group's single slot with a run that stays live.
+  runner.setAgentCaller((agentSlug, input, projectDir, { signal } = {}) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve(`late ${agentSlug}`), 4000)
+    signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')) })
+  }))
+  const occupier = await runner.startRun({
+    workflow: { slug: 'grouped', name: 'Grouped', group: 'nightly', steps: [{ id: 'a', agentSlug: 'agent-a', label: 'A' }] },
+    initialPrompt: 'holding the slot', watch: 'direct-invocation', autoRun: true,
+    projectDir: join(process.env.AGENT_WORKSPACE_ROOT, 'occupier'),
+  })
+
+  const s = { ...base, id: 'nightly-scan', workflowSlug: 'grouped' }
+  const fired = await starterMod.realScheduleStarter(s)
+  assert.equal(fired.lastOutcome, 'queued', fired.lastDetail ?? 'the fire waits for a slot')
+  assert.ok(fired.lastRunId, 'and names the run it queued, so an operator can follow or cancel it')
+  const queuedRun = await store.getRun(fired.lastRunId)
+  assert.equal(queuedRun.status, 'queued')
+  assert.equal(queuedRun.group, 'nightly', 'the run carries the group it counts against')
+  assert.equal(queuedRun.watch, 'schedule:nightly-scan', 'and still says what triggered it')
+
+  // THE REQUIREMENT: the next fire does not queue a second one.
+  const again = await starterMod.realScheduleStarter(s)
+  assert.equal(again.lastOutcome, 'skipped', 'a schedule with a fire already queued does not queue another')
+  assert.equal(again.lastRunId, fired.lastRunId, 'and points at the fire that is already waiting')
+  assert.match(again.lastDetail, /already queued/, 'saying it is queued, not that something is working there')
+  assert.equal((await store.listRuns('grouped')).filter(r => r.status === 'queued').length, 1,
+    'exactly one outstanding fire, however many times the cron ticks')
+
+  // The slot frees, and the queued fire starts on its own.
+  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  await runner.stopRun(occupier.id)
+  await runner.waitForSettled(occupier.id, 5000)
+  for (let i = 0; i < 100; i++) {
+    if ((await store.getRun(fired.lastRunId)).status !== 'queued') break
+    await new Promise(r => setTimeout(r, 50))
+  }
+  const promoted = await store.getRun(fired.lastRunId)
+  assert.notEqual(promoted.status, 'queued', 'the queued fire started once the slot freed')
+  assert.ok(promoted.startedAt >= promoted.queuedAt,
+    'and its clock starts at launch, not at admission - the budget is measured from startedAt')
+  await runner.waitForSettled(fired.lastRunId, 5000)
+  await groups.replaceGroups([])
 }
 
 // ══ 7. the config store ═══════════════════════════════════════════════════

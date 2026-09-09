@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { isLiveStatus } from '~~/shared/types/run'
 
 /**
  * A run, full screen: steps and their live output on the left, the evidence
@@ -18,7 +19,7 @@ async function onNote(text: string) {
 const toast = useToast()
 onMounted(load)
 useHead({ title: computed(() => `${run.value ? (run.value.initialPrompt.split('\n')[0] ?? '').slice(0, 40) : 'Run'} | Agent Manager`) })
-const live = computed(() => !!run.value && (run.value.status === 'running' || run.value.status === 'paused'))
+const live = computed(() => !!run.value && isLiveStatus(run.value.status))
 async function onRestart(stepId: string, note?: string) {
   try { await restart(stepId, note) } catch (e: any) { toast.add({ title: 'Could not restart', description: e.data?.message || e.message, color: 'error' }) }
 }

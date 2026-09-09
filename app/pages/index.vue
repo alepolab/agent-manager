@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 
@@ -35,7 +35,9 @@ onMounted(() => {
   if (!commands.value.length) fetchCommands()
   if (!skills.value.length) fetchSkills()
   if (!workflows.value.length) fetchWorkflows()
-  timer = setInterval(() => { if (runs.value.some(r => r.status === 'running' || r.status === 'paused')) refresh() }, 10_000)
+  // isLiveStatus, so a run waiting for a slot keeps the poll going: the moment
+  // it starts is the moment this page most needs to repaint.
+  timer = setInterval(() => { if (runs.value.some(r => isLiveStatus(r.status))) refresh() }, 10_000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 

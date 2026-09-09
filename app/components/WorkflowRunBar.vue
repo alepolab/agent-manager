@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR, runElapsedLabel } from '~/utils/runStatus'
 
 /**
@@ -10,7 +10,10 @@ import { RUN_STATUS_COLOR, runElapsedLabel } from '~/utils/runStatus'
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[] }>()
 const emit = defineEmits<{ continue: [], stop: [], restart: [stepId: string], clone: [], details: [] }>()
 
-const settled = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
+// isLiveStatus, so a queued run is not treated as settled. Without it the bar
+// showed the finished-run controls - Restart included - for a run that had not
+// started.
+const settled = computed(() => !!props.run && !isLiveStatus(props.run.status))
 /** One-click restart resumes from the failed step, or from what was executing. */
 const restartPoint = computed(() => {
   const r = props.run
@@ -71,7 +74,7 @@ function onStop() {
         <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
         <UButton v-if="canRestart" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Restart" title="Re-run from the failed step" @click="emit('restart', restartPoint!)" />
         <UButton
-          v-if="run.status === 'running' || run.status === 'paused'"
+          v-if="isLiveStatus(run.status)"
           size="xs" :variant="confirmingStop ? 'solid' : 'ghost'" :color="confirmingStop ? 'error' : 'neutral'"
           :label="confirmingStop ? 'Confirm stop' : 'Stop'" @click="onStop"
         />

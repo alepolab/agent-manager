@@ -56,6 +56,11 @@ function cloneRun() {
 const execSteps = computed(() => run.value?.steps ?? [])
 const isRunning = computed(() => run.value?.status === 'running')
 const isPaused = computed(() => run.value?.status === 'paused')
+/** Admitted but waiting for a slot in its concurrency group. Distinct from
+ *  running: the canvas is still editable (launchQueuedRun re-reads the
+ *  definition, so an edit made while it waits is the one that runs), but
+ *  nothing may start a second run of this workflow. */
+const isQueued = computed(() => run.value?.status === 'queued')
 const isComplete = computed(() => !!run.value && ['completed', 'failed', 'stopped', 'interrupted'].includes(run.value.status))
 
 /** Clicking a previous (terminal) run in the panel's history list just shows it - no stream needed. */
@@ -81,6 +86,21 @@ const description = ref('')
 // Edges are deleted by a click and nodes moved by a drag; leaving discards both silently without this.
 const isDirty = computed(() => !!workflow.value && JSON.stringify({ n: name.value, d: description.value, s: workflowSteps.value }) !== JSON.stringify({ n: workflow.value.name, d: workflow.value.description, s: workflow.value.steps }))
 useUnsavedChanges(isDirty)
+/** The concurrency group this workflow's runs count against. '' is ungrouped,
+ *  which means the default group - and is sent as '' rather than omitted,
+ *  because the PUT route is a shallow merge and an absent key would keep
+ *  whatever was stored. */
+const group = ref('')
+const groups = ref<{ id: string, name: string, maxConcurrent: number, inFlight: number, waiting: number, implicit: boolean }[]>([])
+/** What the picked group means right now, so the cap is not a number with no
+ *  context. Names the default group's cap for an ungrouped workflow, because
+ *  ungrouped is capped too - it is not "unlimited". */
+const groupHint = computed(() => {
+  const g = groups.value.find(x => x.id === (group.value || 'default'))
+  if (!g) return 'Runs of this workflow share slots with the default group'
+  return `${g.name}: ${g.maxConcurrent} run${g.maxConcurrent === 1 ? '' : 's'} at once`
+    + ` (${g.inFlight} running, ${g.waiting} waiting). Automated starts over the cap queue; a run started here does not wait, but does occupy a slot.`
+})
 const saving = ref(false)
 const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
@@ -115,6 +135,8 @@ onMounted(async () => {
     savedParameters.value = [...(data.parameters ?? [])]
     name.value = data.name
     description.value = data.description
+    group.value = data.group ?? ''
+    groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => [])
   } catch {
     toast.add({ title: 'Workflow not found', color: 'error' })
     router.push('/workflows')
@@ -433,6 +455,7 @@ async function save() {
       description: description.value,
       steps: workflowSteps.value,
       parameters: workflowParameters.value.filter(p => p.name.trim()),
+      group: group.value,
       lastModified: lastModified.value ?? undefined,
     } as any)
     lastModified.value = (saved as any).lastModified ?? null
@@ -478,7 +501,7 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false, pa
   }
 }
 
-const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value)
+const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value && !isQueued.value)
 const filteredAgents = computed(() => {
   if (!paletteSearch.value) return agents.value
   const q = paletteSearch.value.toLowerCase()
@@ -534,7 +557,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       />
 
       <UButton
-        v-if="isRunning || isPaused"
+        v-if="isRunning || isPaused || isQueued"
         label="Stop"
         icon="i-lucide-square"
         size="sm"
@@ -558,6 +581,20 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         color="neutral"
         @click="() => { showParameters = true }"
       />
+      <!-- Which runs this workflow's runs share slots with. Beside Inputs
+           because both are things you state about the workflow rather than
+           about one run, and both are saved by the same Save. -->
+      <select
+        v-model="group"
+        class="field-input text-[12px] max-w-[11rem]"
+        aria-label="Concurrency group"
+        :title="groupHint"
+      >
+        <option value="">Ungrouped (default)</option>
+        <option v-for="g in groups.filter(x => !x.implicit)" :key="g.id" :value="g.id">
+          {{ g.name }} — {{ g.maxConcurrent }} at once
+        </option>
+      </select>
       <UButton label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
       <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
     </div>
@@ -930,7 +967,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               <label class="field-label mt-2">Workflow for anything the routes miss</label>
               <input v-model="settingsTriggerSlug" type="text" class="field-input" placeholder="runbook-a-ticket-to-evidence-backed-pr">
             </template>
-            <span class="field-hint">Runner-executed, no model call. Reads that file from this run's artifacts and starts one run per entry, each in its own checkout. The children are not waited for: this step completes as soon as they exist, and each reports to its own run. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Concurrent pipelines are capped on the instance (AGENT_MAX_CONCURRENT_PIPELINES); the rest queue and start as slots free up.</span>
+            <span class="field-hint">Runner-executed, no model call. Reads that file from this run's artifacts and starts one run per entry, each in its own checkout. The children are not waited for: this step completes as soon as they exist, and each reports to its own run. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. This run holds a slot in its own group while it dispatches, so a group that both dispatches and receives needs a cap of at least 2.</span>
           </div>
 
           <div class="field-group">

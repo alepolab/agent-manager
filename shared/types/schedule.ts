@@ -73,7 +73,13 @@ export interface Schedule {
 export interface ScheduleState {
   lastFiredAt?: number
   lastRunId?: string
-  lastOutcome?: 'started' | 'skipped' | 'error'
+  /**
+   * `queued` is not `started`. A fire whose concurrency group was full
+   * produced a real run with a real id — `lastRunId` names it — but that run
+   * is waiting for a slot, and a Schedules page reporting "started at 2am"
+   * for it would be describing work that had not begun.
+   */
+  lastOutcome?: 'started' | 'queued' | 'skipped' | 'error'
   /** The reason, when it was skipped or failed. Absent on a clean start. */
   lastDetail?: string
 }

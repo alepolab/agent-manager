@@ -83,6 +83,58 @@ async function createBlank() {
     creating.value = false
   }
 }
+
+/**
+ * Concurrency groups: how many runs of the workflows in a group may work at
+ * once. Edited here rather than on one workflow, because a group is a fact
+ * about several of them - "these three pipelines share two slots" is not
+ * something any single workflow can say. Which group a workflow is IN is set
+ * on that workflow, next to its Inputs.
+ *
+ * The whole table is saved at once (PUT /api/workflow-groups), so a row with a
+ * bad cap is refused before anything is written rather than leaving the file
+ * half-edited.
+ */
+interface GroupRow { id: string, name: string, maxConcurrent: number, inFlight: number, waiting: number, implicit: boolean }
+const showGroups = ref(false)
+const groups = ref<GroupRow[]>([])
+const groupRows = ref<{ id: string, name: string, maxConcurrent: number }[]>([])
+const savingGroups = ref(false)
+
+async function loadGroups() {
+  groups.value = await $fetch<GroupRow[]>('/api/workflow-groups').catch(() => [])
+  // The default group is shown for context but has no row in the file to edit.
+  groupRows.value = groups.value.filter(g => !g.implicit).map(g => ({ ...g }))
+}
+onMounted(loadGroups)
+
+function slugifyGroupId(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+function addGroup() {
+  groupRows.value.push({ id: '', name: '', maxConcurrent: 2 })
+}
+
+async function saveGroups() {
+  savingGroups.value = true
+  try {
+    // The id is derived from the name for a new row and never changed for an
+    // existing one: workflows reference the id, so renaming a group must not
+    // orphan every workflow that named it.
+    const payload = groupRows.value
+      .filter(g => g.name.trim())
+      .map(g => ({ id: g.id || slugifyGroupId(g.name), name: g.name.trim(), maxConcurrent: Number(g.maxConcurrent) }))
+    await $fetch('/api/workflow-groups', { method: 'PUT', body: { groups: payload } })
+    await loadGroups()
+    showGroups.value = false
+    toast.add({ title: 'Groups saved', color: 'success' })
+  } catch (e: any) {
+    toast.add({ title: 'Failed to save groups', description: e.data?.message || e.message, color: 'error' })
+  } finally {
+    savingGroups.value = false
+  }
+}
 </script>
 
 <template>
@@ -92,6 +144,7 @@ async function createBlank() {
         <span class="text-[12px] text-meta">{{ workflows.length }}</span>
       </template>
       <template #right>
+        <UButton label="Groups" icon="i-lucide-layers" size="sm" variant="ghost" color="neutral" @click="() => { showGroups = true }" />
         <UButton label="New Workflow" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
@@ -197,6 +250,66 @@ async function createBlank() {
         </div>
       </div>
     </div>
+
+    <!-- Concurrency groups -->
+    <UModal v-model:open="showGroups">
+      <template #content>
+        <div class="p-6 space-y-4 bg-overlay">
+          <div>
+            <h3 class="text-page-title">Concurrency groups</h3>
+            <p class="text-[12px] text-label mt-1 leading-relaxed">
+              How many runs of a group's workflows may work at once. A schedule, a watch or a
+              dispatched child over the cap becomes a queued run and starts by itself when a slot
+              frees. A run you start by hand never waits — but it does occupy a slot, and a run
+              that dispatches holds one of its own group's slots while it does so.
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <div v-if="groupRows.length" class="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-meta">
+              <span style="flex: 1 1 0%; min-width: 0;">Group</span>
+              <span style="flex: 0 0 5rem;">At once</span>
+              <span style="flex: 0 0 7rem;">Now</span>
+              <span style="flex: 0 0 1.75rem;" />
+            </div>
+            <div v-for="(g, i) in groupRows" :key="i" class="flex items-center gap-2">
+              <!-- Flex sizing set inline: .field-input carries width: 100%, which
+                   made the cap field claim a flex basis of the whole row and
+                   collapsed the name field beside it to nothing. -->
+              <input
+                v-model="g.name" placeholder="SDLC pipelines" class="field-input"
+                style="flex: 1 1 0%; min-width: 0;" :aria-label="`Group ${i + 1} name`"
+              />
+              <input
+                v-model.number="g.maxConcurrent" type="number" min="1" step="1" class="field-input"
+                style="flex: 0 0 5rem;" :aria-label="`Group ${i + 1} concurrent runs`"
+              />
+              <span class="text-[11px] text-meta leading-tight" style="flex: 0 0 7rem;">
+                <template v-if="g.id">{{ groups.find(x => x.id === g.id)?.inFlight ?? 0 }} running, {{ groups.find(x => x.id === g.id)?.waiting ?? 0 }} waiting</template>
+                <template v-else>new</template>
+              </span>
+              <UButton icon="i-lucide-x" size="xs" variant="ghost" color="neutral" class="shrink-0" :aria-label="`Remove group ${i + 1}`" @click="() => { groupRows.splice(i, 1) }" />
+            </div>
+            <UButton label="Add group" icon="i-lucide-plus" size="xs" variant="ghost" color="neutral" @click="addGroup" />
+          </div>
+
+          <!-- Shown, not editable: it is where every ungrouped workflow's runs
+               count, and an operator who cannot see it cannot explain a queued
+               run belonging to no group they created. -->
+          <div v-if="groups.find(g => g.implicit)" class="text-[11px] text-meta">
+            Ungrouped workflows share the default group
+            ({{ groups.find(g => g.implicit)!.maxConcurrent }} at once,
+            {{ groups.find(g => g.implicit)!.inFlight }} running,
+            {{ groups.find(g => g.implicit)!.waiting }} waiting). Set it with AGENT_MAX_CONCURRENT_PIPELINES.
+          </div>
+
+          <div class="flex justify-end gap-2 pt-2">
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showGroups = false }" />
+            <UButton label="Save groups" size="sm" :loading="savingGroups" @click="saveGroups" />
+          </div>
+        </div>
+      </template>
+    </UModal>
 
     <!-- Create modal -->
     <UModal v-model:open="showCreateModal">

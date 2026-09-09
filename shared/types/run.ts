@@ -1,5 +1,40 @@
 export type WorkflowRunStatus =
+  /**
+   * Admitted but not started: its concurrency group was full
+   * (server/utils/runQueue.ts), so it waits for a slot.
+   *
+   * A real run from this moment on, not a placeholder — it has the id that
+   * `RunStep.childRunIds`, a watch's dispatch record and a schedule's
+   * `lastRunId` all persist, and the id in the /runs URL an operator may
+   * already have open. It holds no working directory and no process; it takes
+   * both when the queue drains it into `running`.
+   *
+   * `queued` counts as LIVE everywhere the question is "can this still
+   * change": it is not settled, not restartable, not deletable, and not an
+   * item in the attention queue (it needs nobody). The one place it counts as
+   * idle is the workspace lock at launch time — see findRunInWorkspace.
+   */
+  | 'queued'
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
+
+/**
+ * A run that can still change: it is waiting for a slot, working, or stopped
+ * on a person. Everything else has reached an outcome.
+ *
+ * One function rather than the `status === 'running' || status === 'paused'`
+ * that used to be spelled out at a dozen call sites, for the reason
+ * app/utils/runStatus.ts states about colours: `queued` was added to the union
+ * long after those sites were written, and every one of them read it as
+ * "finished" — offering Restart on a run that had not started, ending its SSE
+ * stream immediately, and letting Delete remove it from under the queue.
+ *
+ * Deliberately NOT the same set as workflowRunner.ts's `isSettled`, which
+ * counts `paused` as settled because a paused run has handed control back.
+ * That is a question about the wave loop; this is a question about the run.
+ */
+export function isLiveStatus(status: WorkflowRunStatus): boolean {
+  return status === 'queued' || status === 'running' || status === 'paused'
+}
 
 export type RunStepStatus =
   | 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
@@ -197,6 +232,33 @@ export interface WorkflowRun {
    *  to a guessed base, since that fallback is exactly the fabrication this
    *  field exists to prevent. */
   baseCommit?: string
+  /**
+   * The concurrency group this run counts against, snapshotted from the
+   * workflow when the run was created.
+   *
+   * On EVERY run, not only queued ones, and for two reasons. Counting a
+   * group's in-flight runs would otherwise mean reading a workflow file per
+   * live run; and re-grouping a workflow would silently move runs already
+   * under way from one cap to another. Runner-owned like `watch`: stated once
+   * at creation, never re-derived.
+   *
+   * Absent means the default group (shared/types/workflowGroup.ts), never
+   * "uncapped".
+   */
+  group?: string
+  /**
+   * When this run joined the queue, for a run that was queued rather than
+   * started immediately.
+   *
+   * Distinct from `startedAt` on purpose, and the distinction is load-bearing:
+   * `startedAt` is rewritten when the queue drains the run, because the run
+   * budget is measured from it (server/utils/workflowRunner.ts's
+   * budgetExceeded) and so are the reported wall clock and cost. A run that
+   * waited four hours behind a full group and kept `startedAt` from queue time
+   * would pause on a spent budget having done no work. Queue ORDER reads this
+   * field; everything about elapsed work reads `startedAt`.
+   */
+  queuedAt?: number
   steps: RunStep[]
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
@@ -224,7 +286,11 @@ export interface WorkflowRun {
    *  the record knows of, never at `now`. */
   runningSince?: number
   error?: string
-  /** The process that owns this run. A live status from a dead pid is a lie. */
+  /** The process that owns this run. A live status from a dead pid is a lie.
+   *  On a `queued` run this is the process that QUEUED it, which may well be
+   *  gone by the time a slot frees: applyInterrupted deliberately does not
+   *  look at a queued run for exactly that reason, and the owner is restated
+   *  when the queue launches it. */
   pid: number
   /** Random id of the server process that owns this run. In a container every
    *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
@@ -315,6 +381,12 @@ export interface CostAggregate {
 export interface NewRunInput {
   workflowSlug: string
   workflowName: string
+  /** See WorkflowRun.group — the caller states it from the workflow
+   *  definition, createRun carries it straight onto the persisted run. */
+  group?: string
+  /** 'queued' for a run admitted but waiting for a slot; createRun stamps
+   *  `queuedAt` itself when this says so. Absent means the run starts now. */
+  status?: Extract<WorkflowRunStatus, 'running' | 'queued'>
   autoRun: boolean
   initialPrompt: string
   /** See WorkflowRun.watch — the caller states it, createRun carries it

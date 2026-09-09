@@ -94,6 +94,48 @@ assert.equal(active.id, other.id)
 // ── 8. A missing run is null, not a throw ─────────────────────────────────
 assert.equal(await store.getRun('does-not-exist'), null)
 
+// ── 9. A queued run: live for every question but the workspace lock ───────
+//
+// A run admitted while its concurrency group was full waits as a REAL run.
+// Which of the store's questions it answers yes to is the whole contract:
+// it can still change (so it is not deletable and it dedupes a watch), but it
+// holds no checkout (so it must not block a start in that directory).
+{
+  const queued = await store.createRun({
+    workflowSlug: 'queued-demo', workflowName: 'Queued Demo', autoRun: true,
+    watch: 'direct-invocation', initialPrompt: 'wait', steps: sampleSteps,
+    status: 'queued', group: 'sdlc', projectDir: '/repos/shared',
+  })
+  assert.equal(queued.status, 'queued')
+  assert.equal(queued.group, 'sdlc', 'the group is snapshotted on the run, not looked up later')
+  assert.ok(queued.queuedAt > 0, 'a queued run records when it joined the queue')
+
+  const stored = await store.getRun(queued.id)
+  assert.equal(stored.status, 'queued', 'and reads back queued')
+
+  assert.equal((await store.findActiveRun('queued-demo')).id, queued.id,
+    'a queued run IS this workflow\'s active run - otherwise a watch queues a second ticket behind it')
+  assert.equal(await store.deleteRun(queued.id), 'live',
+    'and cannot be deleted from under the queue; it is stopped first')
+
+  // THE TWO QUESTIONS. Same directory, opposite answers, both correct.
+  assert.equal(await store.findRunInWorkspace('/repos/shared'), null,
+    'the LOCK ignores it: nothing is working in that directory yet')
+  assert.equal((await store.findRunInWorkspace('/repos/shared', undefined, { includeQueued: true })).id, queued.id,
+    'ADMISSION sees it: something is already aimed there, so a second fire must not queue too')
+
+  // THE REGRESSION applyInterrupted would cause: a queued run outlives the
+  // boot that queued it by definition - that is what waiting for a slot means.
+  const path = join(process.env.CLAUDE_DIR, 'workflow-runs', `${queued.id}.json`)
+  const raw = JSON.parse(readFileSync(path, 'utf8'))
+  raw.bootId = 'a-boot-that-is-gone'
+  raw.pid = 999999
+  writeFileSync(path, JSON.stringify(raw))
+  const survived = await store.getRun(queued.id)
+  assert.equal(survived.status, 'queued',
+    'a queued run with a foreign bootId and a dead pid is still queued, never interrupted')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 // ── A finished run whose final status never landed ────────────────────────
 //

@@ -16,12 +16,14 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolveClaudePath } from './claudeDir.ts'
 import { findActiveRun } from './workflowRunStore.ts'
-import { startRun } from './workflowRunner.ts'
+import { startOrQueue } from './workflowRunner.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
 
 interface WorkflowFile {
   slug: string
   name: string
+  /** See Workflow.group — the concurrency group this workflow's runs count against. */
+  group?: string
   steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number }[]
 }
 
@@ -106,8 +108,13 @@ export async function realRunStarter(watch: Watch, ticket: TicketRef): Promise<{
     throw new Error(`workflow '${watch.workflowSlug}' has no steps`)
   }
 
-  const run = await startRun({
-    workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
+  // Started now if the workflow's concurrency group has room, else recorded as
+  // queued. Either way a run id comes back, which is what recordDispatch
+  // stores and what reconcile follows - so a ticket dispatched into a full
+  // group is tracked exactly like one that started immediately, rather than
+  // looking to the watcher like a failed attempt.
+  const { run } = await startOrQueue({
+    workflow: { slug: workflow.slug, name: workflow.name, group: workflow.group, steps: workflow.steps },
     initialPrompt: promptFor(ticket),
     // The runner's own fact for "what triggered this" — the watch that
     // dispatched it, never left to the agent to self-report.

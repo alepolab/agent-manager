@@ -1534,7 +1534,7 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 // Replaces the sdlc-auto-dispatcher agent, whose "dispatch" was a JSON file
 // nothing read. The step starts real runs, so these assert real run records.
 {
-  const queue = await import('../server/utils/pipelineQueue.ts')
+  const queue = await import('../server/utils/runQueue.ts')
   process.env.AGENT_WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), 'runner-workspaces-'))
   // Deterministic: every entry dispatches at once, so nothing is queued except
   // where 28h deliberately lowers the cap to test queueing.
@@ -1702,28 +1702,80 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 
   // ── 28h. The cap queues the overflow, and a settling run drains it ──────
   // Without a cap a twenty-finding scan opens twenty clones and twenty agent
-  // budgets at once.
+  // budgets at once. The overflow is a REAL RUN in `queued` status, not an
+  // entry in a side file: it has an id, it is listed against its parent, and
+  // it is visible and stoppable on /runs.
+  //
+  // A cap of 1, and the dispatching scan itself holds that slot while it
+  // dispatches - see runQueue.ts's inFlightForGroup, which counts every live
+  // run in the group and not only the dispatched ones. So both children wait,
+  // and the drain starts them as the scan and then each child settles.
   process.env.AGENT_MAX_CONCURRENT_PIPELINES = '1'
   runner.setAgentCaller(scanWriting(JSON.stringify([
     { jira_key: 'CSUP-9', work_type: 'bug' },
     { jira_key: 'CSUP-10', work_type: 'feature' },
   ])))
   let d10 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  const queuedChildren = () => store.listRuns().then(rs => rs.filter(r => r.parentRunId === d10.id && r.status === 'queued'))
   d10 = await runner.waitForSettled(d10.id, TIMEOUT)
-  assert.equal(d10.status, 'completed')
+  assert.equal(d10.status, 'completed', 'the scan does not wait for what it dispatched')
+  // Asserted from the step's own recorded output rather than from live run
+  // status: the parent settling frees its slot and the drain starts a child
+  // immediately, so "is it still queued" is a race by design. What the step
+  // DID is durable.
   const step10 = d10.steps.find(s => s.stepId === 'd')
-  assert.equal(step10.childRunIds.length, 1, 'only one child fits under a cap of 1')
-  assert.match(step10.output, /Queued CSUP-10 for runbook-b \(position 1, waiting for a slot\)/, 'the rest is queued, not dropped')
+  assert.equal(step10.childRunIds.length, 2,
+    'BOTH children are recorded against the parent - a queued child used to be untraceable until it started')
+  assert.match(step10.output, /Queued CSUP-9 for runbook-a \(run [0-9a-f-]+, waiting for a slot in default\)/,
+    'the overflow is queued, not dropped, and the line names the run so it can be found')
+  assert.match(step10.output, /Queued CSUP-10 for runbook-b \(run [0-9a-f-]+, waiting for a slot in default\)/)
 
-  // The queue drains when a run settles, so the second child starts on its own.
-  for (let i = 0; i < 100 && (await queue.peekPipelineQueue()).length; i++) {
-    await new Promise(r => setTimeout(r, 50))
-  }
-  assert.deepEqual(await queue.peekPipelineQueue(), [], 'the queue drains once a slot frees up')
+  // The queue drains as each run settles, so both children start on their own.
+  for (let i = 0; i < 200 && (await queuedChildren()).length; i++) await new Promise(r => setTimeout(r, 50))
+  assert.equal((await queuedChildren()).length, 0, 'the queue drains once slots free up')
   const dispatched = (await store.listRuns()).filter(r => r.parentRunId === d10.id)
-  assert.equal(dispatched.length, 2, 'both entries eventually got a run — queued work is not lost')
+  assert.equal(dispatched.length, 2, 'both entries eventually got a run - queued work is not lost')
   assert.deepEqual(dispatched.map(r => r.workflowSlug).sort(), ['runbook-a', 'runbook-b'])
+  assert.deepEqual(dispatched.map(r => r.id).sort(), [...step10.childRunIds].sort(),
+    'and they are the same two runs the step named when it queued them')
+
+  // THE ONE THAT MATTERS: a launched child's clock starts when it launches.
+  // The budget, the wall clock and the cost report are all measured from
+  // startedAt, so a child that kept its admission time would pause on a spent
+  // budget having done no work.
+  for (const d of dispatched) {
+    assert.ok(d.startedAt >= d.queuedAt,
+      'startedAt is restated at launch; queuedAt keeps the record of the wait')
+    assert.notEqual(d.status, 'paused', 'and it did not pause on a budget it had not spent')
+  }
+
+  // ── 28i. A run cancelled while queued reports nothing about work it never did
+  // Left ungated, publish() finalised an evidence bundle for a run with zero
+  // executed steps and commented "run stopped" on its ticket.
+  {
+    const q = await runner.enqueueRun({
+      workflow: { slug: 'runbook-a', name: 'Runbook A', steps: [{ id: 'a', agentSlug: 'agent-a', label: 'A' }] },
+      initialPrompt: 'CSUP-77 something',
+      watch: 'direct-invocation',
+      ticketKey: 'CSUP-77',
+      autoRun: true,
+      projectDir: join(process.env.AGENT_WORKSPACE_ROOT, 'cancel-me'),
+    })
+    assert.equal(q.status, 'queued')
+    assert.ok(q.queuedAt > 0, 'a queued run records when it joined the queue')
+    assert.equal(q.baseCommit, undefined,
+      'and carries no baseline: one captured now would name a HEAD that has moved by the time it starts')
+    assert.equal(q.branch, undefined, 'and no branch: it has taken no checkout')
+    const stopped = await runner.stopRun(q.id)
+    assert.equal(stopped.status, 'stopped', 'a queued run can be cancelled')
+    assert.ok(stopped.steps.every(s => s.status === 'skipped'), 'and every step it never ran is skipped')
+    assert.equal(existsSync(join(process.env.AGENT_RUNS_DIR, q.id, 'artifacts', 'bundle.md')), false,
+      'no evidence bundle is assembled for a run that did nothing')
+    assert.equal(await store.deleteRun(q.id), 'ok', 'and once stopped it can be deleted')
+  }
+
   process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+  void queue
 
   rmSync(process.env.AGENT_WORKSPACE_ROOT, { recursive: true, force: true })
 }
