@@ -19,6 +19,10 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'runner-'))
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'runner-artifacts-'))
 
 const runner = await import('../server/utils/workflowRunner.ts')
+// The runner's own checks are about the runner: whether THIS machine has a
+// checkout, a docker daemon or the plugin installed is what
+// scripts/test-preflight.mjs asserts. One case below restores the real gate.
+runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 const store = await import('../server/utils/workflowRunStore.ts')
 
 const TIMEOUT = 5000
@@ -886,6 +890,39 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   const unlock = JSON.parse(readFileSync(join(ul.projectDir, '.agent', 'test-unlock.json'), 'utf8'))
   assert.match(unlock.reason, /writes tests and code together/, 'with the reason recorded for the evidence')
   rmSync(projectDir, { recursive: true, force: true })
+}
+
+// ── 18c. a failed preflight stops the run before any agent, and says why ──
+// Four real runs each spent 20-60 minutes of paid model work discovering an
+// environment defect. The gate turns that into seconds, and the reason has to
+// survive on the record: a run that never started is exactly the one whose
+// artifacts a person reads afterwards.
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  let called = 0
+  runner.setAgentCaller(async (slug) => { called++; return `out ${slug}` })
+  runner.setPreflight(async () => ({ at: Date.now(), checks: [
+    { name: 'deployment compose', level: 'fail', detail: 'alepo-dev-team-infra is on branch main and has no docker-compose.pms.yml' },
+    { name: 'docker', level: 'warn', detail: 'alepo-shared is missing' },
+  ] }))
+  let pf = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  assert.equal(pf.status, 'failed', 'a hard preflight failure fails the run at once')
+  assert.match(pf.error, /^Preflight: deployment compose — .*docker-compose\.pms\.yml/, pf.error)
+  assert.equal(called, 0, 'and not one agent turn was spent')
+  assert.ok(pf.steps.every(s => s.status === 'skipped'), 'every step is settled as skipped, never left looking pending')
+  assert.equal(pf.preflight.checks.length, 2, 'the whole report is on the record, warnings included')
+  assert.ok(existsSync(join(process.env.AGENT_RUNS_DIR, pf.id, 'artifacts', 'meta.json')),
+    'and the artifacts exist, because a run that never started is the one whose reason gets read')
+  const stored = await store.getRun(pf.id)
+  assert.equal(stored.preflight.checks[0].level, 'fail', 'the report survives on disk, not only in memory')
+
+  // A warning-only report never blocks.
+  runner.setPreflight(async () => ({ at: Date.now(), checks: [{ name: 'docker', level: 'warn', detail: 'alepo-shared is missing' }] }))
+  let warned = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  warned = await runner.waitForSettled(warned.id, TIMEOUT)
+  assert.equal(warned.status, 'completed', 'a warning is a note on the run page, not a gate')
+  assert.ok(called > 0, 'the agents ran')
+  runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 }
 
 // ── 19. live output: every line an agent reports is kept, streamed and logged ──

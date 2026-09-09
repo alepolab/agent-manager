@@ -7,7 +7,7 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } from '../../shared/utils/runClock.ts'
-import { defaultBudget, createRun, getRun, saveRun, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
+import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
@@ -18,9 +18,19 @@ import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
+import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+
+/**
+ * Preflight, overridable the way the agent caller is. A runner check is about
+ * the runner; whether THIS machine has a checkout, a docker daemon or the
+ * plugin installed is what scripts/test-preflight.mjs is for.
+ */
+let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
+export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { getClaudeDir } from './claudeDir.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable,
@@ -106,6 +116,12 @@ interface Live {
   aborts: Map<string, AbortController>
   /** Live output per step id: what the agent is doing right now, newest last. Capped; the full log is the step's .log artifact. */
   logs: Record<string, string[]>
+  /**
+   * stepId -> the SDK session its next visit continues. Set by the three
+   * places a step runs again for a reason that is not "the work was wrong":
+   * it ran out of turns, the operator answered it, or a person restarted it.
+   */
+  resumeFrom: Record<string, string>
   /** Steps the operator has approved to run (see WorkflowStep.approval). */
   approved: Set<string>
   /** Operator notes addressed to a step, delivered with its next input. */
@@ -480,10 +496,28 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
   return joinInputs(clipped)
 }
 
+/**
+ * The SDK session a step can continue, or undefined.
+ *
+ * Requires the recorded session AND its transcript still on disk under the
+ * same working directory: a run whose worktree was made (or removed) since
+ * has a different project folder, and the CLI would find nothing to resume.
+ * Undefined means "start fresh", which is always correct, only more expensive.
+ */
+function resumableSession(rec: RunStep): string | undefined {
+  if (!rec.sessionId || !rec.sessionProject) return undefined
+  const transcript = join(getClaudeDir(), 'projects', rec.sessionProject, `${rec.sessionId}.jsonl`)
+  return existsSync(transcript) ? rec.sessionId : undefined
+}
+
 function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: string): string {
   const feedback = l.retryFeedback[id]
   if (feedback) {
     delete l.retryFeedback[id]
+    // A resumed visit continues the session that already holds the brief and
+    // the attempt, so re-sending both would pay for them twice and invite the
+    // model to start over. The instruction alone is the whole input.
+    if (l.resumeFrom[id]) return feedback
     return [
       l.lastInputs[id] ?? initialPrompt, '---', 'Your previous attempt:',
       l.outputs[id] ?? '', '---', 'Reviewer feedback:', feedback,
@@ -610,7 +644,11 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // and the header below names it.
   await ensureRunCheckout(run)
   if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
-  const input = artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+  // A visit that continues the previous session needs no header: that session
+  // already has it, and re-sending it invites the model to start over.
+  const resume = l.resumeFrom[id]
+  delete l.resumeFrom[id]
+  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined) + body
@@ -632,6 +670,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
     startedAt: Date.now(), visits: l.state.visits[id],
+    // Which session this visit continues, when it continues one: the step
+    // artifact then says a visit carried on rather than started over.
+    resumedFrom: resume,
     // Progress telemetry is per-visit, not cumulative across retries — a
     // fresh visit's turn count must not start from a previous attempt's.
     assistantMessages: undefined, lastTool: undefined, lastActivityAt: undefined,
@@ -675,7 +716,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
@@ -848,6 +889,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     }
 
     markCompleted(l.graph, l.state, id)
+    // Progress clears the interruption count: only CONSECUTIVE restarts with
+    // nothing achieved in between are the loop worth pausing on.
+    run.interruptions = 0
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
@@ -861,10 +905,18 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       Object.assign(rec, { status: 'failed', error: err.message, completedAt: Date.now(), ...(err.usage ? { usage: err.usage } : {}) })
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
       l.outputs[id] = tail
+      // Continue the session where it can be continued: a step that ran out of
+      // budget has the whole exploration in its context already, and starting
+      // over is how one step spent three visits re-reading the same files and
+      // never wrote its plan.
+      const session = resumableSession(rec)
+      if (session) l.resumeFrom[id] = session
       // Names the budget that actually ran out: a timeout told "you ran out of
       // turns" would send the agent off optimising the wrong thing.
       const spent = err.subtype === 'error_max_duration' ? 'time budget' : 'turn budget'
-      l.retryFeedback[id] = `Your previous attempt ran out of its ${spent} before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.`
+      l.retryFeedback[id] = session
+        ? `You ran out of your ${spent} before reporting. You still have everything you read. Do not re-explore: finish from where you are, in as few commands as possible, and end with the report.`
+        : `Your previous attempt ran out of its ${spent} before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.`
       l.state.status[id] = 'completed'
       armNode(l.state, id)
       log.warn('step ran out of its budget; retrying from its log tail', { runId: run.id, stepId: id, agentSlug: step.agentSlug, subtype: err.subtype, visits: rec.visits })
@@ -1234,16 +1286,35 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })
   await ensureRunCheckout(run)
+  // Before the gate below, not after: a run that fails preflight is precisely
+  // the one whose reason has to be readable afterwards, and the artifacts
+  // directory is where the run page and the assembler look for it.
+  try { await initRunArtifacts(run, opts.workflow.name) } catch { /* absence is the signal */ }
+
+  // Everything an agent should never discover by spending its budget: the
+  // compose file, the checkout, git as the agents will see it, docker, the
+  // Jira statuses this workflow will ask for. Four real runs died on four
+  // such things, each after twenty to sixty minutes of paid model work.
+  run.preflight = await preflight(run, opts.workflow.steps)
+  const blocked = preflightFailure(run.preflight)
+  if (blocked) {
+    run.status = 'failed'
+    run.error = `Preflight: ${blocked}`
+    run.endedAt = Date.now()
+    for (const s of run.steps) s.status = 'skipped'
+    run.currentStepIds = []
+    run.nextStepIds = []
+    await saveRun(run)
+    log.warn('run failed preflight; no agent ran', { runId: run.id, reason: blocked })
+    return run
+  }
+
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
+    outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   live.set(run.id, l)
-  // Best-effort: a filesystem problem here must not stop the run. The run
-  // still executes; what it loses is its evidence, and the assembler will
-  // say so plainly rather than the run failing for an unrelated reason.
-  try { await initRunArtifacts(run, opts.workflow.name) } catch { /* absence is the signal */ }
   void driveToSettlement(l, run)
   return run
 }
@@ -1255,6 +1326,57 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * recreate the exact coupling this feature removes, just scoped to one wave instead of
  * the whole run. Callers await waitForSettled(runId) for the outcome.
  */
+/** How many consecutive restarts a run is resumed through before it asks for a person. */
+const MAX_INTERRUPTIONS = 3
+
+/**
+ * Runs the previous process left mid-step, picked up where they were.
+ *
+ * A rebuild used to cost whatever step was in flight: the run froze as
+ * `interrupted` and a person had to notice and restart it, which re-ran the
+ * step from turn one. With the session resume above, this costs seconds.
+ *
+ * Never touches a run that was waiting on a person — that is not an
+ * interruption, it is a question nobody answered — and pauses rather than
+ * resuming a run that keeps being interrupted, which would otherwise be a loop
+ * that spends money on every boot.
+ */
+export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paused: string[], skipped: string[] }> {
+  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[] }
+  for (const run of await listRuns()) {
+    if (run.status !== 'interrupted') continue
+    const frozen = run.steps.find(s => s.status === 'running')
+    if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
+    if (!frozen) { out.skipped.push(run.id); continue }
+    run.interruptions = (run.interruptions ?? 0) + 1
+    if (run.interruptions > MAX_INTERRUPTIONS) {
+      frozen.status = 'pending'
+      run.status = 'paused'
+      run.question = {
+        stepId: frozen.stepId, kind: 'approval', askedAt: Date.now(),
+        text: `This run has been interrupted ${run.interruptions} times in a row at "${frozen.label}" without finishing it. Continue to try once more, or stop the run.`,
+      }
+      run.interruptions = 0
+      run.pid = process.pid
+      run.bootId = BOOT_ID
+      await saveRun(run)
+      out.paused.push(run.id)
+      log.warn('run interrupted repeatedly; asking rather than resuming', { runId: run.id, stepId: frozen.stepId })
+      continue
+    }
+    await saveRun(run)
+    try {
+      await continueRun(run.id)
+      out.resumed.push(run.id)
+      log.info('resumed a run the previous process left mid-step', { runId: run.id, stepId: frozen.stepId, interruptions: run.interruptions })
+    } catch (err) {
+      out.skipped.push(run.id)
+      log.warn('could not resume an interrupted run', { runId: run.id, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  return out
+}
+
 /** Continue a paused run. A note travels to the approved step, or to whichever step starts next. */
 export async function continueRun(runId: string, note?: string): Promise<WorkflowRun | null> {
   let l = live.get(runId)
@@ -1332,7 +1454,13 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   if (!run || !l || run.status !== 'paused') return run
   const id = run.currentStepIds[0]
   if (!id) return run
-  const combined = `Previous agent output:\n${l.outputs[id] ?? ''}\n\nUser response:\n${reply}`
+  // Continue the session that asked the question: it already holds the brief
+  // and its own output, so the answer alone is the whole input.
+  const session = resumableSession(recOf(run, id))
+  if (session) l.resumeFrom[id] = session
+  const combined = session
+    ? `User response:\n${reply}`
+    : `Previous agent output:\n${l.outputs[id] ?? ''}\n\nUser response:\n${reply}`
   run.question = undefined
   l.waiting = undefined
   // Flip away from 'paused' before doing any work, matching runWave and the client's
@@ -1478,7 +1606,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   // A declared skip is a settled outcome, the same as completed: a restart of a
@@ -1614,11 +1742,45 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
     )
   }
 
+  // The same gate the start does, for the same reason: a restart after a fix
+  // to the environment should say so in seconds, and a restart into an
+  // environment still missing its compose file or its Jira status should not
+  // spend a step's budget rediscovering that.
+  run.preflight = await preflight(run, l.workflow.steps)
+  const blocked = preflightFailure(run.preflight)
+  if (blocked) {
+    await saveRun(run)
+    throw new RestartError(409, `Preflight: ${blocked}`)
+  }
+
   const previousOutput = recOf(run, stepId).output
+  // The restarted step continues where it was, unless the runner itself is
+  // handing the run over with new scope or a new instruction (widen, rework),
+  // where the whole brief is the point. Descendants never resume: their work
+  // was invalidated by whatever is being redone above them.
+  if (!opts.fromRunner) {
+    const rec = recOf(run, stepId)
+    const session = resumableSession(rec)
+    if (session) {
+      l.resumeFrom[stepId] = session
+      l.retryFeedback[stepId] = note?.trim()
+        ? `The run was restarted at this step, with this from the operator: ${note.trim()}\n\nYou still have everything you read. Continue from where you were, do not redo finished work, and end with the report.`
+        : 'The run was restarted at this step after an interruption. You still have everything you read. Continue from where you were, do not redo finished work, and end with the report.'
+    }
+  }
   for (const id of reset) {
     const rec = recOf(run, id)
+    // An interruption is not an attempt. A step frozen at 'running' by a server
+    // that died never reached an outcome, and counting it against maxVisits is
+    // how three container rebuilds exhausted a step's three visits without it
+    // ever failing at anything.
+    if (rec.status === 'running') {
+      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? rec.visits ?? 1) - 1)
+      rec.visits = l.state.visits[id]
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `interrupted-${rec.visits + 1}`) } catch { /* best effort */ }
+    }
     // Only an attempt that actually ran is worth snapshotting; a skipped step has nothing to keep.
-    if (rec.status !== 'pending' && rec.visits > 0) {
+    else if (rec.status !== 'pending' && rec.visits > 0) {
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `restart-${rec.visits}`) } catch { /* best effort */ }
     }
     Object.assign(rec, {

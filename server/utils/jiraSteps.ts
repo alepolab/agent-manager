@@ -103,6 +103,44 @@ const WORK_WORDS = /progress|develop|\bdev\b|implement|start|work|doing/i
 
 interface Transition { id: string, name: string, to?: { name?: string, statusCategory?: { key?: string } } }
 
+/**
+ * Is `target` reachable from where the ticket is now? The same question
+ * `moveTicket` answers, exported so preflight can ask it before a run starts
+ * instead of a step discovering it 40 minutes in.
+ */
+export async function transitionReachable(run: WorkflowRun, key: string, target: string, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean, detail: string }> {
+  const creds = await credentialsFor(run)
+  const headers = { Authorization: jiraAuthHeader(creds), Accept: 'application/json', 'Content-Type': 'application/json' }
+  const issueUrl = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}`
+  const listed = await fetchImpl(`${issueUrl}/transitions`, { headers })
+  if (!listed.ok) return { ok: false, detail: `could not read the transitions of ${key} (HTTP ${listed.status})` }
+  const transitions = (((await listed.json()) as { transitions?: Transition[] })?.transitions) ?? []
+  const current = await currentStatus(issueUrl, headers, fetchImpl)
+  const hit = matchTransition(target, transitions)
+  if (hit) return { ok: true, detail: `"${target}" reaches "${hit.to?.name ?? hit.name}" from "${current?.name ?? 'the current status'}"` }
+  const want = target.trim().toLowerCase()
+  const candidates = STATUS_SYNONYMS[want] ?? [want]
+  if (current && (candidates.includes(current.name.toLowerCase()) || (INTENT_CATEGORY[want] && current.category === INTENT_CATEGORY[want]))) {
+    return { ok: true, detail: `${key} is already in "${current.name}"` }
+  }
+  const inCategory = INTENT_CATEGORY[want] ? transitions.filter(t => t.to?.statusCategory?.key === INTENT_CATEGORY[want]) : []
+  if (inCategory.length === 1) return { ok: true, detail: `"${target}" resolves by status category to "${inCategory[0]!.to?.name}"` }
+  const working = inCategory.filter(t => WORK_WORDS.test(t.to?.name ?? '') || WORK_WORDS.test(t.name))
+  if (working.length === 1) return { ok: true, detail: `"${target}" resolves to "${working[0]!.to?.name}"` }
+  const available = transitions.map(t => t.to?.name ?? t.name).join(', ') || 'none'
+  return { ok: false, detail: `${key} is in "${current?.name ?? 'an unknown status'}" and offers no transition to "${target}" or a known synonym; available: ${available}` }
+}
+
+/** The configured name, then its synonyms, against the target status and then the transition name. */
+function matchTransition(target: string, transitions: Transition[]): Transition | undefined {
+  const want = target.trim().toLowerCase()
+  const candidates = STATUS_SYNONYMS[want] ?? [want]
+  const byTo = (n: string) => transitions.find(t => (t.to?.name ?? '').toLowerCase() === n)
+  const byName = (n: string) => transitions.find(t => t.name.toLowerCase() === n)
+  for (const n of candidates) { const hit = byTo(n) ?? byName(n); if (hit) return hit }
+  return undefined
+}
+
 async function moveTicket(run: WorkflowRun, key: string, target: string, fetchImpl: FetchLike): Promise<string> {
   if (!isJiraPostingEnabled()) return `Would move ${key} to "${target}"; not done: JIRA_POST_ENABLED is not 1 on this instance.`
   const creds = await credentialsFor(run)
@@ -117,10 +155,7 @@ async function moveTicket(run: WorkflowRun, key: string, target: string, fetchIm
   // target status and then the transition name. This is how "Dev Done" lands
   // on a project whose workflow calls the same state "Ready for Review".
   const candidates = STATUS_SYNONYMS[want] ?? [want]
-  const byTo = (n: string) => transitions.find(t => (t.to?.name ?? '').toLowerCase() === n)
-  const byName = (n: string) => transitions.find(t => t.name.toLowerCase() === n)
-  let hit: Transition | undefined
-  for (const n of candidates) { hit = byTo(n) ?? byName(n); if (hit) break }
+  let hit: Transition | undefined = matchTransition(target, transitions)
   const category = INTENT_CATEGORY[want]
   if (!hit && category) {
     // Already there? A ticket a developer moved to In Development by hand has

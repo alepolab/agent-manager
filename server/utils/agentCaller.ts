@@ -7,6 +7,7 @@ import { getClaudeDir, resolveClaudePath } from './claudeDir.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import { resolveTools, resolveMaxTurns, resolveMaxDurationMs } from './agentToolPolicy.ts'
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
+import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
 import type { AgentFrontmatter } from '~/types'
 
@@ -26,6 +27,32 @@ import type { AgentFrontmatter } from '~/types'
  * only sign was one line inside a step's output. An absolute path costs
  * nothing and cannot be read relative to the wrong tree.
  */
+/**
+ * The environment every pipeline agent runs in. Exported because preflight has
+ * to ask git the same questions the AGENTS will ask it: a `commit.gpgsign` read
+ * from this shell answers for the wrong process, and that is exactly how a run
+ * finished its fix and then halted at `git commit`.
+ */
+export async function agentEnvFor(_startedBy?: string): Promise<Record<string, string>> {
+  return {
+    ...process.env as Record<string, string>,
+    // A bot identity for git and gh, when one is configured, so agent pushes
+    // and PRs are not attributed to whoever runs the server.
+    ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
+    SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
+    SDLC_SKILLS_DIR: sdlcSkillsDir(),
+    CE_SKILLS_DIR: await ceSkillsDir(),
+    // Pipeline commits are unsigned. The developer's own ~/.gitconfig is
+    // mounted into the container and may say commit.gpgsign=true, but the
+    // agents hold no signing key and the image has no gpg: a real run
+    // finished its fix and then halted at `git commit`. Environment config
+    // outranks every file, so this holds for every git the agent runs.
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'commit.gpgsign',
+    GIT_CONFIG_VALUE_0: 'false',
+  }
+}
+
 export function sdlcScriptsDir(): string {
   return join(process.cwd(), 'engineering', 'scripts')
 }
@@ -174,6 +201,14 @@ export interface AgentCallOptions {
   onProgress?: OnAgentProgress
   onSteer?: (deliver: (text: string) => boolean) => void
   onSession?: (sessionId: string, cwd: string) => void
+  /**
+   * Continue an earlier SDK session instead of starting one. The model keeps
+   * everything it already read, so a step that ran out of turns, or was
+   * answered, or was interrupted by a server restart, carries on rather than
+   * re-exploring from nothing — which is where a real step spent three whole
+   * visits reading the same files and never wrote its plan.
+   */
+  resume?: string
 }
 
 /** Floor between successive progress emissions when the active tool hasn't
@@ -242,7 +277,7 @@ export function shouldEmitProgress(
 export async function callAgent(
   agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
-  const { signal, env: userEnv = {}, onProgress, onSteer, onSession } = opts
+  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume } = opts
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -281,6 +316,10 @@ export async function callAgent(
   let timedOut = false
   const deadline = setTimeout(() => { timedOut = true; abortController.abort() }, maxDurationMs)
 
+  // Resolved before the call, and deliberately not caught: a missing guardrail
+  // is a reason not to start, not a warning to run past. See agentHooks.ts.
+  const { hooks, registered } = await pipelineHooks()
+
   const startedAt = Date.now()
   log.debug('agent call starting', () => ({
     agentSlug,
@@ -288,6 +327,7 @@ export async function callAgent(
     modelRequested: declaredModel ?? '(sdk default)',
     modelSource: override ? 'settings override' : frontmatter?.model ? 'agent file' : 'sdk default',
     toolCount: toolsOption ? toolsOption.length : '(sdk default)',
+    guardrails: registered.join(', '),
     maxTurns,
     maxDurationMs,
     inputLength: input.length,
@@ -358,28 +398,37 @@ export async function callAgent(
       // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
       // including the no-credential one; a conditional env is exactly how a
       // variable goes missing in the configuration nobody tests.
-      env: {
-        ...process.env,
-        ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
-        SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
-        SDLC_SKILLS_DIR: sdlcSkillsDir(),
-        CE_SKILLS_DIR: await ceSkillsDir(),
-        // Pipeline commits are unsigned. The developer's own ~/.gitconfig is
-        // mounted into the container and may say commit.gpgsign=true, but the
-        // agents hold no signing key and the image has no gpg: a real run
-        // finished its fix and then halted at `git commit`. Environment config
-        // outranks every file, so this holds for every git the agent runs.
-        GIT_CONFIG_COUNT: '1',
-        GIT_CONFIG_KEY_0: 'commit.gpgsign',
-        GIT_CONFIG_VALUE_0: 'false',
-        ...userEnv,
-      },
+      env: { ...(await agentEnvFor()), ...userEnv },
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       maxTurns,
       ...(declaredModel ? { model: declaredModel } : {}),
       ...(toolsOption ? { tools: toolsOption } : {}),
+      // A pipeline agent gets a deliberate environment, not the developer's.
+      //
+      // The SDK used to read this instance's own `~/.claude` settings, which
+      // put a person's interactive session into every step: the ponytail
+      // persona, the explanatory output style, every discovered skill and
+      // CLAUDE.md. Measured in a real worktree with the tool list an agent
+      // declares: 30,516 tokens on turn one, re-paid on all 100-200 turns of
+      // the step, against 13,157 with this empty. Over the ten runs recorded
+      // when this was measured that inheritance cost ~59M input tokens, 31%
+      // of everything the pipeline had spent.
+      //
+      // It also silently defeated `tools`: an agent declaring six tools had
+      // THIRTY-THREE registered, because inherited settings re-add plugin and
+      // MCP tools. Narrowing an agent's tools is a safety statement, not a
+      // preference, so that alone would justify this.
+      //
+      // The guardrails the pipeline does need — plan gate, test lock, secrets
+      // guard — arrived by the same inheritance, so they are now registered
+      // explicitly from the plugin's own hooks.json. `pipelineHooks()` throws
+      // when it cannot find them, and callAgent lets that through: an agent
+      // editing a product repository without them is worse than no run.
+      settingSources: [],
+      hooks,
+      ...(resume ? { resume } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     },
   })) {
