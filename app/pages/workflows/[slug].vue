@@ -450,7 +450,15 @@ async function save() {
 }
 
 async function deleteWorkflow() {
-  if (!confirm('Delete this workflow?')) return
+  // Deleting a workflow cascades to nothing, so its schedules survive it and
+  // keep showing a next fire time while every fire errors - a failure nobody
+  // sees until a night has passed. Named here because the count is already on
+  // this page. Degrades to the plain question if the fetch has not landed.
+  const n = scheduleRows.value.length
+  const question = n
+    ? `Delete this workflow? ${n} schedule${n === 1 ? '' : 's'} point at it and will start failing.`
+    : 'Delete this workflow?'
+  if (!confirm(question)) return
   try {
     await remove(slug)
     router.push('/workflows')

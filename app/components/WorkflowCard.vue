@@ -2,7 +2,18 @@
 import type { Workflow } from '~/types'
 import { getAgentColor } from '~/utils/colors'
 
-const props = defineProps<{ workflow: Workflow }>()
+const props = defineProps<{
+  workflow: Workflow
+  /**
+   * This workflow's schedule counts, from the parent.
+   *
+   * Passed in rather than read from useSchedules() here: schedules are not
+   * fetched app-wide the way agents are, so a card calling the composable
+   * would render 0 unless it also triggered the fetch - which would be N
+   * cards each firing one on mount.
+   */
+  schedules?: { total: number, enabled: number }
+}>()
 const { agents } = useAgents()
 
 const stepAgents = computed(() => {
@@ -59,6 +70,19 @@ function timeAgo(iso: string): string {
       <ClientOnly>
         <span v-if="workflow.lastRunAt" class="text-[10px] ml-2" style="color: var(--text-disabled);">{{ timeAgo(workflow.lastRunAt) }}</span>
       </ClientOnly>
+      <!-- Outside the NuxtLink wrapper above, so a link here is legal. The
+           colour carries the distinction somebody scanning the list cares
+           about - scheduled and live, versus scheduled and all switched off -
+           while the exact split stays in the title. -->
+      <NuxtLink
+        v-if="schedules?.total"
+        :to="`/workflows/${workflow.slug}?tab=schedule`"
+        class="text-[10px] ml-2 flex items-center gap-1 focus-ring rounded"
+        :style="{ color: schedules.enabled ? 'var(--text-tertiary)' : 'var(--text-disabled)' }"
+        :title="`${schedules.total} schedule${schedules.total === 1 ? '' : 's'}, ${schedules.enabled} enabled`"
+      >
+        <UIcon name="i-lucide-calendar-clock" class="size-3" />{{ schedules.total }}
+      </NuxtLink>
       <UButton
         size="xs" variant="soft" icon="i-lucide-play" label="Run"
         class="ml-auto"

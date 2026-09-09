@@ -4,6 +4,19 @@ import { agentTemplates } from '~/utils/templates'
 import { planTemplateResolution } from '~/utils/workflowInstantiation'
 
 const { workflows, loading, error, create, fetchAll } = useWorkflows()
+// Fetched once here rather than per card: schedules are not loaded app-wide,
+// and N cards each calling the composable would each fire a request.
+const { schedules, fetchAll: fetchSchedules } = useSchedules()
+onMounted(() => { void fetchSchedules() })
+const scheduleCounts = computed(() => {
+  const counts: Record<string, { total: number, enabled: number }> = {}
+  for (const s of schedules.value) {
+    const c = counts[s.workflowSlug] ??= { total: 0, enabled: 0 }
+    c.total++
+    if (s.enabled) c.enabled++
+  }
+  return counts
+})
 const { agents, create: createAgent } = useAgents()
 const router = useRouter()
 const toast = useToast()
@@ -120,6 +133,7 @@ async function createBlank() {
           v-for="workflow in filteredWorkflows"
           :key="workflow.slug"
           :workflow="workflow"
+          :schedules="scheduleCounts[workflow.slug]"
         />
       </div>
 

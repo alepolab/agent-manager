@@ -329,6 +329,14 @@ ${modal}`)
   assert.ok((await page.locator('body').innerText()).includes('Scan'),
     'coming back to the canvas still shows the step - the graph was hidden, not thrown away')
 
+  // ── 7. The workflow card says it is scheduled, and links to the tab ─────
+  await page.goto(`${baseUrl}/workflows`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  const indicator = page.locator(`a[href="/workflows/${SLUG}?tab=schedule"]`)
+  await indicator.first().waitFor({ state: 'attached', timeout: VISIBLE_TIMEOUT_MS })
+  assert.equal((await indicator.first().innerText()).trim(), '2',
+    'the card counts this workflow\'s schedules and links straight to the tab')
+  await page.screenshot({ path: join(shots, 'workflow-card-scheduled.png'), fullPage: true })
+
   console.log('schedules + parameters smoke: all assertions passed')
   console.log(`screenshots: ${shots}`)
 }
