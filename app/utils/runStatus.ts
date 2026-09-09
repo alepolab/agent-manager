@@ -1,3 +1,5 @@
+import { runElapsedMs, type RunClockRecord } from '../../shared/utils/runClock.ts'
+
 /**
  * Presentation helpers shared by everything that renders a run or one of its
  * steps — the run panel and the run-history page today.
@@ -35,7 +37,10 @@ export function runStatusColor(status: string): string {
 export const SETTLED_STATUSES = new Set(['completed', 'failed', 'skipped', 'stopped'])
 
 /** Wall-clock duration, or '' when the thing never started. An in-flight item
- *  is measured to now, so a running step's timer advances. */
+ *  is measured to now, so a running step's timer advances.
+ *
+ *  For a STEP. A run is not the difference between two timestamps — see
+ *  runElapsedLabel below and shared/utils/runClock.ts. */
 export function elapsedLabel(s: { startedAt?: number, completedAt?: number }): string {
   if (!s.startedAt) return ''
   const end = s.completedAt ?? Date.now()
@@ -45,3 +50,25 @@ export function elapsedLabel(s: { startedAt?: number, completedAt?: number }): s
   if (mins < 60) return `${mins}m ${secs % 60}s`
   return `${Math.floor(mins / 60)}h ${mins % 60}m`
 }
+
+/**
+ * How long a RUN has been executing, formatted for a table cell or a header.
+ *
+ * Not `elapsedLabel({ startedAt: run.startedAt, completedAt: run.endedAt })`,
+ * which is what every one of these call sites used to compute for itself: a
+ * restarted run resumes under the same id, so that subtraction reports the
+ * hours it spent failed and waiting for someone as run time. The run clock
+ * (shared/utils/runClock.ts) counts only the stretches it was actually
+ * running. `now` is a parameter so a component with a ticking clock re-renders
+ * a live run's duration.
+ */
+export function runElapsedLabel(run: RunClockRecord, now: number = Date.now()): string {
+  const secs = Math.round(runElapsedMs(run, now) / 1000)
+  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
+}
+
+/** What the Duration column and the panel's timer mean, for a `title=`. One
+ *  sentence, in one place, so the two surfaces cannot explain it differently. */
+export const RUN_DURATION_HINT =
+  'Time this run spent executing. Time it sat failed, stopped or paused waiting for a person is not counted, '
+  + 'so a restarted run does not accumulate the gap. The Started column shows when it first began.'

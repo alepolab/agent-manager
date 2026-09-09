@@ -664,6 +664,64 @@ let busy = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct
 await assert.rejects(runner.restartRun(busy.id, 'a'), /running/, 'restart refused while the run is running')
 await runner.waitForSettled(busy.id, TIMEOUT)
 
+// ── 9b. a restart does not charge the run for the time it sat failed ──────
+//
+// Reported from the runs page: a run failed, was restarted later, and its
+// Duration column kept climbing from the FIRST attempt's start - 73 minutes
+// against twelve minutes of agent work. Duration was `endedAt - startedAt`,
+// and a restart resumes the same run id, so the gap was being reported as run
+// time. The run clock (shared/utils/runClock.ts) counts only the stretches the
+// run was actually running.
+{
+  const { runElapsedMs } = await import('../shared/utils/runClock.ts')
+  const { summarizeRunCost } = await import('../server/utils/costReport.ts')
+  const HOUR = 3600_000
+
+  explode = true
+  runner.setAgentCaller(async (agentSlug) => {
+    if (agentSlug === 'agent-b' && explode) throw new Error('agent-b exploded')
+    return `output of ${agentSlug}`
+  })
+  let gap = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  assert.equal(gap.status, 'failed')
+  const workedFirstAttempt = runElapsedMs(gap)
+
+  // The run now sits failed for an hour. Nothing can move the test's clock
+  // forward, so move the run's timestamps back instead - the same record a
+  // person would be looking at the next time they opened the page. activeMs is
+  // a DURATION, not a timestamp, and deliberately stays as measured.
+  const shift = t => (typeof t === 'number' ? t - HOUR : t)
+  await store.saveRun({
+    ...gap,
+    startedAt: shift(gap.startedAt),
+    endedAt: shift(gap.endedAt),
+    runningSince: shift(gap.runningSince),
+    steps: gap.steps.map(st => ({
+      ...st,
+      startedAt: shift(st.startedAt),
+      completedAt: shift(st.completedAt),
+      lastActivityAt: shift(st.lastActivityAt),
+    })),
+  })
+  const failedForAnHour = await store.getRun(gap.id)
+  assert.ok(Date.now() - failedForAnHour.startedAt > HOUR, 'the run has existed for over an hour')
+  assert.ok(runElapsedMs(failedForAnHour) < 60_000,
+    'a run sitting failed does not accrue duration while it waits for a person')
+
+  explode = false
+  runner._dropLive(gap.id)
+  gap = await runner.waitForSettled((await runner.restartRun(gap.id, 'b')).id, TIMEOUT)
+  assert.equal(gap.status, 'completed', 'the restart still runs the run to completion')
+  assert.ok(gap.endedAt - gap.startedAt > HOUR,
+    'the wall clock between first start and final end really is over an hour')
+  assert.ok(runElapsedMs(gap) < 60_000,
+    'but the duration is the work, not the hour the run spent waiting to be restarted')
+  assert.ok(runElapsedMs(gap) >= workedFirstAttempt,
+    'and the first attempt\'s own time is still counted, not discarded by the restart')
+  assert.equal(summarizeRunCost(gap).wall_clock_min, 0,
+    'the cost report and the evidence bundle read the same clock, not the hour-wide span')
+}
+
 // ── 10. continueRun resumes an interrupted run from the executing step ────
 runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `output of ${agentSlug}` })
 calls.length = 0

@@ -156,8 +156,24 @@ export interface WorkflowRun {
   budget: RunBudget
   currentStepIds: string[]
   nextStepIds: string[]
+  /** Wall-clock moment this run was first created, and the moment it last
+   *  settled. NOT its duration: a restart resumes the same run id after an
+   *  arbitrary gap, so `endedAt - startedAt` counts the hours a failed run sat
+   *  waiting for a person. Read the duration from shared/utils/runClock.ts's
+   *  runElapsedMs, never by subtracting these. */
   startedAt: number
   endedAt?: number
+  /** Milliseconds this run has spent executing, summed over the stretches that
+   *  have closed; the stretch open right now is `runningSince`. Owned by the
+   *  run clock (shared/utils/runClock.ts) and advanced only by publish(), the
+   *  one place every status transition passes through. Absent on runs recorded
+   *  before the clock existed - the clock falls back to wall clock for those
+   *  rather than inventing a figure their record never held. */
+  activeMs?: number
+  /** When the stretch in flight began, or absent when the run is not running.
+   *  A stretch left open by a process that died is closed at the last activity
+   *  the record knows of, never at `now`. */
+  runningSince?: number
   error?: string
   /** The process that owns this run. A live status from a dead pid is a lie. */
   pid: number
@@ -214,6 +230,9 @@ export interface RunCostSummary {
   status: WorkflowRunStatus
   startedAt: number
   endedAt?: number
+  /** Minutes the run spent EXECUTING, from the run clock - not
+   *  `endedAt - startedAt`. See shared/utils/runClock.ts for why the two differ
+   *  for any run that was ever restarted. */
   wall_clock_min: number
   attempts: number
   steps: StepCost[]

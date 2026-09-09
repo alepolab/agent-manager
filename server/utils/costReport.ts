@@ -1,4 +1,5 @@
 import { resolveModelMeta } from './models.ts'
+import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { RunStep, WorkflowRun, StepCost, RunCostSummary, CostAggregate } from '~~/shared/types/run'
 
@@ -99,8 +100,6 @@ export function summarizeRunCost(run: WorkflowRun): RunCostSummary {
     cost_usd += s.cost_usd ?? 0
   }
 
-  const ended = run.endedAt ?? Date.now()
-
   return {
     runId: run.id,
     workflowSlug: run.workflowSlug,
@@ -108,7 +107,10 @@ export function summarizeRunCost(run: WorkflowRun): RunCostSummary {
     status: run.status,
     startedAt: run.startedAt,
     endedAt: run.endedAt,
-    wall_clock_min: Math.round((ended - run.startedAt) / 60000),
+    // Time the run spent EXECUTING (shared/utils/runClock.ts), not
+    // `endedAt - startedAt`: a run restarted the next morning would otherwise
+    // report the night as cost, and this figure ends up in the evidence bundle.
+    wall_clock_min: Math.round(runElapsedMinutes(run)),
     attempts: Math.max(1, ...run.steps.map(s => s.visits ?? 1)),
     steps,
     totals: {

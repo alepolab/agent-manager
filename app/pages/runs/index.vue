@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,10 +68,10 @@ const shown = computed(() => runs.value.filter(r =>
   && (!status.value || r.status === status.value)
   && (!mine.value || r.startedBy === me.value?.login)))
 
-const duration = (r: WorkflowRun) => {
-  const secs = Math.round(((r.endedAt ?? Date.now()) - r.startedAt) / 1000)
-  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
-}
+// Execution time from the run clock, and it re-renders because `now` ticks:
+// this column read `endedAt - startedAt`, so a run restarted an hour after it
+// failed showed that hour as its duration.
+const duration = (r: WorkflowRun) => runElapsedLabel(r, now.value)
 /** The step a one-click restart resumes from: the failed one, or what was executing. */
 const restartPoint = (r: WorkflowRun) =>
   r.steps.find(s => s.status === 'failed')?.stepId
@@ -229,7 +229,7 @@ async function deleteFailed() {
               <th class="px-3 py-2 font-medium">By</th>
               <th class="px-3 py-2 font-medium">Status</th>
               <th class="px-3 py-2 font-medium">Started</th>
-              <th class="px-3 py-2 font-medium">Duration</th>
+              <th class="px-3 py-2 font-medium" :title="RUN_DURATION_HINT">Duration</th>
               <th class="px-3 py-2 font-medium w-40">Steps</th>
               <th class="px-3 py-2 font-medium">Prompt</th>
               <th class="px-3 py-2 font-medium text-right">Actions</th>
@@ -244,7 +244,7 @@ async function deleteFailed() {
                 <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans text-[10px] underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
               </td>
               <td class="px-3 py-2 text-label whitespace-nowrap">{{ new Date(r.startedAt).toLocaleString() }}</td>
-              <td class="px-3 py-2 text-label whitespace-nowrap">{{ duration(r) }}</td>
+              <td class="px-3 py-2 text-label whitespace-nowrap" :title="RUN_DURATION_HINT">{{ duration(r) }}</td>
               <td class="px-3 py-2"><RunProgressBar :steps="r.steps" /></td>
               <td class="px-3 py-2 text-label truncate max-w-[12rem]" :title="r.initialPrompt">{{ r.initialPrompt }}</td>
               <td class="px-3 py-2">
