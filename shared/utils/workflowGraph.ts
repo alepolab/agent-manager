@@ -472,6 +472,20 @@ export interface DispatchPlan {
 const ENTRY_KEY_FIELDS = ['jira_key', 'key', 'id', 'ticket', 'title']
 
 /**
+ * What to call one entry of an artifact: its own identity where it has one,
+ * else its position.
+ *
+ * Exported because the review panel names the same entries a dispatch will,
+ * and two different names for one draft - "DRAFT-002" on screen, "entry 2" in
+ * the run log - is a reviewer unable to tell whether the thing they approved
+ * is the thing that ran.
+ */
+export function entryKey(entry: Record<string, unknown>, index: number): string {
+  const named = ENTRY_KEY_FIELDS.map(f => entry[f]).find(v => typeof v === 'string' && v.trim())
+  return typeof named === 'string' ? named.trim() : `entry ${index + 1}`
+}
+
+/**
  * Which child runs a `triggerWorkflow` step should start, from the artifact it
  * dispatches over.
  *
@@ -518,9 +532,7 @@ export function planDispatch(raw: string | null, cfg: TriggerWorkflowConfig): Di
     const entry: Record<string, unknown> = (raw_ && typeof raw_ === 'object' && !Array.isArray(raw_))
       ? raw_ as Record<string, unknown>
       : {}
-    const position = `entry ${i + 1}`
-    const named = ENTRY_KEY_FIELDS.map(f => entry[f]).find(v => typeof v === 'string' && v.trim())
-    const key = typeof named === 'string' ? named.trim() : position
+    const key = entryKey(entry, i)
 
     const routed = cfg.routeBy ? entry[cfg.routeBy] : undefined
     const slug = (typeof routed === 'string' && cfg.routes?.[routed]) || cfg.slug

@@ -21,6 +21,11 @@ export const RUN_STATUS_COLOR = {
   queued: 'var(--text-secondary, #6b7280)',
   running: 'var(--info, #3b82f6)',
   paused: 'var(--warning, #f59e0b)',
+  /** Stopped on a person who has entries to decide about. Shares the warning
+   *  colour with `paused` deliberately — both mean "this is on you now", and
+   *  inventing a seventh hue would say they differ in urgency rather than in
+   *  what is being asked. The label is what tells them apart. */
+  awaiting_review: 'var(--warning, #f59e0b)',
   completed: 'var(--success, #22c55e)',
   failed: 'var(--error, #ef4444)',
   stopped: 'var(--text-disabled, #9ca3af)',
@@ -32,6 +37,14 @@ export const RUN_STATUS_COLOR = {
 
 export function runStatusColor(status: string): string {
   return RUN_STATUS_COLOR[status] ?? 'var(--text-disabled, #9ca3af)'
+}
+
+/** How a status reads to a person. The statuses are rendered uppercase all over
+ *  this app, and a raw multi-word one arrives as AWAITING_REVIEW — an
+ *  identifier, not a phrase. One transformation rather than a label table:
+ *  every status name already reads correctly once its underscore is a space. */
+export function runStatusLabel(status: string): string {
+  return status.replace(/_/g, ' ')
 }
 
 /** A run or step is "settled" when nothing further will happen to it. Note

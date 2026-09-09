@@ -69,6 +69,7 @@ await groups.replaceGroups([
 {
   await mk({ status: 'running', group: 'sdlc' })
   await mk({ status: 'paused', group: 'sdlc' })
+  await mk({ status: 'awaiting_review', group: 'sdlc' })
   await mk({ status: 'queued', group: 'sdlc' })
   await mk({ status: 'completed', group: 'sdlc' })
   await mk({ status: 'failed', group: 'sdlc' })
@@ -76,8 +77,11 @@ await groups.replaceGroups([
   await mk({ status: 'running', group: 'scans' })
   await mk({ status: 'running' })   // ungrouped
 
-  assert.equal(await queue.inFlightForGroup('sdlc'), 2,
-    'running and paused occupy slots; queued, completed, failed and interrupted do not')
+  // awaiting_review counts. A run stopped on a person still holds its working
+  // directory and its clone; letting it hand the slot back would drain another
+  // run onto the same machine while it waits.
+  assert.equal(await queue.inFlightForGroup('sdlc'), 3,
+    'running, paused and awaiting_review occupy slots; queued, completed, failed and interrupted do not')
   assert.equal(await queue.inFlightForGroup('scans'), 1, 'a group counts only its own runs')
   assert.equal(await queue.inFlightForGroup('default'), 1,
     'an ungrouped run counts against the default group, not against nothing')

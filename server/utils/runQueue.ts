@@ -24,6 +24,7 @@ import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { capFor } from './workflowGroups.ts'
 import { listRuns } from './workflowRunStore.ts'
 import { createLogger } from './log.ts'
+import { isWorkingStatus } from '../../shared/types/run.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 // The runner's own namespace: this is work the runner does, not a subsystem of
@@ -84,7 +85,7 @@ function serialised<T>(fn: () => Promise<T>): Promise<T> {
  */
 export async function inFlightForGroup(group: string, runs?: WorkflowRun[]): Promise<number> {
   const all = runs ?? await listRuns()
-  return all.filter(r => (r.status === 'running' || r.status === 'paused') && groupOf(r) === group).length
+  return all.filter(r => isWorkingStatus(r.status) && groupOf(r) === group).length
 }
 
 /**

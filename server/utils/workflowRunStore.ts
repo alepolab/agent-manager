@@ -11,7 +11,7 @@ import { runArtifactsDir } from './runArtifacts.ts'
 // runtime, and the plain-node test scripts that import this module directly
 // resolve no aliases. The type-only imports below may keep the alias because
 // they are erased.
-import { isLiveStatus } from '../../shared/types/run.ts'
+import { isLiveStatus, isWorkingStatus } from '../../shared/types/run.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
 
@@ -73,7 +73,7 @@ function applyInterrupted(run: WorkflowRun): WorkflowRun {
   // pid and bootId name the process that queued it, which is routinely gone by
   // the time a slot frees, and calling that "interrupted" would delete the
   // queue on every restart.
-  const live = run.status === 'running' || run.status === 'paused'
+  const live = isWorkingStatus(run.status)
   // Either signal means the owner is gone: a boot id from another process, or
   // a pid nothing answers on. Inside a container every server is pid 1, which
   // is why the boot id exists at all.
@@ -257,7 +257,7 @@ export async function findRunInWorkspace(
 ): Promise<WorkflowRun | null> {
   const runs = await listRuns()
   return runs.find(r =>
-    (opts.includeQueued ? isLiveStatus(r.status) : r.status === 'running' || r.status === 'paused')
+    (opts.includeQueued ? isLiveStatus(r.status) : isWorkingStatus(r.status))
     && r.id !== excludeRunId
     && runWorkspace(r) === workspace,
   ) ?? null

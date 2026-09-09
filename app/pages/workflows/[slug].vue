@@ -56,6 +56,10 @@ function cloneRun() {
 const execSteps = computed(() => run.value?.steps ?? [])
 const isRunning = computed(() => run.value?.status === 'running')
 const isPaused = computed(() => run.value?.status === 'paused')
+/** Stopped on a person who has entries to decide about. Like paused for every
+ *  purpose on this page: the canvas may not start a second run, and the run
+ *  controls stay up. */
+const isReviewing = computed(() => run.value?.status === 'awaiting_review')
 /** Admitted but waiting for a slot in its concurrency group. Distinct from
  *  running: the canvas is still editable (launchQueuedRun re-reads the
  *  definition, so an edit made while it waits is the one that runs), but
@@ -501,7 +505,7 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false, pa
   }
 }
 
-const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value && !isQueued.value)
+const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value && !isReviewing.value && !isQueued.value)
 const filteredAgents = computed(() => {
   if (!paletteSearch.value) return agents.value
   const q = paletteSearch.value.toLowerCase()
@@ -557,7 +561,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       />
 
       <UButton
-        v-if="isRunning || isPaused || isQueued"
+        v-if="isRunning || isPaused || isReviewing || isQueued"
         label="Stop"
         icon="i-lucide-square"
         size="sm"

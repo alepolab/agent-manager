@@ -226,6 +226,18 @@ rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
   const lr = JSON.parse(readFileSync(lp, 'utf8')); lr.status = 'paused'; lr.pid = process.pid; lr.bootId = store.BOOT_ID; writeFileSync(lp, JSON.stringify(lr))
   assert.equal(await store.deleteRun(live.id), 'live', 'a live run is refused; stop it first')
   assert.ok(existsSync(lp), 'and its record is untouched')
+
+  // A run stopped on a person's decisions is live for the same reason a paused
+  // one is: it holds its checkout and it is going to do something as soon as it
+  // is answered. Deleting it would take that decision away from under it.
+  const reviewing = JSON.parse(readFileSync(lp, 'utf8'))
+  reviewing.status = 'awaiting_review'
+  reviewing.question = { stepId: 'a', kind: 'approval', askedAt: Date.now(), text: 'decide', artifact: 'escalated-drafts.json' }
+  writeFileSync(lp, JSON.stringify(reviewing))
+  assert.equal((await store.getRun(live.id)).status, 'awaiting_review',
+    'and it is not reported interrupted while its owner is alive')
+  assert.equal(await store.deleteRun(live.id), 'live', 'a run awaiting a decision is refused too')
+  assert.ok(existsSync(lp), 'and keeps its record')
   rmSync(runsBase, { recursive: true, force: true })
 }
 

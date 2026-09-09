@@ -37,7 +37,12 @@ const quietLabel = computed(() => {
 })
 
 /** A paused run is not slow, it is waiting on a person — say so, and say what for. */
-const question = computed(() => (props.run.status === 'paused' && props.run.question?.text) || null)
+const question = computed(() => props.run.question?.text ?? null)
+/** A run awaiting review is waiting on a person too, but for several decisions
+ *  rather than one yes. The card says which, and sends them somewhere that can
+ *  take the answer — the decisions do not fit here and must not be faked with a
+ *  single Approve. */
+const reviewing = computed(() => props.run.status === 'awaiting_review')
 
 const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.split('\n')[0]?.slice(0, 70) || 'Untitled run')
 </script>
@@ -60,10 +65,10 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
 
     <!-- What the agent is doing. This is the whole point of the card. -->
     <div v-if="question" class="flex items-center gap-2 text-[12px]">
-      <UIcon name="i-lucide-hand" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR.paused }" />
-      <span :style="{ color: RUN_STATUS_COLOR.paused }">Waiting for you:</span>
+      <UIcon :name="reviewing ? 'i-lucide-gavel' : 'i-lucide-hand'" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR.paused }" />
+      <span :style="{ color: RUN_STATUS_COLOR.paused }">{{ reviewing ? 'Waiting on your decisions:' : 'Waiting for you:' }}</span>
       <span class="text-label truncate">{{ question }}</span>
-      <UButton size="xs" variant="soft" label="Answer" :to="`/runs/${run.id}`" class="ml-auto shrink-0" />
+      <UButton size="xs" variant="soft" :label="reviewing ? 'Review' : 'Answer'" :to="`/runs/${run.id}`" class="ml-auto shrink-0" />
     </div>
 
     <!-- A queued run: say what it is waiting for, not "step 1 of 7". Without

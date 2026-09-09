@@ -2,12 +2,12 @@ import type { WorkflowRun } from '~~/shared/types/run'
 
 /**
  * Posts a one-line message to a Slack incoming webhook when a run reaches a
- * state a person has to act on: paused, completed, failed, stopped or
- * interrupted. Nothing is sent while a run is merely running, and each status
- * is announced once per run so a burst of publishes does not become a burst of
- * messages. No webhook configured means no messages and no errors.
+ * state a person has to act on: paused, awaiting review, completed, failed,
+ * stopped or interrupted. Nothing is sent while a run is merely running, and
+ * each status is announced once per run so a burst of publishes does not become
+ * a burst of messages. No webhook configured means no messages and no errors.
  */
-const NOTIFY_ON: WorkflowRun['status'][] = ['paused', 'completed', 'failed', 'stopped', 'interrupted']
+const NOTIFY_ON: WorkflowRun['status'][] = ['paused', 'awaiting_review', 'completed', 'failed', 'stopped', 'interrupted']
 const lastNotified = new Map<string, WorkflowRun['status']>()
 
 export type Poster = (url: string, body: unknown) => Promise<void>

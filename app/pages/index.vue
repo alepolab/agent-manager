@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { isLiveStatus, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/types/run'
+import { RUN_STATUS_COLOR, runStatusLabel } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 
 /**
@@ -44,7 +44,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 const hasContent = computed(() => agents.value.length > 0 || commands.value.length > 0 || skills.value.length > 0)
 
 const attention = computed(() => runs.value
-  .filter(r => !r.dismissed && (['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
+  .filter(r => !r.dismissed && (isWaitingOnAPerson(r.status) || ['failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
   // Most recently active first, for the same reason as `mine` below: a
   // restarted run is as recent as its last attempt, not as its first.
   .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a)))
@@ -58,8 +58,8 @@ async function dismiss(ids: string[]) {
     toast.add({ title: 'Could not dismiss', description: e.data?.message || e.message, color: 'error' })
   } finally { dismissing.value = false }
 }
-/** Everything settled in the queue; a paused run still needs a decision, so it stays. */
-const dismissable = computed(() => attention.value.filter(r => r.status !== 'paused'))
+/** Everything settled in the queue; a run stopped on a person still needs one, so it stays. */
+const dismissable = computed(() => attention.value.filter(r => !isWaitingOnAPerson(r.status)))
 /**
  * My runs, most recently ACTIVE first - not most recently started.
  *
@@ -125,7 +125,8 @@ async function startFromTicket() {
   }
 }
 
-const why = (r: WorkflowRun) => r.status === 'paused' ? `paused before ${r.steps.find(s => r.nextStepIds.includes(s.stepId))?.label ?? 'the next step'}`
+const why = (r: WorkflowRun) => r.status === 'awaiting_review' ? `${r.question?.artifact ?? 'its drafts'} is waiting on your decisions`
+  : r.status === 'paused' ? `paused before ${r.steps.find(s => r.nextStepIds.includes(s.stepId))?.label ?? 'the next step'}`
   : r.status === 'failed' ? (r.error || `failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`)
   : r.status === 'interrupted' ? 'server restarted; resume it'
   : r.ci?.status === 'failing' ? 'CI failing on the PR' : r.status
@@ -180,13 +181,13 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
                width is what keeps that row's fields level with the others. -->
           <div v-for="r in attention" :key="r.id" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <NuxtLink :to="`/runs/${r.id}`" class="flex-1 min-w-0 grid grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 focus-ring">
-              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ runStatusLabel(r.status) }}</span>
               <span class="font-medium truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
               <span class="text-label truncate" :title="why(r)">{{ why(r) }}</span>
               <span class="text-label text-right truncate" :title="`Started ${new Date(r.startedAt).toLocaleString()}`">{{ r.startedBy || '' }} · {{ ago(runLastActivityAt(r)) }}</span>
             </NuxtLink>
             <span class="w-6 shrink-0 flex justify-center">
-              <button v-if="r.status !== 'paused'" class="p-1.5 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
+              <button v-if="!isWaitingOnAPerson(r.status)" class="p-1.5 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
             </span>
           </div>
           <div v-for="t in escalated" :key="t.watchId + t.key" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
@@ -215,7 +216,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
               class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring"
               style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
             >
-              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ runStatusLabel(r.status) }}</span>
               <span class="truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
               <RunProgressBar :steps="r.steps" />
               <span

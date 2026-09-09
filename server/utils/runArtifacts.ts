@@ -3,7 +3,7 @@ import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { join, resolve, sep, dirname } from 'node:path'
 import { computeFixFacts } from './gitFacts.ts'
 import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import { resolveClaudePath } from './claudeDir.ts'
@@ -85,6 +85,46 @@ export function resolveRunArtifact(runId: string, name: string): string | null {
   const root = resolve(runArtifactsDir(runId))
   const target = resolve(root, name)
   return target === root || target.startsWith(root + sep) ? target : null
+}
+
+/**
+ * Reads one of a run's artifacts as the array of entries the pipeline treats it
+ * as - the drafts, the findings, the things a dispatch fans out over.
+ *
+ * Distinguishes the three cases the callers must tell apart, rather than
+ * flattening them to an empty list: `null` for a file that is not there or is
+ * outside the run's directory, an Error for one that exists but is not a JSON
+ * array. Reading a corrupt artifact as "no entries" is exactly the silent
+ * nothing gateSatisfied refuses to produce.
+ */
+export async function readArtifactEntries(
+  runId: string, name: string,
+): Promise<{ entries: Record<string, unknown>[] } | { error: string } | null> {
+  const path = resolveRunArtifact(runId, name)
+  if (path === null) return { error: `${name} names a path outside the run's artifacts directory` }
+  const raw = await readFile(path, 'utf8').catch(() => null)
+  if (raw === null) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { error: `${name} exists but is not valid JSON` }
+  }
+  if (!Array.isArray(parsed)) return { error: `${name} holds ${parsed === null ? 'null' : typeof parsed}, not an array of entries` }
+  // A non-object entry has no fields to decide about or create from; it is kept
+  // as an empty object so indices - which is how a decision addresses an entry
+  // - still line up with the file.
+  return { entries: parsed.map(e => (e && typeof e === 'object' && !Array.isArray(e)) ? e as Record<string, unknown> : {}) }
+}
+
+/** Writes a JSON artifact back, pretty-printed as every producer of one does.
+ *  Refuses a name that escapes the run's directory, like every other writer. */
+export async function writeArtifactJson(runId: string, name: string, value: unknown): Promise<void> {
+  const path = resolveRunArtifact(runId, name)
+  if (path === null) throw new Error(`${name} names a path outside the run's artifacts directory`)
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, `${JSON.stringify(value, null, 2)}
+`, 'utf-8')
 }
 
 /** Filenames come from agent slugs, which are user data. Keep them inert.

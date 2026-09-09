@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { isLiveStatus, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
 const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string] }>()
+
+/** The run is gated on the entries of an artifact, so RunDecisionPanel owns
+ *  both the question and the resume: the generic note box and Approve button
+ *  below would offer a second, cruder way to answer the same gate — one that
+ *  acts on every entry. */
+const reviewing = computed(() => props.run?.status === 'awaiting_review')
 
 /** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
 const anyRunning = computed(() => props.run?.steps.some(s => s.status === 'running') ?? false)
@@ -152,7 +158,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </button>
       <NuxtLink v-if="!fullPage" :to="`/runs/${run.id}`" class="text-[11px] text-label hover:underline shrink-0 focus-ring" title="Steps, live output and every evidence file, full screen">Full page &nearr;</NuxtLink>
       <span class="text-[11px] font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">
-        {{ run.status }}
+        {{ runStatusLabel(run.status) }}
       </span>
       <span class="text-[12px] text-label">{{ run.workflowName }}</span>
       <span class="text-[11px] text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">
@@ -195,13 +201,18 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     <div v-if="prLinks.length" class="flex flex-wrap gap-3 text-[11px]">
       <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
     </div>
-    <div v-if="run.question" class="rounded-lg p-3 text-[12px] space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
+    <!-- A run gated on the entries of an artifact gets the panel that can take
+         those decisions, not the one-line banner and the single Approve button
+         below: approving the step acts on every entry, which is the thing the
+         reviewer is here to prevent. -->
+    <RunDecisionPanel v-if="reviewing" :run="run" />
+    <div v-else-if="run.question" class="rounded-lg p-3 text-[12px] space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
       <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
       <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
     </div>
     <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
     <textarea
-      v-if="settledRun || run.status === 'paused' || run.status === 'running'"
+      v-if="!reviewing && (settledRun || run.status === 'paused' || run.status === 'running')"
       v-model="note"
       rows="2"
       class="field-input w-full resize-none text-[12px]"
@@ -287,7 +298,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     </div>
 
     <div class="flex gap-2">
-      <UButton v-if="noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
+      <UButton v-if="!reviewing && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
       <UButton v-else-if="run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'" @click="send('continue')" />
       <UButton v-else-if="run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
       <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
@@ -306,7 +317,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <span class="w-2 h-2 rounded-full" :style="{ background: STATUS_COLOR[r.status] }" />
       <span>{{ new Date(r.startedAt).toLocaleString() }}</span>
       <span class="text-[10px] text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(r, now) }}</span>
-      <span class="ml-auto text-[10px] font-mono text-label">{{ r.status }}</span>
+      <span class="ml-auto text-[10px] font-mono text-label">{{ runStatusLabel(r.status) }}</span>
     </button>
     <p v-if="runs.length > 10" class="text-[11px] text-label pt-1">
       Showing 10 of {{ runs.length }}. <NuxtLink to="/runs" class="hover:underline">See all</NuxtLink>.

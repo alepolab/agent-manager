@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR, runStatusLabel } from '~/utils/runStatus'
 import { isLiveStatus } from '~~/shared/types/run'
 
 /**
@@ -33,7 +33,7 @@ async function onRestart(stepId: string, note?: string) {
       </template>
       <template #subtitle>
         <p v-if="run" class="text-[11px] font-mono text-meta truncate">
-          <span :style="{ color: RUN_STATUS_COLOR[run.status] }">{{ run.status }}</span>
+          <span :style="{ color: RUN_STATUS_COLOR[run.status] }">{{ runStatusLabel(run.status) }}</span>
           · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}
         </p>
       </template>

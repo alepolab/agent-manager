@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { isJiraPostingEnabled, jiraAuthHeader } from './jiraCredentials.ts'
 import { credentialsFor, notifyTicketOutcome } from './ticketNotifier.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
+import { createFromArtifact } from './jiraCreate.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -14,6 +15,19 @@ export interface JiraStepConfig {
   comment?: boolean
   /** Attach the run's evidence files to the ticket. */
   attach?: boolean
+  /**
+   * Create one issue per entry of `source`, stamping the key back onto the
+   * entry (server/utils/jiraCreate.ts).
+   *
+   * Spelled as an action rather than a boolean because the workflows already
+   * declare it that way and have since they were written — they were simply
+   * never read, since this interface modelled only the three fields above.
+   * Matching the declaration is what makes those files start working with no
+   * migration and no edit to a workflow definition.
+   */
+  action?: 'create'
+  /** The artifact `action: 'create'` reads its drafts from. */
+  source?: string
 }
 
 /**
@@ -38,9 +52,23 @@ const STATUS_SYNONYMS: Record<string, string[]> = {
  * it would have done.
  */
 export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchImpl: FetchLike = fetch): Promise<string> {
-  const key = run.ticketKey
-  if (!key) return 'PIPELINE-SKIP: this run has no ticket key, so there is nothing in Jira to move or to comment on.'
   const lines: string[] = []
+  // Creation runs first, and outside the ticket-key guard below: a step that
+  // CREATES tickets is the one kind that legitimately starts without one. That
+  // guard is about a run whose own ticket is missing, which says nothing about
+  // drafts this step is about to file — and returning early on it is why the
+  // create action, once declared, would still have produced nothing.
+  if (cfg.action === 'create') {
+    if (!cfg.source) return 'Nothing created: this step is set to create tickets but names no artifact to create them from.'
+    lines.push(await createFromArtifact(run, cfg.source, fetchImpl))
+  }
+
+  const key = run.ticketKey
+  if (!key) {
+    return lines.length
+      ? lines.join('\n')
+      : 'PIPELINE-SKIP: this run has no ticket key, so there is nothing in Jira to move or to comment on.'
+  }
   if (cfg.transition) lines.push(await moveTicket(run, key, cfg.transition, fetchImpl))
   if (cfg.attach) lines.push(await attachArtifacts(run, key, fetchImpl))
   if (cfg.comment) {
@@ -51,7 +79,7 @@ export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchIm
     lines.push(result.posted ? `Comment posted on ${key}.` : `Comment recorded, not posted: ${result.reason}.`)
     run.ticketCommented = true
   }
-  return lines.join('\n') || 'Nothing configured for this Jira step: set a status to move to, or the outcome comment, in the workflow builder.'
+  return lines.join('\n') || 'Nothing configured for this Jira step: set a status to move to, the outcome comment, or ticket creation, in the workflow builder.'
 }
 
 /**

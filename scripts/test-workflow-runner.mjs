@@ -1068,6 +1068,12 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   g = await runner.waitForSettled(g.id, TIMEOUT)
   assert.equal(g.status, 'paused', 'run-to-completion still stops at an approval gate')
   assert.equal(g.question?.kind, 'approval'); assert.equal(g.question.stepId, 'd')
+  // A gate over no artifact is still a plain approval: one yes, one button. The
+  // awaiting_review status is reserved for a gate whose step consumes a file,
+  // and promoting every approval to it would put a decision panel in front of
+  // steps that have nothing to decide.
+  assert.equal(g.status !== 'awaiting_review', true, 'a gate with no runWhen artifact is a plain approval')
+  assert.equal(g.question.artifact, undefined, 'and names no artifact to decide about')
   assert.equal(g.steps.find(s => s.stepId === 'd').status, 'pending', 'the gated step has not started')
   assert.equal(inputs['agent-d'], undefined)
   g = await runner.continueRun(g.id, 'Target the SaskTel branch policy')
@@ -1393,9 +1399,14 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   calls.length = 0
   let g3 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
   g3 = await runner.waitForSettled(g3.id, TIMEOUT)
-  assert.equal(g3.status, 'paused', 'real escalations still wait for a person')
+  // Not 'paused': the step consumes an artifact, so what it does depends on
+  // which of its entries survive review, and "approve this step" is the wrong
+  // question. The status is what the run page keys the decision panel off.
+  assert.equal(g3.status, 'awaiting_review', 'a gate over an artifact waits on decisions, not on one yes')
   assert.equal(g3.question.kind, 'approval')
   assert.equal(g3.question.stepId, 'esc')
+  assert.equal(g3.question.artifact, 'escalated-drafts.json', 'and names the file whose entries are being decided')
+  assert.match(g3.question.text, /escalated-drafts\.json/, 'the question says so in words too')
   // Documents a defect this change does NOT fix: the approval gate holds the
   // WHOLE wave, so the auto-approved sibling waits on the human too. Conditional
   // routing only removes the case where the escalated branch was empty.

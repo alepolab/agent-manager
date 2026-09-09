@@ -447,7 +447,7 @@ async function publish(run: WorkflowRun) {
   await next
 }
 
-const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'completed', 'failed', 'stopped']
+const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'awaiting_review', 'completed', 'failed', 'stopped']
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
@@ -1481,13 +1481,28 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // A step marked for approval waits for a person before it starts, run-to-completion or not.
   const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id))
   if (gate) {
-    const label = stepOf(l, gate)?.label ?? gate
-    run.question = { stepId: gate, text: `Approve "${label}" to run it`, kind: 'approval', askedAt: Date.now() }
-    run.status = 'paused'
+    const step = stepOf(l, gate)
+    const label = step?.label ?? gate
+    // A gated step that consumes an artifact asks a different question. "Approve
+    // this step" acts on every entry in that file, and a step downstream of it
+    // may start one child run per entry - so the honest question is which
+    // entries to act on, and the run says so with its own status. Read off the
+    // step's own runWhen rather than from anything workflow-specific: the shape
+    // (approval + a file to consume) is the whole condition, exactly as
+    // resolveConditions gates on the file rather than on an announcement.
+    const artifact = step?.runWhen?.artifact
+    run.question = {
+      stepId: gate, kind: 'approval', askedAt: Date.now(),
+      text: artifact
+        ? `Decide which entries of ${artifact} to act on before "${label}" runs`
+        : `Approve "${label}" to run it`,
+      ...(artifact ? { artifact } : {}),
+    }
+    run.status = artifact ? 'awaiting_review' : 'paused'
     run.currentStepIds = []
     run.nextStepIds = wave
     l.running = false
-    log.info('run waits for approval', { runId: run.id, stepId: gate })
+    log.info('run waits for a person', { runId: run.id, stepId: gate, artifact })
     await publish(run)
     return run
   }
@@ -2033,7 +2048,12 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
 }
 
 /** Continue a paused run. A note travels to the approved step, or to whichever step starts next. */
-export async function continueRun(runId: string, note?: string): Promise<WorkflowRun | null> {
+export async function continueRun(
+  runId: string, note?: string, opts: { grantApproval?: boolean } = {},
+): Promise<WorkflowRun | null> {
+  // Default true: every existing caller means "yes, run it". Only the decision
+  // endpoint passes false, and only when the operator approved no entry at all.
+  const grantApproval = opts.grantApproval ?? true
   let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds
   // name what was executing; restarting from those is the honest resume.
@@ -2048,7 +2068,7 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
     // Paused with nothing in memory: the process that paused it is gone (a
     // container restart leaves pid 1 in place, so only the record tells).
     // Rebuild the scheduling state from disk and take ownership.
-    if (stored?.status !== 'paused') return stored
+    if (stored?.status !== 'paused' && stored?.status !== 'awaiting_review') return stored
     l = await rehydrate(stored)
     stored.pid = process.pid
     stored.bootId = BOOT_ID
@@ -2061,7 +2081,7 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
   if (l.running) return getRun(runId)
   l.running = true
   const run = await getRun(runId)
-  if (!run || run.status !== 'paused') {
+  if (!run || (run.status !== 'paused' && run.status !== 'awaiting_review')) {
     l.running = false
     return run
   }
@@ -2073,7 +2093,13 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
   }
   if (run.question?.kind === 'approval') {
     if (run.question.reason === 'budget') extendBudget(run)
-    else l.approved.add(run.question.stepId)
+    // Withholding the approval is what lets a review that approved nothing take
+    // effect. l.approved waives runWhen (see resolveConditions), so granting it
+    // here would run the step over an artifact the operator just emptied - the
+    // approval would override the decision it was supposed to carry out.
+    // Without it, the condition is re-tested and the step is skipped by the
+    // ordinary path, with the ordinary sentence naming the file.
+    else if (grantApproval) l.approved.add(run.question.stepId)
     if (note?.trim() && run.question.stepId) l.notes[run.question.stepId] = note.trim()
   } else if (note?.trim()) {
     l.nextNote = note.trim()
@@ -2344,7 +2370,12 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (!run) throw new RestartError(404, 'Run not found')
   if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
   if (!opts.fromRunner && !RESTARTABLE.includes(run.status)) {
-    throw new RestartError(409, `A ${run.status} run cannot be restarted; ${run.status === 'paused' ? 'continue it instead' : 'wait for it to settle'}`)
+    const instead = run.status === 'paused'
+      ? 'continue it instead'
+      : run.status === 'awaiting_review'
+        ? 'record your decisions instead'
+        : 'wait for it to settle'
+    throw new RestartError(409, `A ${run.status} run cannot be restarted; ${instead}`)
   }
   // Same scope as starting a run: what conflicts is a shared working directory.
   const active = await findRunInWorkspace(runWorkspace(run), run.id)

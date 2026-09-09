@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 
 const route = useRoute()
 const router = useRouter()
@@ -73,7 +73,7 @@ const live = computed(() => runs.value.filter(r => isLiveStatus(r.status)))
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | null = null
 
-const STATUSES = ['queued', 'running', 'paused', 'completed', 'failed', 'stopped', 'interrupted']
+const STATUSES = ['queued', 'running', 'paused', 'awaiting_review', 'completed', 'failed', 'stopped', 'interrupted']
 const shown = computed(() => runs.value.filter(r =>
   (!filter.value || [r.workflowName, r.initialPrompt.split('\n')[0] ?? '', r.startedBy ?? '', r.product?.name ?? ''].some(v => v.toLowerCase().includes(filter.value.toLowerCase())))
   && (!status.value || r.status === status.value)
@@ -203,7 +203,7 @@ async function deleteFailed() {
         <label class="text-[12px] text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox" /> Mine</label>
         <select v-model="status" class="field-input w-40" aria-label="Filter by status">
           <option value="">All statuses</option>
-          <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
+          <option v-for="s in STATUSES" :key="s" :value="s">{{ runStatusLabel(s) }}</option>
         </select>
         <UButton
           v-if="failedShown.length"
@@ -253,7 +253,7 @@ async function deleteFailed() {
               <td class="px-3 py-2 font-medium">{{ r.workflowName }}</td>
               <td class="px-3 py-2 text-label">{{ r.startedBy || '' }}</td>
               <td class="px-3 py-2 font-mono uppercase text-[11px]" :style="{ color: RUN_STATUS_COLOR[r.status] }">
-                {{ r.status }}
+                {{ runStatusLabel(r.status) }}
                 <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans text-[10px] underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
               </td>
               <td class="px-3 py-2 text-label whitespace-nowrap">{{ new Date(r.startedAt).toLocaleString() }}</td>

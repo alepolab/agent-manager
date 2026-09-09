@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR, runElapsedLabel } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR, runElapsedLabel, runStatusLabel } from '~/utils/runStatus'
 
 /**
  * The one-line run control that stays visible above the canvas. Every action a
@@ -63,7 +63,7 @@ function onStop() {
   >
     <template v-if="run">
       <span class="text-[11px] font-mono uppercase" :style="{ color: RUN_STATUS_COLOR[run.status] }" aria-live="polite">
-        {{ run.status }}
+        {{ runStatusLabel(run.status) }}
       </span>
       <div class="w-40"><RunProgressBar :steps="run.steps" /></div>
       <span class="text-[11px] text-label font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
@@ -71,6 +71,10 @@ function onStop() {
       <span class="text-[11px] text-label font-mono tabular-nums">{{ elapsed }}</span>
       <div class="flex items-center gap-1 ml-auto">
         <UButton v-if="run.status === 'paused'" size="xs" icon="i-lucide-play" label="Continue" @click="emit('continue')" />
+        <!-- The bar has no room for the drafts and their prompts, and a bare
+             Continue here would approve every entry - the thing the reviewer is
+             here to decide against. It sends them to the panel instead. -->
+        <UButton v-if="run.status === 'awaiting_review'" size="xs" icon="i-lucide-gavel" label="Review" :to="`/runs/${run.id}`" />
         <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
         <UButton v-if="canRestart" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Restart" title="Re-run from the failed step" @click="emit('restart', restartPoint!)" />
         <UButton

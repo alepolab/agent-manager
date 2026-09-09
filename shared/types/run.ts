@@ -15,6 +15,23 @@ export type WorkflowRunStatus =
    * idle is the workspace lock at launch time — see findRunInWorkspace.
    */
   | 'queued'
+  /**
+   * Stopped on a person who must decide about the ENTRIES of an artifact, not
+   * merely say yes to a step.
+   *
+   * Raised when the gated step carries both `approval` and a `runWhen`
+   * artifact: what that step will do depends on which entries survive the
+   * review, so "approve this step" is the wrong question and answering it
+   * yes acts on all of them. The decision is recorded by rewriting the
+   * artifact (server/api/runs/[id]/decisions.post.ts), which is what makes it
+   * bind on every step that reads the same file.
+   *
+   * Distinct from `paused` on purpose, and not merely for the colour: a paused
+   * run resumes with one button, and this one cannot resume at all until the
+   * entries have been decided. Live either way - it holds its working
+   * directory and its group's slot while it waits.
+   */
+  | 'awaiting_review'
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
 
 /**
@@ -33,7 +50,39 @@ export type WorkflowRunStatus =
  * That is a question about the wave loop; this is a question about the run.
  */
 export function isLiveStatus(status: WorkflowRunStatus): boolean {
-  return status === 'queued' || status === 'running' || status === 'paused'
+  return status === 'queued' || status === 'running' || status === 'paused' || status === 'awaiting_review'
+}
+
+/**
+ * A run that has stopped ON A PERSON: nothing will advance it until somebody
+ * acts, and no amount of waiting changes that.
+ *
+ * The distinction the attention queue is built on, and the one that decides
+ * whether a run can be dismissed from it. Dismissing a failure is a person
+ * saying "I have seen this"; there is no equivalent for a run that is still
+ * going to do something as soon as it is answered, so these two are the ones
+ * that cannot be cleared away.
+ */
+export function isWaitingOnAPerson(status: WorkflowRunStatus): boolean {
+  return status === 'paused' || status === 'awaiting_review'
+}
+
+/**
+ * A run that OWNS something right now: a working directory, an owning process,
+ * a slot in its concurrency group. Everything `isLiveStatus` covers except
+ * `queued`, which is admitted but holds nothing yet.
+ *
+ * The second predicate exists because three call sites keep needing exactly
+ * this one and each had spelled it out as `running || paused`: the workspace
+ * lock (findRunInWorkspace), the orphan check (applyInterrupted) and the
+ * per-group slot count (inFlightForGroup). All three were written before
+ * `awaiting_review` joined the union, and all three would have read it as
+ * owning nothing - launching a second run into an occupied checkout, calling a
+ * run that is merely waiting on a person `interrupted` at the next restart, and
+ * handing its group's slot to something else while it still held the clone.
+ */
+export function isWorkingStatus(status: WorkflowRunStatus): boolean {
+  return status === 'running' || status === 'paused' || status === 'awaiting_review'
 }
 
 export type RunStepStatus =
@@ -181,7 +230,6 @@ export interface WorkflowRun {
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
   ticketCommented?: boolean
-  /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
   /**
    * What the runner checked before any agent ran: the compose file, the
    * checkout, git as the agents see it, docker, the Jira statuses this
@@ -195,7 +243,26 @@ export interface WorkflowRun {
    */
   interruptions?: number
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
-  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
+  /** Why the run is stopped on the operator: a step's question, a step that needs approval before it runs, or an artifact whose entries need deciding (see `artifact`). */
+  question?: {
+    stepId: string
+    text: string
+    kind: 'question' | 'approval'
+    askedAt: number
+    /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */
+    reason?: 'budget'
+    /**
+     * The artifact whose entries the operator is deciding about, named by the
+     * gated step's own `runWhen` - set only alongside status
+     * 'awaiting_review'.
+     *
+     * A pointer rather than the entries themselves. The drafts are large, they
+     * are already durable in the run's artifacts directory, and copying them
+     * into the run record would make two sources of truth for what is being
+     * decided - one of which the deciding endpoint then has to keep in step.
+     */
+    artifact?: string
+  }
   projectDir?: string
   /**
    * The workflow's declared inputs, resolved to values once when this run
