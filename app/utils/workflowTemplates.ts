@@ -21,6 +21,11 @@ export interface WorkflowTemplateStep {
   jira?: { transition?: string, comment?: boolean, attach?: boolean }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
+  /** See WorkflowStep.runWhen. */
+  runWhen?: { artifact: string }
+  /** See WorkflowStep.triggerWorkflow. Slugs here name real workflows on the
+   *  instance, not other templates: nothing in this file resolves them. */
+  triggerWorkflow?: { source: string, routeBy?: string, routes?: Record<string, string>, slug?: string }
 }
 
 export interface WorkflowTemplate {
@@ -107,6 +112,8 @@ export function materializeTemplateSteps(
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     if (step.jira !== undefined) materialized.jira = step.jira
     if (step.testsUnlocked) materialized.testsUnlocked = true
+    if (step.runWhen !== undefined) materialized.runWhen = step.runWhen
+    if (step.triggerWorkflow !== undefined) materialized.triggerWorkflow = step.triggerWorkflow
     return materialized
   })
 }

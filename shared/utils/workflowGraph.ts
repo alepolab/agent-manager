@@ -436,6 +436,110 @@ export function gateSatisfied(raw: string | null): GateResult {
     : { verdict: 'skip', detail: `holds ${JSON.stringify(parsed)}` }
 }
 
+/** A step the runner executes itself, without a model: it starts one child run
+ *  per entry in `source`, routing each entry to a workflow. */
+export interface TriggerWorkflowConfig {
+  /** Array artifact in the run's artifacts directory; one child run per entry. */
+  source: string
+  /** Entry field whose value picks the workflow (e.g. 'work_type'). */
+  routeBy?: string
+  /** A `routeBy` value mapped to the workflow slug it dispatches to. */
+  routes?: Record<string, string>
+  /** Where an entry goes when `routeBy`/`routes` do not resolve it, and the
+   *  only target when neither is configured. */
+  slug?: string
+}
+
+export interface DispatchTarget {
+  /** Identifies the entry in reports, and names the child's own workspace. */
+  key: string
+  /** The workflow the child run starts. */
+  slug: string
+  /** The entry itself, so the caller can build the child's opening prompt. */
+  entry: Record<string, unknown>
+}
+
+export interface DispatchPlan {
+  targets: DispatchTarget[]
+  /** Reads as the predicate of a sentence about the file: "<name> <detail>." */
+  detail: string
+  /** Set when no plan could be made; the step fails and dispatches nothing. */
+  error?: string
+}
+
+/** Fields an entry may carry its identity in, nearest-first. A scan pipeline's
+ *  drafts are keyed by ticket before the ticket exists and by key after. */
+const ENTRY_KEY_FIELDS = ['jira_key', 'key', 'id', 'ticket', 'title']
+
+/**
+ * Which child runs a `triggerWorkflow` step should start, from the artifact it
+ * dispatches over.
+ *
+ * Takes the file's text rather than its path, for the same reason
+ * `gateSatisfied` above does: every routing rule and every sentence a reviewer
+ * reads stays I/O-free and testable under plain node. The caller reads the file
+ * and passes `null` when it could not be read at all.
+ *
+ * Absent and malformed are deliberately different, exactly as they are for a
+ * `runWhen` gate. A file that was never written, or holds an empty array, is a
+ * legitimate "nothing to dispatch" - the step ran and found no work. A file
+ * that is not JSON, or is JSON but not an array, means the step that produced
+ * it crashed mid-write or wrote something nobody can consume; reading that as
+ * "nothing to dispatch" would let a scan complete having silently started
+ * nothing, which is the failure this pipeline is built to prevent.
+ *
+ * Routing is all-or-nothing. One entry nobody can route fails the whole step
+ * and starts no children, because a partially dispatched batch leaves some
+ * tickets in flight and others silently dropped, with nothing on the run
+ * saying which were which. Failing names the entry and the value that had no
+ * route, so the fix is a one-line edit to `routes`.
+ */
+export function planDispatch(raw: string | null, cfg: TriggerWorkflowConfig): DispatchPlan {
+  const none = (detail: string): DispatchPlan => ({ targets: [], detail })
+  if (raw === null) return none('was not written')
+  if (!raw.trim()) return none('is empty')
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { targets: [], detail: 'exists but is not valid JSON', error: 'exists but is not valid JSON' }
+  }
+  if (!Array.isArray(parsed)) {
+    const shape = parsed === null ? 'null' : typeof parsed
+    const why = `holds ${shape}, not the array of entries this step dispatches over`
+    return { targets: [], detail: why, error: why }
+  }
+  if (!parsed.length) return none('holds an empty array (0 entries)')
+
+  const targets: DispatchTarget[] = []
+  for (const [i, raw_] of parsed.entries()) {
+    // A non-object entry has no field to route by and no field to be named by.
+    const entry: Record<string, unknown> = (raw_ && typeof raw_ === 'object' && !Array.isArray(raw_))
+      ? raw_ as Record<string, unknown>
+      : {}
+    const position = `entry ${i + 1}`
+    const named = ENTRY_KEY_FIELDS.map(f => entry[f]).find(v => typeof v === 'string' && v.trim())
+    const key = typeof named === 'string' ? named.trim() : position
+
+    const routed = cfg.routeBy ? entry[cfg.routeBy] : undefined
+    const slug = (typeof routed === 'string' && cfg.routes?.[routed]) || cfg.slug
+    if (!slug) {
+      const why = !cfg.routeBy
+        ? 'this step names no workflow to dispatch to: set a target workflow, or a routing field and table'
+        : typeof routed !== 'string' || !routed
+          ? `${key} has no "${cfg.routeBy}" to route on, and this step has no fallback workflow`
+          : `${key} routes on "${cfg.routeBy}": "${routed}", which is in no route and this step has no fallback workflow`
+      return { targets: [], detail: why, error: why }
+    }
+    targets.push({ key, slug, entry })
+  }
+  return {
+    targets,
+    detail: `holds ${targets.length} ${targets.length === 1 ? 'entry' : 'entries'} to dispatch`,
+  }
+}
+
 const CLIP = 4000
 const clip = (text: string): string =>
   text.length > CLIP ? `${text.slice(0, CLIP)}\n...[truncated]` : text

@@ -113,6 +113,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     projectDir: input.projectDir,
     product: input.product,
     startedBy: input.startedBy,
+    parentRunId: input.parentRunId,
     baseCommit: input.baseCommit,
     steps: input.steps.map(s => ({
       stepId: s.stepId, label: s.label, agentSlug: s.agentSlug,

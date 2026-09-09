@@ -1530,6 +1530,204 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
     assert.equal(g9.status, 'completed')
   }
 }
+// ── 28. triggerWorkflow: one child run per entry, dispatched not awaited ───
+// Replaces the sdlc-auto-dispatcher agent, whose "dispatch" was a JSON file
+// nothing read. The step starts real runs, so these assert real run records.
+{
+  const queue = await import('../server/utils/pipelineQueue.ts')
+  process.env.AGENT_WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), 'runner-workspaces-'))
+  // Deterministic: every entry dispatches at once, so nothing is queued except
+  // where 28h deliberately lowers the cap to test queueing.
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+
+  // The child workflows must exist on disk — the runner reads them from
+  // CLAUDE_DIR/workflows, never from the parent's definition.
+  const wfDir = join(process.env.CLAUDE_DIR, 'workflows')
+  mkdirSync(wfDir, { recursive: true })
+  const childWorkflow = name => JSON.stringify({
+    name, steps: [{ id: 'only', agentSlug: 'agent-child', label: name, next: [] }],
+  })
+  writeFileSync(join(wfDir, 'runbook-a.json'), childWorkflow('Runbook A'))
+  writeFileSync(join(wfDir, 'runbook-b.json'), childWorkflow('Runbook B'))
+
+  const dispatchFlow = (trigger, slug = 'scan-demo') => ({
+    slug, name: 'Scan Demo',
+    steps: [
+      { id: 's', agentSlug: 'agent-s', label: 'Scan', next: ['d'] },
+      { id: 'd', agentSlug: 'sdlc-auto-dispatcher', label: 'Dispatch', next: [], triggerWorkflow: trigger },
+    ],
+  })
+  const ROUTING = { source: 'created-tickets.json', routeBy: 'work_type', routes: { bug: 'runbook-a', feature: 'runbook-b' } }
+
+  // The scan step writes the artifact the dispatch step reads, through the
+  // artifact header — the same channel a real agent learns the path from.
+  function scanWriting(tickets) {
+    return async (agentSlug, input) => {
+      calls.push(agentSlug)
+      if (agentSlug === 'agent-s' && tickets !== null) {
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        writeFileSync(join(dir, 'created-tickets.json'), tickets)
+      }
+      return `output of ${agentSlug}`
+    }
+  }
+  const settleAll = async ids => Promise.all(ids.map(id => runner.waitForSettled(id, TIMEOUT)))
+
+  // ── 28a. The feature: a mixed batch fans out, one child run per entry ────
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-1', work_type: 'bug', summary: 'crash on save' },
+    { jira_key: 'CSUP-2', work_type: 'feature', summary: 'dark mode' },
+  ])))
+  calls.length = 0
+  let d1 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true, startedBy: 'dev' })
+  d1 = await runner.waitForSettled(d1.id, TIMEOUT)
+
+  assert.equal(d1.status, 'completed', 'the parent completes; it never waits for a child')
+  const step1 = d1.steps.find(s => s.stepId === 'd')
+  assert.equal(step1.status, 'completed')
+  assert.equal(step1.childRunIds.length, 2, 'one child run per entry')
+  assert.equal(step1.model, null, 'a dispatch step is runner-executed: no model')
+  assert.equal(step1.usage, null, 'and no usage to report')
+  assert.ok(!calls.includes('sdlc-auto-dispatcher'), 'the dispatch step never reaches an agent')
+  assert.match(step1.output, /Dispatched CSUP-1 to runbook-a/, 'the output names each child and its workflow')
+  assert.match(step1.output, /Dispatched CSUP-2 to runbook-b/)
+
+  const kids = await settleAll(step1.childRunIds)
+  assert.deepEqual(kids.map(k => k.workflowSlug).sort(), ['runbook-a', 'runbook-b'],
+    'each entry routed on its own work_type')
+  for (const kid of kids) {
+    assert.equal(kid.parentRunId, d1.id, 'every child records the run that dispatched it')
+    assert.equal(kid.watch, `workflow-trigger:${d1.id}`, 'and answers "what triggered this?" honestly')
+    assert.match(kid.ticketKey, /^CSUP-[12]$/, 'a ticket-shaped key becomes the child ticketKey')
+  }
+  // The whole reason children get their own directory: two runs editing one
+  // checkout corrupt each other, and the run lock is scoped to the directory.
+  assert.equal(new Set(kids.map(k => k.projectDir)).size, 2, 'each child works in its own checkout')
+  assert.ok(kids.every(k => k.projectDir.includes('CSUP-')), 'named after the entry it was dispatched for')
+
+  // ── 28b. Nothing to dispatch is an outcome, not a failure ───────────────
+  runner.setAgentCaller(scanWriting('[]'))
+  let d2 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d2 = await runner.waitForSettled(d2.id, TIMEOUT)
+  assert.equal(d2.status, 'completed', 'an empty batch completes the run')
+  const step2 = d2.steps.find(s => s.stepId === 'd')
+  assert.equal(step2.status, 'completed')
+  assert.match(step2.output, /Dispatched nothing/, 'and says plainly that it dispatched nothing')
+  assert.match(step2.output, /empty array/, 'naming what it found')
+  assert.equal(step2.childRunIds, undefined)
+
+  // A file that was never written is the same outcome, said differently.
+  runner.setAgentCaller(scanWriting(null))
+  let d3 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d3 = await runner.waitForSettled(d3.id, TIMEOUT)
+  assert.equal(d3.status, 'completed')
+  assert.match(d3.steps.find(s => s.stepId === 'd').output, /was not written/)
+
+  // ── 28c. Routing is all-or-nothing ──────────────────────────────────────
+  // A half-dispatched batch leaves some tickets in flight and some silently
+  // dropped, with nothing on the run recording which were which.
+  const runsBefore = (await store.listRuns()).length
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-3', work_type: 'bug' },
+    { jira_key: 'CSUP-4', work_type: 'docs' },
+  ])))
+  let d4 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d4 = await runner.waitForSettled(d4.id, TIMEOUT)
+  assert.equal(d4.status, 'failed', 'an unroutable entry fails the step')
+  const step4 = d4.steps.find(s => s.stepId === 'd')
+  assert.equal(step4.status, 'failed')
+  assert.match(step4.error, /CSUP-4 routes on "work_type": "docs"/, 'the error names the entry and the value')
+  assert.equal((await store.listRuns()).length, runsBefore + 1,
+    'and the routable entry alongside it was NOT dispatched — only the parent exists')
+
+  // ── 28d. Malformed is a failure, never "nothing to dispatch" ────────────
+  // A producer that crashed mid-write must not read as a scan with no findings.
+  runner.setAgentCaller(scanWriting('not json'))
+  let d5 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d5 = await runner.waitForSettled(d5.id, TIMEOUT)
+  assert.equal(d5.status, 'failed')
+  assert.match(d5.steps.find(s => s.stepId === 'd').error, /not valid JSON/)
+
+  // An object where an array belongs is malformed too, not an empty batch.
+  runner.setAgentCaller(scanWriting('{"jira_key":"CSUP-5"}'))
+  let d6 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d6 = await runner.waitForSettled(d6.id, TIMEOUT)
+  assert.equal(d6.status, 'failed')
+  assert.match(d6.steps.find(s => s.stepId === 'd').error, /not the array of entries/)
+
+  // ── 28e. An unknown target workflow fails before anything starts ────────
+  const before5 = (await store.listRuns()).length
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-6', work_type: 'bug' },
+    { jira_key: 'CSUP-7', work_type: 'feature' },
+  ])))
+  let d7 = await runner.startRun({
+    workflow: dispatchFlow({ ...ROUTING, routes: { bug: 'runbook-a', feature: 'no-such-runbook' } }),
+    initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true,
+  })
+  d7 = await runner.waitForSettled(d7.id, TIMEOUT)
+  assert.equal(d7.status, 'failed')
+  assert.match(d7.steps.find(s => s.stepId === 'd').error, /no workflow "no-such-runbook"/)
+  assert.equal((await store.listRuns()).length, before5 + 1,
+    'the valid target was not dispatched either — every target is checked first')
+
+  // ── 28f. A path outside the run's artifacts directory is refused ────────
+  runner.setAgentCaller(scanWriting('[]'))
+  let d8 = await runner.startRun({
+    workflow: dispatchFlow({ ...ROUTING, source: '../../../etc/passwd' }),
+    initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true,
+  })
+  d8 = await runner.waitForSettled(d8.id, TIMEOUT)
+  assert.equal(d8.status, 'failed')
+  assert.match(d8.steps.find(s => s.stepId === 'd').error, /outside the run's artifacts directory/)
+
+  // ── 28g. Recursion: a workflow may not dispatch one it descends from ────
+  // Nothing else in the runner can see this. maxVisits and MAX_TOTAL_RUNS are
+  // per-run, and each generation here would be a NEW run with a fresh budget.
+  writeFileSync(join(wfDir, 'loop-demo.json'), JSON.stringify({
+    name: 'Loop Demo',
+    steps: [
+      { id: 's', agentSlug: 'agent-s', label: 'Scan', next: ['d'] },
+      { id: 'd', agentSlug: 'sdlc-auto-dispatcher', label: 'Dispatch', next: [], triggerWorkflow: { source: 'created-tickets.json', slug: 'loop-demo' } },
+    ],
+  }))
+  runner.setAgentCaller(scanWriting(JSON.stringify([{ jira_key: 'CSUP-8' }])))
+  let d9 = await runner.startRun({
+    workflow: dispatchFlow({ source: 'created-tickets.json', slug: 'loop-demo' }, 'loop-demo'),
+    initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true,
+  })
+  d9 = await runner.waitForSettled(d9.id, TIMEOUT)
+  assert.equal(d9.status, 'failed', 'a self-dispatching workflow is refused')
+  assert.match(d9.steps.find(s => s.stepId === 'd').error, /already descends from|dispatch itself forever/)
+
+  // ── 28h. The cap queues the overflow, and a settling run drains it ──────
+  // Without a cap a twenty-finding scan opens twenty clones and twenty agent
+  // budgets at once.
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '1'
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-9', work_type: 'bug' },
+    { jira_key: 'CSUP-10', work_type: 'feature' },
+  ])))
+  let d10 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d10 = await runner.waitForSettled(d10.id, TIMEOUT)
+  assert.equal(d10.status, 'completed')
+  const step10 = d10.steps.find(s => s.stepId === 'd')
+  assert.equal(step10.childRunIds.length, 1, 'only one child fits under a cap of 1')
+  assert.match(step10.output, /Queued CSUP-10 for runbook-b \(position 1, waiting for a slot\)/, 'the rest is queued, not dropped')
+
+  // The queue drains when a run settles, so the second child starts on its own.
+  for (let i = 0; i < 100 && (await queue.peekPipelineQueue()).length; i++) {
+    await new Promise(r => setTimeout(r, 50))
+  }
+  assert.deepEqual(await queue.peekPipelineQueue(), [], 'the queue drains once a slot frees up')
+  const dispatched = (await store.listRuns()).filter(r => r.parentRunId === d10.id)
+  assert.equal(dispatched.length, 2, 'both entries eventually got a run — queued work is not lost')
+  assert.deepEqual(dispatched.map(r => r.workflowSlug).sort(), ['runbook-a', 'runbook-b'])
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+
+  rmSync(process.env.AGENT_WORKSPACE_ROOT, { recursive: true, force: true })
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

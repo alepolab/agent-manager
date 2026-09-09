@@ -1,8 +1,8 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
-  monitorPrompt, MAX_CONCURRENCY, ancestorsOf, gateSatisfied, markSkippedByCondition,
-  type WorkflowGraph, type RunState,
+  monitorPrompt, MAX_CONCURRENCY, ancestorsOf, gateSatisfied, markSkippedByCondition, planDispatch,
+  type WorkflowGraph, type RunState, type TriggerWorkflowConfig, type DispatchTarget,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
@@ -38,6 +38,8 @@ import {
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
+import { dispatchOrQueue, drainPipelineQueue, type ChildStarter, type QueuedDispatch } from './pipelineQueue.ts'
+import { workspaceRootFor } from './workspace.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 const log = createLogger('runner')
@@ -81,7 +83,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string } }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig }[]
 }
 
 export interface StartRunOpts {
@@ -99,6 +101,9 @@ export interface StartRunOpts {
   autoRun: boolean
   projectDir?: string
   startedBy?: string
+  /** See WorkflowRun.parentRunId - the run whose triggerWorkflow step started
+   *  this one. Threaded straight to createRun, like `watch`. */
+  parentRunId?: string
 }
 
 /** In-memory scheduling state, keyed by run id. Lost on restart — which is
@@ -383,6 +388,14 @@ async function publish(run: WorkflowRun) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
     onRunTransition(run)
+    // A settled run has given its pipeline slot back, so whatever a dispatch
+    // step queued behind it can start. Here rather than in notify.ts, which
+    // cannot reach startRun without an import cycle. Not awaited: the drain
+    // starts runs of its own, and publish() must not block on them.
+    if (TERMINAL_STATUSES.includes(run.status)) {
+      void drainPipelineQueue(childStarter).catch(err =>
+        log.warn('draining the pipeline queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    }
   })
   publishChains.set(run.id, next)
   await next
@@ -711,6 +724,33 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       ...(skip ? { skipReason: skip } : {}),
     })
     log.info('jira step done', () => ({ runId: run.id, stepId: id, output: preview(output) }))
+    markCompleted(l.graph, l.state, id)
+    try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+    return true
+  }
+
+  // A dispatch step is the runner's own work too: no model, no prompt, one
+  // child run started per entry in an artifact. It settles like the Jira step
+  // above and for the same reasons - the graph, the artifacts and the run page
+  // treat it as an ordinary step.
+  if (step.triggerWorkflow) {
+    logLine(l, run, rec, `step started, visit ${rec.visits}`)
+    const { output, failed } = await runDispatchStep(l, run, rec, step.triggerWorkflow)
+    for (const line of output.split('\n')) logLine(l, run, rec, line)
+    l.outputs[id] = output
+    if (failed) {
+      // Unlike a Jira failure, this one fails the step. A Jira step that could
+      // not move a ticket has still had the code work done around it; a
+      // dispatch that started nothing has produced NOTHING, and completing it
+      // would report a scan that quietly dispatched none of its findings.
+      markFailed(l.state, id)
+      Object.assign(rec, { status: 'failed', error: output, model: null, usage: null, completedAt: Date.now() })
+      log.warn('dispatch step failed', { runId: run.id, stepId: id, error: output })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return false
+    }
+    Object.assign(rec, { status: 'completed', output, model: null, usage: null, completedAt: Date.now() })
+    log.info('dispatch step done', () => ({ runId: run.id, stepId: id, children: rec.childRunIds?.length ?? 0 }))
     markCompleted(l.graph, l.state, id)
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
@@ -1082,6 +1122,174 @@ async function resolveConditions(l: Live, run: WorkflowRun): Promise<{ failed: b
   return { failed: false, settled }
 }
 
+/** How many workflows may dispatch one another before the chain is refused.
+ *  The graph model's own cycle guards (maxVisits, MAX_TOTAL_RUNS) are per-run
+ *  and cannot see A dispatching B dispatching A; only the parentRunId chain
+ *  can, and only if something checks its length. */
+const MAX_DISPATCH_DEPTH = 3
+
+/** The workflows this run descends from, nearest first, starting with its own.
+ *  Bounded independently of MAX_DISPATCH_DEPTH so a chain that somehow got
+ *  longer than the cap still terminates here rather than walking forever. */
+async function dispatchAncestry(run: WorkflowRun): Promise<string[]> {
+  const slugs = [run.workflowSlug]
+  let cursor = run.parentRunId
+  for (let hop = 0; cursor && hop < 32; hop++) {
+    const parent = await getRun(cursor)
+    if (!parent) break
+    slugs.push(parent.workflowSlug)
+    cursor = parent.parentRunId
+  }
+  return slugs
+}
+
+/** One path segment, from a key that came out of an artifact a person wrote.
+ *  Rejecting is not an option here - every entry must get a workspace - so
+ *  this rewrites, and the result is only ever a directory name. */
+const workspaceSegment = (key: string) =>
+  key.replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^\.+/, '_').slice(0, 80) || 'entry'
+
+/**
+ * The child's opening prompt: the entry it was dispatched for.
+ *
+ * Deliberately NOT the parent's joined predecessor context. A single-child
+ * trigger could hand that over cheaply, but a fan-out would copy one join -
+ * budgeted at 60k characters - into every child, so a ten-ticket scan would
+ * open ten runs each carrying the other nine tickets' findings. The entry is
+ * what this child is actually for; the parent run id below is how a reader
+ * gets back to the rest.
+ */
+function childPrompt(target: DispatchTarget, parentRunId: string): string {
+  const pick = (...names: string[]) =>
+    names.map(n => target.entry[n]).find(v => typeof v === 'string' && v.trim()) as string | undefined
+  const summary = pick('summary', 'title')
+  const description = pick('description', 'body', 'detail')
+  const head = summary ? `${target.key}: ${summary}` : target.key
+  return [
+    head,
+    description ?? '',
+    '---',
+    `Dispatched from run ${parentRunId}. The entry this run was started for:`,
+    '```json',
+    JSON.stringify(target.entry, null, 2),
+    '```',
+  ].filter(Boolean).join('\n\n')
+}
+
+/** Starts one child run. The seam pipelineQueue.ts calls, both for a dispatch
+ *  happening now and for one promoted off the queue later. */
+const childStarter: ChildStarter = async (item) => {
+  const wf = await loadWorkflowSteps(item.slug)
+  if (!wf) throw new Error(`there is no workflow "${item.slug}" on this instance`)
+  if (!wf.steps.length) throw new Error(`workflow "${item.slug}" has no steps`)
+  const child = await startRun({
+    workflow: { slug: wf.slug, name: wf.name, steps: wf.steps },
+    initialPrompt: item.initialPrompt,
+    // An honest third answer to "what triggered this?", carrying the run that
+    // did. `watch` is a free string in the evidence bundle schema - only
+    // 'direct-invocation' is reserved - so a new literal validates.
+    watch: `workflow-trigger:${item.parentRunId}`,
+    ticketKey: item.ticketKey,
+    autoRun: true,
+    projectDir: item.projectDir,
+    startedBy: item.startedBy,
+    parentRunId: item.parentRunId,
+  })
+  return { id: child.id }
+}
+
+/**
+ * Runs one `triggerWorkflow` step: reads the artifact it dispatches over,
+ * routes each entry to a workflow, and starts a child run per entry up to the
+ * concurrency cap, queueing the rest.
+ *
+ * Never throws - like the Jira step, every problem becomes a sentence. It does
+ * report `failed`, though, where the Jira step does not: a dispatch that
+ * started nothing has produced nothing at all, and completing it would record
+ * a scan that silently dispatched none of its findings.
+ *
+ * The children are not waited for. Each is a top-level run with its own
+ * budget, its own evidence and its own workspace; this step's job is over once
+ * they exist.
+ */
+async function runDispatchStep(
+  l: Live, run: WorkflowRun, rec: RunStep, cfg: TriggerWorkflowConfig,
+): Promise<{ output: string, failed: boolean }> {
+  const fail = (why: string) => ({ output: why, failed: true })
+
+  const path = resolveRunArtifact(run.id, cfg.source)
+  if (path === null) {
+    return fail(`Dispatch failed: ${cfg.source} names a path outside the run's artifacts directory.`)
+  }
+  const plan = planDispatch(await readFile(path, 'utf8').catch(() => null), cfg)
+  if (plan.error) return fail(`Dispatch failed: ${cfg.source} ${plan.error}.`)
+  if (!plan.targets.length) {
+    // Nothing to dispatch is a real outcome, not a failure: the step ran, read
+    // the file, and there was no work in it.
+    return { output: `Dispatched nothing: ${cfg.source} ${plan.detail}.`, failed: false }
+  }
+
+  // Recursion, checked before anything starts. A workflow that dispatches one
+  // it already descends from would run forever, and each generation would be a
+  // fresh run with a fresh budget - nothing else in this file can see it.
+  const ancestry = await dispatchAncestry(run)
+  if (ancestry.length > MAX_DISPATCH_DEPTH) {
+    return fail(`Dispatch failed: this run is already ${ancestry.length} workflows deep`
+      + ` (${ancestry.join(' ← ')}), at the limit of ${MAX_DISPATCH_DEPTH}.`)
+  }
+  const looping = plan.targets.find(t => ancestry.includes(t.slug))
+  if (looping) {
+    return fail(`Dispatch failed: ${looping.key} routes to "${looping.slug}", which this run already descends from`
+      + ` (${ancestry.join(' ← ')}). That would dispatch itself forever.`)
+  }
+
+  // Every target workflow is checked before any child starts, so a typo in one
+  // route cannot leave half a batch in flight and half of it dropped.
+  for (const slug of [...new Set(plan.targets.map(t => t.slug))]) {
+    const wf = await loadWorkflowSteps(slug)
+    if (!wf) return fail(`Dispatch failed: there is no workflow "${slug}" on this instance, so nothing was dispatched.`)
+    if (!wf.steps.length) return fail(`Dispatch failed: workflow "${slug}" has no steps, so nothing was dispatched.`)
+  }
+
+  // Each child gets its own checkout. runWorkspace() honours an explicit
+  // projectDir, so the run lock - which exists because two runs editing one
+  // checkout corrupt each other - becomes correct for these children without
+  // being changed at all. Sharing the parent's directory would hand N
+  // concurrent pipelines one working tree, which is precisely the hazard.
+  const root = workspaceRootFor(run.startedBy)
+  const items: QueuedDispatch[] = plan.targets.map(t => ({
+    key: t.key,
+    slug: t.slug,
+    initialPrompt: childPrompt(t, run.id),
+    projectDir: join(root, workspaceSegment(t.key)),
+    startedBy: run.startedBy,
+    parentRunId: run.id,
+    ticketKey: /^[A-Z][A-Z0-9]+-\d+$/.test(t.key) ? t.key : undefined,
+    queuedAt: Date.now(),
+  }))
+
+  const outcomes = await dispatchOrQueue(items, childStarter)
+  const started = outcomes.filter(o => o.runId)
+  rec.childRunIds = started.map(o => o.runId!)
+
+  const lines = [`${cfg.source} ${plan.detail}.`]
+  for (const o of outcomes) {
+    if (o.runId) lines.push(`Dispatched ${o.item.key} to ${o.item.slug} (run ${o.runId}).`)
+    else if (o.position) lines.push(`Queued ${o.item.key} for ${o.item.slug} (position ${o.position}, waiting for a slot).`)
+    else lines.push(`Could not dispatch ${o.item.key} to ${o.item.slug}: ${o.error}.`)
+  }
+  const stuck = outcomes.filter(o => o.error)
+  // Started none AND queued none: every entry errored, so the step produced
+  // nothing and must say so as a failure.
+  if (!started.length && stuck.length === outcomes.length) {
+    return fail(`Dispatch failed: nothing could be started.\n${lines.join('\n')}`)
+  }
+  log.info('dispatched child runs', {
+    runId: run.id, started: started.length, queued: outcomes.filter(o => o.position).length, failed: stuck.length,
+  })
+  return { output: lines.join('\n'), failed: false }
+}
+
 async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.stopped) { l.running = false; return run }
 
@@ -1403,6 +1611,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     watch: opts.watch,
     ticketKey,
     projectDir,
+    parentRunId: opts.parentRunId,
     baseCommit,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   })

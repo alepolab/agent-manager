@@ -147,6 +147,7 @@ const nodes = computed(() => {
         monitorLabel: agentBySlug(step.monitorSlug)?.frontmatter.name ?? step.monitorSlug,
         approval: step.approval === true,
         runWhen: step.runWhen?.artifact,
+        triggerSource: step.triggerWorkflow?.source,
         maxVisits: step.maxVisits,
         status: exec?.status,
         visits: exec?.visits,
@@ -311,6 +312,55 @@ const settingsRunWhen = computed({
   set: (value: string) => {
     const artifact = value.trim()
     if (settingsStepId.value) patchStep(settingsStepId.value, { runWhen: artifact ? { artifact } : undefined })
+  },
+})
+/** The artifact a dispatch step fans out over. Emptying it removes the whole
+ *  triggerWorkflow block: a step with a routing table and no source to read it
+ *  against is config that can never fire. */
+const settingsTriggerSource = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.source ?? '',
+  set: (value: string) => {
+    const source = value.trim()
+    if (!settingsStepId.value) return
+    const current = settingsStep.value?.triggerWorkflow
+    patchStep(settingsStepId.value, { triggerWorkflow: source ? { ...current, source } : undefined })
+  },
+})
+const settingsTriggerSlug = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.slug ?? '',
+  set: (value: string) => {
+    const slug = value.trim()
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, slug: slug || undefined } })
+  },
+})
+const settingsTriggerRouteBy = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.routeBy ?? '',
+  set: (value: string) => {
+    const routeBy = value.trim()
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, routeBy: routeBy || undefined } })
+  },
+})
+/** The routing table, edited as `value: workflow-slug` lines. A JSON object in
+ *  a text box is a worse thing to type than one pair per line, and this is the
+ *  only place a person writes it. */
+const settingsTriggerRoutes = computed({
+  get: () => Object.entries(settingsStep.value?.triggerWorkflow?.routes ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
+  set: (value: string) => {
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    const routes: Record<string, string> = {}
+    for (const line of value.split('\n')) {
+      const at = line.indexOf(':')
+      if (at < 1) continue
+      const key = line.slice(0, at).trim()
+      const slug = line.slice(at + 1).trim()
+      if (key && slug) routes[key] = slug
+    }
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, routes: Object.keys(routes).length ? routes : undefined } })
   },
 })
 const settingsMaxVisits = computed({
@@ -686,6 +736,20 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               <span class="field-label mb-0">Attach the run's evidence files</span>
             </label>
             <span class="field-hint">Runner-executed, no model call. The status is matched to the ticket's own workflow (with synonyms), so "Dev Done" lands even where the project calls it "Ready for Review"; when nothing matches, the output lists what the ticket offers. Writes reach Jira only when JIRA_POST_ENABLED=1 on the instance.</span>
+          </div>
+
+          <div v-if="settingsStep.agentSlug === 'sdlc-auto-dispatcher'" class="field-group">
+            <label class="field-label">Dispatch one run per entry in</label>
+            <input v-model="settingsTriggerSource" type="text" class="field-input" placeholder="created-tickets.json">
+            <template v-if="settingsTriggerSource">
+              <label class="field-label mt-2">Route on this field</label>
+              <input v-model="settingsTriggerRouteBy" type="text" class="field-input" placeholder="work_type">
+              <label class="field-label mt-2">Routes, one <code>value: workflow-slug</code> per line</label>
+              <textarea v-model="settingsTriggerRoutes" rows="5" class="field-input font-mono text-xs" placeholder="bug: runbook-a-ticket-to-evidence-backed-pr&#10;feature: runbook-b-feature-request-to-evidence-backed-pr" />
+              <label class="field-label mt-2">Workflow for anything the routes miss</label>
+              <input v-model="settingsTriggerSlug" type="text" class="field-input" placeholder="runbook-a-ticket-to-evidence-backed-pr">
+            </template>
+            <span class="field-hint">Runner-executed, no model call. Reads that file from this run's artifacts and starts one run per entry, each in its own checkout. The children are not waited for: this step completes as soon as they exist, and each reports to its own run. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Concurrent pipelines are capped on the instance (AGENT_MAX_CONCURRENT_PIPELINES); the rest queue and start as slots free up.</span>
           </div>
 
           <div class="field-group">

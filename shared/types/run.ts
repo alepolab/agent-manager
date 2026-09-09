@@ -72,6 +72,10 @@ export interface RunStep {
   assistantMessages?: number
   lastTool?: string
   lastActivityAt?: number
+  /** Runs a `triggerWorkflow` step started, in the order it dispatched them.
+   *  The step does not wait for them, so this is the only link back: without
+   *  it a dispatched child is an orphan run nobody can trace to its cause. */
+  childRunIds?: string[]
 }
 
 /** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
@@ -159,6 +163,11 @@ export interface WorkflowRun {
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
   startedBy?: string
+  /** The run whose `triggerWorkflow` step started this one; absent on a run
+   *  nothing dispatched. Runner-owned, set once at creation. It is what makes
+   *  cross-workflow recursion visible: the graph model guards cycles inside
+   *  one workflow, and only this chain can see A dispatching B dispatching A. */
+  parentRunId?: string
   /** `projectDir`'s HEAD sha, captured by the runner (startRun, via
    *  gitFacts.ts's captureBaseline) the instant this run started, before any
    *  step ran. gitFacts.ts's computeFixFacts diffs the CURRENT HEAD against
@@ -300,6 +309,9 @@ export interface NewRunInput {
   projectDir?: string
   product?: ProductMatch
   startedBy?: string
+  /** See WorkflowRun.parentRunId — the caller states it, createRun carries it
+   *  straight onto the persisted run, unmodified. */
+  parentRunId?: string
   /** See WorkflowRun.baseCommit — startRun captures it via
    *  gitFacts.ts's captureBaseline and passes it straight through; createRun
    *  carries it onto the persisted run, unmodified. */

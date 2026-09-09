@@ -27,6 +27,7 @@ import {
   gateSatisfied,
   markSkippedByCondition,
   markFailed,
+  planDispatch,
 } from '../shared/utils/workflowGraph.ts'
 
 /**
@@ -448,6 +449,71 @@ assert.equal(joinInputs([]), '')
   assert.equal(state.armed.b, false)
   assert.deepEqual(readyNodes(graph, state), [], 'an unevaluable condition must not arm anything downstream')
   assert.equal(state.armed.c, false, 'c stays unarmed - the run fails rather than skipping past')
+}
+
+// ── planDispatch: which children a triggerWorkflow step starts ────────────
+// Same shape as the gateSatisfied table above: the artifact's TEXT in, a
+// decision and the sentence a reviewer reads out.
+{
+  const ROUTES = { bug: 'runbook-a', security: 'runbook-a', feature: 'runbook-b' }
+  const routing = { source: 'created-tickets.json', routeBy: 'work_type', routes: ROUTES }
+
+  // Nothing to dispatch is not a failure - the step ran and found no work.
+  const cases = [
+    // raw,                       cfg,       expected target count, a fragment of the sentence
+    [null, routing, 0, /was not written/],
+    ['', routing, 0, /is empty/],
+    ['   ', routing, 0, /is empty/],
+    ['[]', routing, 0, /empty array/],
+    ['[{"jira_key":"A-1","work_type":"bug"}]', routing, 1, /1 entry to dispatch/],
+    ['[{"key":"A-1","work_type":"bug"},{"key":"A-2","work_type":"feature"}]', routing, 2, /2 entries to dispatch/],
+    // A static slug and no routing at all is the single-target form.
+    ['[{"key":"A-1"},{"key":"A-2"}]', { source: 's.json', slug: 'runbook-a' }, 2, /2 entries/],
+  ]
+  for (const [raw, cfg, count, detail] of cases) {
+    const got = planDispatch(raw, cfg)
+    assert.equal(got.error, undefined, `planDispatch(${JSON.stringify(raw)}) should not error, got: ${got.error}`)
+    assert.equal(got.targets.length, count, `planDispatch(${JSON.stringify(raw)}) should plan ${count}, got ${got.targets.length}`)
+    assert.match(got.detail, detail, `planDispatch(${JSON.stringify(raw)}) detail: ${got.detail}`)
+  }
+
+  // Malformed is an error, never "nothing to dispatch": a producer that
+  // crashed mid-write must not read as a scan with no findings.
+  const errors = [
+    ['not json', routing, /not valid JSON/],
+    ['{"jira_key":"A-1"}', routing, /holds object, not the array/],
+    ['"A-1"', routing, /holds string, not the array/],
+    ['null', routing, /holds null, not the array/],
+    // Routing is all-or-nothing, and the sentence names what had no route.
+    ['[{"key":"A-1","work_type":"bug"},{"key":"A-2","work_type":"docs"}]', routing, /A-2 routes on "work_type": "docs", which is in no route/],
+    ['[{"key":"A-1"}]', routing, /A-1 has no "work_type" to route on/],
+    ['[{"key":"A-1"}]', { source: 's.json' }, /names no workflow to dispatch to/],
+  ]
+  for (const [raw, cfg, detail] of errors) {
+    const got = planDispatch(raw, cfg)
+    assert.ok(got.error, `planDispatch(${JSON.stringify(raw)}) should error`)
+    assert.equal(got.targets.length, 0, 'an errored plan dispatches nothing at all')
+    assert.match(got.error, detail, `planDispatch(${JSON.stringify(raw)}) error: ${got.error}`)
+  }
+
+  // Routing picks per entry, and the fallback slug catches what routes miss.
+  const mixed = planDispatch(
+    '[{"key":"A-1","work_type":"bug"},{"key":"A-2","work_type":"feature"},{"key":"A-3","work_type":"docs"}]',
+    { ...routing, slug: 'runbook-c' },
+  )
+  assert.deepEqual(mixed.targets.map(t => [t.key, t.slug]), [
+    ['A-1', 'runbook-a'], ['A-2', 'runbook-b'], ['A-3', 'runbook-c'],
+  ], 'each entry routes on its own field, and an unrouted one falls back')
+  assert.equal(mixed.targets[0].entry.work_type, 'bug', 'the entry travels with the target, for the child prompt')
+
+  // An entry with no identifying field is named by its position, so a report
+  // can still say which one it was.
+  const unnamed = planDispatch('[{"work_type":"bug"},{"work_type":"bug"}]', routing)
+  assert.deepEqual(unnamed.targets.map(t => t.key), ['entry 1', 'entry 2'])
+
+  // A non-object entry has no field to route on: it fails, named by position.
+  const scalar = planDispatch('["A-1"]', routing)
+  assert.match(scalar.error, /entry 1 has no "work_type" to route on/)
 }
 
 console.log('workflowGraph: all checks passed')

@@ -13,6 +13,7 @@ const props = defineProps<{
     maxVisits?: number
     approval?: boolean
     runWhen?: string
+    triggerSource?: string
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
@@ -66,6 +67,12 @@ const verdictColor: Record<string, string> = {
             style="color: var(--text-disabled);"
             :title="`Runs only when ${data.runWhen} has content`"
           ><UIcon name="i-lucide-git-branch" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.triggerSource"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Starts one run per entry in ${data.triggerSource}`"
+          ><UIcon name="i-lucide-git-fork" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.monitorLabel"
             class="text-[9px] truncate"
