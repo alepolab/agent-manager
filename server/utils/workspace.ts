@@ -21,7 +21,8 @@
 
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir as osHomedir } from 'node:os'
-import { join, relative } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { getClaudeDir } from './claudeDir.ts'
 
 /** Login sanitiser, matching users.ts: a login becomes one safe path segment. */
 const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_')
@@ -52,6 +53,48 @@ export function workspaceRootFor(login: string | undefined): string {
  */
 export function runWorkspace(run: { projectDir?: string, startedBy?: string }): string {
   return (run.projectDir?.trim()) || workspaceRootFor(run.startedBy)
+}
+
+/**
+ * A working directory somebody typed, canonicalised — or the reason it cannot
+ * be used.
+ *
+ * Checked where a person types it rather than where a run consumes it, because
+ * the consuming end does not fail. `callAgent` resolves its cwd as
+ * `projectDir && existsSync(projectDir) ? projectDir : claudeDir`, so a path
+ * that does not exist silently runs every agent inside the Claude config
+ * directory — the one holding workflows/, agents/ and workflow-runs/ — with
+ * bypassPermissions, while the step header states the path that was typed. The
+ * run reports success. A 400 while the form is still open is the only place
+ * that mistake is visible.
+ *
+ * A `~` is expanded for the reason workspaceRoot() states: existsSync, Read and
+ * Glob all treat it as a literal directory name, so `~/repos/app` reads as
+ * missing and would take the silent fallback above.
+ *
+ * Trailing separators are stripped because the run lock compares directory
+ * STRINGS (findRunInWorkspace): "/repo" and "/repo/" would otherwise be two
+ * locks on one checkout, which is no lock at all.
+ */
+export function canonicalProjectDir(input: string): { path: string } | { error: string } {
+  const typed = input.trim()
+  if (!typed) return { error: 'no directory was given' }
+
+  const expanded = typed.replace(/^~(?=[/\\]|$)/, osHomedir())
+  if (!isAbsolute(expanded)) {
+    return { error: `"${typed}" is not an absolute path` }
+  }
+
+  const path = resolve(expanded).replace(/[/\\]+$/, '')
+  const claudeDir = resolve(getClaudeDir())
+  if (path === claudeDir || path.startsWith(claudeDir + sep)) {
+    return { error: `"${path}" is inside the Claude config directory; a run would edit its own configuration` }
+  }
+  if (!existsSync(path)) {
+    return { error: `"${path}" does not exist` }
+  }
+
+  return { path }
 }
 
 /**

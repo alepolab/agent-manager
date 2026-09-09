@@ -163,6 +163,26 @@ interface Live {
   conditionOverride?: Set<string>
 }
 const live = new Map<string, Live>()
+
+/** Workspaces with a start in flight — a run that has been decided on but is
+ *  not yet persisted, and so is invisible to findRunInWorkspace. See startRun. */
+const starting = new Set<string>()
+
+/** Thrown by startRun when another start already holds the same directory.
+ *  A distinct type because each caller answers it differently: the API route
+ *  409s like it does for a persisted run, a schedule records a skip, a
+ *  dispatched child reports against its own entry. */
+export class WorkspaceBusyError extends Error {
+  // A plain field, not a constructor parameter property: the node test scripts
+  // run this file under type stripping, which cannot generate the assignment a
+  // parameter property implies (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX).
+  workspace: string
+  constructor(workspace: string) {
+    super(`a run is already starting in ${workspace}`)
+    this.name = 'WorkspaceBusyError'
+    this.workspace = workspace
+  }
+}
 const subscribers = new Map<string, Set<(run: WorkflowRun) => void>>()
 
 /** Live-log listeners: one line at a time, per step. */
@@ -1637,29 +1657,61 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const firstRepo = product?.repos?.[0]
   const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo, opts.startedBy)) ? checkoutDirFor(firstRepo, opts.startedBy) : undefined)
   const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
-  // Captured BEFORE createRun, so the baseline is the project directory's
-  // HEAD at the true moment execution begins — before any step, and so any
-  // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
-  // and shared/types/run.ts's WorkflowRun.baseCommit for why this can never
-  // fall back to a guess: an absent baseline means computeFixFacts later
-  // reports nothing, rather than diffing against a branch's shared base and
-  // attributing that branch's whole history to this run.
-  const baseCommit = await captureBaseline(projectDir)
-  const run = await createRun({
-    product,
-    startedBy: opts.startedBy,
-    workflowSlug: opts.workflow.slug,
-    workflowName: opts.workflow.name,
-    autoRun: opts.autoRun,
-    initialPrompt: opts.initialPrompt,
-    watch: opts.watch,
-    ticketKey,
-    projectDir,
-    parameters: opts.parameters,
-    parentRunId: opts.parentRunId,
-    baseCommit,
-    steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
-  })
+  // Reserved synchronously, before the first await below, and held until the
+  // run record exists.
+  //
+  // Every caller checks findRunInWorkspace first, but that check reads
+  // PERSISTED runs, and this function takes hundreds of milliseconds to
+  // persist one: captureBaseline alone spawns two git processes, and
+  // artifactsWritable probes the filesystem. Two starts aimed at one
+  // directory inside that window both saw an idle workspace and both
+  // proceeded - two runs editing one checkout, which is the exact corruption
+  // the lock exists to prevent. Now that a schedule can name its own
+  // directory, two schedules sharing one on the same cron minute is an
+  // ordinary configuration rather than a mistimed accident.
+  const workspace = runWorkspace({ projectDir, startedBy: opts.startedBy })
+  if (starting.has(workspace)) throw new WorkspaceBusyError(workspace)
+  starting.add(workspace)
+
+  // The directory a run is TOLD it works in has to exist before any agent is
+  // called: callAgent silently falls back to the Claude config directory for
+  // one that does not (see canonicalProjectDir), so the run would edit this
+  // instance's own configuration while its header named somewhere else. A
+  // derived workspace has never existed on a schedule's first fire, which is
+  // every schedule exactly once. Best-effort: a run that cannot create its
+  // directory still fails honestly further down.
+  try { await mkdir(workspace, { recursive: true }) } catch { /* startRun's own error path reports it */ }
+
+  let run: WorkflowRun
+  try {
+    // Captured BEFORE createRun, so the baseline is the project directory's
+    // HEAD at the true moment execution begins — before any step, and so any
+    // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
+    // and shared/types/run.ts's WorkflowRun.baseCommit for why this can never
+    // fall back to a guess: an absent baseline means computeFixFacts later
+    // reports nothing, rather than diffing against a branch's shared base and
+    // attributing that branch's whole history to this run.
+    const baseCommit = await captureBaseline(projectDir)
+    run = await createRun({
+      product,
+      startedBy: opts.startedBy,
+      workflowSlug: opts.workflow.slug,
+      workflowName: opts.workflow.name,
+      autoRun: opts.autoRun,
+      initialPrompt: opts.initialPrompt,
+      watch: opts.watch,
+      ticketKey,
+      projectDir,
+      parameters: opts.parameters,
+      parentRunId: opts.parentRunId,
+      baseCommit,
+      steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
+    })
+  } finally {
+    // Released once the run is persisted (or failed to be): from here on
+    // findRunInWorkspace can see it, so the reservation has done its job.
+    starting.delete(workspace)
+  }
   await ensureRunCheckout(run)
   // Before the gate below, not after: a run that fails preflight is precisely
   // the one whose reason has to be readable afterwards, and the artifacts

@@ -61,4 +61,58 @@ assert.equal(runWorkspace({ startedBy: 'alice', projectDir: '   ' }), workspaceR
 process.env.AGENT_WORKSPACE_ROOT = '/srv/agent-manager/workspace///'
 assert.equal(workspaceRootFor('alice'), '/srv/agent-manager/workspace/alice')
 
-console.log('run lock scope: per developer, and per checkout when one is named')
+// ══ A directory a person typed is canonicalised, or refused with a reason ══
+//
+// THE TRAP this guards: callAgent resolves its cwd as
+// `projectDir && existsSync(projectDir) ? projectDir : claudeDir`, so a path
+// that does not exist does not fail — it silently runs every agent inside the
+// Claude config directory, with bypassPermissions, while the step header names
+// the path that was typed. The run reports success. Refusing at the boundary a
+// person types it is the only place that mistake is visible.
+{
+  const { canonicalProjectDir } = await import('../server/utils/workspace.ts')
+  const { mkdtempSync, mkdirSync } = await import('node:fs')
+  const { tmpdir, homedir } = await import('node:os')
+  const { join, resolve, sep } = await import('node:path')
+
+  const real = mkdtempSync(join(tmpdir(), 'canon-'))
+
+  // An existing absolute directory comes back resolved.
+  assert.equal(canonicalProjectDir(real).path, resolve(real))
+
+  // A trailing separator is stripped, because the lock compares directory
+  // STRINGS: "/repo" and "/repo/" would otherwise be two locks on one checkout.
+  assert.equal(canonicalProjectDir(real + sep).path, resolve(real),
+    'a trailing separator must not create a second lock identity')
+  assert.equal(canonicalProjectDir(real + sep).path, canonicalProjectDir(real).path)
+
+  // A `~` is expanded rather than treated as a directory named "~", which is
+  // what existsSync, Read and Glob all do with it.
+  const underHome = canonicalProjectDir('~')
+  assert.equal('error' in underHome ? '' : underHome.path, resolve(homedir()),
+    'a leading ~ is expanded, not taken literally')
+
+  // A relative path is refused: there is no cwd a run could sensibly resolve it against.
+  assert.ok('error' in canonicalProjectDir('repos/app'), 'a relative path is refused')
+  assert.match(canonicalProjectDir('repos/app').error, /not an absolute path/)
+
+  // The case that motivates the whole check.
+  assert.ok('error' in canonicalProjectDir(join(real, 'does-not-exist')))
+  assert.match(canonicalProjectDir(join(real, 'does-not-exist')).error, /does not exist/,
+    'a nonexistent directory is refused, not silently swapped for the config directory')
+
+  // Nothing may aim a run at this instance's own configuration.
+  const claudeDir = mkdtempSync(join(tmpdir(), 'canon-claude-'))
+  process.env.CLAUDE_DIR = claudeDir
+  const { setClaudeDir } = await import('../server/utils/claudeDir.ts')
+  setClaudeDir(claudeDir)
+  mkdirSync(join(claudeDir, 'workflows'), { recursive: true })
+  assert.ok('error' in canonicalProjectDir(claudeDir), 'the config directory itself is refused')
+  assert.match(canonicalProjectDir(join(claudeDir, 'workflows')).error, /Claude config directory/,
+    'a directory INSIDE the config directory is refused too - a run must not edit its own configuration')
+
+  // Empty is "not stated", and the caller decides what that means; it is never a path.
+  assert.ok('error' in canonicalProjectDir('   '))
+}
+
+console.log('run lock scope: per developer, per checkout, and a typed directory is checked')

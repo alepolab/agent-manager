@@ -193,6 +193,27 @@ const base = {
     'the stated value and the run directory are one answer, not two')
   await runner.waitForSettled(dirRun.lastRunId, 5000)
 
+  // ── 5f. THE TRAP: the directory a run is TOLD it works in must exist ────
+  // callAgent resolves its cwd as
+  // `projectDir && existsSync(projectDir) ? projectDir : claudeDir`, so a
+  // directory that does not exist yet does not fail - it silently runs every
+  // agent inside the Claude config directory, with bypassPermissions, while
+  // the step header names the derived path. A schedule's derived directory has
+  // never existed on its FIRST fire, which is every schedule exactly once.
+  {
+    const fresh = { ...base, id: 'never-fired-before', parameters: { jira_project: 'DEVOPS' } }
+    const derived = starterMod.scheduleWorkspace(fresh)
+    assert.ok(!existsSync(derived), 'precondition: the derived directory does not exist yet')
+    const first = await starterMod.realScheduleStarter(fresh)
+    assert.equal(first.lastOutcome, 'started', first.lastDetail ?? '')
+    assert.ok(existsSync(derived),
+      'the first fire creates its directory, so the agents are not silently run in ~/.claude')
+    const freshRun = await store.getRun(first.lastRunId)
+    assert.equal(freshRun.projectDir, derived,
+      'and the run still records the directory its header names')
+    await runner.waitForSettled(first.lastRunId, 5000)
+  }
+
   await runner.waitForSettled(started.lastRunId, 5000)
   await runner.waitForSettled(wontMove.lastRunId, 5000)
 }
@@ -222,6 +243,37 @@ const base = {
   const third = await starterMod.realScheduleStarter(s)
   assert.equal(third.lastOutcome, 'started', 'the fire after it settles starts normally')
   await runner.waitForSettled(third.lastRunId, 5000)
+}
+
+// ══ 6b. THE REQUIREMENT: two SIMULTANEOUS fires cannot both start ═════════
+//
+// The check in section 6 reads PERSISTED runs, and startRun takes hundreds of
+// milliseconds to persist one - captureBaseline alone spawns two git
+// processes. Two fires inside that window both saw an idle directory and both
+// proceeded, which is two runs editing one checkout: exactly the corruption
+// the lock exists to prevent, reached by passing the lock.
+{
+  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  const s = { ...base, id: 'racing', parameters: { jira_project: 'DEVOPS' } }
+
+  // Started together, so neither can see the other's run record yet.
+  const [a, b] = await Promise.all([
+    starterMod.realScheduleStarter(s),
+    starterMod.realScheduleStarter(s),
+  ])
+  const outcomes = [a.lastOutcome, b.lastOutcome].sort()
+  assert.deepEqual(outcomes, ['skipped', 'started'],
+    `exactly one of two simultaneous fires starts (observed ${outcomes.join(' + ')})`)
+
+  const winner = a.lastOutcome === 'started' ? a : b
+  const loser = a.lastOutcome === 'started' ? b : a
+  assert.ok(loser.lastDetail, 'and the one that did not start says why')
+
+  // The decisive assertion: one run in that directory, not two.
+  const inDir = (await store.listRuns()).filter(r => r.projectDir === starterMod.scheduleWorkspace(s))
+  assert.equal(inDir.length, 1, 'one run exists in the directory, not two racing over the same files')
+  assert.equal(inDir[0].id, winner.lastRunId)
+  await runner.waitForSettled(winner.lastRunId, 5000)
 }
 
 // ══ 7. the config store ═══════════════════════════════════════════════════

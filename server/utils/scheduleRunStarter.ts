@@ -9,7 +9,7 @@
  */
 import { workspaceRootFor } from './workspace.ts'
 import { findRunInWorkspace, loadWorkflowSteps } from './workflowRunStore.ts'
-import { startRun, workspaceSegment } from './workflowRunner.ts'
+import { startRun, workspaceSegment, WorkspaceBusyError } from './workflowRunner.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../shared/utils/workflowParameters.ts'
 import { join } from 'node:path'
 import type { Schedule, ScheduleState } from '../../shared/types/schedule.ts'
@@ -71,17 +71,27 @@ export async function realScheduleStarter(schedule: Schedule): Promise<ScheduleS
     }
   }
 
-  const run = await startRun({
-    workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
-    initialPrompt: schedule.initialPrompt,
-    parameters: values,
-    projectDir,
-    autoRun: schedule.autoRun,
-    startedBy: schedule.createdBy,
-    // The third honest answer to "what triggered this?", beside a watch id and
-    // the reserved 'direct-invocation'. See WorkflowRun.watch.
-    watch: `schedule:${schedule.id}`,
-  })
-
-  return { lastOutcome: 'started', lastRunId: run.id }
+  try {
+    const run = await startRun({
+      workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
+      initialPrompt: schedule.initialPrompt,
+      parameters: values,
+      projectDir,
+      autoRun: schedule.autoRun,
+      startedBy: schedule.createdBy,
+      // The third honest answer to "what triggered this?", beside a watch id and
+      // the reserved 'direct-invocation'. See WorkflowRun.watch.
+      watch: `schedule:${schedule.id}`,
+    })
+    return { lastOutcome: 'started', lastRunId: run.id }
+  } catch (err) {
+    // Another start already holds this directory and has not persisted its run
+    // yet, so the check above could not see it. Same outcome as finding a
+    // persisted one: a skip, for the same reason - a nightly scan has a next
+    // fire, and this is not a failure of the schedule.
+    if (err instanceof WorkspaceBusyError) {
+      return { lastOutcome: 'skipped', lastDetail: `another run was already starting in ${projectDir}` }
+    }
+    throw err
+  }
 }

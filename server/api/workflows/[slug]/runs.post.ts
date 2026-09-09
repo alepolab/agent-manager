@@ -1,8 +1,8 @@
-import { startRun } from '../../../utils/workflowRunner'
+import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
 import { findRunInWorkspace } from '../../../utils/workflowRunStore'
-import { runWorkspace } from '../../../utils/workspace'
+import { canonicalProjectDir, runWorkspace } from '../../../utils/workspace'
 import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
@@ -48,7 +48,23 @@ export default defineEventHandler(async (event) => {
   // explicit value wins over the request's own projectDir, because the
   // workflow declared this input and the modal collects it in that field's
   // place. See RESERVED_PARAM_PROJECT_DIR.
-  const projectDir = parameters[RESERVED_PARAM_PROJECT_DIR]?.trim() || body.projectDir
+  const stated = parameters[RESERVED_PARAM_PROJECT_DIR]?.trim() || body.projectDir
+
+  // Refused here, while the dialog is still open, because the consuming end
+  // does not fail: callAgent falls back to the Claude config directory for a
+  // path that does not exist and reports success. Canonicalised for the lock
+  // below, which compares directory strings. An unset directory is not
+  // validated - it resolves to the developer's own workspace root, which
+  // startRun creates.
+  let projectDir = stated
+  if (stated) {
+    const checked = canonicalProjectDir(stated)
+    if ('error' in checked) {
+      throw createError({ statusCode: 400, message: `That project folder cannot be used: ${checked.error}` })
+    }
+    projectDir = checked.path
+    if (parameters[RESERVED_PARAM_PROJECT_DIR]) parameters[RESERVED_PARAM_PROJECT_DIR] = checked.path
+  }
 
   // Locked on the DIRECTORY a run will write, not on the workflow. Two runs
   // sharing a checkout corrupt each other; two developers working on unrelated
@@ -82,21 +98,33 @@ export default defineEventHandler(async (event) => {
       ? `${typed}\n\nThe ticket text could not be fetched from Jira for this run (${ticket.reason}). Work from the key and whatever the repository holds, say so in the context packet, and do not try to reach Jira yourself: agents have no shell and no Jira access. The developer can add a Jira token on the Profile page, or paste the ticket text, and start again.`
       : body.initialPrompt
 
-  const run = await startRun({
-    workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
-    initialPrompt,
-    ...(body.productKey ? { productKey: body.productKey } : {}),
-    // This route is the manual/API start path, never a watch dispatch — the
-    // reserved literal is the honest answer to "what triggered this?".
-    watch: 'direct-invocation',
-    // Read from the prompt, so a run started by hand reports back to its ticket
-    // the way a watch-dispatched one does. Without it notifyTicketOutcome never
-    // fires for a manual run - the key was in the prompt and nothing looked.
-    ticketKey: ticketKeyFrom(body.initialPrompt),
-    autoRun: body.autoRun === true,
-    projectDir,
-    parameters,
-    startedBy: user?.login,
-  })
-  return run
+  try {
+    return await startRun({
+      workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
+      initialPrompt,
+      ...(body.productKey ? { productKey: body.productKey } : {}),
+      // This route is the manual/API start path, never a watch dispatch — the
+      // reserved literal is the honest answer to "what triggered this?".
+      watch: 'direct-invocation',
+      // Read from the prompt, so a run started by hand reports back to its ticket
+      // the way a watch-dispatched one does. Without it notifyTicketOutcome never
+      // fires for a manual run - the key was in the prompt and nothing looked.
+      ticketKey: ticketKeyFrom(body.initialPrompt),
+      autoRun: body.autoRun === true,
+      projectDir,
+      parameters,
+      startedBy: user?.login,
+    })
+  } catch (err) {
+    // A start that got past the check above but lost the race to a
+    // near-simultaneous one. Answered exactly like a persisted run in the same
+    // directory, because to the person clicking Start it is the same fact.
+    if (err instanceof WorkspaceBusyError) {
+      throw createError({
+        statusCode: 409,
+        message: `A run is already starting in ${err.workspace}. Wait for it, or start this one against a different project directory.`,
+      })
+    }
+    throw err
+  }
 })
