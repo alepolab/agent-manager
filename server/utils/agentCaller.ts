@@ -201,6 +201,14 @@ export interface AgentCallOptions {
   onProgress?: OnAgentProgress
   onSteer?: (deliver: (text: string) => boolean) => void
   onSession?: (sessionId: string, cwd: string) => void
+  /**
+   * Continue an earlier SDK session instead of starting one. The model keeps
+   * everything it already read, so a step that ran out of turns, or was
+   * answered, or was interrupted by a server restart, carries on rather than
+   * re-exploring from nothing — which is where a real step spent three whole
+   * visits reading the same files and never wrote its plan.
+   */
+  resume?: string
 }
 
 /** Floor between successive progress emissions when the active tool hasn't
@@ -269,7 +277,7 @@ export function shouldEmitProgress(
 export async function callAgent(
   agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
-  const { signal, env: userEnv = {}, onProgress, onSteer, onSession } = opts
+  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume } = opts
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -412,6 +420,7 @@ export async function callAgent(
       // editing a product repository without them is worse than no run.
       settingSources: [],
       hooks,
+      ...(resume ? { resume } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     },
   })) {
