@@ -1012,9 +1012,13 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(q.status, 'paused', `a second question pauses the run again, it does not fail it: ${q.error ?? ''}`)
   assert.match(q.question?.text ?? '', /number 2/, 'and the new question is the one on the record')
   assert.equal(q.steps.find(s => s.stepId === 'a').status, 'waiting')
-  q = await runner.respondToRun(q.id, 'second answer')
+  // A paused run is continued, not restarted; a stopped one restarted from the asking
+  // step has its question answered by the restart itself: no stale "waiting for you" on a running run.
+  await runner.stopRun(q.id)
+  q = await runner.restartRun(q.id, 'a', 'restarted instead of answered')
+  assert.equal(q.question, undefined, 'a restart clears the question it supersedes')
   q = await runner.waitForSettled(q.id, TIMEOUT)
-  assert.equal(q.status, 'completed', 'the second answer lets the run finish')
+  assert.equal(q.status, 'completed', 'and the restarted step, no longer asking, lets the run finish')
 }
 
 // ── 22. a step marked for approval waits for a person, note travels with the go-ahead ──
