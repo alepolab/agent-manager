@@ -89,14 +89,29 @@ async function attachArtifacts(run: WorkflowRun, key: string, fetchImpl: FetchLi
   return `Attached ${done} of ${names.length} evidence file(s) to ${key}${failed.length ? `; failed: ${failed.slice(0, 3).join(', ')}` : ''}.`
 }
 
+/**
+ * Every Jira status belongs to one of three categories the product itself
+ * fixes (To Do, In Progress, Done), whatever the project calls its statuses.
+ * When no name or synonym matches, the category is what "start work" means
+ * on that project — a board with Business Analysis and Under PdM Refinement
+ * and no In Progress still has exactly one way of saying work has begun, or
+ * none, and the category tells us which.
+ */
+const INTENT_CATEGORY: Record<string, 'indeterminate'> = { 'in progress': 'indeterminate' }
+/** Among several in-progress statuses, the one that reads as development work. */
+const WORK_WORDS = /progress|develop|\bdev\b|implement|start|work|doing/i
+
+interface Transition { id: string, name: string, to?: { name?: string, statusCategory?: { key?: string } } }
+
 async function moveTicket(run: WorkflowRun, key: string, target: string, fetchImpl: FetchLike): Promise<string> {
   if (!isJiraPostingEnabled()) return `Would move ${key} to "${target}"; not done: JIRA_POST_ENABLED is not 1 on this instance.`
   const creds = await credentialsFor(run)
   const headers = { Authorization: jiraAuthHeader(creds), Accept: 'application/json', 'Content-Type': 'application/json' }
-  const url = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}/transitions`
+  const issueUrl = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}`
+  const url = `${issueUrl}/transitions`
   const listed = await fetchImpl(url, { headers })
   if (!listed.ok) return `Could not read the transitions of ${key} (HTTP ${listed.status}); the ticket was not moved.`
-  const transitions = (((await listed.json()) as { transitions?: { id: string, name: string, to?: { name?: string } }[] })?.transitions) ?? []
+  const transitions = (((await listed.json()) as { transitions?: Transition[] })?.transitions) ?? []
   const want = target.trim().toLowerCase()
   // The configured name first, then its synonyms, matching each against the
   // target status and then the transition name. This is how "Dev Done" lands
@@ -104,14 +119,39 @@ async function moveTicket(run: WorkflowRun, key: string, target: string, fetchIm
   const candidates = STATUS_SYNONYMS[want] ?? [want]
   const byTo = (n: string) => transitions.find(t => (t.to?.name ?? '').toLowerCase() === n)
   const byName = (n: string) => transitions.find(t => t.name.toLowerCase() === n)
-  let hit
+  let hit: Transition | undefined
   for (const n of candidates) { hit = byTo(n) ?? byName(n); if (hit) break }
+  const category = INTENT_CATEGORY[want]
+  if (!hit && category) {
+    // Already there? A ticket a developer moved to In Development by hand has
+    // no transition back to it, and needs none.
+    const current = await currentStatus(issueUrl, headers, fetchImpl)
+    if (current && (candidates.includes(current.name.toLowerCase()) || current.category === category)) {
+      return `${key} is already in "${current.name}", an in-progress status; left as is.`
+    }
+    const inCategory = transitions.filter(t => t.to?.statusCategory?.key === category)
+    const working = inCategory.filter(t => WORK_WORDS.test(t.to?.name ?? '') || WORK_WORDS.test(t.name))
+    hit = inCategory.length === 1 ? inCategory[0] : working.length === 1 ? working[0] : undefined
+    if (!hit && inCategory.length > 1) {
+      return `${key} offers no transition to "${target}" (or a known synonym) from "${current?.name ?? 'its current status'}", and ${inCategory.length} of its transitions lead to an in-progress status (${inCategory.map(t => `"${t.to?.name ?? t.name}"`).join(', ')}), none of them unambiguously the start of development; left as is. Name the one this project uses on the step's status in the workflow builder.`
+    }
+  }
   if (!hit) {
     const available = transitions.map(t => t.to?.name ?? t.name).join(', ') || 'none'
-    return `${key} offers no transition to "${target}" (or a known synonym) from its current status; available: ${available}. Edit the step's status in the workflow builder.`
+    return `${key} offers no transition to "${target}" (or a known synonym) from its current status; available: ${available}. Left as is; edit the step's status in the workflow builder if this project names it differently.`
   }
   const to = hit.to?.name ?? hit.name
   const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify({ transition: { id: hit.id } }) })
   if (!res.ok) return `Moving ${key} to "${to}" failed (HTTP ${res.status}): ${(await res.text().catch(() => '')).slice(0, 300)}. The ticket was not moved.`
-  return `Moved ${key} to "${to}" (transition "${hit.name}").`
+  return `Moved ${key} to "${to}" (transition "${hit.name}"${hit.to?.name?.toLowerCase() !== want && !candidates.includes((hit.to?.name ?? '').toLowerCase()) ? ', the only in-progress status this project offers from here' : ''}).`
+}
+
+/** The ticket's status now, with Jira's category key; null when it cannot be read. */
+async function currentStatus(issueUrl: string, headers: Record<string, string>, fetchImpl: FetchLike): Promise<{ name: string, category?: string } | null> {
+  try {
+    const res = await fetchImpl(`${issueUrl}?fields=status`, { headers })
+    if (!res.ok) return null
+    const status = ((await res.json()) as { fields?: { status?: { name?: string, statusCategory?: { key?: string } } } })?.fields?.status
+    return status?.name ? { name: status.name, category: status.statusCategory?.key } : null
+  } catch { return null }
 }
