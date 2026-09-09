@@ -108,6 +108,21 @@ find "$STAGE" -type d -name ".git" -prune -exec rm -rf {} + 2>/dev/null || true
 # scripts genuinely need their dependencies must install them in the image, not
 # smuggle them in through ~/.claude.
 find "$STAGE" -type d -name "node_modules" -prune -exec rm -rf {} + 2>/dev/null || true
+
+# Marketplace CLONES. Every marketplace ever added is a git checkout under
+# plugins/marketplaces/, and on the machine that prompted this they were 229M of
+# a 283M payload — one of them 99M for a server nothing here uses.
+#
+# The container does not need them. Installed plugins resolve to
+# plugins/cache/<marketplace>/<plugin>/<version> (installPath in
+# installed_plugins.json), which is what teamSync seeds from; the Explore page
+# lists marketplaces from the known_marketplaces.json FILE, which lives directly
+# under plugins/ and survives this, and clones on demand when someone installs.
+#
+# The seeding line at boot is the check: agents, skills and commands must come
+# out the same as before. If a plugin body ever does live under marketplaces/,
+# that count drops and says so.
+find "$STAGE/plugins" -maxdepth 1 -type d -name "marketplaces" -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE" -type f \( -name "*.log" -o -name ".DS_Store" \) -delete 2>/dev/null || true
 
 # ── Fail closed ───────────────────────────────────────────────────────────
