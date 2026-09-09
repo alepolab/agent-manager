@@ -1632,6 +1632,11 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.status = 'running'
   run.error = undefined
   run.endedAt = undefined
+  // A question the restarted step asked before is answered by the restart
+  // itself; left on the record it showed "Waiting for you" on a running run
+  // that nobody could answer.
+  run.question = undefined
+  l.waiting = undefined
   run.pid = process.pid
   run.bootId = BOOT_ID
   if (startedBy) run.startedBy = startedBy

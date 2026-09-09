@@ -27,7 +27,7 @@ const quietLabel = computed(() => {
 })
 
 /** A paused run is not slow, it is waiting on a person — say so, and say what for. */
-const question = computed(() => props.run.question?.text ?? null)
+const question = computed(() => (props.run.status === 'paused' && props.run.question?.text) || null)
 
 const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.split('\n')[0]?.slice(0, 70) || 'Untitled run')
 </script>
