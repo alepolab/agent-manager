@@ -590,6 +590,73 @@ You execute inside the agent-manager container, not on the host shell: host \`lo
 
 Known recipes live as files: when your input's product block names a \`Recipe:\` path, read it first and follow it. It carries the product-specific quirks (image tag policy, port overrides, healthcheck, which variables to pass through). If there is no recipe, work from the deployment repo's compose file for the product and write what you learned into your stack report so a recipe can be made from it. If there is no compose file for it there either, halt as above rather than looking elsewhere.
 
+### You are in a container; the daemon is not
+
+Every path you hand \`docker\` or \`docker compose\` is resolved by the **daemon on the
+host**, not by your filesystem. Your checkout at
+\`/srv/agent-manager/workspace/...\` does not exist for the daemon, so a bind mount
+declared against it fails on something that reads like a permissions problem
+and is not:
+
+\`\`\`
+making volume mountpoint for volume /srv/.../database/mariadb/scripts:
+mkdir /srv/agent-manager: permission denied
+\`\`\`
+
+Translate before you run anything that mounts. The host path for your
+workspace is the source of the mount that gives you \`/srv/agent-manager\` — read
+it rather than assuming a layout:
+
+\`\`\`
+grep ' /srv/agent-manager ' /proc/self/mountinfo | awk '{print $4}'
+\`\`\`
+
+Pass that as \`--project-directory\` to every compose invocation, and use it for
+any \`-v\` you write yourself. A real run lost minutes rediscovering this from a
+failed mount; it is a property of how this instance is deployed, not something
+to work out per ticket.
+
+### Never bring up a stack you do not own
+
+\`database\` (MariaDB, MongoDB) and \`sso\` (Keycloak, URM) are **shared**: FFM, CRM,
+PCRF and VMS all use them. \`docker compose up\` on a shared file does not mean
+"start if absent" — it **recreates** a container that is already there, which
+takes another team's database down mid-use and gives it back empty of whatever
+was in flight.
+
+So, before any \`up\` touching a shared stack:
+
+\`\`\`
+docker ps -a --filter name=<container> --format '{{.Names}} {{.Status}}'
+\`\`\`
+
+- Running → **use it**. Prove it healthy and move on. Do not recreate it to be
+  sure; that is the destructive act wearing the shape of diligence.
+- Present but stopped → it is someone else's stopped container. Report it and
+  halt. Starting it is a guess about why it is down.
+- Absent → you may bring it up, and you own tearing it down.
+
+A real run recreated \`infra-mariadb\` and left it in \`Created\` state when the start
+failed: the shared database ended the run more broken than it began.
+
+### Publish no host ports
+
+Bring run-scoped stacks up without publishing. Host ports are a single global
+namespace shared with every other stack, every developer process and the host's
+own services, and a collision fails the whole \`up\`:
+
+\`\`\`
+rootlessport listen tcp 0.0.0.0:3306: bind: address already in use
+\`\`\`
+
+That is unfixable from inside your run — something else owns the port and you
+must not stop it. Publishing also buys you nothing: this estate addresses
+services by **container-internal name and port** (\`http://urms:3000\`), never
+through the host, and you prove health with \`docker exec ... curl\` from inside
+the network. If a compose file publishes by default, override the port to empty
+in your own override file in the run artifacts directory — never by editing the
+repo's compose.
+
 ## What "up" means
 
 A container that is running is not a service that is serving. Confirm health through each service's own healthcheck endpoint or an actual request that returns data. Let Docker do the waiting, not yourself: bring the stack up with \`docker compose up -d --wait --wait-timeout <seconds>\` so a single command blocks until every service with a healthcheck is healthy and returns non-zero the moment one fails. Never poll health across turns — a \`docker exec ... curl\` in a loop, one call per turn, waiting for a slow app to boot, burns the whole turn budget on what \`--wait\` does in one command. Run your health-proof requests once, after \`--wait\` returns. If a container restart-loops with an empty \`docker logs\` and exit code 0, the app is writing to a file log, not stdout — copy the log directory out of the container and read it rather than guessing.
