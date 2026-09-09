@@ -752,10 +752,30 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     const rework = parseRework(output)
     if (rework) {
       const want = rework.target.trim().toLowerCase()
-      const target = run.steps.find(s => s.stepId !== id && (s.label.toLowerCase() === want || s.agentSlug.toLowerCase() === want))
+      const others = run.steps.filter(s => s.stepId !== id)
+      // The documented form is the step's LABEL, and an exact match on label or
+      // slug is tried first so a step named exactly is never resolved by the
+      // looser rule below.
+      const exact = others.filter(s => s.label.toLowerCase() === want || s.agentSlug.toLowerCase() === want)
+      // Agents decorate the name. A real fix-implementer wrote "step-04
+      // sdlc-test-author" - the right step, carrying its own step number - and
+      // the exact match rejected it, killing a run 70.3 minutes and $7.96 in
+      // with every earlier step already green. Substring rather than equality,
+      // but accepted ONLY when it names exactly one step: an ambiguous target
+      // must still fail loudly rather than send the run somewhere arbitrary.
+      const named = exact.length ? exact : others.filter(s =>
+        want.includes(s.agentSlug.toLowerCase()) || want.includes(s.label.toLowerCase()))
+      const target = named.length === 1 ? named[0] : undefined
       if (!target) {
         markFailed(l.state, id)
-        Object.assign(rec, { status: 'failed', output, model, usage, error: `Step asked to send the run back to "${rework.target}", which is not a step of this run (${run.steps.map(s => s.label).join(', ')})`, completedAt: Date.now() })
+        // Both label AND slug, because the rejected string is usually a slug
+        // while the old message listed only labels - telling the agent nothing
+        // it could use to correct itself.
+        const known = others.map(s => `${s.label} (${s.agentSlug})`).join(', ')
+        const why = named.length > 1
+          ? `matches more than one step of this run (${named.map(s => s.label).join(', ')})`
+          : `is not a step of this run`
+        Object.assign(rec, { status: 'failed', output, model, usage, error: `Step asked to send the run back to "${rework.target}", which ${why}. Name one of: ${known}`, completedAt: Date.now() })
         try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
         return false
       }
@@ -831,19 +851,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
-    // A step that ran out of turns has usually done most of its work, and its
-    // log tail says how far it got. One retry that starts from there is cheaper
-    // than a dead run: the budget becomes a checkpoint, not a wall. A real
-    // verifier died one turn after its tests passed, with nothing reported.
-    if (err instanceof AgentResultError && err.subtype === 'error_max_turns' && !l.stopped && canRevisit(l.graph, l.state, id)) {
+    // A step that ran out of either budget - turns or wall-clock - has usually
+    // done most of its work, and its log tail says how far it got. One retry
+    // that starts from there is cheaper than a dead run: the budget becomes a
+    // checkpoint, not a wall. A real verifier died one turn after its tests
+    // passed, with nothing reported.
+    if (err instanceof AgentResultError && (err.subtype === 'error_max_turns' || err.subtype === 'error_max_duration') && !l.stopped && canRevisit(l.graph, l.state, id)) {
       const tail = (l.logs[id] ?? []).slice(-25).join('\n')
       Object.assign(rec, { status: 'failed', error: err.message, completedAt: Date.now(), ...(err.usage ? { usage: err.usage } : {}) })
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
       l.outputs[id] = tail
-      l.retryFeedback[id] = 'Your previous attempt ran out of its turn budget before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.'
+      // Names the budget that actually ran out: a timeout told "you ran out of
+      // turns" would send the agent off optimising the wrong thing.
+      const spent = err.subtype === 'error_max_duration' ? 'time budget' : 'turn budget'
+      l.retryFeedback[id] = `Your previous attempt ran out of its ${spent} before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.`
       l.state.status[id] = 'completed'
       armNode(l.state, id)
-      log.warn('step ran out of turns; retrying from its log tail', { runId: run.id, stepId: id, agentSlug: step.agentSlug, visits: rec.visits })
+      log.warn('step ran out of its budget; retrying from its log tail', { runId: run.id, stepId: id, agentSlug: step.agentSlug, subtype: err.subtype, visits: rec.visits })
       return true
     }
     markFailed(l.state, id)
@@ -988,6 +1012,18 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     skipPending(l.state)
     for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
     run.status = 'failed'
+    // The run's OWN reason, carried up from the step that supplied it. Without
+    // this the record read `error: (none)` on every step failure: a real
+    // provisioner burned 47.4 minutes on error_max_turns, and the step record
+    // and the container log both said so while the run itself said nothing.
+    // The most expensive failures were the ones that explained themselves
+    // least, which is exactly backwards. Joined rather than first-only because
+    // a parallel wave can fail in more than one place at once.
+    run.error = run.steps
+      .filter(s => s.status === 'failed' && s.error)
+      .map(s => `${s.label}: ${s.error}`)
+      .join(' · ')
+      || 'A step failed without recording a reason'
     run.endedAt = Date.now()
     run.currentStepIds = []
     run.nextStepIds = []

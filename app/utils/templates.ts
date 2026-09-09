@@ -474,7 +474,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 60,
+      maxTurns: 80,
       skills: ['ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You stand up the environment the rest of the pipeline tests against. Nothing downstream works if you get this wrong, and a stack you *believe* is up but is not produces a false FAIL that wastes the whole run.
@@ -802,7 +802,7 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 60,
+      maxTurns: 80,
       // writing-plans because the plan gate (B2) stops this step before its test
       // lands unless .agent/plan.md exists with five specific headings. Writing
       // that well is a skill this agent was expected to have and did not.
@@ -886,7 +886,7 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 60,
+      maxTurns: 80,
       // receiving-code-review is here because this step is the one that gets sent
       // back: a monitor voting RETRY hands it a review to act on, and a real run
       // returned "the agent claims all 6 tests pass but provides zero test

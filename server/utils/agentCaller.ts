@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, resolveClaudePath } from './claudeDir.ts'
 import { parseFrontmatter } from './frontmatter.ts'
-import { resolveTools, resolveMaxTurns } from './agentToolPolicy.ts'
+import { resolveTools, resolveMaxTurns, resolveMaxDurationMs } from './agentToolPolicy.ts'
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import { createLogger, preview } from './log.ts'
 import type { AgentFrontmatter } from '~/types'
@@ -273,6 +273,13 @@ export async function callAgent(
   const declaredModel = override || frontmatter?.model
   const toolsOption = resolveTools(frontmatter)
   const maxTurns = resolveMaxTurns(frontmatter)
+  const maxDurationMs = resolveMaxDurationMs(frontmatter)
+  // Armed here rather than around the loop so the budget covers everything the
+  // call does, and cleared in the same finally that releases the input stream.
+  // `timedOut` is the ONLY thing that distinguishes this abort from the
+  // operator pressing Stop - both reach the SDK as the same aborted controller.
+  let timedOut = false
+  const deadline = setTimeout(() => { timedOut = true; abortController.abort() }, maxDurationMs)
 
   const startedAt = Date.now()
   log.debug('agent call starting', () => ({
@@ -282,6 +289,7 @@ export async function callAgent(
     modelSource: override ? 'settings override' : frontmatter?.model ? 'agent file' : 'sdk default',
     toolCount: toolsOption ? toolsOption.length : '(sdk default)',
     maxTurns,
+    maxDurationMs,
     inputLength: input.length,
     inputPreview: preview(input),
   }))
@@ -423,9 +431,24 @@ export async function callAgent(
       kick()
     }
   }
+  } catch (err) {
+    // A wall-clock abort surfaces as whatever the SDK throws when its
+    // controller fires, which is indistinguishable from an operator stop
+    // except by the flag. Reported as an AgentResultError so the runner's
+    // existing out-of-budget path - record the attempt, retry from the log
+    // tail - covers a timeout exactly as it covers a spent turn budget.
+    if (timedOut) {
+      throw new AgentResultError(
+        `Claude Code ran past its wall-clock budget of ${Math.round(maxDurationMs / 60_000)} minutes and was stopped`
+        + ' (raise this agent\'s maxDurationMs if the step legitimately needs longer)',
+        usage, 'error_max_duration',
+      )
+    }
+    throw err
   } finally {
     // Every exit path, a thrown error result included: otherwise the input
     // generator stays suspended forever and a queued note is never released.
+    clearTimeout(deadline)
     finished = true
     kick()
   }
