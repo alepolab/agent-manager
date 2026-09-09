@@ -96,18 +96,6 @@ const getStatusColor = () => {
       </div>
     </div>
 
-    <!-- Cost Section -->
-    <div v-if="metrics.cost.total > 0" class="space-y-3">
-      <h4 class="text-[11px] font-bold uppercase tracking-wider" style="color: var(--text-tertiary);">Session Cost</h4>
-      <div class="flex items-center justify-between p-2.5 rounded-lg" style="background: var(--surface-raised);">
-        <div class="flex items-center gap-2">
-          <UIcon name="i-lucide-dollar-sign" class="size-3.5" style="color: #22c55e;" />
-          <span class="text-[12px]" style="color: var(--text-primary);">Total Cost</span>
-        </div>
-        <span class="text-[14px] font-mono font-semibold" style="color: #22c55e;">${{ metrics.cost.total.toFixed(4) }}</span>
-      </div>
-    </div>
-
     <!-- Information Box -->
     <div class="p-3 rounded-xl border space-y-2" style="background: rgba(229, 169, 62, 0.05); border-color: rgba(229, 169, 62, 0.15);">
       <div class="flex items-center gap-2">
