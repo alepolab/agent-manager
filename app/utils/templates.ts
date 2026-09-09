@@ -649,13 +649,29 @@ own services, and a collision fails the whole \`up\`:
 rootlessport listen tcp 0.0.0.0:3306: bind: address already in use
 \`\`\`
 
-That is unfixable from inside your run — something else owns the port and you
-must not stop it. Publishing also buys you nothing: this estate addresses
-services by **container-internal name and port** (\`http://urms:3000\`), never
-through the host, and you prove health with \`docker exec ... curl\` from inside
-the network. If a compose file publishes by default, override the port to empty
-in your own override file in the run artifacts directory — never by editing the
-repo's compose.
+Something else owns the port and you must not stop it, so the collision is not
+yours to resolve — but it is yours to avoid.
+
+**You cannot un-publish a port with an override file.** Compose merges
+sequences rather than replacing them, so a \`ports: []\` override leaves the
+original mapping in place; this was measured, not assumed. What works is the
+compose's own port variable: every mapping in the deployment repo is written
+\`"\${MARIADB_PORT:-3306}:3306"\`, so set that variable to a free port in the env
+file you already write into the run artifacts directory.
+
+Pick the port by checking, not by hoping:
+
+\`\`\`
+for p in $(seq 33060 33099); do (echo >/dev/tcp/127.0.0.1/$p) 2>/dev/null || { echo "$p"; break; }; done
+\`\`\`
+
+The published port is for your convenience only and nothing in the run should
+use it: this estate addresses services by **container-internal name and port**
+(\`http://urms:3000\`), never through the host, and you prove health with
+\`docker exec ... curl\` from inside the network. Routing container-to-container
+via a host address hits the host firewall and produces a *timeout* rather than
+a connection refused — that signature means the wrong address, not a dead
+service.
 
 ## What "up" means
 

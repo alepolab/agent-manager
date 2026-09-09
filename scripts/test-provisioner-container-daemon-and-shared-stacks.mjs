@@ -82,11 +82,23 @@ check('it says why publishing buys nothing here',
   /container-internal name and port/.test(prov) && /docker exec/.test(prov),
   'the estate addresses services internally; publishing is cost with no benefit')
 
-check('an override goes in the run artifacts, never the repo',
-  // Whitespace-insensitive: the source hard-wraps at 80 columns, so any
-  // assertion that assumes where a line breaks is asserting on formatting.
-  /never by editing\s+the\s+repo's compose/.test(prov.replace(/\s+/g, ' ')) || /never by editing the repo's compose/.test(prov.replace(/\s+/g, ' ')),
-  'the checkout is shared configuration; a run is not entitled to rewrite it')
+// Measured, not assumed: `ports: []` in an override does NOT remove a
+// published port. Compose merges sequences, so the original mapping survives
+// and the collision happens anyway. The first version of this instruction told
+// the agent to do exactly that — an instruction it could not follow.
+const flat = prov.replace(/\s+/g, ' ')
+check('it does not tell the agent to un-publish via an override',
+  /cannot un-publish a port with an override file/.test(flat)
+  && /Compose merges sequences/.test(flat),
+  'a ports: [] override leaves the mapping in place; an agent following that instruction still collides')
+
+check('it names the mechanism that does work',
+  /MARIADB_PORT:-3306/.test(flat) && /set that variable to a free port/.test(flat),
+  'every mapping in the deployment repo is variable-driven, which is the only lever that actually changes the published port')
+
+check('the free port is found by checking, not guessing',
+  /dev\/tcp\/127\.0\.0\.1/.test(flat),
+  'picking a port by hope reproduces the collision it exists to avoid')
 
 console.log(failures === 0 ? '\nprovisioner container/daemon rules: all checks passed' : `\nprovisioner container/daemon rules: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)
