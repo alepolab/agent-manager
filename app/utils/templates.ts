@@ -1871,7 +1871,9 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
-      maxTurns: 60,
+      // Reads a 109 KB skill and then a codebase; a real run on the PMS
+      // super-repo burned three 60-turn visits reading and never wrote a plan.
+      maxTurns: 120,
       skills: ['using-superpowers'],
     },
     body: `You write the plan the rest of the run executes, and the QA plan the run is judged by. You change no code.
@@ -1879,6 +1881,15 @@ not happen.`,
 ## Read the run artifacts before you touch the filesystem
 
 The run artifacts directory named at the top of your input holds \`context-packet.json\` and \`intent.md\` from intake (the ticket, the acceptance criteria, the affected system, the classification) and \`stack-report.md\` from provisioning (the checkout path, the stack, its URL and seeded users). Read them first, then work in the working checkout the header names. Never search the filesystem for the repository.
+
+## Draft first, then refine — a plan that exists beats a plan that is complete
+
+Your turn budget is finite and reading a large codebase can eat all of it: a real run spent three whole visits reading the same files (one of them four times) and produced nothing. So:
+
+- If \`plan.md\` already exists in the run artifacts directory, this is a resumed visit: read it and \`qa-plan.md\` first and continue from them instead of exploring again.
+- Write a first \`plan.md\` and \`qa-plan.md\` within your first 20 turns, from the context packet plus the files it names. They may be rough; they must exist.
+- Explore to refine, not to start: Grep for the symbols the ticket names, Read a file once, and update the drafts as you learn. Keep a short list of what you have read; never re-read a file you already have unless you need a different range.
+- Stop exploring when the plan names every file to change with a line and every acceptance criterion has a case. More reading past that point is budget the Implement step needs.
 
 ${CE_SKILL_RULES('ce-plan', 'Phase 1 (gather context, in the working checkout), Phase 3 (structure the plan) and Phase 4 (write it). Phase 0 and Phase 2 are settled by the intake step and the context packet; the handoff of Phase 5 is this pipeline')}
 
