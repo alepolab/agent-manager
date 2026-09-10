@@ -37,8 +37,14 @@ function reset() {
   autoRun.value = props.initial?.autoRun ?? true
   // A clone's own values win over the declaration's defaults: the point of
   // cloning is to run what the last one ran.
+  //
+  // The reserved name falls back to the global working directory, because the
+  // field it replaced did: a workflow that declares `projectDir` to say what
+  // the directory MEANS must not cost the operator the prefill they had when
+  // the same box was called "Project folder".
   values.value = Object.fromEntries(declared.value.map(p => [
-    p.name, props.initial?.parameters?.[p.name] ?? p.default ?? '',
+    p.name, props.initial?.parameters?.[p.name] ?? p.default
+      ?? (p.name === RESERVED_PARAM_PROJECT_DIR ? workingDir.value : ''),
   ]))
 }
 
