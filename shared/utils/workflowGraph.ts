@@ -440,7 +440,39 @@ export function gateSatisfied(raw: string | null): GateResult {
  *  per entry in `source`, routing each entry to a workflow. */
 export interface TriggerWorkflowConfig {
   /** Array artifact in the run's artifacts directory; one child run per entry. */
-  source: string
+  source?: string
+  /**
+   * A run parameter holding one item per line; one child run per line.
+   *
+   * Exactly one of this and `source` is set. It exists because the artifact
+   * source needs a step to produce the file, and "scan these five repos" is a
+   * list a person types when they start the run, not something an agent has to
+   * be spent deriving.
+   *
+   * A list of bare items carries no field to route on, so this requires `slug`
+   * and refuses `routeBy`.
+   */
+  fromParameter?: string
+  /**
+   * The child parameter each item is bound to, so the child can act on it.
+   *
+   * Required with `fromParameter`. The item already names the child's
+   * workspace, but a directory name is not an input a workflow can declare, and
+   * a child that cannot tell which repo it is for would scan whatever the
+   * checkout happened to contain.
+   */
+  itemParameter?: string
+  /**
+   * Wait for every child to settle before this run continues.
+   *
+   * Off by default - what this step has always done, and still the right
+   * default, because the children are complete runs that report for themselves.
+   * On, the parent reaches `joining`: live, but holding no slot in its group.
+   * That status exists for this field. A parent counted against the cap its own
+   * children queue behind deadlocks outright at a cap of 1 and halves
+   * throughput at 2 (see inFlightForGroup in runQueue.ts).
+   */
+  join?: boolean
   /** Entry field whose value picks the workflow (e.g. 'work_type'). */
   routeBy?: string
   /** A `routeBy` value mapped to the workflow slug it dispatches to. */
@@ -526,12 +558,71 @@ export function planDispatch(raw: string | null, cfg: TriggerWorkflowConfig): Di
   }
   if (!parsed.length) return none('holds an empty array (0 entries)')
 
+  // A non-object entry has no field to route by and no field to be named by.
+  return planDispatchEntries(parsed.map(raw_ => (raw_ && typeof raw_ === 'object' && !Array.isArray(raw_))
+    ? raw_ as Record<string, unknown>
+    : {}), cfg)
+}
+
+/** The field a list item carries its value in, and the one `entryKey` reads it
+ *  back out of. `id` rather than a name of its own so an item is named the same
+ *  way an artifact entry is, in the step output and in the child's workspace. */
+export const LIST_ITEM_FIELD = 'id'
+
+/**
+ * Which child runs a `triggerWorkflow` step should start, from a run parameter
+ * holding one item per line.
+ *
+ * The same shape as planDispatch above and for the same reasons - `detail`
+ * reads as the predicate of a sentence about the source, absent and empty are
+ * legitimate "nothing to dispatch", and anything the step cannot honour is an
+ * error that starts no children rather than some of them.
+ *
+ * Two identical items is one of those errors, not a list to quietly dedupe. An
+ * item names its child's workspace, so dispatching both would put two runs in
+ * one checkout - the hazard every other line of this fan-out is arranged to
+ * avoid - and silently dropping the second would report a fan-out of two over a
+ * list of three.
+ */
+export function planListDispatch(value: string | undefined, cfg: TriggerWorkflowConfig): DispatchPlan {
+  const none = (detail: string): DispatchPlan => ({ targets: [], detail })
+  const fail = (why: string): DispatchPlan => ({ targets: [], detail: why, error: why })
+
+  // Checked before the value, so a misconfigured step says so even on a run
+  // that supplied nothing: an empty list would otherwise report "nothing to
+  // dispatch" and hide the reason it could never have dispatched anything.
+  if (cfg.routeBy) {
+    return fail('is a list of items, which carry no field to route on: name one target workflow instead of a routing field')
+  }
+  if (!cfg.itemParameter?.trim()) {
+    return fail('names no parameter to give each child, so a child could not tell which item it was started for')
+  }
+
+  if (value === undefined) return none('was not given')
+  const items = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  if (!items.length) return none('is empty')
+
+  const seen = new Set<string>()
+  for (const item of items) {
+    if (seen.has(item)) {
+      return fail(`lists "${item}" twice; each item names its own workspace, so both children would work in one checkout`)
+    }
+    seen.add(item)
+  }
+
+  return planDispatchEntries(items.map(item => ({ [LIST_ITEM_FIELD]: item })), cfg)
+}
+
+/**
+ * The routing half of a dispatch plan: entries in, one target per entry out.
+ *
+ * Split out of planDispatch because a list parameter arrives at the same
+ * entries by a different road, and routing them in two places is how two
+ * sources of the same thing drift apart.
+ */
+export function planDispatchEntries(entries: Record<string, unknown>[], cfg: TriggerWorkflowConfig): DispatchPlan {
   const targets: DispatchTarget[] = []
-  for (const [i, raw_] of parsed.entries()) {
-    // A non-object entry has no field to route by and no field to be named by.
-    const entry: Record<string, unknown> = (raw_ && typeof raw_ === 'object' && !Array.isArray(raw_))
-      ? raw_ as Record<string, unknown>
-      : {}
+  for (const [i, entry] of entries.entries()) {
     const key = entryKey(entry, i)
 
     const routed = cfg.routeBy ? entry[cfg.routeBy] : undefined

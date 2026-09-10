@@ -2,6 +2,7 @@ import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf, gateSatisfied, markSkippedByCondition, planDispatch,
+  planListDispatch,
   type WorkflowGraph, type RunState, type TriggerWorkflowConfig, type DispatchTarget,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
@@ -33,7 +34,7 @@ import { join } from 'node:path'
 import { getClaudeDir } from './claudeDir.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
-  markArtifactsUnusable, resolveRunArtifact,
+  markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
@@ -43,6 +44,7 @@ import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type Launc
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
+import { childrenSettled } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { workspaceRootFor } from './workspace.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
@@ -155,6 +157,10 @@ interface Live {
   steer: Map<string, (text: string) => boolean>
   /** The step that asked the operator a question and waits for the answer. */
   waiting?: string
+  /** The dispatch step waiting for the child runs it started (`triggerWorkflow.join`).
+   *  Separate from `waiting` because nobody is being asked anything: the run
+   *  reaches `joining`, not `paused`, and resumeJoinIfReady advances it. */
+  joining?: string
   /** True while this run's wave loop is actually executing in the background - the
    *  re-entrancy guard for continueRun (C6). Set synchronously, before any await, so
    *  two "concurrent" calls can never both observe it false. */
@@ -441,16 +447,36 @@ async function publish(run: WorkflowRun) {
     // mightHaveWaiting() first, because a sweep costs a listRuns() - every run
     // record parsed and every owning pid signalled - and the overwhelmingly
     // common case is a run settling with nothing queued behind it anywhere.
-    if (TERMINAL_STATUSES.includes(run.status) && mightHaveWaiting()) {
+    // `joining` is here with the terminal statuses because it gives the slot
+    // back just as they do (holdsGroupSlot), and it is the one case where the
+    // drain is not merely prompt but REQUIRED: a parent dispatches while it is
+    // still `running`, so at a cap of 1 its children are all queued behind it,
+    // and the moment it stops holding the slot is this publish. Without the
+    // drain here they would wait for a run that is waiting for them.
+    if ((TERMINAL_STATUSES.includes(run.status) || run.status === 'joining') && mightHaveWaiting()) {
       void drainRunQueue(launchQueuedRun).catch(err =>
         log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    }
+    // A child of a joining parent has reached its outcome, so the parent may
+    // now be able to go on. Here rather than in the child's own wave loop
+    // because this is the one place every terminal status passes through,
+    // including the ones stopRun and failRun publish. Not awaited: the parent's
+    // resume runs steps of its own.
+    if (TERMINAL_STATUSES.includes(run.status) && run.parentRunId) {
+      const parentRunId = run.parentRunId
+      void resumeJoinIfReady(parentRunId).catch(err =>
+        log.warn('resuming a joining parent failed', { runId: parentRunId, child: run.id, error: err instanceof Error ? err.message : String(err) }))
     }
   })
   publishChains.set(run.id, next)
   await next
 }
 
-const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'awaiting_review', 'completed', 'failed', 'stopped']
+// `joining` belongs here for the same reason `paused` does: the run has handed
+// control away, its wave loop has ended, and a caller waiting on it must not
+// block until its children are done - which is a wait measured in whole
+// pipelines. It settles again, for real, when resumeJoinIfReady drives it on.
+const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'awaiting_review', 'joining', 'completed', 'failed', 'stopped']
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
@@ -784,7 +810,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // treat it as an ordinary step.
   if (step.triggerWorkflow) {
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const { output, failed } = await runDispatchStep(l, run, rec, step.triggerWorkflow)
+    const { output, failed, joining } = await runDispatchStep(l, run, rec, step.triggerWorkflow)
     for (const line of output.split('\n')) logLine(l, run, rec, line)
     l.outputs[id] = output
     if (failed) {
@@ -797,6 +823,17 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       log.warn('dispatch step failed', { runId: run.id, stepId: id, error: output })
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
       return false
+    }
+    if (joining) {
+      // Deliberately NOT completed, and no completedAt: this step's job is not
+      // over until its children are, and marking it done here would arm the
+      // very steps that exist to summarise them. `waiting` is the step status
+      // that already means "stopped, and something else has to happen first".
+      Object.assign(rec, { status: 'waiting', output, model: null, usage: null })
+      l.joining = id
+      log.info('dispatch step joining', () => ({ runId: run.id, stepId: id, children: rec.childRunIds?.length ?? 0 }))
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
     }
     Object.assign(rec, { status: 'completed', output, model: null, usage: null, completedAt: Date.now() })
     log.info('dispatch step done', () => ({ runId: run.id, stepId: id, children: rec.childRunIds?.length ?? 0 }))
@@ -1298,19 +1335,38 @@ async function startChild(item: DispatchItem): Promise<{ run: WorkflowRun, queue
  */
 async function runDispatchStep(
   l: Live, run: WorkflowRun, rec: RunStep, cfg: TriggerWorkflowConfig,
-): Promise<{ output: string, failed: boolean }> {
+): Promise<{ output: string, failed: boolean, joining?: boolean }> {
   const fail = (why: string) => ({ output: why, failed: true })
 
-  const path = resolveRunArtifact(run.id, cfg.source)
-  if (path === null) {
-    return fail(`Dispatch failed: ${cfg.source} names a path outside the run's artifacts directory.`)
+  // Exactly one source, checked before anything is read. Both is a step nobody
+  // can act on and guessing which was meant would dispatch over the wrong list;
+  // neither is a step that could never have dispatched anything.
+  if (!!cfg.source === !!cfg.fromParameter) {
+    return fail(cfg.source
+      ? 'Dispatch failed: this step names both an artifact and a run parameter to dispatch over, and it can have one.'
+      : 'Dispatch failed: this step names nothing to dispatch over: give it an artifact or a run parameter.')
   }
-  const plan = planDispatch(await readFile(path, 'utf8').catch(() => null), cfg)
-  if (plan.error) return fail(`Dispatch failed: ${cfg.source} ${plan.error}.`)
+  // Reads as the subject of every sentence below, exactly as the artifact name
+  // did when that was the only source there was.
+  const label = cfg.fromParameter ? `parameter "${cfg.fromParameter}"` : cfg.source as string
+
+  let plan
+  if (cfg.fromParameter) {
+    // The run's own frozen parameters, never anything an agent wrote: the list
+    // a fan-out spends the machine on is a person's stated input.
+    plan = planListDispatch(run.parameters?.[cfg.fromParameter], cfg)
+  } else {
+    const path = resolveRunArtifact(run.id, cfg.source as string)
+    if (path === null) {
+      return fail(`Dispatch failed: ${label} names a path outside the run's artifacts directory.`)
+    }
+    plan = planDispatch(await readFile(path, 'utf8').catch(() => null), cfg)
+  }
+  if (plan.error) return fail(`Dispatch failed: ${label} ${plan.error}.`)
   if (!plan.targets.length) {
     // Nothing to dispatch is a real outcome, not a failure: the step ran, read
-    // the file, and there was no work in it.
-    return { output: `Dispatched nothing: ${cfg.source} ${plan.detail}.`, failed: false }
+    // the source, and there was no work in it.
+    return { output: `Dispatched nothing: ${label} ${plan.detail}.`, failed: false }
   }
 
   // Recursion, checked before anything starts. A workflow that dispatches one
@@ -1336,6 +1392,14 @@ async function runDispatchStep(
     const wf = await loadWorkflowSteps(slug)
     if (!wf) return fail(`Dispatch failed: there is no workflow "${slug}" on this instance, so nothing was dispatched.`)
     if (!wf.steps.length) return fail(`Dispatch failed: workflow "${slug}" has no steps, so nothing was dispatched.`)
+    // Checked here, with the other all-or-nothing target checks, because the
+    // failure is silent otherwise: resolveParameters drops a value the child
+    // does not declare, so the run would start N children that each scanned
+    // whatever their checkout happened to contain.
+    if (cfg.itemParameter && !wf.parameters?.some(p => p.name === cfg.itemParameter)) {
+      return fail(`Dispatch failed: workflow "${slug}" declares no "${cfg.itemParameter}" input,`
+        + ` so a child could not tell which item it was started for. Nothing was dispatched.`)
+    }
     targets.set(slug, wf)
   }
 
@@ -1358,7 +1422,12 @@ async function runDispatchStep(
   // working tree - the very hazard the line above avoids.
   const { [RESERVED_PARAM_PROJECT_DIR]: _parentDir, ...inheritable } = run.parameters ?? {}
   for (const t of plan.targets) {
-    const child = resolveParameters(targets.get(t.slug)?.parameters, inheritable)
+    // The item itself, under the name this step gave it. Per child rather than
+    // in `inheritable` above because it is the one value that differs between
+    // them, and merged BEFORE resolveParameters so it is subject to the same
+    // rule as every other value: only what the child declares crosses over.
+    const supplied = cfg.itemParameter ? { ...inheritable, [cfg.itemParameter]: t.key } : inheritable
+    const child = resolveParameters(targets.get(t.slug)?.parameters, supplied)
     if (child.missing.length) {
       unsatisfiable.push({ key: t.key, slug: t.slug, missing: child.missing })
       continue
@@ -1379,8 +1448,12 @@ async function runDispatchStep(
   // sequential calls are what makes the queue's order match the entries'.
   // A child that cannot be started is reported against its OWN entry and does
   // not stop the others - one unstartable ticket must not strand the batch.
-  const lines = [`${cfg.source} ${plan.detail}.`]
+  const lines = [`${label} ${plan.detail}.`]
   const childRunIds: string[] = []
+  // What a join reports on, and the only durable record of which item each
+  // child was started for: the keys live in this loop and nowhere else, so a
+  // parent resumed after a restart would otherwise have run ids and no names.
+  const children: { id: string, run: string, slug: string }[] = []
   let queuedCount = 0
   const stuck: string[] = []
   for (const item of items) {
@@ -1391,6 +1464,7 @@ async function runDispatchStep(
       // from the moment it is admitted, which is the whole point of a waiting
       // run being a real run.
       childRunIds.push(child.id)
+      children.push({ id: item.key, run: child.id, slug: item.slug })
       if (queued) {
         queuedCount++
         // Deliberately no position: it is stale the instant anything else
@@ -1421,7 +1495,148 @@ async function runDispatchStep(
     runId: run.id, started: childRunIds.length - queuedCount, queued: queuedCount,
     failed: stuck.length, unsatisfiable: unsatisfiable.length,
   })
-  return { output: lines.join('\n'), failed: false }
+
+  if (!cfg.join) return { output: lines.join('\n'), failed: false }
+
+  // Written now rather than on resume, so the item names survive a restart
+  // between here and the last child settling. resumeJoinIfReady rewrites it
+  // with each child's outcome, which is what a downstream notify or runWhen
+  // then reads.
+  try {
+    await writeArtifactJson(run.id, JOIN_ARTIFACT, children)
+  } catch (err) {
+    // The children are already running. Refusing to join now would abandon
+    // them and lose the rollup as well, so say so and join without the file.
+    lines.push(`Could not write ${JOIN_ARTIFACT}: ${err instanceof Error ? err.message : String(err)}.`)
+  }
+  lines.push(`Waiting for ${childRunIds.length} ${childRunIds.length === 1 ? 'child' : 'children'} to finish.`)
+  return { output: lines.join('\n'), failed: false, joining: true }
+}
+
+/**
+ * The artifact a join writes its children into, and what a downstream notify
+ * step or `runWhen` gate reads to say what the fan-out actually did.
+ *
+ * A fixed name rather than a configured one. The step that writes it and the
+ * steps that read it are in the same graph, and every other artifact in this
+ * pipeline is named twice - once by its producer, once by its consumer - which
+ * is one of the two places a fan-out can be misconfigured into silence.
+ */
+const JOIN_ARTIFACT = 'children.json'
+
+/**
+ * Serialises resume attempts for one parent, so the last two children settling
+ * in the same tick cannot both drive its wave loop.
+ *
+ * publishChains does this for one run's writes; this is the same check-then-act
+ * across runs. The status re-read inside the chain is what makes it correct:
+ * the second attempt sees the `running` the first one published and stops.
+ */
+const joinChains = new Map<string, Promise<unknown>>()
+
+/**
+ * Advances a `joining` parent when every child it dispatched has settled.
+ *
+ * Called from publish() for each child reaching a terminal status, so it runs
+ * once per child and does nothing for all but the last. A child that merely
+ * PAUSED is not settled and the parent goes on waiting - the honest answer,
+ * because the work being joined is not finished, and the parent's own page
+ * links the child that is asking for something.
+ *
+ * Every exit is a return, never a throw: this runs detached from the child's
+ * publish, and a parent that cannot be resumed must leave the child's own
+ * outcome recorded exactly as it was.
+ */
+async function resumeJoinIfReady(parentRunId: string): Promise<void> {
+  const previous = joinChains.get(parentRunId) ?? Promise.resolve()
+  const next = previous.catch(() => {}).then(async () => {
+    const parent = await getRun(parentRunId)
+    // Not joining any more: resumed already by the sibling that settled a
+    // moment before this one, or stopped by an operator in between.
+    if (!parent || parent.status !== 'joining') return
+    const rec = parent.steps.find(s => s.status === 'waiting' && s.childRunIds?.length)
+    if (!rec?.childRunIds?.length) return
+
+    const children = await Promise.all(rec.childRunIds.map(childId => getRun(childId)))
+    // A child whose record was deleted will never publish again. Counting it as
+    // unsettled would leave the parent joining for the life of the instance,
+    // so a missing child is one that has stopped mattering.
+    const present = children.filter((c): c is WorkflowRun => !!c)
+    if (!childrenSettled(present.map(c => c.status))) return
+
+    // The item names come from the artifact, not from memory: this may be a
+    // different process from the one that dispatched them.
+    const named = new Map<string, string>()
+    const stored = await readArtifactEntries(parent.id, JOIN_ARTIFACT)
+    for (const e of (stored && 'entries' in stored) ? stored.entries : []) {
+      if (typeof e.run === 'string' && typeof e.id === 'string') named.set(e.run, e.id)
+    }
+    const summary = present.map((c) => {
+      // A run that failed in a wave records nothing on itself - the reason is on
+      // the step that failed, see failRunAfterWave - so read it from wherever it
+      // actually is. Without this a rollup can say a repo failed but not why,
+      // which is the one thing whoever reads it needs.
+      const why = c.error ?? c.steps.find(s => s.status === 'failed')?.error
+      return {
+        id: named.get(c.id) ?? c.id,
+        run: c.id,
+        slug: c.workflowSlug,
+        status: c.status,
+        ...(why ? { error: why } : {}),
+      }
+    })
+    try {
+      await writeArtifactJson(parent.id, JOIN_ARTIFACT, summary)
+    } catch (err) {
+      // The rollup step will read an older file or none at all, which is worth
+      // a sentence in the step's output rather than stranding the parent.
+      log.warn('could not write the join artifact', { runId: parent.id, error: err instanceof Error ? err.message : String(err) })
+    }
+
+    const unfinished = summary.filter(c => c.status !== 'completed')
+    const lines = [
+      `${summary.length} ${summary.length === 1 ? 'child' : 'children'} finished`
+        + `${unfinished.length ? `, ${unfinished.length} not completed` : ''}.`,
+      ...summary.map(c => `${c.id}: ${c.status} (run ${c.run}).`),
+    ]
+    const output = [rec.output, ...lines].filter(Boolean).join('\n')
+
+    // Written onto the record BEFORE rehydrate, so a parent rebuilt from disk
+    // marks the step completed itself and arms what follows. When the live
+    // record survived, its graph state still has the step running, so the
+    // marking is done by hand below - exactly once, either way.
+    const hadLive = live.has(parent.id)
+    Object.assign(rec, { status: 'completed', output, completedAt: Date.now() })
+
+    let l: Live
+    try {
+      l = await rehydrate(parent)
+    } catch (err) {
+      // The workflow file is gone or no longer aligns, so there is nothing to
+      // resume into. Failing the parent is the honest outcome: its children
+      // ran, and their runs hold their own evidence.
+      log.warn('a joining parent could not be rebuilt', { runId: parent.id, error: err instanceof Error ? err.message : String(err) })
+      await failRun(parent, err)
+      return
+    }
+    if (l.running) return
+    l.running = true
+    l.joining = undefined
+    l.outputs[rec.stepId] = output
+    if (hadLive) markCompleted(l.graph, l.state, rec.stepId)
+    try { await writeStepArtifact(parent, rec, parent.steps.indexOf(rec)) } catch { /* best effort */ }
+
+    parent.status = 'running'
+    parent.pid = process.pid
+    parent.bootId = BOOT_ID
+    log.info('joining parent resumed', {
+      runId: parent.id, stepId: rec.stepId, children: summary.length, unfinished: unfinished.length,
+    })
+    await publish(parent)
+    void driveToSettlement(l, parent)
+  })
+  joinChains.set(parentRunId, next)
+  await next
 }
 
 async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
@@ -1611,6 +1826,29 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.nextStepIds = []
     l.running = false
     await publish(run)
+    return run
+  }
+
+  // Waiting for child runs rather than for a person: the same shape as the
+  // branch above with a different status and nothing in the attention queue.
+  // Checked after it, not before, because a question addressed to somebody
+  // outranks waiting on machines. resumeJoinIfReady takes the run from here
+  // when the last child settles.
+  if (l.joining) {
+    run.status = 'joining'
+    run.currentStepIds = [l.joining]
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    // Both ends of the race, because either can win. A child settling looks for
+    // a parent that is already `joining`; children quick enough to finish
+    // before this publish - a small fan-out is routinely quicker than the
+    // parent's own bookkeeping - have all looked and found it still `running`,
+    // and nothing would ever wake it. resumeJoinIfReady is serialised per
+    // parent and re-reads the status, so whichever side arrives second does
+    // nothing.
+    void resumeJoinIfReady(run.id).catch(err =>
+      log.warn('resuming a joining parent failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
     return run
   }
 

@@ -24,7 +24,7 @@ import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { capFor } from './workflowGroups.ts'
 import { listRuns } from './workflowRunStore.ts'
 import { createLogger } from './log.ts'
-import { isWorkingStatus } from '../../shared/types/run.ts'
+import { holdsGroupSlot } from '../../shared/types/run.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 // The runner's own namespace: this is work the runner does, not a subsystem of
@@ -82,10 +82,15 @@ function serialised<T>(fn: () => Promise<T>): Promise<T> {
  * wait until the scan itself finishes. That is honest — the scan is using the
  * machine too — and the arrangement that avoids it is the one groups exist for:
  * put the dispatcher in its own group, and give the pipelines it feeds theirs.
+ *
+ * A dispatcher that WAITS for its children is the case that arrangement cannot
+ * save, so it is not counted at all: see `joining` in shared/types/run.ts. A
+ * parent holding a slot against the queue its own children sit in is a
+ * deadlock at a cap of 1, not a note about the machine being busy.
  */
 export async function inFlightForGroup(group: string, runs?: WorkflowRun[]): Promise<number> {
   const all = runs ?? await listRuns()
-  return all.filter(r => isWorkingStatus(r.status) && groupOf(r) === group).length
+  return all.filter(r => holdsGroupSlot(r.status) && groupOf(r) === group).length
 }
 
 /**

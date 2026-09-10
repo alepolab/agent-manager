@@ -1893,6 +1893,168 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(sent.length, 0, 'so nobody is told about nothing')
 }
 
+// ── 34. A fan-out over a list parameter, joined ────────────────────────────
+// Multi-repo scanning: one child run per line of a run parameter, each with its
+// own checkout, and a parent that waits for all of them so a rollup step can
+// run once. The deadlock in 34b is the whole reason the `joining` status exists.
+{
+  const LF = String.fromCharCode(10)
+  const wfDir = join(process.env.CLAUDE_DIR, 'workflows')
+  mkdirSync(wfDir, { recursive: true })
+  // The child DECLARES the input the fan-out binds each item to; without the
+  // declaration resolveParameters would drop it (see 34c).
+  writeFileSync(join(wfDir, 'scan-child.json'), JSON.stringify({
+    name: 'Scan Child',
+    parameters: [{ name: 'repo', required: true }],
+    steps: [{ id: 'only', agentSlug: 'agent-child', label: 'Scan one repo', next: [] }],
+  }))
+  // Its own concurrency group, so the cap 34b sets is that group's alone and
+  // not shared with whatever earlier cases left paused in `default`. It is also
+  // the arrangement a real fan-out uses - see inFlightForGroup.
+  writeFileSync(join(wfDir, 'scan-child-capped.json'), JSON.stringify({
+    name: 'Scan Child Capped',
+    group: 'fanout',
+    parameters: [{ name: 'repo', required: true }],
+    steps: [{ id: 'only', agentSlug: 'agent-child', label: 'Scan one repo', next: [] }],
+  }))
+  writeFileSync(join(wfDir, 'scan-child-no-input.json'), JSON.stringify({
+    name: 'Scan Child Without Input',
+    steps: [{ id: 'only', agentSlug: 'agent-child', label: 'Scan', next: [] }],
+  }))
+
+  const fanFlow = (trigger, slug = 'fan-demo', group = undefined) => ({
+    slug, name: 'Fan Demo', group,
+    steps: [
+      { id: 'f', agentSlug: 'sdlc-auto-dispatcher', label: 'Fan out', next: ['r'], triggerWorkflow: trigger },
+      { id: 'r', agentSlug: 'agent-rollup', label: 'Roll up', next: [] },
+    ],
+  })
+  const LIST = { fromParameter: 'repos', itemParameter: 'repo', slug: 'scan-child', join: true }
+
+  // Polls the record rather than using waitForSettled: `joining` IS settled -
+  // the wave loop has ended, and a caller must not block for whole child
+  // pipelines - so a run's real outcome is a different question.
+  const waitForStatus = async (runId, status, ms = TIMEOUT) => {
+    const until = Date.now() + ms
+    for (;;) {
+      const r = await store.getRun(runId)
+      if (r?.status === status) return r
+      if (Date.now() > until) assert.fail(`run ${runId} was ${r?.status}, never ${status}`)
+      await new Promise(res => setTimeout(res, 25))
+    }
+  }
+  const readChildren = async runId => JSON.parse(readFileSync(
+    join(process.env.AGENT_RUNS_DIR, runId, 'artifacts', 'children.json'), 'utf8'))
+
+  // ── 34a. The feature: one child per line, each told which item it is for ──
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+  runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `output of ${agentSlug}` })
+  calls.length = 0
+  let f1 = await runner.startRun({
+    workflow: fanFlow(LIST), initialPrompt: 'scan them', watch: 'direct-invocation',
+    autoRun: true, startedBy: 'dev', parameters: { repos: ['alepo-aaa', 'alepo-bbb', 'alepo-ccc'].join(LF) },
+  })
+  f1 = await runner.waitForSettled(f1.id, TIMEOUT)
+
+  assert.equal(f1.status, 'joining', 'the parent waits for its children rather than completing')
+  const fanStep = f1.steps.find(s => s.stepId === 'f')
+  assert.equal(fanStep.status, 'waiting', 'the fan-out step is not done until its children are')
+  assert.equal(fanStep.completedAt, undefined, 'so it has no completion time yet')
+  assert.equal(fanStep.childRunIds.length, 3, 'one child run per line')
+  assert.equal(f1.steps.find(s => s.stepId === 'r').status, 'pending', 'the rollup step has not run')
+  assert.deepEqual(f1.currentStepIds, ['f'], 'and the run page points at the step that is waiting')
+  assert.ok(!calls.includes('agent-rollup'), 'nothing downstream of the join has run')
+
+  const kids = await Promise.all(fanStep.childRunIds.map(id => runner.waitForSettled(id, TIMEOUT)))
+  assert.deepEqual(kids.map(k => k.parameters.repo), ['alepo-aaa', 'alepo-bbb', 'alepo-ccc'],
+    'each child is told which item it was started for')
+  assert.equal(new Set(kids.map(k => k.projectDir)).size, 3, 'and each works in its own checkout')
+  assert.deepEqual(kids.map(k => k.workflowSlug), ['scan-child', 'scan-child', 'scan-child'])
+  assert.deepEqual(kids.map(k => k.parentRunId), [f1.id, f1.id, f1.id], 'the link back to the parent')
+
+  // The last child to settle is what resumes the parent.
+  const done1 = await waitForStatus(f1.id, 'completed')
+  const settledFan = done1.steps.find(s => s.stepId === 'f')
+  assert.equal(settledFan.status, 'completed', 'the join completes once every child has')
+  assert.match(settledFan.output, /3 children finished\./, 'and says how many')
+  assert.match(settledFan.output, /alepo-bbb: completed/, 'naming each child by its item, not its run id')
+  assert.equal(done1.steps.find(s => s.stepId === 'r').status, 'completed', 'so the rollup step runs')
+  assert.equal(calls.filter(c => c === 'agent-rollup').length, 1, 'exactly once, not once per item')
+  const summary1 = await readChildren(f1.id)
+  assert.deepEqual(summary1.map(c => [c.id, c.status]),
+    [['alepo-aaa', 'completed'], ['alepo-bbb', 'completed'], ['alepo-ccc', 'completed']],
+    'children.json is what a rollup notify or runWhen reads')
+
+  // ── 34b. A cap of one: the deadlock `joining` exists to prevent ───────────
+  // The parent dispatches while it is still `running`, so at a cap of 1 every
+  // child is queued behind it. If a joining parent held its group's slot, the
+  // children would wait for the parent and the parent for the children.
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '1'
+  calls.length = 0
+  let f2 = await runner.startRun({
+    // Parent AND children in one group: a parent in a group of its own could
+    // not deadlock its children, so it would not be this test.
+    workflow: fanFlow({ ...LIST, slug: 'scan-child-capped' }, 'fan-capped', 'fanout'),
+    initialPrompt: 'scan them', watch: 'direct-invocation',
+    autoRun: true, startedBy: 'dev', parameters: { repos: ['cap-one', 'cap-two'].join(LF) },
+  })
+  f2 = await runner.waitForSettled(f2.id, TIMEOUT)
+  assert.equal(f2.status, 'joining')
+  const capped = f2.steps.find(s => s.stepId === 'f')
+  assert.equal(capped.childRunIds.length, 2, 'both children are real runs even when both had to queue')
+
+  const done2 = await waitForStatus(f2.id, 'completed', TIMEOUT * 3)
+  assert.equal(done2.steps.find(s => s.stepId === 'r').status, 'completed',
+    'a capped fan-out still finishes: the parent gives its slot back when it starts joining')
+  const kids2 = await Promise.all(capped.childRunIds.map(id => store.getRun(id)))
+  assert.deepEqual(kids2.map(k => k.status), ['completed', 'completed'], 'and every child got its turn')
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+
+  // ── 34c. A target that cannot be told which item it is for ───────────────
+  // Silent otherwise: resolveParameters drops what the child never declared, so
+  // the run would start N children each scanning whatever its checkout held.
+  calls.length = 0
+  let f3 = await runner.startRun({
+    workflow: fanFlow({ ...LIST, slug: 'scan-child-no-input' }, 'fan-undeclared'),
+    initialPrompt: 'scan them', watch: 'direct-invocation', autoRun: true,
+    parameters: { repos: ['x', 'y'].join(LF) },
+  })
+  f3 = await runner.waitForSettled(f3.id, TIMEOUT)
+  assert.equal(f3.status, 'failed', 'a fan-out that cannot brief its children is a failure, not a dispatch')
+  const undeclared = f3.steps.find(s => s.stepId === 'f')
+  assert.equal(undeclared.status, 'failed')
+  assert.match(undeclared.error, /declares no "repo" input/, 'and the message names the missing declaration')
+  assert.equal(undeclared.childRunIds ?? undefined, undefined, 'nothing was started')
+
+  // ── 34d. A child that fails still settles the join ───────────────────────
+  // The parent waits for its children, not for them to succeed: a rollup that
+  // never ran because one repo failed is the report nobody gets.
+  calls.length = 0
+  runner.setAgentCaller(async (agentSlug, input) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-child' && input.includes('doomed')) throw new Error('the scan blew up')
+    return `output of ${agentSlug}`
+  })
+  let f4 = await runner.startRun({
+    workflow: fanFlow(LIST, 'fan-partial'), initialPrompt: 'scan them', watch: 'direct-invocation',
+    autoRun: true, startedBy: 'dev', parameters: { repos: ['doomed', 'healthy'].join(LF) },
+  })
+  f4 = await runner.waitForSettled(f4.id, TIMEOUT)
+  assert.equal(f4.status, 'joining')
+  const partial = f4.steps.find(s => s.stepId === 'f')
+  await Promise.all(partial.childRunIds.map(id => runner.waitForSettled(id, TIMEOUT)))
+
+  const done4 = await waitForStatus(f4.id, 'completed')
+  assert.equal(done4.steps.find(s => s.stepId === 'r').status, 'completed', 'the rollup still runs')
+  const joined4 = done4.steps.find(s => s.stepId === 'f')
+  assert.match(joined4.output, /1 not completed/, 'the join says how many did not make it')
+  assert.match(joined4.output, /doomed: failed/, 'naming the one that did not')
+  const summary4 = await readChildren(f4.id)
+  assert.deepEqual(summary4.map(c => [c.id, c.status]), [['doomed', 'failed'], ['healthy', 'completed']],
+    'and children.json records each outcome, so a rollup can act on the failures')
+  assert.ok(summary4.find(c => c.id === 'doomed').error, 'with the failure itself, not just its status')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

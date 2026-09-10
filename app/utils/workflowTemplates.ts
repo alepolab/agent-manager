@@ -25,7 +25,7 @@ export interface WorkflowTemplateStep {
   runWhen?: { artifact: string }
   /** See WorkflowStep.triggerWorkflow. Slugs here name real workflows on the
    *  instance, not other templates: nothing in this file resolves them. */
-  triggerWorkflow?: { source: string, routeBy?: string, routes?: Record<string, string>, slug?: string }
+  triggerWorkflow?: { source?: string, fromParameter?: string, itemParameter?: string, join?: boolean, routeBy?: string, routes?: Record<string, string>, slug?: string }
   /** See WorkflowStep.notify. The channel names a row in Settings on the
    *  instance, not anything in this file. */
   notify?: { channel: string, message?: string }

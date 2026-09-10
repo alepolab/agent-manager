@@ -247,6 +247,9 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             <span class="text-label font-mono text-[10px]">{{ step.agentSlug }}</span>
             <span v-if="step.visits > 1" class="text-[10px] text-label">×{{ step.visits }}</span>
             <span v-if="step.monitorVerdict" class="text-[10px] font-mono">{{ step.monitorVerdict }}</span>
+            <span v-if="step.childRunIds?.length" class="text-[10px] text-label" data-testid="child-run-count">
+              {{ step.childRunIds.length }} {{ step.childRunIds.length === 1 ? 'child run' : 'child runs' }}
+            </span>
             <span class="ml-auto text-[10px] text-label">{{ elapsed(step) }}</span>
           </button>
           <!-- Visible on the row itself: an action nobody has to discover by expanding. -->
@@ -273,6 +276,20 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
           />
           <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
+          <!-- The runs this step started. Without these a fan-out is a set of
+               unrelated rows on /runs, and childRunIds - persisted since the
+               dispatch step existed - was the link nothing followed. -->
+          <div v-if="step.childRunIds?.length" class="space-y-0.5" data-testid="child-runs">
+            <div class="text-[10px] text-label">
+              {{ step.childRunIds.length === 1 ? 'The run this step started' : 'The runs this step started' }}<template v-if="step.status === 'waiting'">, which it is waiting for</template>
+            </div>
+            <div class="flex flex-wrap gap-x-2 gap-y-0.5">
+              <NuxtLink
+                v-for="childId in step.childRunIds" :key="childId" :to="`/runs/${childId}`"
+                class="font-mono text-[10px] underline" :title="childId"
+              >{{ childId.slice(0, 8) }}</NuxtLink>
+            </div>
+          </div>
           <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
             <div class="text-[10px] text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
             <div :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="max-h-72 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);"><LogLines :lines="liveFor(step.stepId)" /></div>

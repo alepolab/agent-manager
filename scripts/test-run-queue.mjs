@@ -74,6 +74,7 @@ await groups.replaceGroups([
   await mk({ status: 'completed', group: 'sdlc' })
   await mk({ status: 'failed', group: 'sdlc' })
   await mk({ status: 'interrupted', group: 'sdlc' })
+  await mk({ status: 'joining', group: 'sdlc' })
   await mk({ status: 'running', group: 'scans' })
   await mk({ status: 'running' })   // ungrouped
 
@@ -82,6 +83,32 @@ await groups.replaceGroups([
   // run onto the same machine while it waits.
   assert.equal(await queue.inFlightForGroup('sdlc'), 3,
     'running, paused and awaiting_review occupy slots; queued, completed, failed and interrupted do not')
+
+  // `joining` does NOT count, and this is the one exclusion that is a
+  // correctness requirement rather than an accounting choice. A joining parent
+  // is waiting for child runs admitted against this very count, so counting it
+  // would have it queue behind itself: at a cap of 1 the children wait for the
+  // parent and the parent for the children, for ever. It still owns its
+  // checkout, which is why isWorkingStatus covers it and only this does not.
+  await reset()
+  await mk({ status: 'joining', group: 'sdlc' })
+  await mk({ status: 'joining', group: 'sdlc' })
+  assert.equal(await queue.inFlightForGroup('sdlc'), 0,
+    'a run waiting for its children spends no slot, however many are waiting')
+  await mk({ status: 'running', group: 'sdlc' })
+  assert.equal(await queue.inFlightForGroup('sdlc'), 1,
+    'so a group holding nothing but joining parents has room for their children')
+
+  await reset()
+  await mk({ status: 'running', group: 'sdlc' })
+  await mk({ status: 'paused', group: 'sdlc' })
+  await mk({ status: 'awaiting_review', group: 'sdlc' })
+  await mk({ status: 'queued', group: 'sdlc' })
+  await mk({ status: 'completed', group: 'sdlc' })
+  await mk({ status: 'failed', group: 'sdlc' })
+  await mk({ status: 'interrupted', group: 'sdlc' })
+  await mk({ status: 'running', group: 'scans' })
+  await mk({ status: 'running' })   // ungrouped
   assert.equal(await queue.inFlightForGroup('scans'), 1, 'a group counts only its own runs')
   assert.equal(await queue.inFlightForGroup('default'), 1,
     'an ungrouped run counts against the default group, not against nothing')

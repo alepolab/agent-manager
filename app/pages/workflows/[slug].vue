@@ -210,7 +210,9 @@ const nodes = computed(() => {
         monitorLabel: agentBySlug(step.monitorSlug)?.frontmatter.name ?? step.monitorSlug,
         approval: step.approval === true,
         runWhen: step.runWhen?.artifact,
-        triggerSource: step.triggerWorkflow?.source,
+        triggerSource: step.triggerWorkflow?.source
+          ?? (step.triggerWorkflow?.fromParameter ? `parameter ${step.triggerWorkflow.fromParameter}` : undefined),
+        triggerJoin: step.triggerWorkflow?.join === true,
         notifyChannel: step.notify?.channel,
         maxVisits: step.maxVisits,
         status: exec?.status,
@@ -413,15 +415,62 @@ onMounted(async () => {
 })
 
 /** The artifact a dispatch step fans out over. Emptying it removes the whole
- *  triggerWorkflow block: a step with a routing table and no source to read it
- *  against is config that can never fire. */
+ *  triggerWorkflow block - a step with a routing table and no source to read it
+ *  against is config that can never fire - unless the step fans out over a run
+ *  parameter instead, which is the other half of the same field.
+ *
+ *  Setting one source clears the other rather than leaving both: naming both is
+ *  a step the runner refuses, and a step cannot be saved into a state whose
+ *  only outcome is a failure at run time. */
 const settingsTriggerSource = computed({
   get: () => settingsStep.value?.triggerWorkflow?.source ?? '',
   set: (value: string) => {
     const source = value.trim()
     if (!settingsStepId.value) return
     const current = settingsStep.value?.triggerWorkflow
-    patchStep(settingsStepId.value, { triggerWorkflow: source ? { ...current, source } : undefined })
+    const rest = { ...current, fromParameter: undefined }
+    patchStep(settingsStepId.value, {
+      triggerWorkflow: source
+        ? { ...rest, source }
+        : (current?.fromParameter ? { ...current, source: undefined } : undefined),
+    })
+  },
+})
+/** The run parameter a dispatch step fans out over, one item per line. A picker
+ *  rather than a text box, for the reason the notify channel is one: a mistyped
+ *  name is a fan-out that silently dispatches nothing. */
+const settingsTriggerFromParameter = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.fromParameter ?? '',
+  set: (value: string) => {
+    const fromParameter = value.trim()
+    if (!settingsStepId.value) return
+    const current = settingsStep.value?.triggerWorkflow
+    const rest = { ...current, source: undefined }
+    patchStep(settingsStepId.value, {
+      triggerWorkflow: fromParameter
+        ? { ...rest, fromParameter }
+        : (current?.source ? { ...current, fromParameter: undefined } : undefined),
+    })
+  },
+})
+/** The input each child is given its own item as. Required with a parameter
+ *  source, and checked against every target workflow before anything starts. */
+const settingsTriggerItemParameter = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.itemParameter ?? '',
+  set: (value: string) => {
+    const itemParameter = value.trim()
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, itemParameter: itemParameter || undefined } })
+  },
+})
+/** Whether the run waits for its children before going on. */
+const settingsTriggerJoin = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.join === true,
+  set: (value: boolean) => {
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, join: value || undefined } })
   },
 })
 const settingsTriggerSlug = computed({
@@ -1013,17 +1062,41 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           </div>
 
           <div v-if="settingsStep.agentSlug === 'sdlc-auto-dispatcher'" class="field-group">
-            <label class="field-label">Dispatch one run per entry in</label>
-            <input v-model="settingsTriggerSource" type="text" class="field-input" placeholder="created-tickets.json">
-            <template v-if="settingsTriggerSource">
-              <label class="field-label mt-2">Route on this field</label>
-              <input v-model="settingsTriggerRouteBy" type="text" class="field-input" placeholder="work_type">
-              <label class="field-label mt-2">Routes, one <code>value: workflow-slug</code> per line</label>
-              <textarea v-model="settingsTriggerRoutes" rows="5" class="field-input font-mono text-xs" placeholder="bug: runbook-a-ticket-to-evidence-backed-pr&#10;feature: runbook-b-feature-request-to-evidence-backed-pr" />
-              <label class="field-label mt-2">Workflow for anything the routes miss</label>
+            <template v-if="!settingsTriggerFromParameter">
+              <label class="field-label">Dispatch one run per entry in</label>
+              <input v-model="settingsTriggerSource" type="text" class="field-input" placeholder="created-tickets.json">
+            </template>
+            <template v-if="!settingsTriggerSource">
+              <label class="field-label" :class="{ 'mt-2': !settingsTriggerFromParameter }">
+                {{ settingsTriggerFromParameter ? 'Dispatch one run per line of' : 'or one run per line of a run input' }}
+              </label>
+              <select v-model="settingsTriggerFromParameter" class="field-input">
+                <option value="">Choose a run input…</option>
+                <option v-for="p in workflowParameters.filter(p => p.name.trim())" :key="p.name" :value="p.name">{{ p.name }}</option>
+              </select>
+              <span v-if="!workflowParameters.some(p => p.name.trim())" class="field-hint">
+                This workflow declares no inputs yet. Add one under <strong>Inputs</strong> above, then choose it here.
+              </span>
+            </template>
+            <template v-if="settingsTriggerSource || settingsTriggerFromParameter">
+              <label class="field-label mt-2">Give each child this input</label>
+              <input v-model="settingsTriggerItemParameter" type="text" class="field-input" placeholder="repo">
+              <label class="field-label mt-2 flex items-center gap-2">
+                <input v-model="settingsTriggerJoin" type="checkbox" class="rounded">
+                <span>Wait for every child before the next step</span>
+              </label>
+              <template v-if="settingsTriggerSource">
+                <label class="field-label mt-2">Route on this field</label>
+                <input v-model="settingsTriggerRouteBy" type="text" class="field-input" placeholder="work_type">
+                <label class="field-label mt-2">Routes, one <code>value: workflow-slug</code> per line</label>
+                <textarea v-model="settingsTriggerRoutes" rows="5" class="field-input font-mono text-xs" placeholder="bug: runbook-a-ticket-to-evidence-backed-pr&#10;feature: runbook-b-feature-request-to-evidence-backed-pr" />
+              </template>
+              <label class="field-label mt-2">
+                {{ settingsTriggerFromParameter ? 'Workflow every item goes to' : 'Workflow for anything the routes miss' }}
+              </label>
               <input v-model="settingsTriggerSlug" type="text" class="field-input" placeholder="runbook-a-ticket-to-evidence-backed-pr">
             </template>
-            <span class="field-hint">Runner-executed, no model call. Reads that file from this run's artifacts and starts one run per entry, each in its own checkout. The children are not waited for: this step completes as soon as they exist, and each reports to its own run. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. This run holds a slot in its own group while it dispatches, so a group that both dispatches and receives needs a cap of at least 2.</span>
+            <span class="field-hint">Runner-executed, no model call. Starts one run per item, each in its own checkout, from either an artifact this run's earlier steps wrote or a run input holding one item per line. The input is the way to fan out over a list somebody types when they start the run — scanning five repositories needs no step to produce a file first — and it has no field to route on, so it goes to one workflow. <strong>Every target workflow must declare the input you name above</strong>, or the step fails before starting anything: a child that was not told which item it is for would work on whatever its checkout contained. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. <strong>Waiting</strong> holds this run at <code>JOINING</code> until every child has settled, then writes <code>children.json</code> — one entry per child with its status — so one step downstream can report on the whole fan-out. A joining run spends no slot in its group, so a group that dispatches and receives can be capped at 1; without waiting, this step completes as soon as the children exist and each reports to its own run, and this run holds a slot while it dispatches, so such a group needs a cap of at least 2.</span>
           </div>
 
           <div v-if="settingsStep.agentSlug === 'sdlc-notifier'" class="field-group">

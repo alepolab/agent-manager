@@ -26,6 +26,12 @@ export const RUN_STATUS_COLOR = {
    *  inventing a seventh hue would say they differ in urgency rather than in
    *  what is being asked. The label is what tells them apart. */
   awaiting_review: 'var(--warning, #f59e0b)',
+  /** Waiting for the child runs a fan-out step started. The blue of a run that
+   *  is working, not the warning colour `paused` and `awaiting_review` share:
+   *  the work is going on, in other runs, and nobody is being asked for
+   *  anything. Showing it as "on you now" would put it in front of a person
+   *  who can do nothing about it. */
+  joining: 'var(--info, #3b82f6)',
   completed: 'var(--success, #22c55e)',
   failed: 'var(--error, #ef4444)',
   stopped: 'var(--text-disabled, #9ca3af)',

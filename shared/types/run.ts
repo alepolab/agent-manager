@@ -32,6 +32,26 @@ export type WorkflowRunStatus =
    * directory and its group's slot while it waits.
    */
   | 'awaiting_review'
+  /**
+   * Waiting for the child runs a `triggerWorkflow` step with `join` started,
+   * so it can carry on with what comes after them.
+   *
+   * The one live status that holds no slot in its concurrency group, and the
+   * reason it exists rather than reusing `paused`. Children are admitted
+   * through the same per-group count their parent would be in - so a parent
+   * waiting in `running` or `paused` holds a slot against the queue its own
+   * children sit in. At a cap of 1 that never resolves: the parent waits for
+   * children that wait for the parent. See holdsGroupSlot below.
+   *
+   * It does still OWN things - its working directory and the process watching
+   * for its children - so `isWorkingStatus` covers it, and a launch aimed at
+   * that directory is refused while it waits. Only the slot count is different.
+   *
+   * Not `isWaitingOnAPerson`: nobody can advance it, and putting it in the
+   * attention queue would ask an operator to act on a run that is getting on
+   * with its work elsewhere. It runs no model and spends no budget meanwhile.
+   */
+  | 'joining'
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
 
 /**
@@ -50,7 +70,8 @@ export type WorkflowRunStatus =
  * That is a question about the wave loop; this is a question about the run.
  */
 export function isLiveStatus(status: WorkflowRunStatus): boolean {
-  return status === 'queued' || status === 'running' || status === 'paused' || status === 'awaiting_review'
+  return status === 'queued' || status === 'running' || status === 'paused'
+    || status === 'awaiting_review' || status === 'joining'
 }
 
 /**
@@ -68,9 +89,13 @@ export function isWaitingOnAPerson(status: WorkflowRunStatus): boolean {
 }
 
 /**
- * A run that OWNS something right now: a working directory, an owning process,
- * a slot in its concurrency group. Everything `isLiveStatus` covers except
- * `queued`, which is admitted but holds nothing yet.
+ * A run that OWNS something right now: a working directory and an owning
+ * process. Everything `isLiveStatus` covers except `queued`, which is admitted
+ * but holds nothing yet.
+ *
+ * A group's slot is the one thing this no longer answers for - `joining` owns
+ * the rest without spending that - so the slot count reads `holdsGroupSlot`
+ * below instead.
  *
  * The second predicate exists because three call sites keep needing exactly
  * this one and each had spelled it out as `running || paused`: the workspace
@@ -83,6 +108,40 @@ export function isWaitingOnAPerson(status: WorkflowRunStatus): boolean {
  */
 export function isWorkingStatus(status: WorkflowRunStatus): boolean {
   return status === 'running' || status === 'paused' || status === 'awaiting_review'
+    || status === 'joining'
+}
+
+/**
+ * A run holding one of its concurrency group's slots.
+ *
+ * Everything `isWorkingStatus` covers except `joining`, and the exception is
+ * the whole point: a joining parent is waiting for child runs that are admitted
+ * against this very count, so counting it would have it queue behind itself.
+ * At a cap of 1 that is a deadlock rather than a slowdown - the children never
+ * start, so the parent never stops waiting.
+ *
+ * Separate from `isWorkingStatus` rather than carved out of it because the two
+ * questions only look alike. A joining parent still owns its checkout and its
+ * process, which is what every other caller of that predicate is asking about;
+ * it is only the machine's budget for concurrent WORK that it is not spending.
+ */
+export function holdsGroupSlot(status: WorkflowRunStatus): boolean {
+  return isWorkingStatus(status) && status !== 'joining'
+}
+
+/**
+ * Every child of a join has reached an outcome, so the parent can go on.
+ *
+ * Takes the statuses rather than the runs so the rule stays testable under
+ * plain node, and reads `isLiveStatus` rather than listing the terminal ones:
+ * a status added to the union later is far more likely to be another way a run
+ * can still change than another way it can be over, and the failure modes are
+ * not symmetric. Treating a live child as settled resumes a parent while its
+ * children are still writing; treating a settled child as live leaves the
+ * parent waiting for something that will never publish again.
+ */
+export function childrenSettled(statuses: WorkflowRunStatus[]): boolean {
+  return statuses.every(s => !isLiveStatus(s))
 }
 
 export type RunStepStatus =

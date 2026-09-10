@@ -14,6 +14,7 @@ const props = defineProps<{
     approval?: boolean
     runWhen?: string
     triggerSource?: string
+    triggerJoin?: boolean
     notifyChannel?: string
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
@@ -74,6 +75,12 @@ const verdictColor: Record<string, string> = {
             style="color: var(--text-disabled);"
             :title="`Starts one run per entry in ${data.triggerSource}`"
           ><UIcon name="i-lucide-git-fork" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.triggerJoin"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            title="Waits for every child run before the next step"
+          ><UIcon name="i-lucide-hourglass" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.notifyChannel"
             class="inline-flex items-center"

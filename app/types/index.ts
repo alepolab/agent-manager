@@ -288,25 +288,46 @@ export interface WorkflowStep {
   runWhen?: { artifact: string }
   /**
    * Present on a step the runner executes itself, without a model: it starts
-   * one child run per entry in `source`, routing each entry to a workflow.
+   * one child run per item of a list, routing each item to a workflow.
    *
-   * `source` is a filename relative to the run's artifacts directory, holding
-   * a JSON array. Not written or empty and the step dispatches nothing and
-   * completes; present but not valid JSON, or not an array, FAILS the step -
-   * the same rule `runWhen` uses, and for the same reason.
+   * The list comes from exactly one of two places, and naming both or neither
+   * fails the step. `source` is a filename relative to the run's artifacts
+   * directory holding a JSON array - written by an earlier step. Not written or
+   * empty and the step dispatches nothing and completes; present but not valid
+   * JSON, or not an array, FAILS the step - the same rule `runWhen` uses, and
+   * for the same reason. `fromParameter` names one of the workflow's own
+   * parameters instead, whose value is one item per line: that is what makes
+   * "scan these five repos" a list a person types when they start the run,
+   * rather than a step spent producing a file.
+   *
+   * `itemParameter` is the input each child is given the item as, and is
+   * required with `fromParameter`. Every target workflow must declare it or the
+   * step fails before starting anything: a child that was never told which repo
+   * it is for would scan whatever its checkout happened to contain, and nothing
+   * would say so.
    *
    * `routeBy` names a field on each entry and `routes` maps that field's value
    * to a workflow slug, so one step fans a mixed batch out to several
    * workflows. `slug` is the target for an entry no route matches, and the
    * only target when neither is set. An entry nobody can route fails the whole
    * step and starts nothing: a half-dispatched batch leaves some work in
-   * flight and some silently dropped, with nothing recording which.
+   * flight and some silently dropped, with nothing recording which. A list of
+   * bare items has no field to route on, so `fromParameter` requires `slug`.
    *
-   * Children are started and not waited for. The step's own successors run
-   * immediately; a child's outcome reaches its own run, not this one.
+   * `join` decides whether the step waits. Without it - the original behaviour,
+   * and still the default - the children are started and not waited for, the
+   * step's successors run immediately, and each child's outcome reaches its own
+   * run. With it the run reaches `joining` until every child has settled, then
+   * writes `children.json` (one entry per child, with its item name, status and
+   * failure) and carries on, so one step downstream can report on the whole
+   * fan-out. A child stopped on a person keeps the parent waiting: the work
+   * being joined is not finished.
    */
   triggerWorkflow?: {
-    source: string
+    source?: string
+    fromParameter?: string
+    itemParameter?: string
+    join?: boolean
     routeBy?: string
     routes?: Record<string, string>
     slug?: string

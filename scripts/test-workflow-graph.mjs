@@ -28,6 +28,7 @@ import {
   markSkippedByCondition,
   markFailed,
   planDispatch,
+  planListDispatch,
 } from '../shared/utils/workflowGraph.ts'
 
 /**
@@ -514,6 +515,68 @@ assert.equal(joinInputs([]), '')
   // A non-object entry has no field to route on: it fails, named by position.
   const scalar = planDispatch('["A-1"]', routing)
   assert.match(scalar.error, /entry 1 has no "work_type" to route on/)
+}
+
+// -- planListDispatch: a fan-out over a run parameter ----------------------
+// The list source exists so a multi-repo scan needs no step to emit a file
+// first. It keeps the same contract planDispatch does above: absent and empty
+// are a legitimate "nothing to dispatch", and anything the step cannot honour
+// is an error that starts NO children rather than some of them.
+//
+// Built from char codes rather than escapes so the newline under test is
+// unmistakably one character and this file's own line endings cannot flatter it.
+{
+  const LF = String.fromCharCode(10)
+  const CRLF = String.fromCharCode(13, 10)
+  const one = { slug: 'scan-security', itemParameter: 'repo' }
+
+  for (const [value, keys, why] of [
+    ['alepo-aaa', ['alepo-aaa'], 'a single item'],
+    [['a', 'b', 'c'].join(LF), ['a', 'b', 'c'], 'one child per line'],
+    ['  a  ' + LF + '  b  ', ['a', 'b'], 'surrounding whitespace is not part of the item'],
+    ['a' + LF + '  ' + LF + LF + 'b', ['a', 'b'], 'blank lines are not items'],
+    [['a', 'b'].join(CRLF), ['a', 'b'], 'a list typed on Windows splits the same way'],
+  ]) {
+    const got = planListDispatch(value, one)
+    assert.equal(got.error, undefined, `planListDispatch(${JSON.stringify(value)}): ${got.error}`)
+    assert.deepEqual(got.targets.map(t => t.key), keys, why)
+    assert.deepEqual(got.targets.map(t => t.slug), keys.map(() => 'scan-security'), 'every item goes to the one named workflow')
+    assert.equal(got.targets[0].entry.id, keys[0], 'the item travels as the entry id, so entryKey names it')
+  }
+
+  // Nothing to dispatch, and no error: the step ran and the list was empty.
+  for (const [value, detail, why] of [
+    [undefined, /was not given/, 'a run that supplied no value at all'],
+    ['', /is empty/, 'an empty value'],
+    ['   ' + LF + '  ', /is empty/, 'a value of nothing but whitespace'],
+  ]) {
+    const got = planListDispatch(value, one)
+    assert.equal(got.error, undefined, 'an empty list is not a misconfiguration')
+    assert.equal(got.targets.length, 0, why)
+    assert.match(got.detail, detail, why)
+  }
+
+  // Misconfiguration, reported before the value is looked at: an empty list
+  // would otherwise read as "nothing to dispatch" and hide the reason this step
+  // could never have dispatched anything.
+  for (const [cfg, value, detail, why] of [
+    [{ slug: 's', itemParameter: 'repo', routeBy: 'work_type' }, 'a', /carry no field to route on/, 'a list of items has no field to route on'],
+    [{ slug: 's', itemParameter: 'repo', routeBy: 'work_type' }, undefined, /carry no field to route on/, 'and it says so even when nothing was supplied'],
+    [{ slug: 's' }, 'a', /names no parameter to give each child/, 'without an item parameter a child cannot tell which item it is for'],
+    [{ slug: 's', itemParameter: '   ' }, 'a', /names no parameter to give each child/, 'and whitespace is not a parameter name'],
+    [{ itemParameter: 'repo' }, 'a', /names no workflow to dispatch to/, 'with no target workflow there is nothing to start'],
+  ]) {
+    const got = planListDispatch(value, cfg)
+    assert.ok(got.error, why)
+    assert.match(got.error, detail, why)
+    assert.equal(got.targets.length, 0, 'an errored plan dispatches nothing at all')
+  }
+
+  // Two identical items is an error, not a list to quietly dedupe: an item
+  // names its child's workspace, so both children would work in one checkout.
+  const twice = planListDispatch(['a', 'b', 'a'].join(LF), one)
+  assert.match(twice.error, /lists "a" twice/, 'a repeated item is refused by name')
+  assert.equal(twice.targets.length, 0, 'and nothing is dispatched')
 }
 
 console.log('workflowGraph: all checks passed')
