@@ -1602,9 +1602,9 @@ run's own state is what a reviewer acts on; the message is the convenience on
 top of it. A run stopped for a decision is still stopped for that decision
 whether or not anybody was told.
 
-Placement matters, and the runner cannot fix it for you: a wave stops at an
-approval step before any member of that wave runs, so a notify step placed
-beside a gated step never sends. It belongs upstream of the gate.
+Placement is free: only a gated step waits for its person, so a notify step
+beside one still sends before the run stops. Upstream of the gate it sends
+sooner, which is usually what you want.
 
 If you are reading this as a model, the runner did not intercept the step. Post
 nothing yourself - you hold no channel credentials, and no address you could

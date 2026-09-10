@@ -1714,7 +1714,21 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   }
 
   // A step marked for approval waits for a person before it starts, run-to-completion or not.
-  const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id))
+  //
+  // Only that step waits. The gate used to stop the WHOLE wave the moment any
+  // member of it was gated, which is how a scan's auto-approved half ended up
+  // behind the human deciding its escalated half: conditional routing puts the
+  // two branches in one wave, and one of them needs nobody. So the wave splits,
+  // the rest of it runs, and the gate is raised only when there is nothing else
+  // left to run.
+  //
+  // A deferred gate is not a skipped one. Nothing marks it running, so it stays
+  // armed and readyNodes offers it again on every wave until it is the only
+  // thing standing - which is exactly the moment the question is worth asking,
+  // because by then the answer is all that the run is waiting on.
+  const gated = wave.filter(id => stepOf(l, id)?.approval && !l.approved.has(id))
+  const runnable = wave.filter(id => !gated.includes(id))
+  const gate = runnable.length ? undefined : gated[0]
   if (gate) {
     const step = stepOf(l, gate)
     const label = step?.label ?? gate
@@ -1735,7 +1749,9 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     }
     run.status = artifact ? 'awaiting_review' : 'paused'
     run.currentStepIds = []
-    run.nextStepIds = wave
+    // The gated steps only: whatever else was ready has already run by now, and
+    // naming a completed step as what comes next reads as work still to do.
+    run.nextStepIds = gated
     l.running = false
     log.info('run waits for a person', { runId: run.id, stepId: gate, artifact })
     await publish(run)
@@ -1746,15 +1762,17 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // currentStepIds is the whole wave, set once before anything in it runs. executeNode
   // deliberately never reassigns it (C4) - if it did, concurrent execution would leave
   // it reflecting only whichever node happened to reach that line last, not the wave.
-  run.currentStepIds = wave
-  run.nextStepIds = []
-  log.debug('wave starting', { runId: run.id, stepIds: wave })
+  // The gated members are not in it and are not started; nextStepIds names them so the
+  // run page shows what is coming rather than losing them until the next wave.
+  run.currentStepIds = runnable
+  run.nextStepIds = gated
+  log.debug('wave starting', { runId: run.id, stepIds: runnable, deferredGates: gated })
   await publish(run)
 
   // Genuine concurrency (C4), each executeNode call publish()es independently as it
   // progresses (mirroring the client engine's parallel step execution). publish() (above)
   // serializes those writes per run id so they can never race on disk.
-  const results = await Promise.all(wave.map(id => executeNode(l, run, id)))
+  const results = await Promise.all(runnable.map(id => executeNode(l, run, id)))
 
   // A stop during the wave published 'stopped' from stopRun's own copy of the
   // record. This object is the one the wave mutated and the one executeNode
@@ -1772,7 +1790,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   }
 
   if (results.some(ok => !ok)) {
-    return failRunAfterWave(l, run, wave)
+    return failRunAfterWave(l, run, runnable)
   }
 
   // A step is waiting on the operator: nothing else starts until they answer.

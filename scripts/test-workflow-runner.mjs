@@ -1407,11 +1407,15 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(g3.question.stepId, 'esc')
   assert.equal(g3.question.artifact, 'escalated-drafts.json', 'and names the file whose entries are being decided')
   assert.match(g3.question.text, /escalated-drafts\.json/, 'the question says so in words too')
-  // Documents a defect this change does NOT fix: the approval gate holds the
-  // WHOLE wave, so the auto-approved sibling waits on the human too. Conditional
-  // routing only removes the case where the escalated branch was empty.
-  assert.equal(g3.steps.find(s => s.stepId === 'ap').status, 'pending',
-    'known limitation: one gated node still holds its whole wave')
+  // The sibling that needs nobody does NOT wait on the human: the wave splits,
+  // the auto-approved branch runs, and the gate is raised once it is the only
+  // thing left. This is the whole point of the split - the two branches meet in
+  // one wave and only one of them is a decision.
+  assert.equal(g3.steps.find(s => s.stepId === 'ap').status, 'completed',
+    'the ungated sibling of a gated step runs instead of waiting for the person')
+  assert.ok(calls.includes('agent-ap'), 'and it really ran')
+  assert.ok(!calls.includes('agent-esc'), 'while the gated step itself has not')
+  assert.deepEqual(g3.nextStepIds, ['esc'], 'what comes next is the gated step alone')
   g3 = await runner.continueRun(g3.id)
   g3 = await runner.waitForSettled(g3.id, TIMEOUT)
   assert.equal(g3.status, 'completed')
@@ -1844,7 +1848,11 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(nStep.usage, null, 'so it costs nothing')
   assert.match(nStep.output, /^Posted to "reviewers"/, 'the output says what happened')
 
-  // 33b. The trap: BESIDE the gate, the wave stops before the notify step runs.
+  // 33b. Beside the gate now works too: the wave splits, the notify step is not
+  // the decision, and it sends before the run stops on the person. Kept as its
+  // own case because it was a documented trap for as long as a gate held its
+  // whole wave, and a regression there would go unnoticed - the run reaches
+  // awaiting_review either way, and only the message is missing.
   const beside = {
     slug: 'notify-beside', name: 'Notify Beside',
     steps: [
@@ -1859,9 +1867,10 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   let n2 = await runner.startRun({ workflow: beside, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
   n2 = await runner.waitForSettled(n2.id, TIMEOUT)
   assert.equal(n2.status, 'awaiting_review')
-  assert.equal(sent.length, 0,
-    'a notify step beside the gate never sends: runWave returns at the gate before the wave executes')
-  assert.equal(n2.steps.find(s => s.stepId === 'n').status, 'pending', 'it has not run at all')
+  assert.equal(sent.length, 1,
+    'a notify step beside the gate sends: only the gated step waits for the person')
+  assert.match(sent[0].body.text, /B-1/, 'over the same entries the decision is about')
+  assert.equal(n2.steps.find(s => s.stepId === 'n').status, 'completed', 'it ran')
 
   // 33c. Delivery failure completes the step and does not fail the run.
   N.setPoster(async () => { throw new Error('the webhook answered 503') })

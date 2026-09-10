@@ -1120,9 +1120,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               channel's webhook is never stored in this workflow — only its name. A delivery failure is recorded
               in the step's output and never fails the run, so verify a new channel with "Send test" in Settings
               rather than on the branch that matters.
-              <strong>Put this step before the step that waits for approval, not beside it:</strong> a wave stops
-              at the approval before any of its steps run, so a notify step running in parallel with the gated
-              step never sends.
+              Beside a step that waits for approval is fine: only the gated step waits, so this one sends
+              before the run stops on the person.
             </span>
           </div>
 

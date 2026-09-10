@@ -347,10 +347,10 @@ export interface WorkflowStep {
    * arbitrary entry fields would make this config know the artifact's schema,
    * and a producer renaming a field would silently empty the message.
    *
-   * Placement matters. A wave stops at an `approval` step BEFORE any of its
-   * members run (workflowRunner.ts, runWave), so a notify step placed BESIDE a
-   * gated step never sends. Put it upstream of the gate, not in parallel with
-   * it.
+   * Placement is free: a gated step waits alone (workflowRunner.ts, runWave
+   * splits the wave), so a notify step beside one still sends before the run
+   * stops on the person. It sends earlier upstream of the gate, and that is
+   * still the clearer place to read it off the canvas.
    */
   notify?: {
     channel: string
