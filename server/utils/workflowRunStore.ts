@@ -118,6 +118,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     workflowName: input.workflowName,
     status,
     group: input.group,
+    notifyChannel: input.notifyChannel,
     // Only a queued run has one, so its presence is also the honest record of
     // "this run waited". A run that started immediately never did.
     ...(status === 'queued' ? { queuedAt: Date.now() } : {}),
@@ -270,12 +271,12 @@ export async function findRunInWorkspace(
  *  needs its `group` to know which cap the run counts against. This is the only
  *  workflow reader on those paths, so returning `group` here is what keeps
  *  slot accounting from re-reading a workflow file per live run. */
-export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, group?: string, steps: any[], parameters?: WorkflowParameter[] } | null> {
+export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, group?: string, notifyChannel?: string, steps: any[], parameters?: WorkflowParameter[] } | null> {
   const path = resolveClaudePath('workflows', `${slug}.json`)
   if (!existsSync(path)) return null
   try {
     const data = JSON.parse(await readFile(path, 'utf-8'))
-    return { slug, name: data.name ?? slug, group: data.group || undefined, steps: data.steps ?? [], parameters: data.parameters ?? [] }
+    return { slug, name: data.name ?? slug, group: data.group || undefined, notifyChannel: data.notifyChannel || undefined, steps: data.steps ?? [], parameters: data.parameters ?? [] }
   } catch {
     return null
   }

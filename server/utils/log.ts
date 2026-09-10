@@ -66,7 +66,7 @@
  */
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug'
-export type Namespace = 'runner' | 'agent' | 'artifacts' | 'watcher' | 'jira'
+export type Namespace = 'runner' | 'agent' | 'artifacts' | 'watcher' | 'jira' | 'notify'
 
 const LEVEL_RANK: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, debug: 3 }
 const VALID_LEVELS = new Set<string>(['error', 'warn', 'info', 'debug'])

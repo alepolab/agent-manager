@@ -38,6 +38,7 @@ import {
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
+import { runNotifyStep, type NotifyStepConfig } from './notifySteps.ts'
 import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
@@ -90,7 +91,9 @@ interface WorkflowLike {
   /** See Workflow.group (app/types/index.ts) - the concurrency group this
    *  workflow's runs count against. Absent means the default group. */
   group?: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig }[]
+  /** See Workflow.notifyChannel - where this workflow's run transitions are announced. */
+  notifyChannel?: string
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig }[]
 }
 
 export interface StartRunOpts {
@@ -802,6 +805,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return true
   }
 
+  // A notify step is the runner's own work too: no model, no prompt, one POST
+  // to a channel this instance configures. It settles like the Jira step above
+  // - a delivery failure is a sentence, never a failed step - because the run's
+  // own state is what a reviewer acts on and the message is the convenience on
+  // top of it. See runNotifyStep for the full argument.
+  if (step.notify) {
+    logLine(l, run, rec, `step started, visit ${rec.visits}`)
+    const output = await runNotifyStep(run, step.notify, step.runWhen?.artifact)
+    for (const line of output.split('\n')) logLine(l, run, rec, line)
+    l.outputs[id] = output
+    Object.assign(rec, { status: 'completed', output, model: null, usage: null, completedAt: Date.now() })
+    log.info('notify step done', () => ({ runId: run.id, stepId: id, channel: step.notify?.channel }))
+    markCompleted(l.graph, l.state, id)
+    try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+    return true
+  }
+
   const ac = new AbortController()
   l.aborts.set(id, ac)
   try {
@@ -1243,7 +1263,7 @@ async function startChild(item: DispatchItem): Promise<{ run: WorkflowRun, queue
   if (!wf) throw new Error(`there is no workflow "${item.slug}" on this instance`)
   if (!wf.steps.length) throw new Error(`workflow "${item.slug}" has no steps`)
   return startOrQueue({
-    workflow: { slug: wf.slug, name: wf.name, group: wf.group, steps: wf.steps },
+    workflow: { slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, steps: wf.steps },
     initialPrompt: item.initialPrompt,
     // An honest third answer to "what triggered this?", carrying the run that
     // did. `watch` is a free string in the evidence bundle schema - only
@@ -1751,6 +1771,8 @@ function newRunInput(opts: StartRunOpts, resolved: ResolvedStart) {
     workflowName: opts.workflow.name,
     // Snapshotted here rather than looked up later: see WorkflowRun.group.
     group: opts.workflow.group,
+    // Snapshotted here for the same reason `group` is: see WorkflowRun.notifyChannel.
+    notifyChannel: opts.workflow.notifyChannel,
     autoRun: opts.autoRun,
     initialPrompt: opts.initialPrompt,
     watch: opts.watch,
@@ -1883,8 +1905,8 @@ export async function enqueueRun(opts: StartRunOpts): Promise<WorkflowRun> {
  *
  * The workflow definition is RE-READ rather than taken from the run record: a
  * record snapshots only each step's id, label and agent, while buildGraph needs
- * `next`, `monitorSlug`, `maxVisits`, `approval`, `runWhen`, `jira` and
- * `triggerWorkflow`. Since it is re-read, the steps are also refreshed from it:
+ * `next`, `monitorSlug`, `maxVisits`, `approval`, `runWhen`, `jira`,
+ * `triggerWorkflow` and `notify`. Since it is re-read, the steps are also refreshed from it:
  * a queued run has executed nothing, so there is no completed work to preserve
  * and the current definition is simply the right one. (This is why
  * `alignStepIds`, which refuses a changed shape, is not used here — its whole
@@ -1927,7 +1949,7 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   }))
 
   try {
-    await beginRun({ slug: wf.slug, name: wf.name, group: wf.group, steps: wf.steps }, {
+    await beginRun({ slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, steps: wf.steps }, {
       product: run.product, projectDir: run.projectDir, ticketKey: run.ticketKey, workspace,
     }, async (baseCommit) => {
       run.baseCommit = baseCommit

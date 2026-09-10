@@ -14,6 +14,7 @@ const props = defineProps<{
     approval?: boolean
     runWhen?: string
     triggerSource?: string
+    notifyChannel?: string
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
@@ -73,6 +74,12 @@ const verdictColor: Record<string, string> = {
             style="color: var(--text-disabled);"
             :title="`Starts one run per entry in ${data.triggerSource}`"
           ><UIcon name="i-lucide-git-fork" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.notifyChannel"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Posts a message to ${data.notifyChannel}`"
+          ><UIcon name="i-lucide-bell-ring" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.monitorLabel"
             class="text-[9px] truncate"

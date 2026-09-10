@@ -311,6 +311,30 @@ export interface WorkflowStep {
     routes?: Record<string, string>
     slug?: string
   }
+  /**
+   * Present on a step the runner executes itself, without a model: it posts one
+   * message to a channel configured under Settings, and completes.
+   *
+   * `channel` is a NAME, never a URL. Workflow definitions are staged into the
+   * distributable image and written onto the shared team volume, so a webhook
+   * written here would ship inside an image; the URL lives encrypted outside the
+   * config tree (server/utils/channels.ts).
+   *
+   * `message` is the step author's own sentence, with `{count}` replaced by the
+   * number of entries in this step's `runWhen` artifact. The entry names and a
+   * link to the run are appended. There is no other substitution: projecting
+   * arbitrary entry fields would make this config know the artifact's schema,
+   * and a producer renaming a field would silently empty the message.
+   *
+   * Placement matters. A wave stops at an `approval` step BEFORE any of its
+   * members run (workflowRunner.ts, runWave), so a notify step placed BESIDE a
+   * gated step never sends. Put it upstream of the gate, not in parallel with
+   * it.
+   */
+  notify?: {
+    channel: string
+    message?: string
+  }
 }
 
 export interface Workflow {
@@ -341,6 +365,15 @@ export interface Workflow {
    * is this in?".
    */
   group?: string
+  /**
+   * The named channel this workflow's run transitions are announced to
+   * (server/utils/channels.ts). Absent falls back to a channel called `default`,
+   * then to SLACK_WEBHOOK_URL.
+   *
+   * A name, not a URL, for the same reason WorkflowStep.notify holds one: this
+   * file ships inside the distributable image.
+   */
+  notifyChannel?: string
   createdAt: string
   lastRunAt?: string
   filePath: string
@@ -355,6 +388,8 @@ export interface WorkflowPayload {
   /** See Workflow.group. Sent as '' rather than omitted to clear it: the PUT
    *  route is a shallow merge, so an absent key keeps the stored value. */
   group?: string
+  /** See Workflow.notifyChannel. Sent as '' to clear it, like `group`. */
+  notifyChannel?: string
 }
 
 export interface StepExecution {

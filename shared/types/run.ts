@@ -314,6 +314,19 @@ export interface WorkflowRun {
    */
   group?: string
   /**
+   * The named channel this run's transition messages go to, snapshotted from
+   * the workflow when the run was created.
+   *
+   * Snapshotted for the same reason `group` is, plus one of its own: the
+   * transition hook runs inside publish(), which holds a run record and never
+   * the workflow definition it came from. Without the snapshot there is no path
+   * from a run to its workflow's channel at the moment the message is sent.
+   *
+   * Absent falls back to a channel named `default`, then to SLACK_WEBHOOK_URL
+   * (server/utils/notify.ts).
+   */
+  notifyChannel?: string
+  /**
    * When this run joined the queue, for a run that was queued rather than
    * started immediately.
    *
@@ -451,6 +464,9 @@ export interface NewRunInput {
   /** See WorkflowRun.group — the caller states it from the workflow
    *  definition, createRun carries it straight onto the persisted run. */
   group?: string
+  /** See WorkflowRun.notifyChannel — stated from the workflow definition and
+   *  carried straight onto the persisted run, exactly like `group`. */
+  notifyChannel?: string
   /** 'queued' for a run admitted but waiting for a slot; createRun stamps
    *  `queuedAt` itself when this says so. Absent means the run starts now. */
   status?: Extract<WorkflowRunStatus, 'running' | 'queued'>

@@ -26,6 +26,9 @@ export interface WorkflowTemplateStep {
   /** See WorkflowStep.triggerWorkflow. Slugs here name real workflows on the
    *  instance, not other templates: nothing in this file resolves them. */
   triggerWorkflow?: { source: string, routeBy?: string, routes?: Record<string, string>, slug?: string }
+  /** See WorkflowStep.notify. The channel names a row in Settings on the
+   *  instance, not anything in this file. */
+  notify?: { channel: string, message?: string }
 }
 
 export interface WorkflowTemplate {
@@ -114,6 +117,7 @@ export function materializeTemplateSteps(
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.runWhen !== undefined) materialized.runWhen = step.runWhen
     if (step.triggerWorkflow !== undefined) materialized.triggerWorkflow = step.triggerWorkflow
+    if (step.notify !== undefined) materialized.notify = step.notify
     return materialized
   })
 }

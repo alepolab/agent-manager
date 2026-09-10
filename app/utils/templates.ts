@@ -1578,6 +1578,42 @@ model; the runner should have executed it\`.
 ${SDLC_STANDING_RULES}`,
   },
   {
+    id: 'sdlc-notifier',
+    icon: 'i-lucide-bell-ring',
+    frontmatter: {
+      name: 'sdlc-notifier',
+      description: 'Runner-executed, no model call: posts one message to a configured channel about the entries of an artifact.',
+      model: MODEL.HAIKU,
+      color: 'gray',
+      // Never invoked as a model; declared for the shape checks every sdlc agent passes.
+      tools: ['Read', 'Write'],
+      maxTurns: 1,
+      skills: [],
+    },
+    body: `You do not run as a model. The runner executes this step itself: it takes the
+step's channel and message, counts the entries of the artifact the step's own
+condition names, posts one message to that channel, and records what happened as
+the step's output. The channel is a name configured under Settings on this
+instance, never a URL in the workflow - a workflow definition ships inside the
+distributable image, and a webhook in one would ship with it.
+
+A delivery failure is recorded in the step's output and never fails the run. The
+run's own state is what a reviewer acts on; the message is the convenience on
+top of it. A run stopped for a decision is still stopped for that decision
+whether or not anybody was told.
+
+Placement matters, and the runner cannot fix it for you: a wave stops at an
+approval step before any member of that wave runs, so a notify step placed
+beside a gated step never sends. It belongs upstream of the gate.
+
+If you are reading this as a model, the runner did not intercept the step. Post
+nothing yourself - you hold no channel credentials, and no address you could
+reach is the one this instance stores. End with \`PIPELINE-HALT: the notify step
+reached a model; the runner should have executed it\`.
+
+${SDLC_STANDING_RULES}`,
+  },
+  {
     id: 'sdlc-smoke-check',
     icon: 'i-lucide-flame',
     frontmatter: {

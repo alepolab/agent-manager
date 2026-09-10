@@ -1791,6 +1791,108 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   rmSync(process.env.AGENT_WORKSPACE_ROOT, { recursive: true, force: true })
 }
 
+// ── 33. The notify step: runner-executed, never fatal, and wave-sensitive ──
+// A notify step posts one message and completes. It must never reach the agent
+// caller, must never fail a run when delivery fails, and - the trap worth a
+// test rather than a comment - must be placed UPSTREAM of an approval gate,
+// because runWave returns at the gate before any member of that wave runs.
+{
+  process.env.AGENT_MANAGER_SECRET = 'runner-test-secret'
+  process.env.AGENT_CHANNELS_FILE = join(process.env.CLAUDE_DIR, 'channels.json')
+  const C = await import('../server/utils/channels.ts')
+  const N = await import('../server/utils/notify.ts')
+  await C.saveChannel('reviewers', { kind: 'slack', url: 'https://hooks.slack.com/services/runner' })
+
+  const sent = []
+  N.setPoster(async (url, body) => { sent.push({ url, body }) })
+
+  const writeEscalated = json => async (agentSlug, input) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-g') {
+      const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+      writeFileSync(join(dir, 'escalated-drafts.json'), json)
+    }
+    return `output of ${agentSlug}`
+  }
+
+  // 33a. Upstream of the gate: the message goes out, THEN the run stops to ask.
+  const upstream = {
+    slug: 'notify-upstream', name: 'Notify Upstream',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['n'] },
+      { id: 'n', agentSlug: 'sdlc-notifier', label: 'Tell reviewers', next: ['esc'],
+        runWhen: { artifact: 'escalated-drafts.json' },
+        notify: { channel: 'reviewers', message: '{count} drafts need a decision' } },
+      { id: 'esc', agentSlug: 'agent-esc', label: 'Create Jira (Escalated)', next: [], approval: true, runWhen: { artifact: 'escalated-drafts.json' } },
+    ],
+  }
+  runner.setAgentCaller(writeEscalated('[{"key":"A-1"},{"key":"A-2"}]'))
+  calls.length = 0
+  sent.length = 0
+  let n1 = await runner.startRun({ workflow: upstream, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n1 = await runner.waitForSettled(n1.id, TIMEOUT)
+
+  assert.equal(n1.status, 'awaiting_review', 'the run still stops for the decision')
+  assert.equal(sent.length, 1, 'and the message went out before it did')
+  assert.match(sent[0].body.text, /2 drafts need a decision/, 'the count comes from the runWhen artifact')
+  assert.match(sent[0].body.text, /A-1, A-2/, 'and the entries are named the way the review panel names them')
+  assert.ok(!calls.includes('sdlc-notifier'), 'a notify step never reaches the agent caller')
+
+  const nStep = n1.steps.find(s => s.stepId === 'n')
+  assert.equal(nStep.status, 'completed')
+  assert.equal(nStep.model, null, 'no model ran')
+  assert.equal(nStep.usage, null, 'so it costs nothing')
+  assert.match(nStep.output, /^Posted to "reviewers"/, 'the output says what happened')
+
+  // 33b. The trap: BESIDE the gate, the wave stops before the notify step runs.
+  const beside = {
+    slug: 'notify-beside', name: 'Notify Beside',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['n', 'esc'] },
+      { id: 'n', agentSlug: 'sdlc-notifier', label: 'Tell reviewers', next: [],
+        runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'reviewers' } },
+      { id: 'esc', agentSlug: 'agent-esc', label: 'Create Jira (Escalated)', next: [], approval: true, runWhen: { artifact: 'escalated-drafts.json' } },
+    ],
+  }
+  runner.setAgentCaller(writeEscalated('[{"key":"B-1"}]'))
+  sent.length = 0
+  let n2 = await runner.startRun({ workflow: beside, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n2 = await runner.waitForSettled(n2.id, TIMEOUT)
+  assert.equal(n2.status, 'awaiting_review')
+  assert.equal(sent.length, 0,
+    'a notify step beside the gate never sends: runWave returns at the gate before the wave executes')
+  assert.equal(n2.steps.find(s => s.stepId === 'n').status, 'pending', 'it has not run at all')
+
+  // 33c. Delivery failure completes the step and does not fail the run.
+  N.setPoster(async () => { throw new Error('the webhook answered 503') })
+  const plain = {
+    slug: 'notify-plain', name: 'Notify Plain',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['n'] },
+      { id: 'n', agentSlug: 'sdlc-notifier', label: 'Tell reviewers', next: [],
+        runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'reviewers' } },
+    ],
+  }
+  runner.setAgentCaller(writeEscalated('[{"key":"C-1"}]'))
+  let n3 = await runner.startRun({ workflow: plain, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n3 = await runner.waitForSettled(n3.id, TIMEOUT)
+  assert.equal(n3.status, 'completed', 'a webhook outage must not fail a run that did its work')
+  const failedStep = n3.steps.find(s => s.stepId === 'n')
+  assert.equal(failedStep.status, 'completed', 'the step completes')
+  assert.match(failedStep.output, /Could not post to "reviewers": the webhook answered 503/, 'and says so in its output')
+  assert.match(failedStep.output, /run still needs attention at/, 'with the link whoever reads it now has to act on')
+
+  // 33d. Nothing to report: runWhen skips the step, and nothing is sent.
+  N.setPoster(async (url, body) => { sent.push({ url, body }) })
+  runner.setAgentCaller(writeEscalated('[]'))
+  sent.length = 0
+  let n4 = await runner.startRun({ workflow: plain, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n4 = await runner.waitForSettled(n4.id, TIMEOUT)
+  assert.equal(n4.status, 'completed')
+  assert.equal(n4.steps.find(s => s.stepId === 'n').status, 'skipped', 'an empty artifact skips the step')
+  assert.equal(sent.length, 0, 'so nobody is told about nothing')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

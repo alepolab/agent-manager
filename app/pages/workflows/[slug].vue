@@ -95,6 +95,10 @@ useUnsavedChanges(isDirty)
  *  because the PUT route is a shallow merge and an absent key would keep
  *  whatever was stored. */
 const group = ref('')
+/** Where this workflow's run transitions are announced. '' means the channel
+ *  called `default`, then SLACK_WEBHOOK_URL - sent as '' rather than omitted
+ *  because the PUT is a shallow merge. */
+const notifyChannel = ref('')
 const groups = ref<{ id: string, name: string, maxConcurrent: number, inFlight: number, waiting: number, implicit: boolean }[]>([])
 /** What the picked group means right now, so the cap is not a number with no
  *  context. Names the default group's cap for an ungrouped workflow, because
@@ -140,6 +144,7 @@ onMounted(async () => {
     name.value = data.name
     description.value = data.description
     group.value = data.group ?? ''
+    notifyChannel.value = data.notifyChannel ?? ''
     groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => [])
   } catch {
     toast.add({ title: 'Workflow not found', color: 'error' })
@@ -206,6 +211,7 @@ const nodes = computed(() => {
         approval: step.approval === true,
         runWhen: step.runWhen?.artifact,
         triggerSource: step.triggerWorkflow?.source,
+        notifyChannel: step.notify?.channel,
         maxVisits: step.maxVisits,
         status: exec?.status,
         visits: exec?.visits,
@@ -372,6 +378,40 @@ const settingsRunWhen = computed({
     if (settingsStepId.value) patchStep(settingsStepId.value, { runWhen: artifact ? { artifact } : undefined })
   },
 })
+/** The channel a notify step posts to. Emptying it removes the whole notify
+ *  block, for the same reason emptying a dispatch source removes that one: a
+ *  message with no destination is config that can never fire. */
+const settingsNotifyChannel = computed({
+  get: () => settingsStep.value?.notify?.channel ?? '',
+  set: (value: string) => {
+    const channel = value.trim()
+    if (!settingsStepId.value) return
+    const current = settingsStep.value?.notify
+    patchStep(settingsStepId.value, { notify: channel ? { ...current, channel } : undefined })
+  },
+})
+const settingsNotifyMessage = computed({
+  get: () => settingsStep.value?.notify?.message ?? '',
+  set: (value: string) => {
+    const message = value.trim()
+    const current = settingsStep.value?.notify
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { notify: { ...current, message: message || undefined } })
+  },
+})
+
+/** The channels this instance has configured, for the notify step's picker. A
+ *  dropdown rather than a text box on purpose: a mistyped channel name is a
+ *  notification that silently never arrives. */
+const channels = ref<{ name: string, kind: string, host?: string }[]>([])
+onMounted(async () => {
+  try {
+    channels.value = (await $fetch<{ channels: typeof channels.value }>('/api/channels')).channels
+  } catch {
+    channels.value = []
+  }
+})
+
 /** The artifact a dispatch step fans out over. Emptying it removes the whole
  *  triggerWorkflow block: a step with a routing table and no source to read it
  *  against is config that can never fire. */
@@ -460,6 +500,7 @@ async function save() {
       steps: workflowSteps.value,
       parameters: workflowParameters.value.filter(p => p.name.trim()),
       group: group.value,
+      notifyChannel: notifyChannel.value,
       lastModified: lastModified.value ?? undefined,
     } as any)
     lastModified.value = (saved as any).lastModified ?? null
@@ -598,6 +639,17 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <option v-for="g in groups.filter(x => !x.implicit)" :key="g.id" :value="g.id">
           {{ g.name }} — {{ g.maxConcurrent }} at once
         </option>
+      </select>
+      <!-- Where this workflow's runs announce themselves. Beside the group for
+           the same reason: both are stated about the workflow, not about a run. -->
+      <select
+        v-model="notifyChannel"
+        class="field-input text-[12px] max-w-[11rem]"
+        aria-label="Notification channel"
+        title="Where this workflow's runs announce that they paused, finished or failed"
+      >
+        <option value="">Default channel</option>
+        <option v-for="c in channels" :key="c.name" :value="c.name">Announce to {{ c.name }}</option>
       </select>
       <UButton label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
       <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
@@ -972,6 +1024,33 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               <input v-model="settingsTriggerSlug" type="text" class="field-input" placeholder="runbook-a-ticket-to-evidence-backed-pr">
             </template>
             <span class="field-hint">Runner-executed, no model call. Reads that file from this run's artifacts and starts one run per entry, each in its own checkout. The children are not waited for: this step completes as soon as they exist, and each reports to its own run. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. This run holds a slot in its own group while it dispatches, so a group that both dispatches and receives needs a cap of at least 2.</span>
+          </div>
+
+          <div v-if="settingsStep.agentSlug === 'sdlc-notifier'" class="field-group">
+            <label class="field-label">Post to channel</label>
+            <select v-model="settingsNotifyChannel" class="field-input">
+              <option value="">Choose a channel…</option>
+              <option v-for="c in channels" :key="c.name" :value="c.name">{{ c.name }} ({{ c.kind }}{{ c.host ? ` · ${c.host}` : '' }})</option>
+            </select>
+            <span v-if="!channels.length" class="field-hint">
+              No channels are configured on this instance yet. Add one under
+              <NuxtLink to="/settings" class="underline">Settings</NuxtLink>, then choose it here.
+            </span>
+            <template v-if="settingsNotifyChannel">
+              <label class="field-label mt-2">Message</label>
+              <textarea v-model="settingsNotifyMessage" rows="3" class="field-input" placeholder="{count} drafts need a decision." />
+            </template>
+            <span class="field-hint">
+              Runner-executed, no model call. Posts one message and completes. <code>{{ '{count}' }}</code> is
+              the number of entries in this step's "Run only when this artifact has content" file above, and the
+              entries are named the same way the review panel names them; a link to the run is appended. The
+              channel's webhook is never stored in this workflow — only its name. A delivery failure is recorded
+              in the step's output and never fails the run, so verify a new channel with "Send test" in Settings
+              rather than on the branch that matters.
+              <strong>Put this step before the step that waits for approval, not beside it:</strong> a wave stops
+              at the approval before any of its steps run, so a notify step running in parallel with the gated
+              step never sends.
+            </span>
           </div>
 
           <div class="field-group">

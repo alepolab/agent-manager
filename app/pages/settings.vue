@@ -40,6 +40,71 @@ async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
   await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), runBudget } } as any)
   toast.add({ title: 'Run budget saved for new runs', color: 'success' })
 }
+/**
+ * Notification channels. Their own API, not part of settings.json: the webhook
+ * is a secret and the config tree holds none (server/utils/channels.ts).
+ */
+interface PublicChannel { name: string, kind: 'teams' | 'slack', hasUrl: boolean, host?: string, updatedAt: number, updatedBy?: string }
+const channels = ref<PublicChannel[]>([])
+const channelsError = ref('')
+const newChannelName = ref('')
+const newChannelKind = ref<'teams' | 'slack'>('teams')
+const newChannelUrl = ref('')
+const savingChannel = ref(false)
+const testing = ref('')
+
+async function loadChannels() {
+  try {
+    channels.value = (await $fetch<{ channels: PublicChannel[] }>('/api/channels')).channels
+    channelsError.value = ''
+  } catch (e: unknown) {
+    channelsError.value = e instanceof Error ? e.message : 'Could not load channels'
+  }
+}
+
+async function saveChannel() {
+  savingChannel.value = true
+  try {
+    await $fetch(`/api/channels/${encodeURIComponent(newChannelName.value.trim())}`, {
+      method: 'PUT',
+      body: { kind: newChannelKind.value, url: newChannelUrl.value },
+    })
+    newChannelUrl.value = ''
+    newChannelName.value = ''
+    await loadChannels()
+    toast.add({ title: 'Channel saved', color: 'success' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not save the channel', color: 'error' })
+  } finally {
+    savingChannel.value = false
+  }
+}
+
+async function removeChannel(name: string) {
+  try {
+    await $fetch(`/api/channels/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    await loadChannels()
+    toast.add({ title: `Removed "${name}"`, color: 'success' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not remove the channel', color: 'error' })
+  }
+}
+
+/** Proves a webhook works now, rather than on the escalation branch at 2am. */
+async function testChannel(name: string) {
+  testing.value = name
+  try {
+    const res = await $fetch<{ ok: boolean, message: string }>(`/api/channels/${encodeURIComponent(name)}/test`, { method: 'POST' })
+    toast.add({ title: res.message, color: res.ok ? 'success' : 'error' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not reach the channel', color: 'error' })
+  } finally {
+    testing.value = ''
+  }
+}
+
+onMounted(loadChannels)
+
 const viewMode = ref<'structured' | 'raw'>('structured')
 const showRemoveConfirm = ref(false)
 const repoToRemove = ref<{ owner: string; repo: string; type: 'skills' | 'agents'; count: number } | null>(null)
@@ -422,6 +487,72 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <span class="text-[12px] text-label">seconds</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Notification channels -->
+      <div class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Notification channels</h3>
+        <p class="text-[12px] text-meta">
+          Named Teams and Slack webhooks a workflow refers to by name — from a notify step, or as a
+          workflow's channel for run transitions. Stored encrypted on the server under
+          <code>~/.agent-manager</code>, outside the Claude config directory: they are not part of
+          settings.json and are never included in a config export or a built image. A channel called
+          <code>default</code> receives run transitions from every workflow that names no channel of its own.
+        </p>
+
+        <div v-if="channelsError" class="text-[12px]" style="color: var(--error);">{{ channelsError }}</div>
+
+        <table v-if="channels.length" class="w-full text-[12px]">
+          <thead>
+            <tr class="text-meta text-left">
+              <th class="pb-2 font-medium">Name</th>
+              <th class="pb-2 font-medium">Kind</th>
+              <th class="pb-2 font-medium">Webhook host</th>
+              <th class="pb-2 font-medium">Last saved</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in channels" :key="c.name" class="border-t" style="border-color: var(--border);">
+              <td class="py-2 font-medium text-primary">{{ c.name }}</td>
+              <td class="py-2">{{ c.kind }}</td>
+              <td class="py-2 font-mono text-meta">{{ c.host ?? 'stored' }}</td>
+              <td class="py-2 text-meta">
+                {{ new Date(c.updatedAt).toLocaleDateString() }}{{ c.updatedBy ? ` · ${c.updatedBy}` : '' }}
+              </td>
+              <td class="py-2 text-right whitespace-nowrap">
+                <UButton label="Send test" size="xs" variant="soft" :loading="testing === c.name" @click="testChannel(c.name)" />
+                <UButton label="Remove" size="xs" variant="ghost" color="error" class="ml-1" @click="removeChannel(c.name)" />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else-if="!channelsError" class="text-[12px] text-meta">No channels configured yet.</p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="field-group">
+            <label class="field-label">Name</label>
+            <input v-model="newChannelName" class="field-input" placeholder="reviewers" >
+          </div>
+          <div class="field-group">
+            <label class="field-label">Kind</label>
+            <select v-model="newChannelKind" class="field-input">
+              <option value="teams">Teams</option>
+              <option value="slack">Slack</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Webhook URL</label>
+            <input v-model="newChannelUrl" type="password" class="field-input" placeholder="https://…" >
+            <span class="field-hint">
+              Write-only once saved. Editing an existing channel and leaving this blank keeps the stored URL.
+            </span>
+          </div>
+        </div>
+
+        <div class="flex justify-end">
+          <UButton label="Save channel" size="sm" variant="soft" :loading="savingChannel" @click="saveChannel" />
         </div>
       </div>
 
