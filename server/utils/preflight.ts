@@ -98,6 +98,16 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
     // ── the product checkout, or a token to clone it with ──
     await guard('product checkout', async () => {
       if (!repos.length) return null
+      // The checkout the run was HANDED counts, before the one it would resolve
+      // to. A run started against an explicit projectDir already has the repo on
+      // disk; asking only about the canonical workspace path failed such a run
+      // on any host that has never cloned the product — which is every fresh
+      // host, and every CI runner — and told it to sign in to clone something it
+      // was already sitting in.
+      if (run.projectDir && existsSync(join(run.projectDir, '.git'))) {
+        const s = await checkoutState(run.projectDir)
+        return { name: 'product checkout', level: 'ok', detail: `${s.name} on ${s.branch}, handed to this run${s.dirty ? `, ${s.dirty} uncommitted change(s)` : ''}` }
+      }
       const dir = checkoutDirFor(repos[0]!, run.startedBy)
       if (existsSync(dir)) {
         const s = await checkoutState(dir)

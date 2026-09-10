@@ -138,5 +138,39 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   assert.match(of(r, 'jira: In Progress').detail, /the check itself failed: jira is down/)
 }
 
+// ── 8. a host with no git identity of its own still passes: the run's identity
+//      comes from the env the agents get, not from ~/.gitconfig ──────────────
+// This is the shape of the bug that made CI red for a day: preflight asked
+// `git var GIT_COMMITTER_IDENT` in an environment missing the identity every
+// agent is handed, so every run on a runner (or any fresh container) died
+// before an agent started. It passes on a developer's machine either way,
+// which is why it needs forcing here rather than being left to the suite.
+{
+  const saved = { HOME: process.env.HOME, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM }
+  const bare = mkdtempSync(join(tmpdir(), 'preflight-nohome-'))
+  process.env.HOME = bare
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null'
+  process.env.GIT_CONFIG_SYSTEM = '/dev/null'
+  try {
+    const r = await runPreflight(run(), [{ agentSlug: 'sdlc-ticket-intake', label: 'Ticket Intake' }])
+    assert.equal(of(r, 'git identity').level, 'ok', JSON.stringify(of(r, 'git identity')))
+    assert.ok(!preflightFailure(r), `a host without a global gitconfig must not fail the run: ${preflightFailure(r)}`)
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    rmSync(bare, { recursive: true, force: true })
+  }
+}
+
+// ── 9. the checkout the run was handed satisfies the product check ───────────
+// Preflight used to look only at the canonical workspace path, so a run given
+// an explicit projectDir was failed for "not checked out" and told to sign in
+// to clone the repo it was already sitting in.
+{
+  const handed = repo(join(root, 'handed-checkout'))
+  const r = await runPreflight(run({ projectDir: handed, product: product() }), [stackStep])
+  assert.equal(of(r, 'product checkout').level, 'ok', JSON.stringify(of(r, 'product checkout')))
+  assert.match(of(r, 'product checkout').detail, /handed to this run/)
+}
+
 rmSync(root, { recursive: true, force: true })
 console.log('preflight: the four things that killed real runs are caught before any agent starts')
