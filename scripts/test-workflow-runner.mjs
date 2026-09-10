@@ -25,7 +25,21 @@ const runner = await import('../server/utils/workflowRunner.ts')
 runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 const store = await import('../server/utils/workflowRunStore.ts')
 
-const TIMEOUT = 5000
+/**
+ * How long one run is given to settle.
+ *
+ * A liveness guard, not a performance assertion. Every agent in this file is a
+ * stub that returns immediately, so a run that needs seconds is not doing more
+ * work — it is waiting for a CPU. Sized to an idle machine, this script failed
+ * whenever the machine was not idle: under six concurrent copies it failed six
+ * times out of six, always as `waitForSettled: run <id> did not settle within
+ * 5000ms`, which reads like a runner bug and is not one.
+ *
+ * 30s matches waitForSettled's own default. Raising it costs nothing on a run
+ * that passes — the wait ends when the run settles — and only lengthens the
+ * report of a genuine hang.
+ */
+const TIMEOUT = 30_000
 
 const workflow = {
   slug: 'demo', name: 'Demo',
@@ -790,7 +804,15 @@ inflight = await runner.waitForSettled(inflight.id, TIMEOUT)
 assert.ok(Date.now() - t0 < 2000, 'stop returns without waiting for the agent to finish on its own')
 assert.equal(inflight.status, 'stopped', 'an aborted wave leaves the run stopped, not failed')
 // The stop publishes first; the aborted step's own failure lands a moment later.
-for (let i = 0; i < 20 && (await store.getRun(inflight.id)).steps.find(s => s.stepId === 'a').status === 'running'; i++) await new Promise(r => setTimeout(r, 50))
+// Bounded by a deadline rather than an iteration count: 20 × 50ms is a second,
+// which is plenty on an idle machine and not always enough on a busy one — the
+// step was still 'running' here under parallel load, failing the assertion below
+// as though the abort had not been recorded.
+const abortRecordedBy = Date.now() + TIMEOUT
+while ((await store.getRun(inflight.id)).steps.find(s => s.stepId === 'a').status === 'running'
+  && Date.now() < abortRecordedBy) {
+  await new Promise(r => setTimeout(r, 25))
+}
 inflight = await store.getRun(inflight.id)
 assert.equal(inflight.status, 'stopped', 'the step failure does not turn a stopped run into a failed one')
 assert.equal(inflight.steps.find(s => s.stepId === 'a').status, 'failed', 'the aborted step records a failure, not a completion')
