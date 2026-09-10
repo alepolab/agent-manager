@@ -44,21 +44,56 @@ async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
  * Notification channels. Their own API, not part of settings.json: the webhook
  * is a secret and the config tree holds none (server/utils/channels.ts).
  */
-interface PublicChannel { name: string, kind: 'teams' | 'slack', hasUrl: boolean, host?: string, updatedAt: number, updatedBy?: string }
+type ChannelKind = 'teams' | 'slack' | 'email'
+interface PublicChannel { name: string, kind: ChannelKind, hasUrl: boolean, host?: string, to?: string[], updatedAt: number, updatedBy?: string }
+interface PublicSmtp { host: string, port: number, secure?: boolean, user?: string, from: string, hasPassword: boolean }
 const channels = ref<PublicChannel[]>([])
 const channelsError = ref('')
 const newChannelName = ref('')
-const newChannelKind = ref<'teams' | 'slack'>('teams')
+const newChannelKind = ref<ChannelKind>('teams')
 const newChannelUrl = ref('')
+const newChannelTo = ref('')
 const savingChannel = ref(false)
 const testing = ref('')
+
+/** The one relay every email channel sends through. Shown only when an email
+ *  channel exists or is being added - an instance that notifies over webhooks
+ *  has no use for it. */
+const smtp = ref<PublicSmtp>({ host: '', port: 587, secure: false, user: '', from: '', hasPassword: false })
+const smtpPassword = ref('')
+const savingSmtp = ref(false)
+const needsSmtp = computed(() => newChannelKind.value === 'email' || channels.value.some(c => c.kind === 'email'))
+
+/** What a row sends to: a webhook host, or the people on an email channel. */
+function channelTarget(c: PublicChannel): string {
+  if (c.kind === 'email') return (c.to ?? []).join(', ') || 'no recipients'
+  return c.host ?? 'stored'
+}
 
 async function loadChannels() {
   try {
     channels.value = (await $fetch<{ channels: PublicChannel[] }>('/api/channels')).channels
     channelsError.value = ''
+    const s = (await $fetch<{ smtp: PublicSmtp | null }>('/api/smtp')).smtp
+    if (s) smtp.value = s
   } catch (e: unknown) {
     channelsError.value = e instanceof Error ? e.message : 'Could not load channels'
+  }
+}
+
+async function saveSmtpSettings() {
+  savingSmtp.value = true
+  try {
+    smtp.value = await $fetch<PublicSmtp>('/api/smtp', {
+      method: 'PUT',
+      body: { ...smtp.value, password: smtpPassword.value },
+    })
+    smtpPassword.value = ''
+    toast.add({ title: 'SMTP relay saved', color: 'success' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not save the relay', color: 'error' })
+  } finally {
+    savingSmtp.value = false
   }
 }
 
@@ -67,9 +102,10 @@ async function saveChannel() {
   try {
     await $fetch(`/api/channels/${encodeURIComponent(newChannelName.value.trim())}`, {
       method: 'PUT',
-      body: { kind: newChannelKind.value, url: newChannelUrl.value },
+      body: { kind: newChannelKind.value, url: newChannelUrl.value, to: newChannelTo.value },
     })
     newChannelUrl.value = ''
+    newChannelTo.value = ''
     newChannelName.value = ''
     await loadChannels()
     toast.add({ title: 'Channel saved', color: 'success' })
@@ -494,7 +530,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
       <div class="rounded-xl p-5 space-y-4 bg-card">
         <h3 class="text-section-title">Notification channels</h3>
         <p class="text-[12px] text-meta">
-          Named Teams and Slack webhooks a workflow refers to by name — from a notify step, or as a
+          Named Teams, Slack and email destinations a workflow refers to by name — from a notify step, or as a
           workflow's channel for run transitions. Stored encrypted on the server under
           <code>~/.agent-manager</code>, outside the Claude config directory: they are not part of
           settings.json and are never included in a config export or a built image. A channel called
@@ -508,7 +544,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             <tr class="text-meta text-left">
               <th class="pb-2 font-medium">Name</th>
               <th class="pb-2 font-medium">Kind</th>
-              <th class="pb-2 font-medium">Webhook host</th>
+              <th class="pb-2 font-medium">Sends to</th>
               <th class="pb-2 font-medium">Last saved</th>
               <th />
             </tr>
@@ -517,7 +553,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             <tr v-for="c in channels" :key="c.name" class="border-t" style="border-color: var(--border);">
               <td class="py-2 font-medium text-primary">{{ c.name }}</td>
               <td class="py-2">{{ c.kind }}</td>
-              <td class="py-2 font-mono text-meta">{{ c.host ?? 'stored' }}</td>
+              <td class="py-2 font-mono text-meta">{{ channelTarget(c) }}</td>
               <td class="py-2 text-meta">
                 {{ new Date(c.updatedAt).toLocaleDateString() }}{{ c.updatedBy ? ` · ${c.updatedBy}` : '' }}
               </td>
@@ -540,14 +576,63 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             <select v-model="newChannelKind" class="field-input">
               <option value="teams">Teams</option>
               <option value="slack">Slack</option>
+              <option value="email">Email</option>
             </select>
           </div>
-          <div class="field-group">
+          <div v-if="newChannelKind === 'email'" class="field-group">
+            <label class="field-label">Recipients</label>
+            <input v-model="newChannelTo" class="field-input" placeholder="dev-leads@alepo.com, qa@alepo.com" >
+            <span class="field-hint">
+              Comma- or newline-separated. Not a secret, so unlike a webhook these are shown back to you and
+              saving replaces the whole list.
+            </span>
+          </div>
+          <div v-else class="field-group">
             <label class="field-label">Webhook URL</label>
             <input v-model="newChannelUrl" type="password" class="field-input" placeholder="https://…" >
             <span class="field-hint">
               Write-only once saved. Editing an existing channel and leaving this blank keeps the stored URL.
             </span>
+          </div>
+        </div>
+
+        <!-- The relay, shown only when something would actually use it. -->
+        <div v-if="needsSmtp" class="rounded-lg p-4 space-y-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <h4 class="text-[13px] font-semibold text-primary">SMTP relay</h4>
+          <p class="text-[12px] text-meta">
+            One relay for every email channel: it is a property of this deployment, not of an audience.
+            The password is sealed like a webhook URL, and leaving it blank keeps the stored one.
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="field-group">
+              <label class="field-label">Host</label>
+              <input v-model="smtp.host" class="field-input" placeholder="smtp.office365.com" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">Port</label>
+              <input v-model.number="smtp.port" type="number" class="field-input" placeholder="587" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">From</label>
+              <input v-model="smtp.from" class="field-input" placeholder="agent-manager@alepo.com" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">Username</label>
+              <input v-model="smtp.user" class="field-input" placeholder="optional" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">Password</label>
+              <input v-model="smtpPassword" type="password" class="field-input" :placeholder="smtp.hasPassword ? 'stored; paste a new one to replace it' : ''" >
+            </div>
+            <div class="field-group">
+              <label class="flex items-center gap-2 cursor-pointer mt-5">
+                <input v-model="smtp.secure" type="checkbox" >
+                <span class="field-label mb-0">Implicit TLS (465)</span>
+              </label>
+            </div>
+          </div>
+          <div class="flex justify-end">
+            <UButton label="Save relay" size="sm" variant="soft" :loading="savingSmtp" @click="saveSmtpSettings" />
           </div>
         </div>
 

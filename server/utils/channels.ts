@@ -29,23 +29,47 @@ const log = createLogger('notify')
 
 /**
  * Slack posts a plain `{ text }`. Teams needs one of two shapes depending on
- * which Microsoft product issued the URL - see bodyFor.
- *
- * Additive by design: 'email' joins this union without touching the store, the
- * routes or the step config.
+ * which Microsoft product issued the URL - see bodyFor. Email is not a webhook
+ * at all: it carries recipients instead of a URL and sends through the
+ * instance's one SMTP relay.
  */
-export type ChannelKind = 'teams' | 'slack'
+export type ChannelKind = 'teams' | 'slack' | 'email'
 
 export interface Channel {
   /** The identifier a workflow step references. */
   name: string
   kind: ChannelKind
-  /** Encrypted, in the same `v1:iv:tag:data` format as a user's Jira token. Never leaves the server. */
-  url: string
+  /** Encrypted, in the same `v1:iv:tag:data` format as a user's Jira token.
+   *  Absent on an email channel, which addresses people rather than a URL. */
+  url?: string
+  /** Email only: who receives it. */
+  to?: string[]
   updatedAt: number
   /** The login that last saved it, so a shared instance can answer "who changed this". */
   updatedBy?: string
 }
+
+/**
+ * The one SMTP relay this instance sends through.
+ *
+ * Instance-level rather than per-channel, because it is a property of the
+ * deployment and not of an audience: five email channels are five recipient
+ * lists over one relay, and copying host/port/credentials into each of them
+ * would be five places to rotate one password.
+ */
+export interface SmtpConfig {
+  host: string
+  port: number
+  /** Implicit TLS (port 465). STARTTLS on 587 is the default and needs no flag. */
+  secure?: boolean
+  user?: string
+  /** Encrypted, like a webhook URL. */
+  password?: string
+  /** The From address. Relays reject a From they do not own, so it is required. */
+  from: string
+}
+
+export type PublicSmtp = Omit<SmtpConfig, 'password'> & { hasPassword: boolean }
 
 /**
  * What the browser is allowed to see.
@@ -60,6 +84,7 @@ export type PublicChannel = Omit<Channel, 'url'> & { hasUrl: boolean, host?: str
 
 interface ChannelStore {
   channels: Channel[]
+  smtp?: SmtpConfig
 }
 
 const storePath = () => process.env.AGENT_CHANNELS_FILE || join(homedir(), '.agent-manager', 'channels.json')
@@ -81,8 +106,21 @@ export function validateChannelName(name: unknown): string {
 }
 
 export function validateChannelKind(kind: unknown): ChannelKind {
-  if (kind !== 'teams' && kind !== 'slack') throw new Error(`Unknown channel kind ${JSON.stringify(kind)}; it must be "teams" or "slack"`)
+  if (kind !== 'teams' && kind !== 'slack' && kind !== 'email') {
+    throw new Error(`Unknown channel kind ${JSON.stringify(kind)}; it must be "teams", "slack" or "email"`)
+  }
   return kind
+}
+
+/** Deliberately shallow. A relay is the authority on whether an address exists;
+ *  this catches the paste that is obviously not one. */
+export function validateRecipients(to: unknown): string[] {
+  const list = Array.isArray(to) ? to : String(to ?? '').split(/[,\n;]/)
+  const cleaned = list.map(x => String(x).trim()).filter(Boolean)
+  if (!cleaned.length) throw new Error('An email channel needs at least one recipient')
+  const bad = cleaned.filter(a => !/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(a))
+  if (bad.length) throw new Error(`Not an email address: ${bad.join(', ')}`)
+  return cleaned
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
@@ -129,13 +167,15 @@ async function writeStore(store: ChannelStore): Promise<void> {
   await rename(tmp, p)
 }
 
-function hostOf(sealed: string): string | undefined {
+function hostOf(sealed: string | undefined): string | undefined {
+  if (!sealed) return undefined
   try { return new URL(decrypt(sealed)).host } catch { return undefined }
 }
 
 export function toPublicChannel(c: Channel): PublicChannel {
   const { url, ...rest } = c
-  return { ...rest, hasUrl: !!url, ...(hostOf(url) ? { host: hostOf(url) } : {}) }
+  const host = url ? hostOf(url) : undefined
+  return { ...rest, hasUrl: !!url, ...(host ? { host } : {}) }
 }
 
 /** Every channel, secrets included. Server-side callers only. */
@@ -162,21 +202,34 @@ export async function getChannel(name: string): Promise<Channel | null> {
  */
 export async function saveChannel(
   name: string,
-  patch: { kind: unknown, url?: unknown },
+  patch: { kind: unknown, url?: unknown, to?: unknown },
   updatedBy?: string,
 ): Promise<PublicChannel> {
   validateChannelName(name)
   const kind = validateChannelKind(patch.kind)
   const store = await readStore()
   const existing = store.channels.find(c => c.name === name)
-  const hasNewUrl = typeof patch.url === 'string' && patch.url.trim()
-  if (!hasNewUrl && !existing) throw new Error('A webhook URL is required')
-  const url = hasNewUrl ? encrypt(validateWebhookUrl(patch.url)) : existing!.url
 
-  const next: Channel = { name, kind, url, updatedAt: Date.now(), ...(updatedBy ? { updatedBy } : {}) }
+  let url: string | undefined
+  let to: string[] | undefined
+  if (kind === 'email') {
+    // Recipients are not a secret, so unlike a webhook they are echoed back to
+    // the form and an empty list means "no recipients", not "unchanged".
+    to = validateRecipients(patch.to)
+  } else {
+    const hasNewUrl = typeof patch.url === 'string' && patch.url.trim()
+    if (!hasNewUrl && existing?.url === undefined) throw new Error('A webhook URL is required')
+    url = hasNewUrl ? encrypt(validateWebhookUrl(patch.url)) : existing!.url
+  }
+
+  const next: Channel = {
+    name, kind, updatedAt: Date.now(),
+    ...(url ? { url } : {}), ...(to ? { to } : {}),
+    ...(updatedBy ? { updatedBy } : {}),
+  }
   store.channels = [...store.channels.filter(c => c.name !== name), next].sort((a, b) => a.name.localeCompare(b.name))
   await writeStore(store)
-  log.info('channel saved', { name, kind, urlChanged: !!hasNewUrl, by: updatedBy })
+  log.info('channel saved', { name, kind, by: updatedBy })
   return toPublicChannel(next)
 }
 
@@ -201,5 +254,48 @@ export async function deleteChannel(name: string): Promise<boolean> {
 
 /** The decrypted URL, for the transport. Separate from getChannel so a caller has to ask. */
 export function channelUrl(c: Channel): string {
+  if (!c.url) throw new Error(`the channel "${c.name}" has no webhook URL`)
   return decrypt(c.url)
+}
+
+/** The instance's SMTP settings, password decrypted, or null when unconfigured. */
+export async function getSmtp(): Promise<(Omit<SmtpConfig, 'password'> & { password?: string }) | null> {
+  const smtp = (await readStore()).smtp
+  if (!smtp?.host || !smtp?.from) return null
+  return { ...smtp, password: smtp.password ? decrypt(smtp.password) : undefined }
+}
+
+export async function getPublicSmtp(): Promise<PublicSmtp | null> {
+  const smtp = (await readStore()).smtp
+  if (!smtp) return null
+  const { password, ...rest } = smtp
+  return { ...rest, hasPassword: !!password }
+}
+
+/** An absent or empty password keeps the stored one, exactly as a webhook URL does. */
+export async function saveSmtp(patch: {
+  host?: unknown, port?: unknown, secure?: unknown, user?: unknown, password?: unknown, from?: unknown,
+}): Promise<PublicSmtp> {
+  const host = String(patch.host ?? '').trim()
+  const from = String(patch.from ?? '').trim()
+  if (!host) throw new Error('An SMTP host is required')
+  if (!from) throw new Error('A From address is required; relays reject a From they do not own')
+  const port = Number(patch.port)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('An SMTP port must be a number between 1 and 65535')
+
+  const store = await readStore()
+  const hasNewPassword = typeof patch.password === 'string' && patch.password.trim()
+  const smtp: SmtpConfig = {
+    host, port, from,
+    ...(patch.secure ? { secure: true } : {}),
+    ...(String(patch.user ?? '').trim() ? { user: String(patch.user).trim() } : {}),
+    ...(hasNewPassword
+      ? { password: encrypt(String(patch.password)) }
+      : (store.smtp?.password ? { password: store.smtp.password } : {})),
+  }
+  store.smtp = smtp
+  await writeStore(store)
+  log.info('smtp saved', { host, port, from, secure: !!smtp.secure })
+  const { password, ...rest } = smtp
+  return { ...rest, hasPassword: !!password }
 }

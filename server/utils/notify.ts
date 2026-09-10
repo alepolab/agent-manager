@@ -1,4 +1,4 @@
-import { channelUrl, getChannel, type Channel } from './channels.ts'
+import { channelUrl, getChannel, getSmtp, type Channel } from './channels.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 /**
@@ -75,8 +75,50 @@ export function bodyFor(kind: Channel['kind'], url: string, text: string): unkno
   }
 }
 
+export type Mailer = (
+  smtp: { host: string, port: number, secure?: boolean, user?: string, password?: string, from: string },
+  mail: { to: string[], subject: string, text: string },
+) => Promise<void>
+
+/**
+ * Imported lazily so nodemailer is loaded only by an instance that actually
+ * sends mail - the two webhook kinds are a bare fetch and should not pull an
+ * SMTP client into the server's startup path.
+ */
+let mailer: Mailer = async (smtp, mail) => {
+  const { createTransport } = await import('nodemailer')
+  const transport = createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: !!smtp.secure,
+    ...(smtp.user ? { auth: { user: smtp.user, pass: smtp.password ?? '' } } : {}),
+  })
+  await transport.sendMail({ from: smtp.from, to: mail.to.join(', '), subject: mail.subject, text: mail.text })
+}
+
+/** Test seam, the twin of setPoster. */
+export function setMailer(fn: Mailer) { mailer = fn }
+
+/**
+ * The subject line. A message is one sentence then its details, and an inbox
+ * shows only the first line, so the subject is that sentence - not a fixed
+ * banner that would make every escalation look identical in a mail list.
+ */
+function subjectFor(text: string): string {
+  const first = (text.split('\n')[0] ?? '').trim()
+  return first.slice(0, 120) || 'Agent Manager notification'
+}
+
 /** Posts one message to a channel. Throws on a delivery problem; the caller decides what that means. */
 export async function sendToChannel(channel: Channel, text: string): Promise<void> {
+  if (channel.kind === 'email') {
+    const smtp = await getSmtp()
+    if (!smtp) throw new Error('no SMTP relay is configured on this instance')
+    const to = channel.to ?? []
+    if (!to.length) throw new Error(`the channel "${channel.name}" has no recipients`)
+    await mailer(smtp, { to, subject: subjectFor(text), text })
+    return
+  }
   const url = channelUrl(channel)
   await poster(url, bodyFor(channel.kind, url, text))
 }

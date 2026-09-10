@@ -170,4 +170,68 @@ N._resetNotified()
 await N.notifyRunTransition({ ...transition })
 assert.equal(sent[0].url, 'https://hooks.example/legacy', 'SLACK_WEBHOOK_URL is the last fallback')
 
+// ── email: recipients, the shared relay, and the subject line ─────────────
+const mailed = []
+N.setMailer(async (smtp, mail) => { mailed.push({ smtp, mail }) })
+
+// A recipient list is not a secret, so it round-trips in the clear.
+await C.saveChannel('leads', { kind: 'email', to: 'a@x.com, b@y.com' })
+assert.deepEqual((await C.getChannel('leads')).to, ['a@x.com', 'b@y.com'], 'a comma list is split and trimmed')
+const pubEmail = (await C.listPublicChannels()).find(c => c.name === 'leads')
+assert.equal(pubEmail.hasUrl, false, 'an email channel has no webhook')
+assert.equal(pubEmail.host, undefined, 'and no host to show')
+assert.deepEqual(pubEmail.to, ['a@x.com', 'b@y.com'], 'the recipients are shown back, unlike a URL')
+
+for (const [to, why] of [
+  ['', 'no recipients at all'],
+  ['not-an-address', 'a bare word'],
+  ['ok@x.com, broken@', 'one bad address among good ones'],
+]) {
+  await assert.rejects(() => C.saveChannel('leads2', { kind: 'email', to }), `${why} is refused`)
+}
+
+// Sending with no relay configured is a sentence, not a crash.
+const leads = await C.getChannel('leads')
+await assert.rejects(
+  () => N.sendToChannel(leads, 'hello'),
+  /no SMTP relay is configured/,
+  'an email channel with no relay says so',
+)
+
+await C.saveSmtp({ host: 'smtp.example.test', port: 587, from: 'bot@example.test', user: 'bot', password: 'hunter2' })
+const rawSmtp = readFileSync(process.env.AGENT_CHANNELS_FILE, 'utf8')
+assert.ok(!rawSmtp.includes('hunter2'), 'the SMTP password is not stored in the clear')
+const pubSmtp = await C.getPublicSmtp()
+assert.equal(pubSmtp.password, undefined, 'the public view carries no password')
+assert.equal(pubSmtp.hasPassword, true)
+
+await N.sendToChannel(await C.getChannel('leads'), 'Two drafts need a decision.\nDRAFT-1, DRAFT-2\nhttps://run')
+assert.equal(mailed.length, 1, 'it sent')
+assert.deepEqual(mailed[0].mail.to, ['a@x.com', 'b@y.com'], 'to every recipient')
+assert.equal(mailed[0].smtp.password, 'hunter2', 'the relay password is decrypted for the transport')
+assert.equal(mailed[0].mail.subject, 'Two drafts need a decision.',
+  'the subject is the first line, so two escalations do not look identical in an inbox')
+assert.match(mailed[0].mail.text, /DRAFT-1, DRAFT-2/, 'the body carries the detail')
+
+// An empty password on a re-save keeps the stored one, like a webhook URL.
+await C.saveSmtp({ host: 'smtp.example.test', port: 2525, from: 'bot@example.test', user: 'bot', password: '' })
+mailed.length = 0
+await N.sendToChannel(await C.getChannel('leads'), 'x')
+assert.equal(mailed[0].smtp.password, 'hunter2', 'a blank password kept the stored one')
+assert.equal(mailed[0].smtp.port, 2525, 'while the rest of the relay updated')
+
+for (const [patch, why] of [
+  [{ port: 587, from: 'a@b.com' }, 'no host'],
+  [{ host: 'h', from: 'a@b.com', port: 0 }, 'a port out of range'],
+  [{ host: 'h', port: 587 }, 'no From address'],
+]) {
+  await assert.rejects(() => C.saveSmtp(patch), `${why} is refused`)
+}
+
+// A notify step can address an email channel like any other.
+mailed.length = 0
+const emailOut = await S.runNotifyStep(RUN, { channel: 'leads', message: '{count} drafts need review' }, 'escalated-drafts.json')
+assert.match(emailOut, /^Posted to "leads": 3 drafts need review/, 'the step reports an email send the same way')
+assert.equal(mailed.length, 1, 'and the mail went out')
+
 console.log('notify channels: all assertions passed')

@@ -12,10 +12,10 @@ import { currentUser } from '../../utils/session.ts'
  */
 export default defineEventHandler(async (event) => {
   const name = getRouterParam(event, 'name')!
-  const body = await readBody<{ kind?: unknown, url?: unknown }>(event)
+  const body = await readBody<{ kind?: unknown, url?: unknown, to?: unknown }>(event)
   const user = await currentUser(event)
   try {
-    return await saveChannel(decodeURIComponent(name), { kind: body?.kind, url: body?.url }, user?.login)
+    return await saveChannel(decodeURIComponent(name), { kind: body?.kind, url: body?.url, to: body?.to }, user?.login)
   } catch (err) {
     throw createError({ statusCode: 400, message: err instanceof Error ? err.message : String(err) })
   }
