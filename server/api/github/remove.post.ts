@@ -1,8 +1,10 @@
+import { requireCapability } from '../../utils/session'
 import { readImportsRegistry, writeImportsRegistry, findImport } from '../../utils/github'
 import { removeClone } from '../../utils/gitOps'
 import { syncGithubImportSymlinks } from '../../utils/githubSkillSymlinks'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const { owner, repo, type } = await readBody<{ owner: string; repo: string; type: 'skills' | 'agents' }>(event)
 
   if (!type) throw createError({ statusCode: 400, message: 'type is required' })

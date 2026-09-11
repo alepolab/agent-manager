@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -7,6 +8,7 @@ import { serializeFrontmatter } from '../../utils/frontmatter'
 import type { CommandPayload } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('relationships')
   const payload = await readBody<CommandPayload>(event)
   const name = payload.frontmatter.name

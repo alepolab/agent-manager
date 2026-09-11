@@ -1,5 +1,7 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('skills'); invalidate('relationships')
   const { marketplace, plugin } = await readBody<{ marketplace: string; plugin: string }>(event)
 

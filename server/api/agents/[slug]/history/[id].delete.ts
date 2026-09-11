@@ -1,7 +1,9 @@
+import { requireCapability } from '../../../../utils/session'
 import { existsSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const slug = getRouterParam(event, 'slug')
   const id = getRouterParam(event, 'id')
   if (!slug || !id) throw createError({ statusCode: 400, message: 'slug and id are required' })

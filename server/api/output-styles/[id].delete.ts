@@ -1,8 +1,10 @@
+import { requireCapability } from '../../utils/session'
 import { existsSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { getClaudeDir } from '../../utils/claudeDir'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const id = getRouterParam(event, 'id')
   const query = getQuery(event)
   const scope = query.scope as string

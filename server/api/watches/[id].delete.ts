@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { getWatch, deleteWatch } from '../../utils/watchConfig.ts'
 import { deleteWatchState } from '../../utils/watchStateStore.ts'
 
@@ -23,6 +24,7 @@ import { deleteWatchState } from '../../utils/watchStateStore.ts'
  * scripts/test-watch-scheduler.mjs for a test against real timers proving this.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const id = getRouterParam(event, 'id')!
   const watch = await getWatch(id)
   if (!watch) throw createError({ statusCode: 404, message: 'Watch not found' })

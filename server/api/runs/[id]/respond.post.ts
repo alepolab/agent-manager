@@ -1,5 +1,7 @@
 import { respondToRun } from '../../../utils/workflowRunner'
+import { requireCapability } from '../../../utils/session'
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'answerGate')
   const body = await readBody<{ reply: string }>(event)
   if (!body?.reply?.trim()) throw createError({ statusCode: 400, message: 'reply is required' })
   const run = await respondToRun(getRouterParam(event, 'id')!, body.reply)
