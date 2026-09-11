@@ -552,15 +552,16 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
   assert.ok(evidence.body.includes('Which branch the pull request targets'),
     'the evidence step must know which branch to target')
-  // The team's standard flow, in the words the runner header also uses: work
-  // starts from develop; a production bug is a hotfix from main, merged back
-  // into ci-release and develop; a QA bug is a hotfix from ci-release, merged
-  // back into develop. The evidence step targets the header's base, never
-  // retargeting on its own judgement.
-  assert.ok(/from \*\*develop\*\*/.test(evidence.body), 'a task or a development bug enters at develop')
-  assert.ok(/hotfix from\s+\*\*main\*\*/.test(evidence.body), 'a production bug is a hotfix from main')
-  assert.ok(/main is merged into ci-release and develop/.test(evidence.body), 'and main is merged back afterwards')
-  assert.ok(/hotfix from\s+\*\*ci-release\*\*/.test(evidence.body), 'a QA bug is a hotfix from ci-release')
+  // Develop-first, in the words the runner header also uses: every kind of
+  // work, a production or QA bug included, starts from develop; hotfix flow
+  // only where a product's registry names the branch. The evidence step
+  // targets the header's base, never retargeting on its own judgement.
+  assert.ok(/starts from \*\*develop\*\*/.test(evidence.body), 'every kind of work enters at develop')
+  assert.ok(/in\s+production alike/.test(evidence.body), 'a production bug included')
+  assert.ok(!/hotfix from\s+\*\*(main|ci-release)\*\*/.test(evidence.body), 'no default hotfix from main or ci-release is taught')
+  assert.ok(/registry names a hotfix branch/.test(evidence.body), 'hotfix flow only on the registry\'s say-so')
+  const intake = AGENT_TEMPLATES.map(a => a.body).find(b => b.includes('`origin` — where the work comes from'))
+  assert.ok(intake && !/hotfix from main/.test(intake), 'intake does not tell the classifier a production bug goes to main')
   assert.ok(/Never retarget on your own/.test(evidence.body), 'the base named in the run header is the target; a person changes it, not the step')
 }
 

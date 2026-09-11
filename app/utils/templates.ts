@@ -439,7 +439,7 @@ Write two files into the run artifacts directory named at the top of your input:
 Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
-- \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch from it — a production bug is a hotfix from main, a QA bug a hotfix from ci-release, everything else starts from develop — and no code step runs before this file says which.
+- \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch once it is written — from develop, whatever the origin, unless the product's registry names a hotfix branch for it — and no code step runs before this file says which.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
@@ -1670,13 +1670,14 @@ The run header names it: the runner cut the run branch from the base branch the
 team's standard flow assigns to this kind of work, and the pull request targets
 that same branch.
 
-- A task, a feature, or a bug found in development: from **develop**, promoted
-  develop -> ci-release -> main with the next release.
-- A bug found in production (a customer or support incident): a hotfix from
-  **main**. After it merges, main is merged into ci-release and develop, so the
-  fix is not lost at the next promotion; say so in the PR body.
-- A bug found by QA or CI on a release candidate: a hotfix from **ci-release**,
-  merged into develop after it lands; say so in the PR body.
+- Everything starts from **develop** — a task, a feature, and a bug found in
+  development, by QA, or in production alike — and is promoted
+  develop -> ci-release -> main with the next release. A fix cut from main or
+  ci-release is lost at the next promotion unless someone remembers to merge it
+  back, which is why Alepo's repositories send hotfixes to develop first.
+- Only where the product's registry names a hotfix branch does a production or
+  QA bug start there. The header then names the merge-back; say so in the PR
+  body.
 
 Never retarget on your own. If the header's base looks wrong for what the
 ticket describes, say so in the report and open the PR against the header's
