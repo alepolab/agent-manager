@@ -113,10 +113,16 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
         const s = await checkoutState(dir)
         return { name: 'product checkout', level: 'ok', detail: `${s.name} on ${s.branch}${s.dirty ? `, ${s.dirty} uncommitted change(s)` : ', clean'}` }
       }
-      const token = process.env.AGENT_GH_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN
+      // The starter's own token counts. This used to read process.env alone and
+      // told a developer whose profile holds a working GitHub token that there
+      // was none — the same mistake the git-identity check made: asking the
+      // server's shell a question about the environment the AGENTS get.
+      // envForUser is where a run's credentials actually come from.
+      const runEnv = await agentEnvFor(run.startedBy)
+      const token = runEnv.AGENT_GH_TOKEN || runEnv.GH_TOKEN || runEnv.GITHUB_TOKEN
       return token
         ? { name: 'product checkout', level: 'ok', detail: `${repos[0]} is not checked out yet; a token is present, so the stack step can clone it.` }
-        : { name: 'product checkout', level: 'fail', detail: `${repos[0]} is not checked out at ${dir} and no GitHub token is available to clone it. Sign in with GitHub, or set AGENT_GH_TOKEN.` }
+        : { name: 'product checkout', level: 'fail', detail: `${repos[0]} is not checked out at ${dir}, and this run carries no GitHub token to clone it with. Add one on the Profile page, or set AGENT_GH_TOKEN on the instance.` }
     })
   }
 

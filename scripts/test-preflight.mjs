@@ -18,6 +18,9 @@ const root = mkdtempSync(join(tmpdir(), 'preflight-'))
 process.env.CLAUDE_DIR = join(root, 'claude')
 process.env.AGENT_WORKSPACE_ROOT = join(root, 'ws')
 process.env.AGENT_RUNS_DIR = join(root, 'runs')
+// Profiles live outside CLAUDE_DIR (~/.agent-manager/users by default), so this
+// has to be redirected too or the test writes into the developer's real one.
+process.env.AGENT_USERS_DIR = join(root, 'users')
 process.env.JIRA_BASE_URL = 'https://jira.test'
 process.env.JIRA_EMAIL = 'dev@example.test'
 process.env.JIRA_API_TOKEN = 'not-a-real-token'
@@ -170,6 +173,43 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   const r = await runPreflight(run({ projectDir: handed, product: product() }), [stackStep])
   assert.equal(of(r, 'product checkout').level, 'ok', JSON.stringify(of(r, 'product checkout')))
   assert.match(of(r, 'product checkout').detail, /handed to this run/)
+}
+
+// ── the starter's own GitHub token counts as a way to clone ──────────────────
+// The check used to read process.env alone, so a developer whose profile holds
+// a working token was told there was none and the run failed before it started.
+// That is the real shape: the token lives in the PROFILE and reaches a run
+// through envForUser, never through the server's own environment. The
+// distinction only shows when process.env has no token at all, which is why
+// this case clears them.
+{
+  const saved = { GH_TOKEN: process.env.GH_TOKEN, GITHUB_TOKEN: process.env.GITHUB_TOKEN, AGENT_GH_TOKEN: process.env.AGENT_GH_TOKEN }
+  for (const k of Object.keys(saved)) delete process.env[k]
+  // Storing a credential needs the instance secret; any value will do here.
+  process.env.AGENT_MANAGER_SECRET ||= 'test-secret-not-a-real-one-0123456789'
+  const { saveProfile } = await import('../server/utils/users.ts')
+  // Unique per run: token verdicts are memoised for ten minutes by token
+  // string, so a reused fixture value carries a stale verdict between runs.
+  await saveProfile('a-developer-with-a-token', { githubTokenPlain: `ghp-fixture-${Date.now()}` })
+  // A stored token is verified with GitHub before it is allowed near a run — a
+  // revoked one must not reach it. Stubbed here so the case is about preflight
+  // reading the run's environment, not about network reachability.
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => ({ ok: true, status: 200 })
+  try {
+    // A repo nothing has cloned, so the token is the only thing that can answer.
+    const withToken = await runPreflight(
+      run({ startedBy: 'a-developer-with-a-token', product: product({ repos: ['alepolab/never-cloned'] }) }), [stackStep])
+    assert.equal(of(withToken, 'product checkout').level, 'ok', JSON.stringify(of(withToken, 'product checkout')))
+
+    // And someone with neither a checkout nor a token is still told so.
+    const without = await runPreflight(
+      run({ startedBy: 'a-developer-with-nothing', product: product({ repos: ['alepolab/never-cloned'] }) }), [stackStep])
+    assert.equal(of(without, 'product checkout').level, 'fail')
+  } finally {
+    globalThis.fetch = realFetch
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+  }
 }
 
 rmSync(root, { recursive: true, force: true })
