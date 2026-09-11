@@ -543,10 +543,15 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   {
     const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
     const pr = runbook.steps.find(s => s.agentTemplateId === 'sdlc-evidence-and-pr')
-    assert.notEqual(pr.approval, true, 'the default Runbook A opens the PR without a human gate — a broken run halts earlier, so the gate only ever paused healthy runs')
+    // b409c5e dropped this gate because it "only ever paused healthy runs" — true,
+    // and now the reason to keep it: a healthy run pausing for a person IS the
+    // human workflow. The throughput objection it was dropped for does not apply,
+    // because the budget clock banks execution time only (shared/utils/runClock.ts),
+    // so a run waiting at a gate overnight is not charged for the wait.
+    assert.equal(pr.approval, true, 'Runbook A opens the PR only after a person approves the diff')
     const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
     const made = materializeTemplateSteps(runbook, slugs)
-    assert.notEqual(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and no gate flag is materialised')
+    assert.equal(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and the gate survives materialisation into a real workflow')
     for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) assert.ok(a.body.includes('PIPELINE-ASK:'), `${a.id} must know it may ask the operator`)
   }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
@@ -619,6 +624,29 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
   assert.match(body('sdlc-qa-manual'), /PIPELINE-REWORK: Implement Fix/, 'a failed manual case sends the run back to the implementer')
   assert.match(body('sdlc-ce-ship'), /git push -u origin/, 'the ship step is the one allowed to push')
+}
+
+// ── The gates a person answers, per intake path ───────────────────────────
+// The gate machinery (workflowRunner's `approval`) has been in place and unused:
+// a runbook with no gated step runs to a PR with no human decision in it. These
+// assert the gates the human workflow is defined by, so a step added later
+// cannot silently move or drop one.
+{
+  const gated = id => WORKFLOW_TEMPLATES.find(t => t.id === id).steps.filter(s => s.approval).map(s => s.label)
+
+  assert.deepEqual(gated('runbook-a-jira-to-diff'), ['Evidence Bundle + PR'],
+    'the bug path stops for a person exactly once, at the diff')
+
+  assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Update Stack', 'Push + PR'],
+    'the feature path stops three times: the plan, the diff, and verification before ship')
+
+  // A gate only means something before the step acts. Both outward-effect steps
+  // push; approving them IS the decision to push.
+  for (const id of ['runbook-a-jira-to-diff', 'runbook-c-ce-ticket-to-pr']) {
+    const steps = WORKFLOW_TEMPLATES.find(t => t.id === id).steps
+    const pusher = steps.find(s => /PR$/.test(s.label))
+    assert.equal(pusher.approval, true, `${id}: the step that opens the PR waits for a person`)
+  }
 }
 
 console.log('workflowTemplates: all assertions passed')
