@@ -30,7 +30,7 @@ export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { getClaudeDir } from './claudeDir.ts'
+import { getClaudeDir, transcriptPath } from './claudeDir.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable,
@@ -506,8 +506,10 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
  */
 function resumableSession(rec: RunStep): string | undefined {
   if (!rec.sessionId || !rec.sessionProject) return undefined
-  const transcript = join(getClaudeDir(), 'projects', rec.sessionProject, `${rec.sessionId}.jsonl`)
-  return existsSync(transcript) ? rec.sessionId : undefined
+  // Asked of every place the SDK might have written it, not just this app's
+  // config directory: in a container those are different directories, and
+  // looking only in ours made every resume a silent cold start.
+  return transcriptPath(rec.sessionProject, rec.sessionId) ? rec.sessionId : undefined
 }
 
 /**

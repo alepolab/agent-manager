@@ -120,9 +120,30 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       // envForUser is where a run's credentials actually come from.
       const runEnv = await agentEnvFor(run.startedBy)
       const token = runEnv.AGENT_GH_TOKEN || runEnv.GH_TOKEN || runEnv.GITHUB_TOKEN
-      return token
-        ? { name: 'product checkout', level: 'ok', detail: `${repos[0]} is not checked out yet; a token is present, so the stack step can clone it.` }
-        : { name: 'product checkout', level: 'fail', detail: `${repos[0]} is not checked out at ${dir}, and this run carries no GitHub token to clone it with. Add one on the Profile page, or set AGENT_GH_TOKEN on the instance.` }
+      if (token) return { name: 'product checkout', level: 'ok', detail: `${repos[0]} is not checked out yet; a token is present, so the stack step can clone it.` }
+
+      // No token is not the same as no access, and this check used to conflate
+      // them. A container with the developer's git credential store mounted
+      // clones fine with no token anywhere in its environment — `gh` is
+      // authenticated and git's helper answers — and a run was refused on a
+      // repository it could reach, told to add a credential it already had.
+      //
+      // So ask git instead of guessing from the environment. `ls-remote` is the
+      // cheapest question that has the real answer, and it is the same
+      // authentication path the clone will take.
+      const url = `https://github.com/${repos[0]}`
+      try {
+        await execFileP('git', ['ls-remote', url, 'HEAD'], { env: runEnv, timeout: 20_000 })
+        return { name: 'product checkout', level: 'ok', detail: `${repos[0]} is not checked out yet; git can reach it with this run's credentials, so the stack step can clone it.` }
+      } catch (err) {
+        // git's own stderr, not just "Command failed": the reason is the whole
+        // value of this check, and a credential-helper misconfiguration reads
+        // nothing like a missing token. Any token-shaped string is stripped —
+        // this text lands in the run record, which is not a place for one.
+        const e = err as { message?: string, stderr?: string }
+        const why = [e.stderr, e.message].filter(Boolean).join(' ').replace(/gh[pousr]_[A-Za-z0-9_]+/g, '<redacted>').split('\n').filter(l => l.trim()).slice(0, 3).join(' / ').slice(0, 400) || String(err)
+        return { name: 'product checkout', level: 'fail', detail: `${repos[0]} is not checked out at ${dir}, and git cannot reach it with this run's credentials (${why}). Sign in on the Profile page, set AGENT_GH_TOKEN, or clone it to ${dir}.` }
+      }
     })
   }
 
