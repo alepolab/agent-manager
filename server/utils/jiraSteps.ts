@@ -24,6 +24,19 @@ export interface JiraStepConfig {
  * Ordered: the closest name is tried first. A configured name not in a group
  * is matched on its own, exactly as before.
  */
+/**
+ * Status names for comparison: lowercased, punctuation flattened to spaces.
+ *
+ * Projects spell the same status differently — CSUP's is "Dev. Done", with a
+ * period, against a runbook that asks for "Dev Done". An exact lowercase
+ * compare misses that and the step reports "offers no transition to Dev Done or
+ * a known synonym" while listing "Dev. Done" among the available ones, which
+ * reads as a bug in the matcher because it is one. Adding "dev. done" to the
+ * synonyms below would fix that project and wait to be rediscovered on the next
+ * one; normalising fixes the class.
+ */
+const norm = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
 const STATUS_SYNONYMS: Record<string, string[]> = {
   'dev done': ['dev done', 'development done', 'ready for review', 'in review', 'code review', 'review', 'resolved', 'fixed'],
   'in progress': ['in progress', 'in development', 'in dev', 'start progress', 'doing'],
@@ -118,9 +131,9 @@ export async function transitionReachable(run: WorkflowRun, key: string, target:
   const current = await currentStatus(issueUrl, headers, fetchImpl)
   const hit = matchTransition(target, transitions)
   if (hit) return { ok: true, detail: `"${target}" reaches "${hit.to?.name ?? hit.name}" from "${current?.name ?? 'the current status'}"` }
-  const want = target.trim().toLowerCase()
-  const candidates = STATUS_SYNONYMS[want] ?? [want]
-  if (current && (candidates.includes(current.name.toLowerCase()) || (INTENT_CATEGORY[want] && current.category === INTENT_CATEGORY[want]))) {
+  const want = norm(target)
+  const candidates = (STATUS_SYNONYMS[want] ?? [want]).map(norm)
+  if (current && (candidates.includes(norm(current.name)) || (INTENT_CATEGORY[want] && current.category === INTENT_CATEGORY[want]))) {
     return { ok: true, detail: `${key} is already in "${current.name}"` }
   }
   const inCategory = INTENT_CATEGORY[want] ? transitions.filter(t => t.to?.statusCategory?.key === INTENT_CATEGORY[want]) : []
@@ -133,10 +146,10 @@ export async function transitionReachable(run: WorkflowRun, key: string, target:
 
 /** The configured name, then its synonyms, against the target status and then the transition name. */
 function matchTransition(target: string, transitions: Transition[]): Transition | undefined {
-  const want = target.trim().toLowerCase()
-  const candidates = STATUS_SYNONYMS[want] ?? [want]
-  const byTo = (n: string) => transitions.find(t => (t.to?.name ?? '').toLowerCase() === n)
-  const byName = (n: string) => transitions.find(t => t.name.toLowerCase() === n)
+  const want = norm(target)
+  const candidates = (STATUS_SYNONYMS[want] ?? [want]).map(norm)
+  const byTo = (n: string) => transitions.find(t => norm(t.to?.name ?? '') === n)
+  const byName = (n: string) => transitions.find(t => norm(t.name) === n)
   for (const n of candidates) { const hit = byTo(n) ?? byName(n); if (hit) return hit }
   return undefined
 }

@@ -13,7 +13,7 @@ process.env.JIRA_EMAIL = 'dev@example.test'
 process.env.JIRA_API_TOKEN = 'not-a-real-token'
 delete process.env.JIRA_POST_ENABLED
 
-const { runJiraStep } = await import('../server/utils/jiraSteps.ts')
+const { runJiraStep, transitionReachable } = await import('../server/utils/jiraSteps.ts')
 
 const run = { id: 'run-1', ticketKey: 'CSUP-1', status: 'running', workflowName: 'Runbook A', workflowSlug: 'runbook-a', watch: 'direct-invocation', steps: [], startedAt: Date.now(), budget: { maxMinutes: 1, maxTokens: 1 } }
 let calls = []
@@ -130,4 +130,27 @@ assert.match(down, /HTTP 503/, down)
 assert.match(down, /not moved/)
 
 delete process.env.JIRA_POST_ENABLED
+// ── a status spelled with punctuation still matches ──────────────────────────
+// CSUP's status is "Dev. Done"; the runbook asks for "Dev Done". An exact
+// lowercase compare missed it and reported "offers no transition to Dev Done or
+// a known synonym" while listing "Dev. Done" among the available transitions.
+{
+  const transitions = [
+    { id: '1', name: 'Stop Progress', to: { name: 'To Do', statusCategory: { key: 'new' } } },
+    { id: '2', name: 'Dev. Done', to: { name: 'Dev. Done', statusCategory: { key: 'indeterminate' } } },
+  ]
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/transitions') && (!init || init.method !== 'POST')) {
+      return { ok: true, status: 200, json: async () => ({ transitions }) }
+    }
+    if (String(url).includes('?fields=status')) {
+      return { ok: true, status: 200, json: async () => ({ fields: { status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } } }) }
+    }
+    return { ok: true, status: 204, json: async () => ({}) }
+  }
+  const verdict = await transitionReachable({ ...run, ticketKey: 'CSUP-1' }, 'CSUP-1', 'Dev Done', fetchImpl)
+  assert.equal(verdict.ok, true, JSON.stringify(verdict))
+  assert.match(verdict.detail, /Dev\. Done/)
+}
+
 console.log('jira steps: all checks passed')
