@@ -49,6 +49,15 @@ export interface TicketOutcome {
 export interface RenderInput {
   ticketKey: string
   watchName: string
+  /** The run's `watch` field. Two literals are reserved - 'direct-invocation'
+   *  and 'workflow-trigger:<parent run id>' - and a comment that calls either
+   *  of them a watch names a dispatcher that does not exist. */
+  watchId?: string
+  /** Whether the assignee and reporter were actually read from the ticket.
+   *  Absent means nobody looked, which is not the same fact as the ticket
+   *  having neither - and the comment must not assert the second when it only
+   *  knows the first. */
+  ownerChecked?: boolean
   outcome: TicketOutcome
   /** Display name to `@mention` — omitted (not fabricated) when the ticket
    *  source didn't supply an assignee or reporter. */
@@ -66,7 +75,10 @@ export interface RenderInput {
  */
 export function renderTicketComment(input: RenderInput): string {
   const lines: string[] = []
-  lines.push(input.owner ? `@${input.owner}` : '(no assignee or reporter on this ticket to mention)')
+  // An unchecked ticket gets no line at all: the alternative was a comment on
+  // a real ticket stating it had no assignee or reporter while it had both.
+  if (input.owner) lines.push(`@${input.owner}`)
+  else if (input.ownerChecked) lines.push('(no assignee or reporter on this ticket to mention)')
   lines.push('')
 
   // Three outcomes, not two. A run can open a real pull request and STILL not
@@ -88,7 +100,14 @@ export function renderTicketComment(input: RenderInput): string {
   }
 
   lines.push('')
-  lines.push(`Dispatched by watch "${input.watchName}" — run ${input.outcome.runId}.`)
+  const parent = input.watchId?.startsWith('workflow-trigger:') ? input.watchId.slice('workflow-trigger:'.length) : ''
+  lines.push(
+    parent
+      ? `Dispatched from run ${parent} — run ${input.outcome.runId}.`
+      : input.watchId === 'direct-invocation'
+        ? `Started directly — run ${input.outcome.runId}.`
+        : `Dispatched by watch "${input.watchName}" — run ${input.outcome.runId}.`,
+  )
 
   if (input.forVisName) {
     lines.push('')
@@ -164,6 +183,34 @@ export async function credentialsFor(run: WorkflowRun) {
   return resolveJiraCredentials()
 }
 
+/**
+ * The display name to mention, and whether the question was actually answered.
+ *
+ * `checked: false` is the honest answer when Jira could not be reached or
+ * posting is off - the caller then says nothing about ownership instead of
+ * stating the ticket has none.
+ */
+async function ownerOf(
+  ticketKey: string,
+  run: WorkflowRun,
+  fetchImpl: FetchLike = fetch,
+): Promise<{ owner?: string, checked: boolean }> {
+  if (!isJiraPostingEnabled()) return { checked: false }
+  try {
+    const creds = await credentialsFor(run)
+    const res = await fetchImpl(
+      `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(ticketKey)}?fields=assignee,reporter`,
+      { headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' } },
+    )
+    if (!res.ok) return { checked: false }
+    const body = await res.json() as { fields?: { assignee?: { displayName?: string } | null, reporter?: { displayName?: string } | null } }
+    const name = body.fields?.assignee?.displayName || body.fields?.reporter?.displayName
+    return { owner: name?.trim() || undefined, checked: true }
+  } catch {
+    return { checked: false }
+  }
+}
+
 export async function notifyTicketOutcome(
   watch: NotifySource,
   ticketKey: string,
@@ -182,11 +229,21 @@ export async function notifyTicketOutcome(
     haltReason: (prUrls.length > 0 && run.status === 'completed') ? undefined : (run.error ?? undefined),
   }
 
+  // Read from the ticket when the caller did not already know: the runner's
+  // own settle path calls this with no owner at all, so every comment it ever
+  // posted opened by declaring the ticket had no assignee or reporter - on
+  // tickets that had both. A lookup that fails leaves the line off entirely
+  // rather than asserting an absence it did not establish.
+  const known = owner.assignee || owner.reporter
+  const looked = known ? { owner: known, checked: true } : await ownerOf(ticketKey, run, fetchImpl)
+
   const comment = renderTicketComment({
     ticketKey,
     watchName: watch.name,
+    watchId: watch.id,
     outcome,
-    owner: owner.assignee || owner.reporter,
+    owner: looked.owner,
+    ownerChecked: looked.checked,
     forVisName: process.env.JIRA_COMMENT_FOR_VIS_NAME?.trim() || undefined,
   })
 

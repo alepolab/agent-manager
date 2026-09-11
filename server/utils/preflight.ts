@@ -22,6 +22,8 @@ import { pipelineHooks } from './agentHooks.ts'
 import { checkoutState } from './workspace.ts'
 import { checkoutDirFor } from './workspace.ts'
 import { transitionReachable } from './jiraSteps.ts'
+import { projectCreateSchema } from './jiraCreate.ts'
+import { writeArtifactJson, JIRA_SCHEMA_ARTIFACT } from './runArtifacts.ts'
 import { credentialsFor } from './ticketNotifier.ts'
 import { agentEnvFor } from './agentCaller.ts'
 import { createLogger } from './log.ts'
@@ -38,7 +40,7 @@ export interface PreflightReport { at: number, checks: PreflightCheck[] }
 export interface PreflightSteps {
   agentSlug: string
   label: string
-  jira?: { transition?: string }
+  jira?: { transition?: string, action?: string }
   testsUnlocked?: boolean
 }
 
@@ -63,6 +65,10 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
   const repos = run.product?.repos ?? []
   const needsStack = steps.some(s => s.agentSlug === 'sdlc-stack-provisioner')
   const jiraTargets = steps.filter(s => s.jira?.transition).map(s => s.jira!.transition!)
+  const creates = steps.some(s => s.jira?.action === 'create')
+  // One project per product in the registry today; the first is the one a
+  // drafting agent is told to file into.
+  const jiraProject = run.product?.projects?.[0]
   const unlockedStep = steps.find(s => s.testsUnlocked)
 
   // ── the guardrails: without them no agent may touch a product repository ──
@@ -135,6 +141,36 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       return net
         ? { name: 'docker', level: 'ok', detail: `server ${v}, alepo-shared present` }
         : { name: 'docker', level: 'warn', detail: `server ${v}, but the external network alepo-shared does not exist. Every compose file in the deployment repo declares it: docker network create --driver bridge alepo-shared` }
+    })
+  }
+
+  // ── what the project a create step will file into actually requires ──────
+  //
+  // Fetched here and written where the DRAFTING agent can read it. That agent
+  // has Read, Write, Grep, Glob and no network, so it cannot ask Jira itself -
+  // and a run that drafts three tickets against a project whose priority scheme
+  // it guessed wrong has all three refused after the drafting is paid for.
+  if (!creates) add('jira fields', 'skip', 'no step of this workflow creates tickets')
+  else if (!jiraProject) add('jira fields', 'warn', 'no Jira project is registered for this product, so the drafts name their own project and nothing can be checked in advance')
+  else {
+    await guard('jira fields', async () => {
+      // A machine with no Jira configured still runs scans - the create step
+      // dry-runs and says so. Failing the run here would turn "Jira is not set
+      // up" into "your workflow is broken".
+      let creds
+      try {
+        creds = await credentialsFor(run)
+      } catch (err) {
+        return { name: 'jira fields', level: 'warn', detail: `${jiraProject}'s required fields could not be checked: ${err instanceof Error ? err.message : String(err)}. Creation will dry-run or report what Jira refuses.` }
+      }
+      const schema = await projectCreateSchema(creds, jiraProject, fetchImpl)
+      if (!schema) {
+        return { name: 'jira fields', level: 'warn', detail: `${jiraProject}'s create metadata could not be read; drafting proceeds without it and a refusal will name whatever is missing.` }
+      }
+      await writeArtifactJson(run.id, JIRA_SCHEMA_ARTIFACT, { project: jiraProject, issueTypes: schema })
+      const shapes = Object.entries(schema)
+        .map(([type, s]) => `${type}${s.required.length ? ` (needs ${s.required.map(f => f.name).join(', ')})` : ''}`)
+      return { name: 'jira fields', level: 'ok', detail: `${jiraProject}: ${shapes.join('; ')} — written to ${JIRA_SCHEMA_ARTIFACT}` }
     })
   }
 

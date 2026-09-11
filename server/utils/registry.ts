@@ -114,6 +114,7 @@ function productMatchFrom(registryPath: string, name: string, p: any): ProductMa
     ...(p.suite ? { suite: String(p.suite) } : {}),
     ...(p.multi_repo === true ? { multiRepo: true } : {}),
     repos: p.repos ?? [],
+    ...(Array.isArray(p.match?.projects) && p.match.projects.length ? { projects: p.match.projects.map(String) } : {}),
     ...(p.modules && Object.keys(p.modules).length ? { modules: p.modules } : {}),
     branches: p.branches ?? {},
     stack: p.stack,

@@ -242,6 +242,11 @@ export interface ProductMatch {
   /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
   multiRepo?: boolean
   repos: string[]
+  /** The Jira project keys this product routes from, straight out of the
+   *  registry's `match.projects`. Carried on the run so a step can ask Jira
+   *  what that project requires - agents have Read and Write and no network,
+   *  so anything they must know about Jira has to arrive as an artifact. */
+  projects?: string[]
   /** For a container repo whose real content is sibling repos: directory under
    *  the parent checkout -> the repo that fills it. Cloning the parent alone
    *  does not produce these, because it git-ignores them. */

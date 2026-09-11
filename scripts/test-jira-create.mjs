@@ -40,11 +40,32 @@ const draft = (over = {}) => ({
   ...over,
 })
 
-/** Records what was sent and answers as Jira would. */
-function stubJira(answers) {
+/**
+ * The project schema a stub answers createmeta with. Permissive by default —
+ * every case that is not ABOUT the schema should behave as it did before it
+ * existed.
+ */
+function schemaBody({ priorities = ['High', 'Medium', 'Low'], required = [] } = {}) {
+  const fields = {
+    summary: { name: 'Summary', required: true },
+    priority: { name: 'Priority', required: false, allowedValues: priorities.map(name => ({ name })) },
+  }
+  for (const f of required) fields[f.id] = { name: f.name, required: true, hasDefaultValue: false }
+  return { projects: [{ issuetypes: [{ fields }] }] }
+}
+
+/** Records what was sent and answers as Jira would.
+ *
+ *  createmeta is answered from `schema` and does NOT consume the answer queue:
+ *  the queue is about the issues a case files, and creation now asks what the
+ *  project accepts before filing the first one. */
+function stubJira(answers, schema = schemaBody()) {
   const sent = []
   const impl = async (url, init) => {
     sent.push({ url, body: init?.body ? JSON.parse(init.body) : undefined, headers: init?.headers })
+    if (String(url).includes('/issue/createmeta')) {
+      return { ok: true, status: 200, json: async () => schema, text: async () => '' }
+    }
     const next = answers.shift()
     if (typeof next === 'function') return next()
     return {
@@ -55,6 +76,7 @@ function stubJira(answers) {
     }
   }
   impl.sent = sent
+  impl.posts = () => sent.filter(s => !String(s.url).includes('/issue/createmeta'))
   return impl
 }
 
@@ -83,10 +105,11 @@ process.env.JIRA_POST_ENABLED = '1'
   // whole reason for stamping: a dispatch step downstream names its child run
   // after the real ticket instead of "entry 2".
   assert.deepEqual(entries.map(e => e.work_type), ['bug', 'bug'], 'and the work_type a dispatch routes on')
-  assert.equal(fetchImpl.sent.length, 2)
-  assert.equal(fetchImpl.sent[0].url, 'https://jira.invalid/rest/api/3/issue')
+  assert.equal(fetchImpl.posts().length, 2)
+  assert.ok(fetchImpl.sent.some(r => String(r.url).includes("/issue/createmeta")), "it asks what the project accepts before filing anything")
+  assert.equal(fetchImpl.posts()[0].url, 'https://jira.invalid/rest/api/3/issue')
 
-  const body = fetchImpl.sent[0].body.fields
+  const body = fetchImpl.posts()[0].body.fields
   assert.deepEqual(body.project, { key: 'SEC' })
   assert.deepEqual(body.issuetype, { name: 'Bug' })
   assert.deepEqual(body.priority, { name: 'High' })
@@ -136,7 +159,7 @@ process.env.JIRA_POST_ENABLED = '1'
     const [out] = await createIssuesFrom(run, [{ index: 0, entry: row.entry }], fetchImpl)
     assert.match(out.error, row.match, `refusal names what is missing: ${row.name}`)
     assert.equal(out.jiraKey, undefined, `${row.name}: nothing is claimed`)
-    assert.equal(fetchImpl.sent.length, 0, `${row.name}: and nothing is sent`)
+    assert.equal(fetchImpl.posts().length, 0, `${row.name}: and nothing is sent`)
   }
 }
 
@@ -221,6 +244,114 @@ process.env.JIRA_POST_ENABLED = '1'
   // A step configured for nothing at all still reports that, and now mentions
   // creation among the things it could have been set to do.
   assert.match(await runJiraStep({ ...r9, ticketKey: 'SEC-1' }, {}, stubJira([])), /Nothing configured for this Jira step.*ticket creation/)
+}
+
+
+// ── 10. The project's own schema decides what may be sent ─────────────────
+//
+// A real run drafted three good tickets and had all three refused: priority
+// "High" against a Blocker/Critical/Major/Minor scheme, plus two required
+// custom fields nobody had asked about. Both are one GET away.
+{
+  // A priority the scheme does not offer is dropped, and the issue still files.
+  const entry = draft({ fields: { project: 'SEC', issue_type: 'Bug', priority: 'High' } })
+  const fetchImpl = stubJira([{ json: { key: 'SEC-60' } }], schemaBody({ priorities: ['Blocker', 'Critical', 'Major', 'Minor'] }))
+  const out = await createIssuesFrom(run, [{ index: 0, entry }], fetchImpl)
+
+  assert.equal(out[0].jiraKey, 'SEC-60', 'the ticket matters more than the field')
+  assert.equal(fetchImpl.posts()[0].body.fields.priority, undefined, 'the invalid priority is never sent')
+  assert.match(out[0].line, /without priority "High"/, 'and the line says what was dropped')
+  assert.match(out[0].line, /Blocker, Critical, Major, Minor/, 'naming what the project does offer')
+}
+{
+  // A priority the scheme DOES offer travels untouched.
+  const entry = draft({ fields: { project: 'SEC', issue_type: 'Bug', priority: 'Major' } })
+  const fetchImpl = stubJira([{ json: { key: 'SEC-61' } }], schemaBody({ priorities: ['Blocker', 'Major'] }))
+  await createIssuesFrom(run, [{ index: 0, entry }], fetchImpl)
+  assert.deepEqual(fetchImpl.posts()[0].body.fields.priority, { name: 'Major' })
+}
+{
+  // A required field with no value is refused BEFORE the POST, by name and id.
+  const entry = draft()
+  const fetchImpl = stubJira([], schemaBody({
+    required: [{ id: 'customfield_10182', name: 'Steps to Reproduce' }, { id: 'customfield_10202', name: 'Business Value' }],
+  }))
+  const out = await createIssuesFrom(run, [{ index: 0, entry }], fetchImpl)
+
+  assert.equal(out[0].jiraKey, undefined)
+  assert.equal(fetchImpl.posts().length, 0, 'nothing is sent that Jira would only refuse')
+  assert.match(out[0].line, /Steps to Reproduce \(customfield_10182\)/)
+  assert.match(out[0].line, /Business Value \(customfield_10202\)/)
+}
+{
+  // Supplied values satisfy it, by field id or by the human name.
+  const rows = [
+    { name: 'by id', custom: { customfield_10182: 'Call the endpoint twice.' } },
+    { name: 'by name', custom: { 'Steps to Reproduce': 'Call the endpoint twice.' } },
+    { name: 'by name, different case', custom: { 'steps to reproduce': 'Call the endpoint twice.' } },
+  ]
+  for (const row of rows) {
+    const entry = draft({ fields: { project: 'SEC', issue_type: 'Bug', custom: row.custom } })
+    const fetchImpl = stubJira([{ json: { key: 'SEC-62' } }], schemaBody({
+      required: [{ id: 'customfield_10182', name: 'Steps to Reproduce' }],
+    }))
+    const out = await createIssuesFrom(run, [{ index: 0, entry }], fetchImpl)
+    assert.equal(out[0].jiraKey, 'SEC-62', `${row.name}: the required field is satisfied`)
+    assert.ok(fetchImpl.posts()[0].body.fields.customfield_10182, `${row.name}: and travels under its id`)
+  }
+}
+{
+  // A schema lookup that fails files exactly as before it existed.
+  const entry = draft({ fields: { project: 'SEC', issue_type: 'Bug', priority: 'High' } })
+  const fetchImpl = async (url, init) => {
+    if (String(url).includes('/issue/createmeta')) return { ok: false, status: 403, json: async () => ({}), text: async () => '' }
+    return { ok: true, status: 201, json: async () => ({ key: 'SEC-63' }), text: async () => '' }
+  }
+  const out = await createIssuesFrom(run, [{ index: 0, entry }], fetchImpl)
+  assert.equal(out[0].jiraKey, 'SEC-63', 'an unreadable schema must not become a new way for creation to stop')
+}
+
+function seed(id, name, entries) {
+  const dir = artifacts.runArtifactsDir(id)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, name), JSON.stringify(entries, null, 2))
+}
+
+// ── 11. A step that created nothing must not report success ───────────────
+//
+// The run that prompted this filed none of three, reported itself completed,
+// and dispatched three child pipelines at tickets that did not exist.
+{
+  const r11 = { ...run, id: 'run-11' }
+  seed(r11.id, 'approved-drafts.json', [draft(), draft({ draft_id: 'DRAFT-002' })])
+  const refuse = { ok: false, status: 400, text: 'the priority selected is invalid' }
+  const output = await createFromArtifact(r11, 'approved-drafts.json', stubJira([refuse, refuse]))
+
+  assert.match(output, /^PIPELINE-HALT: /, 'zero created out of two is a halt, not a result')
+  assert.match(output, /nothing downstream has a ticket to work on/)
+  assert.match(output, /the priority selected is invalid/, 'and the refusals are still reported verbatim')
+}
+{
+  // One created out of two is NOT a halt: the batch did some of its job.
+  const r11b = { ...run, id: 'run-11b' }
+  seed(r11b.id, 'approved-drafts.json', [draft(), draft({ draft_id: 'DRAFT-002' })])
+  const output = await createFromArtifact(r11b, 'approved-drafts.json', stubJira([
+    { json: { key: 'SEC-70' } },
+    { ok: false, status: 400, text: 'nope' },
+  ]))
+  assert.doesNotMatch(output, /PIPELINE-HALT/)
+  assert.match(output, /Created SEC-70/)
+}
+{
+  // And a dry run creates nothing BY DESIGN, so it never halts.
+  const saved = process.env.JIRA_POST_ENABLED
+  process.env.JIRA_POST_ENABLED = ''
+  const r11c = { ...run, id: 'run-11c' }
+  seed(r11c.id, 'approved-drafts.json', [draft()])
+  const output = await createFromArtifact(r11c, 'approved-drafts.json', stubJira([]))
+  assert.doesNotMatch(output, /PIPELINE-HALT/, 'a dry run created nothing on purpose')
+  assert.match(output, /Would create/)
+  process.env.JIRA_POST_ENABLED = saved
 }
 
 console.log('jira create: declared drafts become real issues, and every refusal is named')

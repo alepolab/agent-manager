@@ -117,6 +117,10 @@ export async function readArtifactEntries(
   return { entries: parsed.map(e => (e && typeof e === 'object' && !Array.isArray(e)) ? e as Record<string, unknown> : {}) }
 }
 
+/** What the run's Jira project will accept, written by preflight and read by
+ *  the drafting agent - which has no network of its own. */
+export const JIRA_SCHEMA_ARTIFACT = 'jira-schema.json'
+
 /** Writes a JSON artifact back, pretty-printed as every producer of one does.
  *  Refuses a name that escapes the run's directory, like every other writer. */
 export async function writeArtifactJson(runId: string, name: string, value: unknown): Promise<void> {

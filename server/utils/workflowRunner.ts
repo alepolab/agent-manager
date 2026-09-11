@@ -409,6 +409,12 @@ async function publish(run: WorkflowRun) {
               run.ticketKey,
               run,
             )
+            // Recorded here, not only by a Jira STEP: this flag was written in
+            // exactly one place (runJiraStep) and read in two, so a run that
+            // settled twice - stopped, then a step failing after it - posted the
+            // same comment twice on a real ticket, seven seconds apart.
+            run.ticketCommented = true
+            await saveRun(run)
             log.info('ticket notified', {
               runId: run.id, ticketKey: run.ticketKey,
               posted: result.posted, reason: result.reason ?? '(none)',
@@ -792,8 +798,22 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       output = `Jira step failed: ${err instanceof Error ? err.message : String(err)}. The ticket was not changed; the run goes on.`
     }
     for (const line of output.split('\n')) logLine(l, run, rec, line)
-    const skip = parseSkip(output)
     l.outputs[id] = output
+    // A Jira step halts the same way an agent step does. Without this the only
+    // outcomes it had were completed and skipped, so a create step that filed
+    // nothing still read as done and its branch carried on to steps addressed
+    // to tickets that were never created.
+    const jiraHalt = parseHalt(output)
+    if (jiraHalt) {
+      markFailed(l.state, id)
+      Object.assign(rec, {
+        status: 'failed', output, model: null, usage: null, error: `Step halted: ${jiraHalt}`, completedAt: Date.now(),
+      })
+      log.warn('jira step halted', () => ({ runId: run.id, stepId: id, reason: preview(jiraHalt) }))
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return false
+    }
+    const skip = parseSkip(output)
     Object.assign(rec, {
       status: skip ? 'skipped' : 'completed', output, model: null, usage: null, completedAt: Date.now(),
       ...(skip ? { skipReason: skip } : {}),
@@ -1290,6 +1310,8 @@ interface DispatchItem {
   startedBy?: string
   parentRunId: string
   ticketKey?: string
+  /** The product the PARENT resolved, so a child does not re-guess from prose. */
+  productKey?: string
   /** The child's own declared inputs, already resolved against the parent's values. */
   parameters?: Record<string, string>
 }
@@ -1307,6 +1329,7 @@ async function startChild(item: DispatchItem): Promise<{ run: WorkflowRun, queue
     // 'direct-invocation' is reserved - so a new literal validates.
     watch: `workflow-trigger:${item.parentRunId}`,
     ticketKey: item.ticketKey,
+    ...(item.productKey ? { productKey: item.productKey } : {}),
     autoRun: true,
     projectDir: item.projectDir,
     // Resolved now and frozen on the run: a workflow re-saved with a new
@@ -1439,7 +1462,15 @@ async function runDispatchStep(
       projectDir: join(root, workspaceSegment(t.key)),
       startedBy: run.startedBy,
       parentRunId: run.id,
-      ticketKey: /^[A-Z][A-Z0-9]+-\d+$/.test(t.key) ? t.key : undefined,
+      // The parent already resolved this, from a registry key or an explicit
+      // productKey. Left out, each child re-resolved from its own prompt text
+      // and two of three landed on a different product than the one scanned.
+      ...(run.product?.name ? { productKey: run.product.name } : {}),
+      // The issue a create step actually filed for this entry, and nothing
+      // else. The old shape test accepted any PROJ-NNN, which `DRAFT-001`
+      // satisfies - so a child whose ticket was never created adopted its own
+      // draft id as a Jira key and its first step tried to transition it.
+      ticketKey: typeof t.entry.jira_key === 'string' && t.entry.jira_key.trim() ? t.entry.jira_key.trim() : undefined,
       ...(Object.keys(child.values).length ? { parameters: child.values } : {}),
     })
   }
@@ -2013,7 +2044,14 @@ async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
   // apply, instead of an agent committing wherever it happens to be.
   const firstRepo = product?.repos?.[0]
   const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo, opts.startedBy)) ? checkoutDirFor(firstRepo, opts.startedBy) : undefined)
-  const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
+  // A dispatched child's key is decided by the dispatcher, which knows which
+  // issue was filed for its entry. Scraping its prompt instead reads whichever
+  // key appears first in the embedded entry - and a triage dedup note naming an
+  // adjacent ticket is the normal case, not an odd one. One real run adopted a
+  // colleague's unrelated ticket that way and moved it to In Progress. A run
+  // nobody dispatched still reads its own prompt: a person who typed a key
+  // meant it.
+  const ticketKey = opts.ticketKey ?? (opts.parentRunId ? undefined : opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1])
   return { product, projectDir, ticketKey, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }) }
 }
 

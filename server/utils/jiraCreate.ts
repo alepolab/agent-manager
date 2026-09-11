@@ -90,6 +90,119 @@ function bodyOf(fields: Record<string, unknown>, entry: Record<string, unknown>)
 }
 
 /**
+ * What a project will actually accept for one issue type: the priorities it
+ * offers, and the fields it refuses to create without.
+ *
+ * Read before the first POST rather than discovered by it. A real run drafted
+ * three good tickets, sent priority "High" to a project whose scheme is
+ * Blocker/Critical/Major/Minor, and had all three refused - along with two
+ * required custom fields nobody knew about. Every one of those is a question
+ * Jira answers in one GET, before anything is filed.
+ *
+ * A lookup that fails returns null, and the caller files exactly as it did
+ * before: the schema makes failures legible, it must not become a new way for
+ * creation to stop working.
+ */
+export interface CreateSchema {
+  /** Priority names the project offers, empty when the field is not on the screen. */
+  priorities: string[]
+  /** Fields with no default that the project will not create without, by id and human name. */
+  required: { id: string, name: string }[]
+}
+
+const NEVER_ASK = new Set(['project', 'issuetype', 'summary', 'description', 'reporter'])
+
+export async function createSchemaFor(
+  creds: { baseUrl: string, email: string, apiToken: string },
+  project: string,
+  issueType: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<CreateSchema | null> {
+  try {
+    const url = `${creds.baseUrl}/rest/api/3/issue/createmeta`
+      + `?projectKeys=${encodeURIComponent(project)}`
+      + `&issuetypeNames=${encodeURIComponent(issueType)}`
+      + `&expand=projects.issuetypes.fields`
+    const res = await fetchImpl(url, { headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' } })
+    if (!res.ok) return null
+    const body = await res.json() as {
+      projects?: { issuetypes?: { fields?: Record<string, { name?: string, required?: boolean, hasDefaultValue?: boolean, allowedValues?: { name?: string, value?: string }[] }> }[] }[]
+    }
+    const fields = body.projects?.[0]?.issuetypes?.[0]?.fields
+    if (!fields) return null
+    const priorities = (fields.priority?.allowedValues ?? [])
+      .map(v => v.name ?? v.value)
+      .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+    const required = Object.entries(fields)
+      .filter(([id, f]) => f.required && !f.hasDefaultValue && !NEVER_ASK.has(id))
+      .map(([id, f]) => ({ id, name: f.name?.trim() || id }))
+    return { priorities, required }
+  } catch {
+    return null
+  }
+}
+
+
+/**
+ * Every issue type a project offers, with the priorities and required fields of
+ * each. Written to the run's artifacts by preflight so the DRAFTING agent can
+ * read it: that agent holds Read, Write, Grep and Glob and no network at all,
+ * so anything it must know about Jira has to arrive as a file.
+ */
+export async function projectCreateSchema(
+  creds: { baseUrl: string, email: string, apiToken: string },
+  project: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<Record<string, CreateSchema> | null> {
+  try {
+    const url = `${creds.baseUrl}/rest/api/3/issue/createmeta`
+      + `?projectKeys=${encodeURIComponent(project)}`
+      + `&expand=projects.issuetypes.fields`
+    const res = await fetchImpl(url, { headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' } })
+    if (!res.ok) return null
+    const body = await res.json() as {
+      projects?: { issuetypes?: { name?: string, fields?: Record<string, { name?: string, required?: boolean, hasDefaultValue?: boolean, allowedValues?: { name?: string, value?: string }[] }> }[] }[]
+    }
+    const types = body.projects?.[0]?.issuetypes
+    if (!types?.length) return null
+    const out: Record<string, CreateSchema> = {}
+    for (const t of types) {
+      if (!t.name || !t.fields) continue
+      out[t.name] = {
+        priorities: (t.fields.priority?.allowedValues ?? [])
+          .map(v => v.name ?? v.value)
+          .filter((n): n is string => typeof n === 'string' && n.trim().length > 0),
+        required: Object.entries(t.fields)
+          .filter(([id, f]) => f.required && !f.hasDefaultValue && !NEVER_ASK.has(id))
+          .map(([id, f]) => ({ id, name: f.name?.trim() || id })),
+      }
+    }
+    return Object.keys(out).length ? out : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The values a draft supplies for fields beyond the fixed few, keyed by field
+ * id or by the human name the schema reports. Names are accepted because that
+ * is what a person (or a drafting agent) writes; ids are what Jira takes.
+ */
+function customValues(fields: Record<string, unknown>, schema: CreateSchema | null): Record<string, unknown> {
+  const raw = (fields.custom && typeof fields.custom === 'object' && !Array.isArray(fields.custom))
+    ? fields.custom as Record<string, unknown>
+    : {}
+  const byName = new Map((schema?.required ?? []).map(f => [f.name.toLowerCase(), f.id]))
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === undefined || v === null || v === '') continue
+    const id = byName.get(k.trim().toLowerCase()) ?? k
+    out[id] = typeof v === 'string' ? plainTextToAdf(v) : v
+  }
+  return out
+}
+
+/**
  * Creates an issue per entry, stamping `jira_key` and `work_type` onto the
  * entries it created.
  *
@@ -123,6 +236,8 @@ export async function createIssuesFrom(
   }
 
   const out: CreateOutcome[] = []
+  // One lookup per (project, issue type) for the whole batch.
+  const schemas = new Map<string, CreateSchema | null>()
   for (const { index, entry } of entries) {
     const key = entryKey(entry, index)
     const fields = (entry.fields && typeof entry.fields === 'object' && !Array.isArray(entry.fields))
@@ -147,7 +262,25 @@ export async function createIssuesFrom(
       continue
     }
 
-    const priority = typeof fields.priority === 'string' && fields.priority.trim() ? fields.priority.trim() : ''
+    // What this project will take, read once per (project, issue type) and
+    // shared across the batch: three drafts for one project ask Jira once.
+    const schemaKey = `${project}::${issueType}`
+    if (!schemas.has(schemaKey)) schemas.set(schemaKey, await createSchemaFor(creds, project, issueType, fetchImpl))
+    const schema = schemas.get(schemaKey) ?? null
+
+    const custom = customValues(fields, schema)
+    const unmet = (schema?.required ?? []).filter(f => custom[f.id] === undefined)
+    if (unmet.length) {
+      const why = `${project}/${issueType} requires ${unmet.map(f => `${f.name} (${f.id})`).join(', ')}, and the draft supplies no value for ${unmet.length === 1 ? 'it' : 'them'}`
+      out.push({ index, key, error: why, line: `Could not create an issue for ${key}: ${why}.` })
+      continue
+    }
+
+    const wanted = typeof fields.priority === 'string' && fields.priority.trim() ? fields.priority.trim() : ''
+    // A priority the scheme does not offer is dropped, not sent: Jira refuses
+    // the whole issue over it, and the ticket matters more than the field.
+    const priority = (schema && wanted && !schema.priorities.includes(wanted)) ? '' : wanted
+    const droppedPriority = wanted && !priority ? wanted : ''
     const labels = Array.isArray(fields.labels) ? fields.labels.filter((l): l is string => typeof l === 'string' && l.trim().length > 0) : []
     const payload = {
       fields: {
@@ -157,6 +290,7 @@ export async function createIssuesFrom(
         description: plainTextToAdf(bodyOf(fields, entry)),
         ...(priority ? { priority: { name: priority } } : {}),
         ...(labels.length ? { labels } : {}),
+        ...custom,
       },
     }
 
@@ -182,7 +316,7 @@ export async function createIssuesFrom(
       const workType = workTypeOf(entry, fields)
       if (workType) entry.work_type = workType
       log.info('created a jira issue', { runId: run.id, jiraKey: created.key, project })
-      out.push({ index, key, jiraKey: created.key, line: `Created ${created.key} in ${project} for ${key}.` })
+      out.push({ index, key, jiraKey: created.key, line: `Created ${created.key} in ${project} for ${key}${droppedPriority ? `, without priority "${droppedPriority}" (${project} does not offer it${schema?.priorities.length ? `; it offers ${schema.priorities.join(', ')}` : ''})` : ''}.` })
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
       out.push({ index, key, error: why, line: `Could not create an issue for ${key}: ${why}.` })
@@ -230,5 +364,17 @@ export async function createFromArtifact(run: WorkflowRun, source: string, fetch
   const outcomes = await createIssuesFrom(run, read.entries.map((entry, index) => ({ index, entry })), fetchImpl)
   await writeArtifactJson(run.id, source, read.entries)
   await recordCreatedTickets(run.id, outcomes)
-  return outcomes.map(o => o.line).join('\n')
+  const lines = outcomes.map(o => o.line).join('\n')
+
+  // A create step that created nothing has not done its job, and everything
+  // downstream of it addresses tickets that do not exist. A real run filed none
+  // of three (an invalid priority and two required custom fields), reported
+  // itself completed, and dispatched three child pipelines at the tickets it had
+  // failed to create. A dry run is excluded: it creates nothing by design.
+  const created = outcomes.filter(o => o.jiraKey).length
+  const refused = outcomes.filter(o => o.error).length
+  if (isJiraPostingEnabled() && !created && refused) {
+    return `PIPELINE-HALT: Jira refused every one of the ${outcomes.length} ${outcomes.length === 1 ? 'issue' : 'issues'} this step tried to create from ${source}; nothing downstream has a ticket to work on.\n${lines}`
+  }
+  return lines
 }
