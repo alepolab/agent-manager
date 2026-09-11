@@ -81,7 +81,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -510,6 +510,34 @@ function resumableSession(rec: RunStep): string | undefined {
   return existsSync(transcript) ? rec.sessionId : undefined
 }
 
+/**
+ * The predecessor's session this step continues, or undefined for a cold start.
+ *
+ * Only for a step that declares `continuesSession`, and only when the answer is
+ * unambiguous: exactly one forward predecessor, which completed, whose
+ * transcript is still on disk. Anything else starts fresh — the same contract
+ * as `resumableSession`: undefined is always correct, only more expensive.
+ *
+ * Fan-in is the reason for the single-predecessor rule. A step joining three
+ * upstream branches has no "the" session to continue, and silently picking one
+ * would hand it one third of its context while the header it would otherwise
+ * have received carried all three.
+ */
+function inheritedSession(l: Live, run: WorkflowRun, id: string): string | undefined {
+  const step = stepOf(l, id)
+  if (!step?.continuesSession) return undefined
+  const preds = l.graph.forwardPreds[id] ?? []
+  if (preds.length !== 1) {
+    log.info('step declares continuesSession but has no single predecessor; starting fresh', { runId: run.id, stepId: id, preds: preds.length })
+    return undefined
+  }
+  const rec = run.steps.find(s => s.stepId === preds[0])
+  if (!rec || rec.status !== 'completed') return undefined
+  const session = resumableSession(rec)
+  if (session) log.info('step continues its predecessor\'s session', { runId: run.id, stepId: id, from: rec.stepId, sessionId: session })
+  return session
+}
+
 function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: string): string {
   const feedback = l.retryFeedback[id]
   if (feedback) {
@@ -646,7 +674,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
-  const resume = l.resumeFrom[id]
+  const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
   const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,

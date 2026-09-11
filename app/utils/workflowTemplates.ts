@@ -15,6 +15,8 @@ export interface WorkflowTemplateStep {
   maxVisits?: number
   /** See WorkflowStep.approval. */
   approval?: boolean
+  /** See WorkflowStep.continuesSession. */
+  continuesSession?: boolean
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
@@ -107,6 +109,7 @@ export function materializeTemplateSteps(
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     if (step.jira !== undefined) materialized.jira = step.jira
     if (step.testsUnlocked) materialized.testsUnlocked = true
+    if (step.continuesSession) materialized.continuesSession = true
     return materialized
   })
 }
@@ -196,7 +199,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // ce-work writes each test before the code that passes it, in one step, so the
       // test lock that guards Runbook A's separate fix step would stop it after the
       // first source edit; a real run asked the operator for the unlock and stalled.
-      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], monitorSlug: 'sdlc-step-monitor', testsUnlocked: true },
+      // Continues the planner's session. It is the same agent's work: the plan
+      // it just wrote, the files it just read, the repository it just learned.
+      // Across the recorded runs this pair and its Runbook A equivalent were
+      // over half of every run's cost, each half rebuilding what the other had
+      // just finished learning.
+      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], continuesSession: true, monitorSlug: 'sdlc-step-monitor', testsUnlocked: true },
       { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
       // Rebuilds the image from the worktree and redeploys in place, alone, before anything tests it.
       { agentTemplateId: 'sdlc-stack-update', label: 'Update Stack', next: ['sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
@@ -206,7 +214,10 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
       // The one step with an outward effect: pushes the branch and opens the PR quoting the QA, review and security reports.
       { agentTemplateId: 'sdlc-ce-ship', label: 'Push + PR', next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
+      // Continues the ship step's session: same branch, same PR, same GitHub
+      // context, minutes later. Answering a reviewer on a PR you just opened is
+      // not a new problem.
+      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', next: ['sdlc-jira-tracker'], contextMode: 'ancestors', continuesSession: true, maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, monitorSlug: 'sdlc-step-monitor' },
     ],
   },
