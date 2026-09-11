@@ -81,4 +81,25 @@ writeFileSync(join(root, 'oracle', 'raw-3.txt'), 'ccc')
 }
 
 rmSync(root, { recursive: true, force: true })
+// ── an image artifact is not text, and the route must know that ─────────────
+// The route served every artifact as `text/plain` and ran it through
+// toString('utf8'), which replaces every byte that is not valid UTF-8. A
+// screenshot arrived corrupted and the console highlighted the corruption as
+// source code; one run's manual QA produced four screenshots nobody could look
+// at. The decision lives in runArtifacts so it can be asserted here.
+{
+  const { artifactContentType } = await import('../server/utils/runArtifacts.ts')
+  for (const [name, want] of [
+    ['browser/shot.png', 'image/png'],
+    ['browser/QA-6-step1.PNG', 'image/png'],
+    ['trace/flow.gif', 'image/gif'],
+    ['evidence/report.pdf', 'application/pdf'],
+  ]) {
+    assert.strictEqual(artifactContentType(name), want, `${name} must be served as ${want}`)
+  }
+  for (const name of ['meta.json', 'oracle/raw-1.txt', 'reports/qa.md', 'steps/step-01.log', 'noextension']) {
+    assert.strictEqual(artifactContentType(name), undefined, `${name} is text and must stay text`)
+  }
+}
+
 console.log('\nartifact listing: all checks passed')

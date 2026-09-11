@@ -27,6 +27,10 @@ async function refresh() {
   try { files.value = await $fetch<{ name: string, size: number }[]>(`/api/runs/${props.runId}/artifacts`) } catch { files.value = [] }
 }
 const ext = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+/** Evidence a reviewer looks at rather than reads. Fetching one as text produced
+ *  mojibake and the console highlighted it as source; a QA run's four
+ *  screenshots were unviewable. */
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
 const kind = computed(() => {
   const n = selected.value ?? ''
   const e = ext(n)
@@ -34,16 +38,21 @@ const kind = computed(() => {
   if (e === 'json') return 'json'
   if (e === 'xml') return 'xml'
   if (e === 'log') return 'log'
+  if (IMAGE_EXT.has(e)) return 'image'
   return 'code'
 })
 const LANG: Record<string, string> = { java: 'java', py: 'python', ts: 'typescript', js: 'javascript', sh: 'bash', yml: 'yaml', yaml: 'yaml', xml: 'xml', json: 'json', diff: 'diff', sql: 'sql', vue: 'vue', txt: 'text' }
+
+const fileUrl = (name: string) => `/api/runs/${props.runId}/artifacts/${name.split('/').map(encodeURIComponent).join('/')}`
 
 async function open(name: string) {
   selected.value = name
   loading.value = true
   search.value = ''
+  // An image is served as itself; the browser fetches it from the same route.
+  if (IMAGE_EXT.has(ext(name))) { raw.value = ''; rendered.value = ''; loading.value = false; return }
   try {
-    raw.value = await $fetch<string>(`/api/runs/${props.runId}/artifacts/${name.split('/').map(encodeURIComponent).join('/')}`, { responseType: 'text' })
+    raw.value = await $fetch<string>(fileUrl(name), { responseType: 'text' })
     await render()
   } catch (e: any) { raw.value = e.data?.message || e.message; rendered.value = '' } finally { loading.value = false }
 }
@@ -115,7 +124,7 @@ const rawLines = computed(() => {
   const lines = (kind.value === 'json' ? pretty(raw.value) : raw.value).split('\n')
   return lines.map((text, i) => ({ n: i + 1, text })).filter(l => !q || l.text.toLowerCase().includes(q))
 })
-const showRaw = computed(() => mode.value === 'raw' || (kind.value !== 'markdown' && kind.value !== 'json' && kind.value !== 'log' && !rendered.value && !junit.value) || !!search.value.trim())
+const showRaw = computed(() => kind.value !== 'image' && (mode.value === 'raw' || (kind.value !== 'markdown' && kind.value !== 'json' && kind.value !== 'log' && !rendered.value && !junit.value) || !!search.value.trim()))
 
 async function copy() {
   try { await navigator.clipboard.writeText(raw.value); copied.value = true; setTimeout(() => { copied.value = false }, 1500) } catch { /* clipboard unavailable */ }
@@ -174,6 +183,14 @@ defineExpose({ refresh })
             <span :class="wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'" class="min-w-0">{{ l.text }}</span>
           </div>
           <p v-if="!rawLines.length" class="text-label font-sans">No line matches.</p>
+        </div>
+
+        <!-- a screenshot is looked at, not read -->
+        <div v-else-if="kind === 'image'" class="p-2">
+          <a :href="fileUrl(selected!)" target="_blank" rel="noopener">
+            <img :src="fileUrl(selected!)" :alt="selected!" class="max-w-full h-auto rounded" style="border: 1px solid var(--border-subtle);">
+          </a>
+          <p class="text-[11px] text-label mt-2">{{ selected }} — click to open full size</p>
         </div>
 
         <!-- markdown -->
