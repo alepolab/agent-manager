@@ -30,7 +30,7 @@ import { join } from 'node:path'
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'budgets-'))
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'budgets-artifacts-'))
 
-const { resolveMaxDurationMs, DEFAULT_MAX_DURATION_MS, resolveMaxTurns } =
+const { resolveMaxDurationMs, DEFAULT_MAX_DURATION_MS, DEFAULT_MAX_TURNS, resolveMaxTurns } =
   await import('../server/utils/agentToolPolicy.ts')
 const { agentTemplates: AGENT_TEMPLATES } = await import('../app/utils/templates.ts')
 const { AgentResultError } = await import('../server/utils/agentCaller.ts')
@@ -42,43 +42,51 @@ const TIMEOUT = 5000
 // Same validation rule, so the two budgets cannot drift into behaving
 // differently for the same malformed frontmatter.
 assert.equal(resolveMaxDurationMs({ maxDurationMs: 90_000 }), 90_000,
-  'a positive integer overrides the default')
+  'a positive integer is honoured')
 for (const bad of [0, -5, 2.5, '600000', null, undefined, NaN]) {
   assert.equal(resolveMaxDurationMs({ maxDurationMs: bad }), DEFAULT_MAX_DURATION_MS,
-    `maxDurationMs ${String(bad)} must fall back to the default, never be trusted`)
+    `maxDurationMs ${String(bad)} must fall back to the default (now: none), never be trusted`)
 }
 assert.equal(resolveMaxDurationMs(undefined), DEFAULT_MAX_DURATION_MS,
   'absent frontmatter resolves to the default rather than throwing')
 
-// The default has to clear the longest step that has ever SUCCEEDED here
-// (10.5 minutes) by a real margin, and still end a runaway well inside the
-// 47.4-minute one that prompted this. Both edges are asserted: a default
-// tightened under the observed need would fail working steps, and one
-// loosened past the observed runaway would not have caught it.
-assert.ok(DEFAULT_MAX_DURATION_MS >= 20 * 60_000,
-  'the default must clear the longest observed successful step (10.5m) with margin')
-assert.ok(DEFAULT_MAX_DURATION_MS < 47 * 60_000,
-  'the default must be tight enough to have ended the 47.4-minute provisioner runaway')
 
-// ── 2. Every iterative SDLC agent carries the same turn budget ────────────
-// Named individually rather than looped: the point is not "these agents have
-// some budget" but "these three were the stragglers at 60, and all three of
-// that day's turn-budget hits were theirs".
-for (const id of ['sdlc-stack-provisioner', 'sdlc-test-author', 'sdlc-fix-implementer']) {
-  const agent = AGENT_TEMPLATES.find(t => t.id === id)
-  assert.ok(agent, `${id} must exist in the templates`)
-  assert.equal(agent.frontmatter.maxTurns, 80,
-    `${id} does iterative work and must carry the same 80-turn budget as the ` +
-    'verifier, trace-capture and pr-follow-up, not the 60 it hit repeatedly')
-}
-// The cheap agents must NOT have been swept up by a blanket raise.
-for (const [id, want] of [['sdlc-jira-tracker', 1], ['sdlc-step-monitor', 20], ['sdlc-ticket-intake', 30]]) {
-  assert.equal(AGENT_TEMPLATES.find(t => t.id === id).frontmatter.maxTurns, want,
-    `${id} is a cheap single-purpose step and must stay at ${want}`)
+// ── 2. There is no default budget, and nothing in the pipeline declares one ──
+// Removed on the operator's decision. The history this file records is the
+// argument for it: every budget here was set from a guess, hit real work, and
+// was raised after the fact — stragglers at 60 that produced every turn-budget
+// failure of 2026-09-09, then a 30-minute ceiling drawn from a provisioner that
+// had actually died on TURNS while working, not on time while hung.
+//
+// A budget that fires does not save the spend. It discards what the step had
+// done and re-attempts it from a log tail, which costs more than the turns it
+// refused. What still bounds a run: the RUN budget, which pauses and asks for
+// another allowance rather than failing, and the operator's Stop.
+assert.equal(DEFAULT_MAX_TURNS, undefined, 'no default turn budget: a step runs until it finishes')
+assert.equal(DEFAULT_MAX_DURATION_MS, undefined, 'no default wall-clock ceiling either')
+assert.equal(resolveMaxTurns(undefined), undefined, 'absent frontmatter means absent, not a substituted number')
+assert.equal(resolveMaxDurationMs(undefined), undefined)
+
+// Declaring one still works — the mechanism is opt-in, not deleted.
+assert.equal(resolveMaxTurns({ maxTurns: 12 }), 12, 'a declared turn budget is still honoured')
+assert.equal(resolveMaxDurationMs({ maxDurationMs: 90_000 }), 90_000, 'a declared ceiling is still honoured')
+
+// The jira tracker is the one agent that legitimately declares one: moving a
+// ticket is a single turn by nature, not a guess about how long work takes.
+assert.equal(AGENT_TEMPLATES.find(t => t.id === 'sdlc-jira-tracker').frontmatter.maxTurns, 1,
+  'a one-shot step may still say it is one-shot')
+
+// Every other pipeline agent declares nothing at all. A budget reintroduced
+// here is a step that can fail for a reason unrelated to its work.
+for (const t of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-jira-tracker')) {
+  assert.equal(t.frontmatter.maxTurns, undefined,
+    `${t.id} must not declare a turn budget: they were removed deliberately`)
+  assert.equal(t.frontmatter.maxDurationMs, undefined,
+    `${t.id} must not declare a wall-clock ceiling`)
 }
 
 // ── 3. Every SDLC agent still declares maxTurns explicitly ────────────────
-// An omitted budget silently inherits DEFAULT_MAX_TURNS (10) and is invisible
+// An omitted budget silently inherits DEFAULT_MAX_TURNS and is invisible
 // in the template — the exact shape of an earlier DEVOPS-15 failure.
 for (const t of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-'))) {
   assert.equal(resolveMaxTurns(t.frontmatter), t.frontmatter.maxTurns,

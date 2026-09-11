@@ -392,7 +392,6 @@ Rules:
       //
       // A higher cap costs more only in the rare runaway case. A cap set too
       // low costs 100% of the run, every time it bites.
-      maxTurns: 30,
       skills: ['intent-template', 'using-superpowers'],
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
@@ -475,7 +474,6 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 80,
       skills: ['ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You stand up the environment the rest of the pipeline tests against. Nothing downstream works if you get this wrong, and a stack you *believe* is up but is not produces a false FAIL that wastes the whole run.
@@ -803,7 +801,6 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
       // writing-plans because the plan gate (B2) stops this step before its test
       // lands unless .agent/plan.md exists with five specific headings. Writing
       // that well is a skill this agent was expected to have and did not.
@@ -887,7 +884,6 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
       // receiving-code-review is here because this step is the one that gets sent
       // back: a monitor voting RETRY hands it a review to act on, and a real run
       // returned "the agent claims all 6 tests pass but provides zero test
@@ -989,7 +985,6 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 80,
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
@@ -1221,7 +1216,6 @@ not happen.`,
       // is its own turn, and this step does that for every route the change
       // touches, so its budget matches the other tool-heavy steps rather than
       // the single-Playwright-run job it used to be. A real run hit 30 twice.
-      maxTurns: 80,
       skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You capture browser evidence for the change, against the stack the provisioning step brought up: what the changed screen looks like and does now, seen through a real browser, so a reviewer verifies the change visually without standing anything up.
@@ -1301,7 +1295,6 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'red',
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
-      maxTurns: 30,
       // No `claude-security` here, though it is the obvious fit: that plugin is
       // licensed "All rights reserved", so it cannot be vendored into this repo
       // the way the MIT superpowers skills are - and a container installs no
@@ -1355,7 +1348,6 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'yellow',
       tools: ['Read'],
-      maxTurns: 20,
       skills: ['requesting-code-review', 'ponytail-review'],
     },
     body: `You review one step of an automated fix pipeline. You did not run the step, but you have a Read tool and the step's evidence is files in the run artifacts directory named in its input.
@@ -1451,7 +1443,6 @@ shape of the answer.`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
       skills: ['receiving-code-review', 'finishing-a-development-branch'],
     },
     body: `You close the loop after the pull request opens. An open PR is not a finished
@@ -1586,7 +1577,6 @@ ${SDLC_STANDING_RULES}`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Write', 'Glob', 'Grep'],
-      maxTurns: 40,
       skills: [],
     },
     body: `You prove that this instance can work on one product: that its repository can
@@ -1638,7 +1628,6 @@ ${SDLC_STANDING_RULES}`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
-      maxTurns: 60,
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
@@ -1874,7 +1863,6 @@ not happen.`,
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
       // Reads a 109 KB skill and then a codebase; a real run on the PMS
       // super-repo burned three 60-turn visits reading and never wrote a plan.
-      maxTurns: 120,
       skills: ['using-superpowers'],
     },
     body: `You write the plan the rest of the run executes, and the QA plan the run is judged by. You change no code.
@@ -1932,7 +1920,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 100,
       skills: ['test-driven-development', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You implement the plan. Implement and verify locally, commit on the run branch, and hand the result back: review, stack update, QA and the pull request are later steps' work, not yours.
@@ -1985,7 +1972,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'purple',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
       skills: ['using-superpowers'],
     },
     body: `You review the change before anything is deployed or tested against it: bugs, regressions, missing tests, standards. Findings you verify and can fix within the ticket, you fix and commit; the rest you record.
@@ -2034,7 +2020,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 60,
       skills: ['using-superpowers'],
     },
     body: `The stack the provisioning step stood up runs an image built before this run's commits existed. You rebuild the product from the working checkout and put that build into the running stack, so that every QA step after you tests the change and not the old release.
@@ -2108,7 +2093,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 80,
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You are the automated half of QA. You run what exists and report what happened; you fix nothing. A green result you did not watch produce its counts is not a result.
@@ -2163,7 +2147,6 @@ ${SDLC_STOPPING}`,
       tools: ['Bash', 'Read', 'Glob', 'Write'],
       // One agent-browser call per open, click, type, screenshot and console
       // read, for every step of every case: the most tool-heavy step there is.
-      maxTurns: 120,
       skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You are the manual tester. You perform every manual case in the QA plan through a real browser against the stack that now serves the fixed build, exactly as a QA engineer would: preconditions, steps, what was expected, what was observed, a verdict. You judge; you do not fix.
@@ -2222,7 +2205,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob', 'Grep'],
-      maxTurns: 60,
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You are the one step with an outward effect: you push the run branch and open the pull request. Everything is already committed; nothing here writes code. The pull request body is the deliverable — a reviewer decides from it whether the change is trustworthy, without re-deriving any of it.

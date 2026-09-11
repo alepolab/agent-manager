@@ -1,7 +1,24 @@
 import { MODEL_ALIAS, DEFAULT_MODEL_ALIAS } from './models.ts'
 import type { AgentFrontmatter } from '~/types'
 
-export const DEFAULT_MAX_TURNS = 10
+/**
+ * There is no default turn budget. A step runs until it finishes.
+ *
+ * The defaults were removed on the operator's decision, and the evidence was
+ * on their side: across the recorded runs 40% of all agent executions were
+ * repeats, and a budget that fires does not save the spend — it discards
+ * everything the step had done and re-attempts it from a log tail, which
+ * costs more than the turns it refused. Every declared budget in the pipeline
+ * had been set from a guess and then raised after it killed real work.
+ *
+ * `maxTurns` and `maxDurationMs` remain honoured when an agent declares one,
+ * so a genuinely bounded step (a one-shot Jira transition) can still say so.
+ * Absent means absent: nothing is substituted.
+ *
+ * What still bounds a run: the RUN budget in workflowRunStore, which pauses
+ * and asks for another allowance instead of failing, and the operator's Stop.
+ */
+export const DEFAULT_MAX_TURNS: number | undefined = undefined
 
 /**
  * Resolves the SDK's `tools` option for a `query()` call.
@@ -67,29 +84,30 @@ export function resolveModel(frontmatter?: Pick<AgentFrontmatter, 'model'>): { a
   return { alias, id: MODEL_ALIAS[alias] ?? MODEL_ALIAS[DEFAULT_MODEL_ALIAS] ?? DEFAULT_MODEL_ALIAS }
 }
 
-/** An agent's turn budget. Only a positive integer overrides the default. */
-export function resolveMaxTurns(frontmatter?: Pick<AgentFrontmatter, 'maxTurns'>): number {
+/** An agent's turn budget, or undefined for "run until done". Only a positive integer counts. */
+export function resolveMaxTurns(frontmatter?: Pick<AgentFrontmatter, 'maxTurns'>): number | undefined {
   const declared = frontmatter?.maxTurns
   if (typeof declared === 'number' && Number.isInteger(declared) && declared > 0) return declared
   return DEFAULT_MAX_TURNS
 }
 
-/** Wall-clock ceiling for one agent call.
+/** There is no default wall-clock ceiling either.
  *
- *  The turn budget alone does NOT bound a step: one turn can sit inside a
- *  single Bash command indefinitely, so an agent waiting on a deploy that will
- *  never converge burns wall-clock without spending turns. Before this existed
- *  `maxTurns` was the only bound in the system - there is no timeout in the
- *  runner - and a real stack-provisioner ran 47.4 minutes before its turns ran
- *  out.
+ *  The turn budget alone does not bound a step — one turn can sit inside a
+ *  single Bash command indefinitely — which is why this existed: a real stack
+ *  provisioner ran 47.4 minutes, and a 30-minute ceiling was set from it.
+ *  Re-reading that case, the provisioner was spending turns the whole way and
+ *  died on TURNS, not time: it was working, not hanging, and the ceiling drawn
+ *  from it killed working steps.
  *
- *  30 minutes because the longest step that has ever SUCCEEDED here took 10.5
- *  minutes: roughly three times the observed need, while still ending a
- *  runaway inside one coffee break rather than one working day. */
-export const DEFAULT_MAX_DURATION_MS = 30 * 60_000
+ *  Removed on the operator's decision. A step that genuinely hangs is now ended
+ *  by the operator's Stop or by the run budget, both of which a person sees,
+ *  rather than by a timer that discards the step's work and silently
+ *  re-attempts it. An agent that wants a ceiling may still declare one. */
+export const DEFAULT_MAX_DURATION_MS: number | undefined = undefined
 
-/** An agent's wall-clock budget. Only a positive integer overrides the default. */
-export function resolveMaxDurationMs(frontmatter?: Pick<AgentFrontmatter, 'maxDurationMs'>): number {
+/** An agent's wall-clock budget, or undefined for no ceiling. Only a positive integer counts. */
+export function resolveMaxDurationMs(frontmatter?: Pick<AgentFrontmatter, 'maxDurationMs'>): number | undefined {
   const declared = frontmatter?.maxDurationMs
   if (typeof declared === 'number' && Number.isInteger(declared) && declared > 0) return declared
   return DEFAULT_MAX_DURATION_MS

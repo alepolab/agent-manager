@@ -309,12 +309,15 @@ export async function callAgent(
   const toolsOption = resolveTools(frontmatter)
   const maxTurns = resolveMaxTurns(frontmatter)
   const maxDurationMs = resolveMaxDurationMs(frontmatter)
-  // Armed here rather than around the loop so the budget covers everything the
-  // call does, and cleared in the same finally that releases the input stream.
-  // `timedOut` is the ONLY thing that distinguishes this abort from the
-  // operator pressing Stop - both reach the SDK as the same aborted controller.
+  // Armed only when an agent declares a ceiling. There is no default one: a
+  // timer that fires does not save the spend, it discards everything the step
+  // had done and re-attempts it. `timedOut` is the ONLY thing that
+  // distinguishes this abort from the operator pressing Stop - both reach the
+  // SDK as the same aborted controller.
   let timedOut = false
-  const deadline = setTimeout(() => { timedOut = true; abortController.abort() }, maxDurationMs)
+  const deadline = maxDurationMs === undefined
+    ? undefined
+    : setTimeout(() => { timedOut = true; abortController.abort() }, maxDurationMs)
 
   // Resolved before the call, and deliberately not caught: a missing guardrail
   // is a reason not to start, not a warning to run past. See agentHooks.ts.
@@ -402,7 +405,9 @@ export async function callAgent(
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
-      maxTurns,
+      // Absent means absent: the SDK is given no turn cap unless the agent
+      // asked for one, so a step runs until it finishes.
+      ...(maxTurns === undefined ? {} : { maxTurns }),
       ...(declaredModel ? { model: declaredModel } : {}),
       ...(toolsOption ? { tools: toolsOption } : {}),
       // A pipeline agent gets a deliberate environment, not the developer's.
@@ -486,7 +491,7 @@ export async function callAgent(
     // except by the flag. Reported as an AgentResultError so the runner's
     // existing out-of-budget path - record the attempt, retry from the log
     // tail - covers a timeout exactly as it covers a spent turn budget.
-    if (timedOut) {
+    if (timedOut && maxDurationMs !== undefined) {
       throw new AgentResultError(
         `Claude Code ran past its wall-clock budget of ${Math.round(maxDurationMs / 60_000)} minutes and was stopped`
         + ' (raise this agent\'s maxDurationMs if the step legitimately needs longer)',
@@ -497,7 +502,7 @@ export async function callAgent(
   } finally {
     // Every exit path, a thrown error result included: otherwise the input
     // generator stays suspended forever and a queued note is never released.
-    clearTimeout(deadline)
+    if (deadline) clearTimeout(deadline)
     finished = true
     kick()
   }

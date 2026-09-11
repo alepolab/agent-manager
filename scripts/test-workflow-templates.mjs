@@ -358,18 +358,26 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.notDeepEqual(fresh.map(s => s.id), first.map(s => s.id), 'a length mismatch regenerates rather than half-reusing')
 }
 
-// Every sdlc agent must declare its own turn budget. Omitting it silently
-// inherits DEFAULT_MAX_TURNS (10) — and a real DEVOPS-15 run died with
-// `error_max_turns` because sdlc-ticket-intake, the step that reads the ticket
-// AND explores an unfamiliar repo AND writes three artifacts, had the smallest
-// budget of any step purely by accident of omission. An inherited default is
-// invisible in the template; an explicit number is not.
+// No sdlc agent declares a turn budget any more, and that inverts an older
+// rule rather than relaxing it.
+//
+// The old rule existed because omitting maxTurns silently inherited
+// DEFAULT_MAX_TURNS (10): a real DEVOPS-15 run died on `error_max_turns`
+// because sdlc-ticket-intake — which reads the ticket AND explores an
+// unfamiliar repo AND writes three artifacts — had the smallest budget in the
+// pipeline purely by accident of omission. The fix then was "declare it".
+//
+// The defaults are now gone, so absence means absence: an undeclared step runs
+// until it finishes and cannot die on a number nobody chose for it. Declaring
+// one is opt-in, and the one agent that does is the Jira tracker, whose job
+// genuinely is a single turn.
 {
-  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-'))) {
-    const mt = a.frontmatter.maxTurns
-    assert.ok(typeof mt === 'number' && Number.isInteger(mt) && mt > 0,
-      `${a.id} must declare maxTurns explicitly rather than inheriting the default`)
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-jira-tracker')) {
+    assert.equal(a.frontmatter.maxTurns, undefined,
+      `${a.id} must not declare a turn budget: they were removed deliberately, and a reintroduced one can fail a step for a reason unrelated to its work`)
   }
+  assert.equal(AGENT_TEMPLATES.find(t => t.id === 'sdlc-jira-tracker').frontmatter.maxTurns, 1,
+    'a step that moves a ticket may still say it is one-shot')
 }
 
 // Absence must be as hard to claim as presence. A real DEVOPS-15 run halted the

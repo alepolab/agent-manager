@@ -89,12 +89,14 @@ check('the deploy verdict reaches the report and the artifacts',
   && /deploy-report\.md/.test(verifier),
   'a reviewer needs to see the decision, not its absence')
 
-// The added work has to be paid for. A verifier that runs out of turns returns
-// EMPTY output (error_max_turns), which is the worst failure mode in this
-// system: it looks like an agent that had nothing to say.
-check('the turn budget was raised to pay for the build',
-  /maxTurns: 80,/.test(verifier),
-  'build + deploy + health + teardown does not fit in the 60 turns the old scope was proven at')
+// The added work has to be paid for. This used to assert a raised turn budget
+// (60 -> 80) because a verifier that runs out of turns returns EMPTY output,
+// which is the worst failure mode here: it looks like an agent that had nothing
+// to say. Budgets are gone now, so the guarantee is stronger and the assertion
+// is its inverse — nothing may cut this step short.
+check('no turn budget can cut the build short',
+  !/maxTurns:/.test(verifier),
+  'build + deploy + health + teardown must not be bounded by a number guessed before the work')
 
 console.log(failures === 0 ? '\nverify-against-the-artifact: all checks passed' : `\nverify-against-the-artifact: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)
