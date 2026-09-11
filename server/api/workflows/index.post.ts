@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -9,6 +10,7 @@ function slugify(name: string): string {
 }
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody<WorkflowPayload>(event)
   if (!body.name?.trim()) {
     throw createError({ statusCode: 400, message: 'name is required' })

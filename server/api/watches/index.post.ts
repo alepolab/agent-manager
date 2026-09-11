@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { listWatches, saveWatch } from '../../utils/watchConfig.ts'
 import type { Watch } from '../../../shared/types/watch.ts'
 import { currentUser } from '../../utils/session'
@@ -14,6 +15,7 @@ function slugify(name: string): string {
  * so a minimal `{ name, workflowSlug }` body is enough to get started.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody<Partial<Watch>>(event)
   const user = await currentUser(event)
   if (user && !body.createdBy) body.createdBy = user.login

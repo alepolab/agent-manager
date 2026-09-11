@@ -1,9 +1,11 @@
+import { requireCapability } from '../../utils/session'
 import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody(event)
   const { content } = body
 

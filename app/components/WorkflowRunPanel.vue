@@ -5,6 +5,17 @@ import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RU
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
 const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string] }>()
 
+/**
+ * What this person may do here. A reviewer holds `answerGate` and not
+ * `runEngine`: they decide at the gate, and the pipeline's controls — stop,
+ * restart a step, clone, steer a running agent — are not theirs. The server
+ * refuses those routes for them too; this only stops us offering what would
+ * then be refused.
+ */
+const { can } = useUser()
+const mayDrive = computed(() => can('runEngine'))
+const mayAnswer = computed(() => can('answerGate'))
+
 /** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
 const anyRunning = computed(() => props.run?.steps.some(s => s.status === 'running') ?? false)
 /** What the note box is for right now: a reply, an approval note, a note to the next step, or a restart note. */
@@ -189,7 +200,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     </div>
     <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
     <textarea
-      v-if="settledRun || run.status === 'paused' || run.status === 'running'"
+      v-if="(mayDrive && (settledRun || run.status === 'running')) || (mayAnswer && run.status === 'paused')"
       v-model="note"
       rows="2"
       class="field-input w-full resize-none text-[12px]"
@@ -197,7 +208,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       :aria-label="notePlaceholder"
       @keydown.meta.enter="noteMode === 'reply' ? send('respond') : noteMode === 'steer' ? send('note') : noteMode === 'continue' ? send('continue') : undefined"
     />
-    <p v-if="settledRun && run.steps.some(s => s.sessionId)" class="text-[11px] text-label">
+    <p v-if="mayDrive && settledRun && run.steps.some(s => s.sessionId)" class="text-[11px] text-label">
       Questions or feedback for a step's agent go to its chat: expand the step and choose Ask this agent, or use the speech bubble on its row. The conversation continues with everything the agent saw. A note typed here goes to the step you restart.
     </p>
     <!-- Tokens against the budget cap. The cost figure that used to lead this
@@ -226,15 +237,18 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             <span v-if="step.monitorVerdict" class="text-[10px] font-mono">{{ step.monitorVerdict }}</span>
             <span class="ml-auto text-[10px] text-label">{{ elapsed(step) }}</span>
           </button>
-          <!-- Visible on the row itself: an action nobody has to discover by expanding. -->
+          <!-- Visible on the row itself: an action nobody has to discover by
+               expanding. Not for a reviewer: it opens the agent's live Claude
+               Code session, which is the same power the sidebar's CLI entry
+               was taken away from them for. -->
           <UButton
-            v-if="step.sessionId && step.sessionProject"
+            v-if="mayDrive && step.sessionId && step.sessionProject"
             size="xs" variant="soft" icon="i-lucide-message-circle"
             :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
             :aria-label="`Open the ${step.label} agent's chat`" :title="`Open the ${step.label} agent's chat`"
           />
           <UButton
-            v-if="settledRun && stepSettled(step)"
+            v-if="mayDrive && settledRun && stepSettled(step)"
             size="xs" variant="soft" icon="i-lucide-rotate-ccw"
             :aria-label="`Restart from ${step.label}`" :title="`Restart from ${step.label}`"
             @click="emit('restart', step.stepId, note)"
@@ -245,7 +259,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
           <!-- Questions and feedback for a finished step go to the agent itself: its
                Claude Code session continues on /cli with everything it saw. -->
           <UButton
-            v-if="step.sessionId && step.sessionProject"
+            v-if="mayDrive && step.sessionId && step.sessionProject"
             size="xs" variant="soft" icon="i-lucide-message-circle" label="Ask this agent"
             :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
           />
@@ -275,13 +289,14 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     </div>
 
     <div class="flex gap-2">
-      <UButton v-if="noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
-      <UButton v-else-if="run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'" @click="send('continue')" />
-      <UButton v-else-if="run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
-      <UButton v-if="noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
-      <UButton v-if="run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
-      <UButton v-if="run.status === 'running' || run.status === 'paused'" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
-      <UButton v-if="settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
+      <UButton v-if="mayAnswer && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
+      <UButton v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'" @click="send('continue')" />
+      <UButton v-else-if="mayAnswer && run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
+      <UButton v-if="mayDrive && noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
+      <UButton v-if="mayDrive && run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
+      <UButton v-if="mayDrive && (run.status === 'running' || run.status === 'paused')" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
+      <UButton v-if="mayDrive && settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
+      <p v-if="!mayAnswer && run.status === 'paused'" class="text-[11px] text-label self-center">This run is waiting on a decision from a developer.</p>
     </div>
   </div>
 

@@ -1,3 +1,4 @@
+import { requireCapability } from '../../../utils/session'
 import { startRun } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
 import { findRunInWorkspace } from '../../../utils/workflowRunStore'
@@ -7,6 +8,9 @@ import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
 
 export default defineEventHandler(async (event) => {
+  // Starting a run spends money and touches a repo; a manager reads, and QA
+  // answers the verification gate on work someone else began.
+  await requireCapability(event, 'startRun')
   const slug = getRouterParam(event, 'slug')!
   const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string }>(event)
   if (!body?.initialPrompt?.trim()) {

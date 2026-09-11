@@ -1,7 +1,9 @@
+import { requireCapability } from '../../utils/session'
 import { readImportsRegistry, writeImportsRegistry } from '../../utils/github'
 import { gitLsRemote } from '../../utils/gitOps'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const { type } = await readBody<{ type: 'skills' | 'agents' }>(event)
   if (!type) throw createError({ statusCode: 400, message: 'type is required' })
 

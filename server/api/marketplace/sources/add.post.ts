@@ -1,4 +1,6 @@
+import { requireCapability } from '../../../utils/session'
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const { url } = await readBody<{ url: string }>(event)
 
   if (!url) {

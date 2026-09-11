@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath } from '../../utils/claudeDir'
@@ -18,6 +19,7 @@ async function readJson<T>(path: string): Promise<T | null> {
 }
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const id = decodeURIComponent(getRouterParam(event, 'id')!)
 
   // Remove from installed_plugins.json

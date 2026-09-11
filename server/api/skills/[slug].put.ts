@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { writeFile, mkdir, rename, readFile, readdir, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -107,6 +108,7 @@ async function findSkillPath(slug: string): Promise<string | null> {
 }
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('skills'); invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const skillPath = await findSkillPath(slug)

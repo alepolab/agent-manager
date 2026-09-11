@@ -1,3 +1,4 @@
+import { requireCapability } from '../../../utils/session'
 import { getWatch } from '../../../utils/watchConfig.ts'
 import { runCycle } from '../../../utils/watchScheduler.ts'
 
@@ -9,6 +10,7 @@ import { runCycle } from '../../../utils/watchScheduler.ts'
  * need to call `reconcile` separately.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const id = getRouterParam(event, 'id')!
   const watch = await getWatch(id)
   if (!watch) throw createError({ statusCode: 404, message: 'Watch not found' })
