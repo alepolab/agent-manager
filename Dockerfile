@@ -116,6 +116,16 @@ COPY --chown=bun:bun engineering/schemas ./engineering/schemas
 # carries on with less than it should have.
 COPY --chown=bun:bun engineering/recipes ./engineering/recipes
 
+# And the guardrail hooks — the plan gate, the test lock and the secrets guard.
+# agentHooks.ts resolves them from the installed plugin first and falls back to
+# this copy, and in a container that fallback is the only path that works: the
+# staged installed_plugins.json records the HOST's installPath
+# (/home/sandeep/.claude/...), which does not exist in here. Without this COPY
+# neither path resolves and preflight fails every run with "the guardrail hooks
+# are on neither the installed plugin nor the copy shipped at
+# /app/engineering/hooks" — accurate, and entirely about a missing COPY.
+COPY --chown=bun:bun engineering/hooks ./engineering/hooks
+
 COPY --chown=bun:bun docker/claude-config /root/.claude
 
 # Git credentials for private-repo imports.
