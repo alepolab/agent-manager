@@ -629,4 +629,28 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.match(body('sdlc-ce-ship'), /git push -u origin/, 'the ship step is the one allowed to push')
 }
 
+// ── a step that writes to a customer's ticket waits for a person ────────────
+// Not every Jira step: the In Progress transition at the top of a run is
+// justified by someone having started the run. The terminal one is different —
+// it moves the issue to Dev Done, comments on it, and attaches the evidence
+// bundle, which is the pipeline asserting to reporters and watchers that the
+// work is finished. A human qualifies that claim before it is made.
+{
+  for (const id of ['runbook-a-jira-to-diff', 'runbook-c-ce-ticket-to-pr']) {
+    const steps = WORKFLOW_TEMPLATES.find(t => t.id === id).steps
+    const writes = steps.filter(s => s.jira?.comment || s.jira?.attach)
+    assert.ok(writes.length, `${id} has no outcome-posting Jira step to check`)
+    for (const w of writes) {
+      assert.equal(w.approval, true,
+        `${id}: "${w.label}" comments on or attaches to the ticket and must wait for a person`)
+    }
+    // The opening transition is deliberately NOT gated: gating it would pause
+    // every run before it has done anything, for a write the operator just
+    // authorised by pressing Start.
+    const opening = steps.find(s => s.jira?.transition && !s.jira.comment && !s.jira.attach)
+    assert.notEqual(opening?.approval, true,
+      `${id}: the opening transition must not be gated — starting the run is the authorisation`)
+  }
+}
+
 console.log('workflowTemplates: all assertions passed')

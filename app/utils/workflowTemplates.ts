@@ -180,7 +180,14 @@ export const workflowTemplates: WorkflowTemplate[] = [
         next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       // `next` names a template id, and a repeated id resolves to its LAST step, which
       // is this one: the review step, not the In Progress step at the top.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, monitorSlug: 'sdlc-step-monitor' },
+      // The one step that writes to a customer's ticket, and it waits for a
+      // person. Moving an issue to Dev Done, commenting on it and attaching the
+      // evidence is the pipeline ASSERTING the work is finished, to an audience
+      // of reporters, watchers and whoever is on support that week. A human
+      // qualifies that claim before it is made. Starting the run is what
+      // justifies the In Progress transition above; nothing justifies Dev Done
+      // except someone having looked.
+      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, approval: true, monitorSlug: 'sdlc-step-monitor' },
     ],
   },
   {
@@ -218,7 +225,14 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // context, minutes later. Answering a reviewer on a PR you just opened is
       // not a new problem.
       { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', next: ['sdlc-jira-tracker'], contextMode: 'ancestors', continuesSession: true, maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, monitorSlug: 'sdlc-step-monitor' },
+      // The one step that writes to a customer's ticket, and it waits for a
+      // person. Moving an issue to Dev Done, commenting on it and attaching the
+      // evidence is the pipeline ASSERTING the work is finished, to an audience
+      // of reporters, watchers and whoever is on support that week. A human
+      // qualifies that claim before it is made. Starting the run is what
+      // justifies the In Progress transition above; nothing justifies Dev Done
+      // except someone having looked.
+      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, approval: true, monitorSlug: 'sdlc-step-monitor' },
     ],
   },
 ]
