@@ -385,6 +385,17 @@ export async function callAgent(
 
   // ── progress telemetry (diagnostic only — see AgentProgress's doc comment) ──
   let turn = 0
+  /** The last API error the stream carried.
+   *
+   *  The SDK surfaces an API failure as assistant text and then ends the call
+   *  with `subtype: 'success', is_error: true` and an EMPTY errors array, so
+   *  the thrown message read "no further detail" while the step log held the
+   *  exact reason. A real run died on "API Error: Request rejected (429) · all
+   *  2 accounts are at their quota or rate limit. Quota resets in 3145s" and
+   *  the run record said only that Claude Code returned an error result —
+   *  indistinguishable from a crash, and it sent the reader to the logs to
+   *  learn they only had to wait. */
+  let lastApiError: string | undefined
   let lastTool: string | undefined
   let lastEmitAt: number | undefined
   let lastEmittedTool: string | undefined
@@ -475,6 +486,7 @@ export async function callAgent(
           }
           // Lines are never throttled: a watcher wants every command, not a sample.
           const line = describeBlock(block)
+          if (line && /\bAPI Error\b/i.test(line)) lastApiError = line.trim().slice(0, 300)
           if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
         }
       }
@@ -490,7 +502,7 @@ export async function callAgent(
       }
     }
     if (message.type === 'result') {
-      const interpreted = interpretResultMessage(message, maxTurns)
+      const interpreted = interpretResultMessage(message, maxTurns, lastApiError)
       result = interpreted.output
       usage = interpreted.usage
       // The turn is over. Close the input stream unless a note is still queued,
@@ -605,6 +617,8 @@ export function interpretResultMessage(
    *  messages, not SDK turns, so a step showing 87 messages against a budget of
    *  40 looks like a broken limit when the limit worked correctly. */
   maxTurns?: number,
+  /** The last API error seen on the stream, used when the result carries none. */
+  lastApiError?: string,
 ): { output: string, usage: AgentUsage | null } {
   if (message.subtype === 'success' && !message.is_error) {
     return { output: String(message.result ?? ''), usage: usageFrom(message.usage, message.total_cost_usd) }
@@ -626,7 +640,7 @@ export function interpretResultMessage(
   throw new AgentResultError(
     `Claude Code returned an error result (${message.subtype}` +
     `${message.is_error ? ', is_error' : ''}): ` +
-    `${errors?.join('; ') || 'no further detail'}${budget}`,
+    `${errors?.join('; ') || lastApiError || 'no further detail'}${budget}`,
     usageFrom(message.usage),
     message.subtype,
   )
