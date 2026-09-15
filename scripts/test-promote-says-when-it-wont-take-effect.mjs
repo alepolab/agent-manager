@@ -36,8 +36,22 @@ check('pluginInstall is exported for promote to reuse',
   'promote must answer "is the plugin installed" the same way the seeder does, not with a second, divergent check')
 
 check('promote reports whether the plugin is installed',
-  /pluginInstalled: boolean/.test(promote) && /const installed = \(await pluginInstall\(\)\) !== null/.test(promote),
+  /pluginInstalled: boolean/.test(promote) && /await pluginInstall\(\)/.test(promote),
   'the caller cannot warn about a condition the server never returns')
+
+// A record now exists on every seeded instance: the copy baked into the image
+// is recorded as an install so the Plugins page can see it. That made the old
+// "is there a record at all" test the wrong question — it would answer yes on
+// exactly the instance this whole file exists to warn about. The question that
+// survives is narrower and is the one the operator is really asking: can
+// merging this PR change THIS box without a redeploy?
+check('a plugin shipped in the image does not count as installed here',
+  /install\.scope !== 'shipped'/.test(promote),
+  'a scope "shipped" record updates on redeploy, never on reinstall; treating it as installed drops the note and reports a promotion as effective when the seeder will keep reverting the same edit')
+
+check('and the note it gets names the redeploy',
+  /baked into its image[\s\S]*?rebuilt and redeployed/.test(promote),
+  'the generic "no plugin is installed" wording is false on such an instance — there IS one, listed on the Plugins page, and it updates differently')
 
 check('the note names the consequence, not just the condition',
   /will not change behaviour here/.test(promote) && /keep reverting local edits/.test(promote),

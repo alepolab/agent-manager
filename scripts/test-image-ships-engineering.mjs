@@ -38,6 +38,7 @@ const SHIPPED = [
   ['schemas', 'assemble-bundle.mjs validates against schemas/evidence-bundle.v0.1.schema.json and halts without it'],
   ['recipes', 'registry.ts resolves <registry>/../../recipes/<key>.md; absent, every product silently has no recipe'],
   ['hooks', 'agentHooks.ts falls back to /app/engineering/hooks, and in a container that is the ONLY path that resolves: the staged installed_plugins.json records the host\'s installPath. Absent, preflight fails every run on "the guardrail hooks are on neither"'],
+  ['.claude-plugin', 'teamSync reads the manifest for shippedVersion AND records this directory as the installed plugin, which is what puts it on the Plugins page; absent, the page is empty on an instance whose plugin is demonstrably installed'],
 ]
 
 for (const [dir, why] of SHIPPED) {
@@ -74,7 +75,6 @@ assert.ok(schemas.some(f => f.startsWith('evidence-bundle.') && f.endsWith('.sch
 const NOT_SHIPPED = new Set([
   'docs',       // written for people reading the repo, not for the running app
   'templates',  // authoring aids for the plugin itself
-  '.claude-plugin', // the marketplace/plugin manifest, read by `claude plugin install`, not by this app
 ])
 const known = new Set([...SHIPPED.map(([d]) => d), ...NOT_SHIPPED])
 const unaccounted = readdirSync(join(root, 'engineering'), { withFileTypes: true })
