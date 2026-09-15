@@ -36,13 +36,14 @@ export interface ComputedFix {
  * `git remote get-url origin` in any of its usual shapes
  * (`git@host:owner/repo.git`, `https://host/owner/repo.git`,
  * `https://host/owner/repo`, even a bare local path used as a remote in a
- * test) down to `owner/repo` — the shape the bundle schema's `repo` pattern
- * (`^[^/]+/[^/]+$`) requires. Takes the last two `/`- or `:`-delimited
- * segments; returns null if there aren't two.
+ * test — Windows-style backslashes included) down to `owner/repo` — the
+ * shape the bundle schema's `repo` pattern (`^[^/]+/[^/]+$`) requires. Takes
+ * the last two `/`-, `:`- or `\`-delimited segments; returns null if there
+ * aren't two.
  */
 function parseOwnerRepo(remoteUrl: string): string | null {
   const cleaned = remoteUrl.trim().replace(/\.git$/, '').replace(/\/+$/, '')
-  const parts = cleaned.split(/[/:]/).filter(Boolean)
+  const parts = cleaned.split(/[/:\\]/).filter(Boolean)
   if (parts.length < 2) return null
   const owner = parts[parts.length - 2]
   const repo = parts[parts.length - 1]

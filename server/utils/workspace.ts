@@ -21,7 +21,7 @@
 
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir as osHomedir } from 'node:os'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { getClaudeDir } from './claudeDir.ts'
 
 /** Login sanitiser, matching users.ts: a login becomes one safe path segment. */
@@ -204,7 +204,9 @@ export interface CheckoutState {
 }
 
 export async function checkoutState(path: string): Promise<CheckoutState> {
-  const name = path.split('/').pop() || path
+  // basename, not split('/'): a Windows path has no '/' in it at all, so that
+  // split returned the whole path as the "name".
+  const name = basename(path) || path
   if (!existsSync(path)) return { path, name, exists: false, git: false, dirty: 0, dirtyFiles: [] }
   if (!existsSync(join(path, '.git'))) return { path, name, exists: true, git: false, dirty: 0, dirtyFiles: [] }
   try {

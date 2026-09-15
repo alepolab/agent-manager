@@ -54,7 +54,11 @@ export async function listArtifactFiles(root: string, deps: ListDeps = { readdir
         await walk(full)
       } else if (entry.isFile()) {
         try {
-          out.push({ name: relative(root, full), size: (await deps.stat(full)).size })
+          // `name` is a URL segment (served at /api/runs/[id]/artifacts), not a
+          // filesystem path - relative() returns '\'-joined segments on Windows,
+          // which is wrong in a URL on any platform. A no-op on POSIX, where
+          // relative() already uses '/'.
+          out.push({ name: relative(root, full).replace(/\\/g, '/'), size: (await deps.stat(full)).size })
         } catch (err: any) {
           if (!GONE.has(err?.code)) throw err
         }

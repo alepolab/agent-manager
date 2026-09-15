@@ -33,7 +33,9 @@ const note = (where, msg) => notes.push(`${where}: ${msg}`)
 // [a, b] flow sequences, quoted scalars, > folded blocks and # comments.
 // Anything outside that subset is a parse error, not a silent misread.
 function parseYaml(text) {
-  const lines = text.split('\n')
+  // Split on either ending: a CRLF checkout otherwise leaves \r on every line,
+  // and `#.*$` cannot match it, so every comment reads as a parse error.
+  const lines = text.split(/\r?\n/)
   const root = {}
   const stack = [{ indent: -1, node: root }]
   let i = 0

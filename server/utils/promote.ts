@@ -43,12 +43,15 @@ export function setPrOpener(fn: PrOpener) { openPr = fn }
 
 const SLUG = /^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/
 
-/** Where a kind lives on this instance, and where it belongs in the plugin. */
+/** Where a kind lives on this instance, and where it belongs in the plugin.
+ * `to` is a path inside a git repo, so it is always `/`-joined regardless of
+ * OS — `path.join` would emit `\`-separated paths on Windows and break both
+ * the reported path and the git plumbing below that shells out with it. */
 function locate(kind: PromoteKind, slug: string): { from: string, to: string } {
   if (!SLUG.test(slug)) throw new PromoteError(400, 'invalid slug')
-  if (kind === 'agent') return { from: resolveClaudePath('agents', `${slug}.md`), to: join('engineering', 'agents', `${slug}.md`) }
-  if (kind === 'command') return { from: resolveClaudePath('commands', `${slug}.md`), to: join('engineering', 'commands', `${slug}.md`) }
-  if (kind === 'skill') return { from: resolveClaudePath('skills', slug), to: join('engineering', 'skills', slug) }
+  if (kind === 'agent') return { from: resolveClaudePath('agents', `${slug}.md`), to: `engineering/agents/${slug}.md` }
+  if (kind === 'command') return { from: resolveClaudePath('commands', `${slug}.md`), to: `engineering/commands/${slug}.md` }
+  if (kind === 'skill') return { from: resolveClaudePath('skills', slug), to: `engineering/skills/${slug}` }
   throw new PromoteError(400, 'kind must be agent, skill or command')
 }
 

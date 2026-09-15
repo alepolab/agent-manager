@@ -35,7 +35,11 @@ async function registryPath(): Promise<string | null> {
   // registry could not be found" produced the same undefined. Same shape as the
   // skills and commands gaps: the plugin is preferred so an operator can update
   // it independently, and the shipped copy is the floor.
-  const shipped = join(process.cwd(), 'engineering', 'registry', 'products.yaml')
+  // `/`-joined rather than path.join'd: existsSync/readFile take either
+  // separator on Windows, but callers (this test included) match this path
+  // against the repo-relative shape "engineering/registry", which a
+  // Windows `\`-joined path would never contain.
+  const shipped = `${process.cwd().replace(/\\/g, '/')}/engineering/registry/products.yaml`
   return existsSync(shipped) ? shipped : null
 }
 
