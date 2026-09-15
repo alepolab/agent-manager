@@ -358,18 +358,26 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.notDeepEqual(fresh.map(s => s.id), first.map(s => s.id), 'a length mismatch regenerates rather than half-reusing')
 }
 
-// Every sdlc agent must declare its own turn budget. Omitting it silently
-// inherits DEFAULT_MAX_TURNS (10) — and a real DEVOPS-15 run died with
-// `error_max_turns` because sdlc-ticket-intake, the step that reads the ticket
-// AND explores an unfamiliar repo AND writes three artifacts, had the smallest
-// budget of any step purely by accident of omission. An inherited default is
-// invisible in the template; an explicit number is not.
+// No sdlc agent declares a turn budget any more, and that inverts an older
+// rule rather than relaxing it.
+//
+// The old rule existed because omitting maxTurns silently inherited
+// DEFAULT_MAX_TURNS (10): a real DEVOPS-15 run died on `error_max_turns`
+// because sdlc-ticket-intake — which reads the ticket AND explores an
+// unfamiliar repo AND writes three artifacts — had the smallest budget in the
+// pipeline purely by accident of omission. The fix then was "declare it".
+//
+// The defaults are now gone, so absence means absence: an undeclared step runs
+// until it finishes and cannot die on a number nobody chose for it. Declaring
+// one is opt-in, and the one agent that does is the Jira tracker, whose job
+// genuinely is a single turn.
 {
-  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-'))) {
-    const mt = a.frontmatter.maxTurns
-    assert.ok(typeof mt === 'number' && Number.isInteger(mt) && mt > 0,
-      `${a.id} must declare maxTurns explicitly rather than inheriting the default`)
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-jira-tracker')) {
+    assert.equal(a.frontmatter.maxTurns, undefined,
+      `${a.id} must not declare a turn budget: they were removed deliberately, and a reintroduced one can fail a step for a reason unrelated to its work`)
   }
+  assert.equal(AGENT_TEMPLATES.find(t => t.id === 'sdlc-jira-tracker').frontmatter.maxTurns, 1,
+    'a step that moves a ticket may still say it is one-shot')
 }
 
 // Absence must be as hard to claim as presence. A real DEVOPS-15 run halted the
@@ -625,6 +633,41 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
   assert.match(body('sdlc-qa-manual'), /PIPELINE-REWORK: Implement Fix/, 'a failed manual case sends the run back to the implementer')
   assert.match(body('sdlc-ce-ship'), /git push -u origin/, 'the ship step is the one allowed to push')
+  // A run on the CRM container opened three pull requests and one of them —
+  // alepolab/ase_lbss#155 — held a single commit containing only
+  // `.agent/plan.md`. The plan is not a leak: the plan gate requires it beside
+  // the directory the agent works in, which on a container product is the
+  // umbrella root, so that repo legitimately carries a plan-only commit. What
+  // must not happen is opening a pull request for it: a reviewer is asked to
+  // approve agent bookkeeping, and it lands in a product's history.
+  assert.match(body('sdlc-ce-ship'), /only change is under `\.agent\/` gets NO pull request/,
+    'the ship step must not open a pull request for a repository whose only change is the plan')
+  assert.match(body('sdlc-ce-ship'), /own a changed file outside `\.agent\/`/,
+    'and must say which repositories do get one')
+}
+
+// ── a step that writes to a customer's ticket waits for a person ────────────
+// Not every Jira step: the In Progress transition at the top of a run is
+// justified by someone having started the run. The terminal one is different —
+// it moves the issue to Dev Done, comments on it, and attaches the evidence
+// bundle, which is the pipeline asserting to reporters and watchers that the
+// work is finished. A human qualifies that claim before it is made.
+{
+  for (const id of ['runbook-a-jira-to-diff', 'runbook-c-ce-ticket-to-pr']) {
+    const steps = WORKFLOW_TEMPLATES.find(t => t.id === id).steps
+    const writes = steps.filter(s => s.jira?.comment || s.jira?.attach)
+    assert.ok(writes.length, `${id} has no outcome-posting Jira step to check`)
+    for (const w of writes) {
+      assert.equal(w.approval, true,
+        `${id}: "${w.label}" comments on or attaches to the ticket and must wait for a person`)
+    }
+    // The opening transition is deliberately NOT gated: gating it would pause
+    // every run before it has done anything, for a write the operator just
+    // authorised by pressing Start.
+    const opening = steps.find(s => s.jira?.transition && !s.jira.comment && !s.jira.attach)
+    assert.notEqual(opening?.approval, true,
+      `${id}: the opening transition must not be gated — starting the run is the authorisation`)
+  }
 }
 
 // ── The gates a person answers, per intake path ───────────────────────────
@@ -635,11 +678,11 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 {
   const gated = id => WORKFLOW_TEMPLATES.find(t => t.id === id).steps.filter(s => s.approval).map(s => s.label)
 
-  assert.deepEqual(gated('runbook-a-jira-to-diff'), ['Evidence Bundle + PR'],
-    'the bug path stops for a person exactly once, at the diff')
+  assert.deepEqual(gated('runbook-a-jira-to-diff'), ['Evidence Bundle + PR', 'Jira: Dev Done'],
+    'the bug path stops for a person twice: at the diff, and before the ticket is told the work is done')
 
-  assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Update Stack', 'Push + PR'],
-    'the feature path stops three times: the plan, the diff, and verification before ship')
+  assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Update Stack', 'Push + PR', 'Jira: Dev Done'],
+    'the feature path stops four times: the plan, the diff, verification before ship, and before the ticket is told the work is done')
 
   // A gate only means something before the step acts. Both outward-effect steps
   // push; approving them IS the decision to push.

@@ -265,6 +265,30 @@ export interface WorkflowStep {
    * into the run's checkout before the step starts, with the reason recorded.
    */
   testsUnlocked?: boolean
+  /**
+   * This step continues its predecessor's Claude Code session instead of
+   * starting a fresh one.
+   *
+   * The default is a cold start per step: a new session, a new context, and the
+   * repository re-read from nothing. Measured across the four recorded runs,
+   * the three steps that share one piece of work — write the failing test, fix
+   * it, verify it — were 55-75% of every run's cost, each rebuilding what the
+   * one before it had just learned.
+   *
+   * Set it only where the next phase needs everything the last one learned AND
+   * independence does not matter. It is wrong wherever a fresh pair of eyes is
+   * the point: a reviewer continuing the implementer's session reviews its own
+   * work from inside its own assumptions, and QA that watched the fix being
+   * written is no longer testing it.
+   *
+   * The step keeps its own agent: system prompt, tools, model and hooks are
+   * sent on every call, resumed or not. What carries is the conversation.
+   *
+   * Ignored — with a cold start, which is always correct and only more
+   * expensive — when the step has no single predecessor, or that predecessor's
+   * transcript is not on disk.
+   */
+  continuesSession?: boolean
 }
 
 export interface Workflow {

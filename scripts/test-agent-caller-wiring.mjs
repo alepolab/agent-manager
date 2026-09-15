@@ -101,4 +101,34 @@ const ok = interpretResultMessage({ subtype: 'success', is_error: false, result:
 assert.equal(ok.output, 'real output', 'subtype: success with is_error: false still returns the real output')
 
 console.log('OK: the real agent caller (server/utils/agentCaller.ts#callAgent) is wired')
+// ── an API failure keeps its reason ──────────────────────────────────────────
+// The SDK surfaces an API error as assistant text and then ends the call with
+// `subtype: 'success', is_error: true` and an EMPTY errors array. A real run
+// died on "API Error: Request rejected (429) ... Quota resets in 3145s" and the
+// run record said "no further detail" — indistinguishable from a crash, and it
+// sent the reader to the logs to learn they only had to wait.
+{
+  const { interpretResultMessage } = await import('../server/utils/agentCaller.ts')
+  const result = { subtype: 'success', is_error: true, errors: [] }
+  const apiError = 'API Error: Request rejected (429) · all 2 accounts are at their quota or rate limit. Quota resets in 3145s.'
+
+  let threw
+  try { interpretResultMessage(result, undefined, apiError) } catch (e) { threw = e }
+  assert.ok(threw, 'an is_error result must throw')
+  assert.match(threw.message, /429/, `the reason must reach the run record: ${threw.message}`)
+  assert.match(threw.message, /Quota resets/, 'including when it will work again')
+  assert.doesNotMatch(threw.message, /no further detail/)
+
+  // Without one, the honest fallback stands.
+  let bare
+  try { interpretResultMessage(result, undefined, undefined) } catch (e) { bare = e }
+  assert.match(bare.message, /no further detail/, 'nothing is invented when the stream carried no reason')
+
+  // A real error list still wins: it is the SDK's own account of the failure.
+  let listed
+  try { interpretResultMessage({ subtype: 'error_during_execution', is_error: true, errors: ['tool crashed'] }, undefined, apiError) } catch (e) { listed = e }
+  assert.match(listed.message, /tool crashed/)
+  assert.doesNotMatch(listed.message, /429/)
+}
+
 console.log('    into workflowRunner.ts at module-load time, with no import-order dependency.')

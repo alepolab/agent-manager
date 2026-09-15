@@ -558,3 +558,24 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
   lines.push('', '---', '')
   return lines.join('\n')
 }
+
+/**
+ * The content type an artifact must be served with, or undefined for text.
+ *
+ * Lives here rather than in the route so it can be tested: the route served
+ * every artifact as `text/plain` and ran it through toString('utf8'), which
+ * replaces every byte that is not valid UTF-8. Screenshots arrived corrupted
+ * and the console highlighted the corruption as source code.
+ */
+export function artifactContentType(name: string): string | undefined {
+  return ({
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    pdf: 'application/pdf',
+    zip: 'application/zip',
+  } as Record<string, string>)[(name.split('.').pop() ?? '').toLowerCase()]
+}

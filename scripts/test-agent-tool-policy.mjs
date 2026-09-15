@@ -27,7 +27,10 @@ assert.equal(resolveMaxTurns(undefined), DEFAULT_MAX_TURNS)
 // ── 2. An agent that declares nothing keeps today's behaviour ─────────────
 assert.equal(resolveTools({}), undefined)
 assert.equal(resolveMaxTurns({}), DEFAULT_MAX_TURNS)
-assert.equal(DEFAULT_MAX_TURNS, 10)
+// No default budget: a step runs until it finishes. Declaring one is opt-in,
+// and a resolver that substituted a number for "absent" is what made every
+// undeclared agent fail on someone else's guess.
+assert.equal(DEFAULT_MAX_TURNS, undefined)
 
 // ── 3. A declared toolset is used verbatim, Bash included ─────────────────
 assert.deepEqual(

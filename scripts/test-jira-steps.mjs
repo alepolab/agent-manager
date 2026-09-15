@@ -13,7 +13,7 @@ process.env.JIRA_EMAIL = 'dev@example.test'
 process.env.JIRA_API_TOKEN = 'not-a-real-token'
 delete process.env.JIRA_POST_ENABLED
 
-const { runJiraStep } = await import('../server/utils/jiraSteps.ts')
+const { runJiraStep, transitionReachable } = await import('../server/utils/jiraSteps.ts')
 
 const run = { id: 'run-1', ticketKey: 'CSUP-1', status: 'running', workflowName: 'Runbook A', workflowSlug: 'runbook-a', watch: 'direct-invocation', steps: [], startedAt: Date.now(), budget: { maxMinutes: 1, maxTokens: 1 } }
 let calls = []
@@ -45,7 +45,7 @@ assert.ok(calls.every(c => c[0] === 'https://jira.test/rest/api/3/issue/CSUP-1/t
 // 4. No such transition: names what is available and does not throw; the run goes on.
 calls = []
 const none = await runJiraStep(run, { transition: 'In Review' }, jira)
-assert.match(none, /no transition to "In Review"/, none)
+assert.match(none, /no transition named "In Review"/, none)
 assert.match(none, /In Progress, Done/, 'the available targets are listed')
 assert.deepEqual(calls.map(c => c[1]), ['GET'], 'nothing was posted')
 
@@ -98,7 +98,7 @@ const byCategory = await runJiraStep(run, { transition: 'In Progress' }, withSta
   { id: '21', name: 'Analyse', to: st('In Analysis', 'indeterminate') }, { id: '51', name: 'Close', to: st('Closed', 'done') },
 ]))
 assert.match(byCategory, /Moved CSUP-1 to "In Analysis"/, `category fallback failed: ${byCategory}`)
-assert.match(byCategory, /only in-progress status/, 'and says why that status was chosen')
+assert.match(byCategory, /resolves by status category/, 'and says why that status was chosen')
 assert.deepEqual(calls.map(c => c[1]), ['GET', 'GET', 'POST'], 'transitions, current status, one write')
 
 // 5d. Several in-progress statuses and none reads as development: the ticket is left where it is, and the message names them.
@@ -108,7 +108,7 @@ const ambiguous = await runJiraStep(run, { transition: 'In Progress' }, withStat
   { id: '3', name: 'Accept', to: st('PDM Accepted', 'new') }, { id: '4', name: 'Refine', to: st('Under PdM  Refinement', 'indeterminate') },
 ]))
 assert.match(ambiguous, /"Business Analysis", "Under PdM  Refinement"/, ambiguous)
-assert.match(ambiguous, /left as is/)
+assert.match(ambiguous, /[Ll]eft as is/)
 assert.ok(!calls.some(c => c[1] === 'POST'), 'nothing was posted')
 
 // 5e. Several in-progress statuses, exactly one of which reads as development work.
@@ -130,4 +130,69 @@ assert.match(down, /HTTP 503/, down)
 assert.match(down, /not moved/)
 
 delete process.env.JIRA_POST_ENABLED
+// ── a status spelled with punctuation still matches ──────────────────────────
+// CSUP's status is "Dev. Done"; the runbook asks for "Dev Done". An exact
+// lowercase compare missed it and reported "offers no transition to Dev Done or
+// a known synonym" while listing "Dev. Done" among the available transitions.
+{
+  const transitions = [
+    { id: '1', name: 'Stop Progress', to: { name: 'To Do', statusCategory: { key: 'new' } } },
+    { id: '2', name: 'Dev. Done', to: { name: 'Dev. Done', statusCategory: { key: 'indeterminate' } } },
+  ]
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/transitions') && (!init || init.method !== 'POST')) {
+      return { ok: true, status: 200, json: async () => ({ transitions }) }
+    }
+    if (String(url).includes('?fields=status')) {
+      return { ok: true, status: 200, json: async () => ({ fields: { status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } } }) }
+    }
+    return { ok: true, status: 204, json: async () => ({}) }
+  }
+  const verdict = await transitionReachable({ ...run, ticketKey: 'CSUP-1' }, 'CSUP-1', 'Dev Done', fetchImpl)
+  assert.equal(verdict.ok, true, JSON.stringify(verdict))
+  assert.match(verdict.detail, /Dev\. Done/)
+}
+
+// ── the handoff intent resolves by category too, and never closes a ticket ───
+// "Dev Done" had no status category, so it was matched by name alone and a
+// project spelling it anything unexpected got "offers no transition". It
+// resolves by category now — but the category is the dangerous part, and these
+// three cases pin the safe boundary.
+{
+  process.env.JIRA_POST_ENABLED = '1'
+  const st2 = (name, key) => ({ name, statusCategory: { key } })
+
+  // 1. A review status reached by category, not by name.
+  calls = []
+  const handoff = await runJiraStep(run, { transition: 'Dev Done' }, withStatus('In Progress', 'indeterminate', [
+    { id: '31', name: 'Hand over', to: st2('Peer Verification', 'indeterminate') },
+    { id: '51', name: 'Close', to: st2('Closed', 'done') },
+  ]))
+  assert.match(handoff, /Moved CSUP-1 to "Peer Verification"/, handoff)
+  assert.ok(!/Closed/.test(handoff.split('Moved')[1] ?? ''), 'the done transition was not the one chosen')
+
+  // 2. The CSUP-7516 shape: an untriaged ticket whose ONLY transitions are
+  //    "Close as invalid" and "Cancel", both `done`. A resolver that tried
+  //    harder here would close a customer's ticket because a pipeline could
+  //    not find a status it liked.
+  calls = []
+  const untriaged = await runJiraStep(run, { transition: 'Dev Done' }, withStatus('New', 'new', [
+    { id: '61', name: 'Close as invalid', to: st2('Closed', 'done') },
+    { id: '62', name: 'Cancel', to: st2('Cancelled', 'done') },
+  ]))
+  assert.match(untriaged, /[Ll]eft as is/, untriaged)
+  assert.ok(!calls.some(c => c[1] === 'POST'), 'nothing was posted: a done transition is never auto-selected')
+  assert.match(untriaged, /Closed, Cancelled/, 'and the message names what the ticket does offer')
+
+  // 3. One intent must not borrow the other's status: a lone "In Progress"
+  //    transition does not mean the work was handed on.
+  calls = []
+  const notHandoff = await runJiraStep(run, { transition: 'Dev Done' }, withStatus('Open', 'new', [
+    { id: '11', name: 'Start progress', to: st2('In Progress', 'indeterminate') },
+  ]))
+  assert.match(notHandoff, /other half of the work/, notHandoff)
+  assert.ok(!calls.some(c => c[1] === 'POST'), 'and the ticket was not moved')
+  delete process.env.JIRA_POST_ENABLED
+}
+
 console.log('jira steps: all checks passed')

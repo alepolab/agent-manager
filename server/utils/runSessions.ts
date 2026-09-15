@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { getClaudeDir } from './claudeDir.ts'
+import { getClaudeDir, projectDirFor } from './claudeDir.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
 /**
@@ -26,7 +26,7 @@ export async function backfillSessions(run: WorkflowRun): Promise<boolean> {
   type Candidate = { sessionId: string, project: string, path: string, mtime: number }
   const byInput = new Map<string, Candidate[]>()
   for (const project of projects) {
-    const dir = join(getClaudeDir(), 'projects', project)
+    const dir = projectDirFor(project)
     let files: string[]
     try { files = (await readdir(dir)).filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-')) } catch { continue }
     for (const file of files) {
