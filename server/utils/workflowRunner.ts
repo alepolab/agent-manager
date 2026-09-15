@@ -1048,10 +1048,26 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return run
   }
 
+  // The radius is normally recorded once, where the worktree is cut. But that
+  // path early-returns for a run that already has its branch, so a run that was
+  // restarted, resumed after the server died, or reworked back to an earlier
+  // step never passes through it again — and would arrive here unclassified and
+  // stop for a person even when its own meta.json says `docs`. Backfill at the
+  // point the answer is actually needed, and only while it is still missing.
+  if (run.blastRadius === undefined) {
+    const late = await readClassification(run)
+    if (late?.blast_radius) {
+      run.blastRadius = late.blast_radius
+      run.workType = run.workType ?? late.work_type
+      run.origin = run.origin ?? late.origin
+    }
+  }
+
   // A step marked for approval is a point where a gate MAY fire; the run's own
   // blast radius decides whether it does. A docs or ui_parsing change flows
   // straight through the same runbook that stops hard on a money one, so
   // nobody learns to click approve without reading. See shared/utils/oversight.
+  // Still-unclassified stays `stop`: absence of evidence is not evidence of safety.
   const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id)
     && oversightFor(run.blastRadius) !== 'auto')
   if (gate) {
@@ -1213,7 +1229,18 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
 async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string } | null> {
   try {
     const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
-    return meta && typeof meta === 'object' ? { work_type: meta.work_type, origin: meta.origin } : null
+    // `blast_radius` is read here because it is written here: intake merges all
+    // three into the same meta.json (app/utils/templates.ts). This reader
+    // declared it in its return type and then did not return it, so
+    // `classified?.blast_radius` was `undefined` on every run ever recorded and
+    // the entire risk-tier policy in shared/utils/oversight.ts never executed —
+    // every approval step stopped, nothing was ever owner-gated, and
+    // ApprovalNeedsReason could not be thrown. One absent key in one object
+    // literal, and no test caught it: test-oversight.mjs exercises oversightFor()
+    // in isolation and never asks whether anything populates its input.
+    return meta && typeof meta === 'object'
+      ? { work_type: meta.work_type, origin: meta.origin, blast_radius: meta.blast_radius }
+      : null
   } catch { return null }
 }
 
