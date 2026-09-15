@@ -49,7 +49,7 @@ async function onRestart(stepId: string, note?: string) {
         <UButton to="/runs" icon="i-lucide-arrow-left" size="sm" variant="ghost" color="neutral" aria-label="All runs" />
       </template>
       <template #subtitle>
-        <p v-if="run" class="text-[11px] font-mono text-meta truncate">
+        <p v-if="run" class="t-small font-mono text-meta truncate">
           <span :style="{ color: RUN_STATUS_COLOR[run.status] }">{{ run.status }}</span>
           · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}
         </p>
@@ -59,13 +59,17 @@ async function onRestart(stepId: string, note?: string) {
         <UButton v-if="can('runEngine')" :to="`/workflows/${run?.workflowSlug ?? ''}?clone=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :disabled="!run" />
       </template>
     </PageHeader>
-    <div v-if="error" class="px-6 py-4 text-[12px]" style="color: var(--error);">{{ error }}</div>
-    <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 px-6 py-4" style="grid-template-columns: minmax(22rem, 2fr) minmax(0, 3fr);">
+    <div v-if="error" class="page t-small" style="color: var(--error);">{{ error }}</div>
+    <!-- Stacks below `lg`. This was a fixed two-column grid at every width — about
+         37rem of minimum track before the evidence pane's own 15rem file list was
+         counted — so on anything narrower than a laptop the evidence a reviewer is
+         meant to be reading was squeezed to nothing and the page scrolled sideways. -->
+    <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 page page--wide grid-cols-1 lg:grid-cols-[minmax(22rem,2fr)_minmax(0,3fr)]">
       <div class="min-h-0 overflow-y-auto pr-1">
         <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
       </div>
       <RunArtifacts :run-id="id" :live="live" class="min-h-0" />
     </div>
-    <div v-else class="px-6 py-4"><SkeletonCard /></div>
+    <div v-else class="page"><SkeletonCard /></div>
   </div>
 </template>

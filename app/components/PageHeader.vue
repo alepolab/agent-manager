@@ -19,7 +19,7 @@ useHead({ title: computed(() => `${props.title} | Agent Manager`) })
       </h1>
       <div v-if="subtitle || $slots.subtitle" class="mt-0.5">
         <slot name="subtitle">
-          <p class="text-[11px] font-mono text-meta truncate">{{ subtitle }}</p>
+          <p class="t-small font-mono text-meta truncate">{{ subtitle }}</p>
         </slot>
       </div>
     </div>

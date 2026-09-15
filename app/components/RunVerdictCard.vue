@@ -115,30 +115,30 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 </script>
 
 <template>
-  <div class="rounded-lg text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+  <div class="rounded-lg t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
     <div class="px-3 py-2 flex items-center gap-2" style="border-bottom: 1px solid var(--border-subtle);">
-      <span class="text-[11px] font-mono uppercase tracking-wider text-label">What you are approving</span>
+      <span class="t-small font-mono uppercase tracking-wider text-label">What you are approving</span>
       <span
         v-if="run.blastRadius"
-        class="ml-auto text-[10px] font-mono uppercase px-1.5 py-0.5 rounded"
+        class="ml-auto t-small font-mono uppercase px-1.5 py-0.5 rounded"
         :style="{ background: 'var(--accent-muted)', color: 'var(--accent)' }"
         :title="oversightReason(run.blastRadius)"
       >{{ run.blastRadius }}</span>
-      <span v-else class="ml-auto text-[10px] font-mono uppercase text-label">unclassified</span>
+      <span v-else class="ml-auto t-small font-mono uppercase text-label">unclassified</span>
     </div>
 
     <div class="px-3 py-2 space-y-2">
       <!-- 1. The outward effect, in one sentence. -->
       <p class="m-0" style="color: var(--text-primary);">{{ effect }}</p>
 
-      <p v-if="mustJustify" class="m-0 text-[11px]" style="color: var(--warning);">
+      <p v-if="mustJustify" class="m-0 t-small" style="color: var(--warning);">
         Owner-gated: approving needs a written reason.
       </p>
 
-      <div v-if="loading" class="text-[11px] text-label">Reading the evidence bundle…</div>
+      <div v-if="loading" class="t-small text-label">Reading the evidence bundle…</div>
 
       <!-- Missing is missing. A bundle that was never written must not render as zeros. -->
-      <div v-else-if="metaMissing" class="text-[11px]" style="color: var(--warning);">
+      <div v-else-if="metaMissing" class="t-small" style="color: var(--warning);">
         No evidence bundle written yet, so there is nothing measured to show. Approving here means
         approving the step on its description alone.
       </div>
@@ -161,7 +161,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           </span>
         </div>
         <div v-if="repos.length" class="space-y-0.5">
-          <div v-for="r in repos" :key="r.repo" class="flex gap-2 text-[11px]">
+          <div v-for="r in repos" :key="r.repo" class="flex gap-2 t-small">
             <span class="font-mono truncate">{{ r.repo }}</span>
             <a v-if="r.pr" :href="r.pr" target="_blank" rel="noopener" class="underline shrink-0" style="color: var(--accent);">
               {{ r.pr.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}
@@ -171,7 +171,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
         </div>
 
         <!-- 3. Did it reproduce, and does it pass now. -->
-        <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+        <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">
           <span v-if="meta?.oracle?.kind">
             <span class="text-label">Oracle</span> {{ meta.oracle.kind }}<template v-if="meta.oracle.runs">, {{ meta.oracle.runs }} run(s)</template><template v-if="meta.oracle.rows">, {{ meta.oracle.rows }} row(s)</template>
           </span>
@@ -182,7 +182,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
         </div>
 
         <!-- 4. Security and deployment, as the record holds them. -->
-        <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+        <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">
           <span v-if="meta?.security?.verdict">
             <span class="text-label">Security</span>
             <span :style="{ color: meta.security.verdict.toLowerCase().includes('pass') || meta.security.verdict.toLowerCase().includes('clean') ? 'var(--success)' : 'var(--warning)' }">
@@ -196,13 +196,13 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           </span>
         </div>
 
-        <p v-if="adversarialMissing" class="m-0 text-[11px]" style="color: var(--error);">
+        <p v-if="adversarialMissing" class="m-0 t-small" style="color: var(--error);">
           This change is <span class="font-mono">{{ run.blastRadius }}</span>, which the evidence-bundle
           schema requires an adversarial report for — and the bundle has none.
         </p>
 
         <!-- 5. What the pipeline thought of itself on the way here. -->
-        <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-label">
+        <div class="flex flex-wrap gap-x-4 gap-y-1 t-small text-label">
           <span v-for="s in run.steps.filter(st => st.monitorVerdict && st.monitorVerdict !== 'CONTINUE')" :key="s.stepId" :title="s.monitorNote || ''">
             <span class="font-mono">{{ s.monitorVerdict }}</span> at {{ s.label }}
           </span>
@@ -211,7 +211,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           </span>
         </div>
 
-        <div v-if="presentReports.length" class="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+        <div v-if="presentReports.length" class="flex flex-wrap gap-x-3 gap-y-1 t-small">
           <span class="text-label">Reports:</span>
           <span v-for="r in presentReports" :key="r.file" class="font-mono">{{ r.label }}</span>
         </div>

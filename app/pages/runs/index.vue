@@ -174,12 +174,12 @@ async function deleteFailed() {
   <div>
     <PageHeader title="Runs">
       <template #trailing>
-        <span class="text-[12px] text-meta">{{ runs.length }}</span>
+        <span class="t-small text-meta">{{ runs.length }}</span>
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4 space-y-4">
-      <p class="text-[13px] leading-relaxed text-label">
+    <div class="page space-y-4">
+      <p class="t-ui leading-relaxed text-label">
         Every workflow run, newest first. Open a run in its builder, restart a failed one from the step that failed, or clone its inputs into a new run.
       </p>
 
@@ -189,15 +189,15 @@ async function deleteFailed() {
       <section v-if="live.length" class="rounded-xl overflow-hidden" style="border: 1px solid var(--border-subtle);">
         <header class="px-4 py-2 flex items-center gap-2" style="background: var(--surface-raised);">
           <span class="inline-block size-1.5 rounded-full" :style="{ background: RUN_STATUS_COLOR.running }" />
-          <h2 class="text-[11px] font-mono uppercase tracking-wider text-label">In flight</h2>
-          <span class="text-[11px] text-meta">{{ live.length }}</span>
+          <h2 class="t-small font-mono uppercase tracking-wider text-label">In flight</h2>
+          <span class="t-small text-meta">{{ live.length }}</span>
         </header>
         <RunLiveCard v-for="r in live" :key="`live-${r.id}`" :run="r" :now="now" />
       </section>
 
-      <div class="flex gap-2 items-center">
+      <div class="flex flex-wrap gap-2 items-center">
         <input v-model="filter" placeholder="Filter by ticket, workflow, product or person..." class="field-search max-w-xs" aria-label="Filter runs" />
-        <label class="text-[12px] text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox" /> Mine</label>
+        <label class="t-small text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox" /> Mine</label>
         <select v-model="status" class="field-input w-40" aria-label="Filter by status">
           <option value="">All statuses</option>
           <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
@@ -217,7 +217,7 @@ async function deleteFailed() {
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ loadError }}</span>
+        <span class="t-small" style="color: var(--error);">{{ loadError }}</span>
         <UButton size="xs" variant="soft" label="Retry" class="ml-auto" @click="refresh" />
       </div>
 
@@ -225,38 +225,38 @@ async function deleteFailed() {
         <SkeletonCard v-for="i in 3" :key="i" />
       </div>
 
-      <p v-else-if="!runs.length" class="text-[13px] text-label">
+      <p v-else-if="!runs.length" class="t-ui text-label">
         No runs yet. Start one with the Run button on a <NuxtLink to="/workflows" class="underline">workflow card</NuxtLink>.
       </p>
 
-      <p v-else-if="!shown.length" class="text-[13px] text-label">No runs match these filters.</p>
+      <p v-else-if="!shown.length" class="t-ui text-label">No runs match these filters.</p>
 
       <div v-else class="overflow-x-auto rounded-xl" style="border: 1px solid var(--border-subtle);">
-        <table class="w-full text-[12px]">
+        <table class="w-full table-fixed t-small">
           <thead>
             <tr class="text-left text-label" style="background: var(--surface-raised);">
               <th class="px-3 py-2 font-medium">Workflow</th>
-              <th class="px-3 py-2 font-medium">By</th>
+              <th class="px-3 py-2 font-medium hidden md:table-cell">By</th>
               <th class="px-3 py-2 font-medium">Status</th>
-              <th class="px-3 py-2 font-medium">Started</th>
-              <th class="px-3 py-2 font-medium" :title="RUN_DURATION_HINT">Duration</th>
-              <th class="px-3 py-2 font-medium w-40">Steps</th>
-              <th class="px-3 py-2 font-medium">Prompt</th>
+              <th class="px-3 py-2 font-medium hidden xl:table-cell">Started</th>
+              <th class="px-3 py-2 font-medium hidden sm:table-cell" :title="RUN_DURATION_HINT">Duration</th>
+              <th class="px-3 py-2 font-medium w-24 hidden md:table-cell">Steps</th>
+              <th class="px-3 py-2 font-medium hidden lg:table-cell">Prompt</th>
               <th class="px-3 py-2 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody aria-live="polite">
             <tr v-for="r in shown" :key="r.id" style="border-top: 1px solid var(--border-subtle);">
-              <td class="px-3 py-2 font-medium">{{ r.workflowName }}</td>
-              <td class="px-3 py-2 text-label">{{ r.startedBy || '' }}</td>
-              <td class="px-3 py-2 font-mono uppercase text-[11px]" :style="{ color: RUN_STATUS_COLOR[r.status] }">
+              <td class="px-3 py-2 font-medium"><div class="max-w-[12rem] truncate" :title="r.workflowName">{{ r.workflowName }}</div></td>
+              <td class="px-3 py-2 text-label hidden md:table-cell"><div class="max-w-[9rem] truncate" :title="r.startedBy || ''">{{ r.startedBy || '' }}</div></td>
+              <td class="px-3 py-2 font-mono t-label" :style="{ color: RUN_STATUS_COLOR[r.status] }">
                 {{ r.status }}
-                <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans text-[10px] underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
+                <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans t-small underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
               </td>
-              <td class="px-3 py-2 text-label whitespace-nowrap">{{ new Date(r.startedAt).toLocaleString() }}</td>
-              <td class="px-3 py-2 text-label whitespace-nowrap" :title="RUN_DURATION_HINT">{{ duration(r) }}</td>
-              <td class="px-3 py-2"><RunProgressBar :steps="r.steps" /></td>
-              <td class="px-3 py-2 text-label truncate max-w-[12rem]" :title="r.initialPrompt">{{ r.initialPrompt }}</td>
+              <td class="px-3 py-2 text-label whitespace-nowrap hidden xl:table-cell">{{ new Date(r.startedAt).toLocaleString() }}</td>
+              <td class="px-3 py-2 text-label whitespace-nowrap hidden sm:table-cell" :title="RUN_DURATION_HINT">{{ duration(r) }}</td>
+              <td class="px-3 py-2 hidden md:table-cell"><RunProgressBar :steps="r.steps" /></td>
+              <td class="px-3 py-2 text-label hidden lg:table-cell"><div class="max-w-[14rem] truncate" :title="r.initialPrompt">{{ r.initialPrompt }}</div></td>
               <td class="px-3 py-2">
                 <div class="flex gap-1 justify-end">
                   <UButton size="xs" variant="ghost" label="Open" :to="`/runs/${r.id}`" />
