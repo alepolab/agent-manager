@@ -124,6 +124,20 @@ onMounted(() => {
             </span>
           </div>
 
+          <!-- Read at run time, not preloaded: the catalogue and ce skills -->
+          <div
+            v-if="skill.readBy?.length"
+            class="flex items-center gap-1 shrink-0"
+            :title="`Read at run time by: ${skill.readBy.map(a => a.name).join(', ')} (from disk, not inlined into the prompt)`"
+          >
+            <span
+              class="text-[10px] font-mono px-1.5 py-px rounded-full badge badge-subtle flex items-center gap-1"
+            >
+              <UIcon name="i-lucide-book-open" class="size-2.5" />
+              <span>{{ skill.readBy.length }}</span>
+            </span>
+          </div>
+
           <!-- GitHub badge -->
           <ImportBadge
             v-if="skill.source === 'github' && skill.githubRepo"

@@ -93,6 +93,16 @@ COPY --chown=bun:bun engineering/commands ./engineering/commands
 # is indistinguishable from "no product matched".
 COPY --chown=bun:bun engineering/registry ./engineering/registry
 
+# And the plugin manifest. Two readers already expect it and silently got
+# nothing: teamSync reports `shippedVersion` from
+# engineering/.claude-plugin/plugin.json, which is absent from the image, so a
+# container always answered null; and the Plugins page reads an install record
+# that names a directory holding this manifest. Without it the page is
+# permanently empty on a team instance while the plugin's agents, skills and
+# commands are demonstrably installed - the page right about the record and
+# wrong about the instance.
+COPY --chown=bun:bun engineering/.claude-plugin ./engineering/.claude-plugin
+
 # And its scripts. The evidence step is instructed to run
 # `node engineering/scripts/assemble-bundle.mjs`, and a real run reported back:
 # "assemble-bundle.mjs is not installed anywhere in this Agent Manager

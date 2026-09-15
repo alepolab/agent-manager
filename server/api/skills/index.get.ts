@@ -31,6 +31,23 @@ export default defineEventHandler(async (event) => {
   // Load all agents to find preloading associations
   const agentsDir = resolveClaudePath('agents')
   const agentPreloads = new Map<string, { name: string; slug: string }[]>() // skillSlug -> {name, slug}[]
+  /**
+   * Agent bodies, for the skills an agent reads WITHOUT declaring.
+   *
+   * The sdlc agents deliberately do not declare the language-matched or
+   * compound-engineering skills in frontmatter: buildAgentSystemPrompt inlines
+   * the full body of every declared skill, and declaring all 24 language
+   * skills measured at ~80,000 tokens added to every agent's prompt on every
+   * step (see scripts/test-vendored-ecc-skills.mjs). They carry a catalogue
+   * instead and read the matching file from $SDLC_SKILLS_DIR or $CE_SKILLS_DIR
+   * at run time.
+   *
+   * The relationship is real either way - it is how the skill reaches an agent
+   * at all - but it lived only inside prompt prose, so the page showed no
+   * agent for 59 of the skills on this instance. `readBy` is that half of it,
+   * kept separate from `agents` because the difference is the 80,000 tokens.
+   */
+  const agentBodies: { name: string; slug: string; body: string }[] = []
 
   if (existsSync(agentsDir)) {
     const agentFiles = await readdir(agentsDir)
@@ -39,9 +56,10 @@ export default defineEventHandler(async (event) => {
       try {
         const agentSlug = file.replace(/\.md$/, '')
         const raw = await readFile(join(agentsDir, file), 'utf-8')
-        const { frontmatter } = parseFrontmatter<{ name: string; skills?: string[] }>(raw)
+        const { frontmatter, body } = parseFrontmatter<{ name: string; skills?: string[] }>(raw)
         const agentName = frontmatter.name || agentSlug
         const preloadedSkills = frontmatter.skills || []
+        agentBodies.push({ name: agentName, slug: agentSlug, body })
 
         for (const skillSlug of preloadedSkills) {
           if (!agentPreloads.has(skillSlug)) agentPreloads.set(skillSlug, [])
@@ -58,6 +76,15 @@ export default defineEventHandler(async (event) => {
   const mcpServers = await loadMcpServers(workingDir)
   const attachMetadata = async (skill: Skill) => {
     skill.agents = agentPreloads.get(skill.slug) || []
+    // Two shapes, both exact enough not to guess: the run-time path an agent
+    // is told to cat, and the backticked row in its skill catalogue. A bare
+    // mention in prose is not a reference - `ponytail` the word appears in
+    // plenty of sentences that are not telling an agent to read it.
+    const declared = new Set(skill.agents.map(a => a.slug))
+    const readBy = agentBodies.filter(a => !declared.has(a.slug) && (
+      a.body.includes(`_SKILLS_DIR/${skill.slug}/`) || a.body.includes(`\`${skill.slug}\``)
+    )).map(({ name, slug }) => ({ name, slug }))
+    if (readBy.length) skill.readBy = readBy
     skill.mcpServer = matchMcpServer(mcpServers, skill.slug, skill.frontmatter, skill.body ?? '')
   }
 
@@ -91,6 +118,19 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  /**
+   * A slug already on the list. The seeder COPIES a plugin's skills into
+   * CLAUDE_DIR/skills, so every seeded skill exists twice on disk - once
+   * where it was installed, once where it is read - and listing both sources
+   * blind showed each of them twice on the page.
+   *
+   * The local copy wins because it is the one that runs: `resolveSkill`
+   * checks CLAUDE_DIR/skills first, and an agent edited through the UI reads
+   * that file, not the plugin's. Listing the plugin's copy beside it offers a
+   * second entry that no agent will ever use.
+   */
+  const claimed = (slug: string) => skills.some(s => s.slug === slug)
+
   // 2. Plugin skills from installed plugins
   const installedPath = resolveClaudePath('plugins', 'installed_plugins.json')
   const installed = await readJson<{ plugins: Record<string, InstalledEntry[]> }>(installedPath)
@@ -119,6 +159,10 @@ export default defineEventHandler(async (event) => {
         if ((slug.toLowerCase() === 'skill' || !slug) && frontmatter.name) {
           slug = frontmatter.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
         }
+        // After the slug is derived, not before: a directory literally named
+        // SKILL takes its slug from the frontmatter, and that is the name the
+        // local copy would have been listed under too.
+        if (claimed(slug)) continue
 
         const skill: Skill = {
           slug,
@@ -153,7 +197,7 @@ export default defineEventHandler(async (event) => {
       if (!existsSync(scanRoot)) continue
 
       /** Avoid duplicates when a GitHub skill is already visible via ~/.claude/skills symlink. */
-      const slugClaimed = (slug: string) => skills.some(s => s.slug === slug)
+      const slugClaimed = claimed
 
       const shouldIncludeSkill = (slug: string) => {
         return entry.selectedItems?.includes(slug) || false
