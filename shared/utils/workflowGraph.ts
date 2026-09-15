@@ -389,6 +389,29 @@ export type GateResult = {
 }
 
 /**
+ * The array of entries a JSON artifact holds, however the agent shaped it.
+ *
+ * The contract every drafting agent is given says "a JSON array". On
+ * 2026-09-11 the drafter wrote one; on 2026-09-15, from an unchanged prompt, it
+ * wrapped the same array in `{note, run_id, repo, checkout, drafts: [...]}`.
+ * Both are one model's reading of the same instruction, and a pipeline that
+ * dies on the second has made a coin toss load-bearing.
+ *
+ * So a wrapper carrying exactly one array is unwrapped, and anything else is
+ * still refused - two arrays in one object is genuinely ambiguous about which
+ * one the step is meant to act on, and guessing there would be the kind of
+ * silent wrong answer this whole file exists to avoid.
+ *
+ * Returns null when there is no single array to be found.
+ */
+export function entriesOf(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) return parsed
+  if (!parsed || typeof parsed !== 'object') return null
+  const arrays = Object.values(parsed as Record<string, unknown>).filter(Array.isArray)
+  return arrays.length === 1 ? arrays[0] as unknown[] : null
+}
+
+/**
  * Whether a step's `runWhen` artifact holds something worth running for.
  *
  * Takes the file's text rather than its path so the whole decision - every
@@ -425,6 +448,18 @@ export function gateSatisfied(raw: string | null): GateResult {
     return parsed ? { verdict: 'run', detail: 'holds a string' } : { verdict: 'skip', detail: 'holds an empty string' }
   }
   if (typeof parsed === 'object') {
+    // A wrapper around a single array is that array: the drafting agents shape
+    // the same instruction both ways between runs, and the dispatch step that
+    // consumes this file resolves it the same way. The two used to disagree -
+    // this said "an object with 5 keys, there is work here" and ran the step,
+    // while planDispatch refused the identical file - so an empty drafts array
+    // inside a wrapper ran a create step that had nothing to create.
+    const wrapped = entriesOf(parsed)
+    if (wrapped) {
+      return wrapped.length
+        ? { verdict: 'run', detail: `holds ${wrapped.length} ${wrapped.length === 1 ? 'entry' : 'entries'}`, count: wrapped.length }
+        : { verdict: 'skip', detail: 'holds an empty array (0 entries)', count: 0 }
+    }
     const keys = Object.keys(parsed as Record<string, unknown>).length
     return keys
       ? { verdict: 'run', detail: `holds an object with ${keys} ${keys === 1 ? 'key' : 'keys'}`, count: keys }
@@ -551,15 +586,16 @@ export function planDispatch(raw: string | null, cfg: TriggerWorkflowConfig): Di
   } catch {
     return { targets: [], detail: 'exists but is not valid JSON', error: 'exists but is not valid JSON' }
   }
-  if (!Array.isArray(parsed)) {
+  const entries = entriesOf(parsed)
+  if (!entries) {
     const shape = parsed === null ? 'null' : typeof parsed
     const why = `holds ${shape}, not the array of entries this step dispatches over`
     return { targets: [], detail: why, error: why }
   }
-  if (!parsed.length) return none('holds an empty array (0 entries)')
+  if (!entries.length) return none('holds an empty array (0 entries)')
 
   // A non-object entry has no field to route by and no field to be named by.
-  return planDispatchEntries(parsed.map(raw_ => (raw_ && typeof raw_ === 'object' && !Array.isArray(raw_))
+  return planDispatchEntries(entries.map(raw_ => (raw_ && typeof raw_ === 'object' && !Array.isArray(raw_))
     ? raw_ as Record<string, unknown>
     : {}), cfg)
 }

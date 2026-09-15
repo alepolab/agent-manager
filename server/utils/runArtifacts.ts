@@ -1,3 +1,4 @@
+import { entriesOf } from '../../shared/utils/workflowGraph.ts'
 import { workspaceRootFor, browserSurface } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
@@ -110,11 +111,15 @@ export async function readArtifactEntries(
   } catch {
     return { error: `${name} exists but is not valid JSON` }
   }
-  if (!Array.isArray(parsed)) return { error: `${name} holds ${parsed === null ? 'null' : typeof parsed}, not an array of entries` }
+  // However the agent shaped it: a wrapper carrying one array is that array.
+  // See entriesOf in workflowGraph.ts - the same reading the gate and the
+  // dispatch step apply, so all three consumers of a drafts file agree.
+  const entries = entriesOf(parsed)
+  if (!entries) return { error: `${name} holds ${parsed === null ? 'null' : typeof parsed}, not an array of entries` }
   // A non-object entry has no fields to decide about or create from; it is kept
   // as an empty object so indices - which is how a decision addresses an entry
   // - still line up with the file.
-  return { entries: parsed.map(e => (e && typeof e === 'object' && !Array.isArray(e)) ? e as Record<string, unknown> : {}) }
+  return { entries: entries.map(e => (e && typeof e === 'object' && !Array.isArray(e)) ? e as Record<string, unknown> : {}) }
 }
 
 /** What the run's Jira project will accept, written by preflight and read by
