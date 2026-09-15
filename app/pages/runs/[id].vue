@@ -59,7 +59,13 @@ async function onRestart(stepId: string, note?: string) {
         <UButton v-if="can('runEngine')" :to="`/workflows/${run?.workflowSlug ?? ''}?clone=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :disabled="!run" />
       </template>
     </PageHeader>
-    <div v-if="error" class="page t-small" style="color: var(--error);">{{ error }}</div>
+    <!-- A missing or unreadable run used to render one bare red line of raw API
+         text, with no heading and no way back except the browser button. -->
+    <div v-if="error" class="page space-y-2">
+      <p class="t-head" style="color: var(--text-primary);">This run could not be opened.</p>
+      <p class="t-ui text-label">{{ error }}</p>
+      <UButton to="/runs" size="sm" variant="soft" icon="i-lucide-arrow-left" label="All runs" />
+    </div>
     <!-- Stacks below `lg`. This was a fixed two-column grid at every width — about
          37rem of minimum track before the evidence pane's own 15rem file list was
          counted — so on anything narrower than a laptop the evidence a reviewer is
