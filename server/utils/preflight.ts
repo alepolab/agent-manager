@@ -169,7 +169,7 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       }
       await writeArtifactJson(run.id, JIRA_SCHEMA_ARTIFACT, { project: jiraProject, issueTypes: schema })
       const shapes = Object.entries(schema)
-        .map(([type, s]) => `${type}${s.required.length ? ` (needs ${s.required.map(f => f.name).join(', ')})` : ''}`)
+        .map(([type, s]) => `${type}${s.required.length ? ` (needs ${s.required.map(f => `${f.name}${f.type ? `:${f.type}` : ''}`).join(', ')})` : ''}`)
       return { name: 'jira fields', level: 'ok', detail: `${jiraProject}: ${shapes.join('; ')} — written to ${JIRA_SCHEMA_ARTIFACT}` }
     })
   }

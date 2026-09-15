@@ -50,7 +50,7 @@ function schemaBody({ priorities = ['High', 'Medium', 'Low'], required = [] } = 
     summary: { name: 'Summary', required: true },
     priority: { name: 'Priority', required: false, allowedValues: priorities.map(name => ({ name })) },
   }
-  for (const f of required) fields[f.id] = { name: f.name, required: true, hasDefaultValue: false }
+  for (const f of required) fields[f.id] = { name: f.name, required: true, hasDefaultValue: false, schema: { ...(f.type ? { type: f.type } : {}), ...(f.custom ? { custom: f.custom } : {}) } }
   return { projects: [{ issuetypes: [{ fields }] }] }
 }
 
@@ -354,4 +354,64 @@ function seed(id, name, entries) {
   process.env.JIRA_POST_ENABLED = saved
 }
 
+
+// ── 12. A value is sent in the shape its field actually takes ─────────────
+//
+// Everything was wrapped in ADF because the first required field we met was
+// rich text. The second was "Business Value", a NUMBER, and Jira refused the
+// whole issue: customfield_10202 "Operation value must be a number".
+{
+  const ROWS = [
+    {
+      name: 'number takes a bare number',
+      field: { id: 'customfield_10202', name: 'Business Value', required: true, type: 'number' },
+      value: 8,
+      expect: v => assert.equal(v, 8),
+    },
+    {
+      name: 'number written as a string is coerced',
+      field: { id: 'customfield_10202', name: 'Business Value', required: true, type: 'number' },
+      value: '8',
+      expect: v => assert.equal(v, 8),
+    },
+    {
+      name: 'a number field given prose is passed through, so the refusal names it',
+      field: { id: 'customfield_10202', name: 'Business Value', required: true, type: 'number' },
+      value: 'high value',
+      expect: v => assert.equal(v, 'high value'),
+    },
+    {
+      name: 'rich text takes ADF',
+      field: { id: 'customfield_10182', name: 'Steps to Reproduce', required: true, type: 'string', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:textarea' },
+      value: 'Call it twice.',
+      expect: v => { assert.equal(v.type, 'doc'); assert.equal(v.version, 1) },
+    },
+    {
+      name: 'single-line text takes the string itself',
+      field: { id: 'customfield_11000', name: 'Release Note', required: true, type: 'string', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:textfield' },
+      value: 'One line.',
+      expect: v => assert.equal(v, 'One line.'),
+    },
+    {
+      name: 'an option takes { value }',
+      field: { id: 'customfield_11001', name: 'Severity', required: true, type: 'option' },
+      value: 'Major',
+      expect: v => assert.deepEqual(v, { value: 'Major' }),
+    },
+    {
+      name: 'a multi-select takes an array of { value }',
+      field: { id: 'customfield_11002', name: 'Teams', required: true, type: 'array', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:multiselect' },
+      value: ['CRM', 'Billing'],
+      expect: v => assert.deepEqual(v, [{ value: 'CRM' }, { value: 'Billing' }]),
+    },
+  ]
+
+  for (const row of ROWS) {
+    const entry = draft({ fields: { project: 'SEC', issue_type: 'Bug', custom: { [row.field.name]: row.value } } })
+    const fetchImpl = stubJira([{ json: { key: 'SEC-80' } }], schemaBody({ required: [row.field] }))
+    const out = await createIssuesFrom(run, [{ index: 0, entry }], fetchImpl)
+    assert.equal(out[0].jiraKey, 'SEC-80', `${row.name}: the issue files`)
+    row.expect(fetchImpl.posts()[0].body.fields[row.field.id])
+  }
+}
 console.log('jira create: declared drafts become real issues, and every refusal is named')

@@ -107,7 +107,10 @@ export interface CreateSchema {
   /** Priority names the project offers, empty when the field is not on the screen. */
   priorities: string[]
   /** Fields with no default that the project will not create without, by id and human name. */
-  required: { id: string, name: string }[]
+  /** Jira own field type from createmeta. Business Value is a NUMBER field: wrapping
+   *  its value in ADF, the way a text field needs, had Jira refuse the whole issue with
+   *  "Operation value must be a number". */
+  required: { id: string, name: string, type?: string, custom?: string }[]
 }
 
 const NEVER_ASK = new Set(['project', 'issuetype', 'summary', 'description', 'reporter'])
@@ -126,7 +129,7 @@ export async function createSchemaFor(
     const res = await fetchImpl(url, { headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' } })
     if (!res.ok) return null
     const body = await res.json() as {
-      projects?: { issuetypes?: { fields?: Record<string, { name?: string, required?: boolean, hasDefaultValue?: boolean, allowedValues?: { name?: string, value?: string }[] }> }[] }[]
+      projects?: { issuetypes?: { fields?: Record<string, { name?: string, required?: boolean, hasDefaultValue?: boolean, allowedValues?: { name?: string, value?: string }[], schema?: { type?: string, custom?: string } }> }[] }[]
     }
     const fields = body.projects?.[0]?.issuetypes?.[0]?.fields
     if (!fields) return null
@@ -135,7 +138,7 @@ export async function createSchemaFor(
       .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
     const required = Object.entries(fields)
       .filter(([id, f]) => f.required && !f.hasDefaultValue && !NEVER_ASK.has(id))
-      .map(([id, f]) => ({ id, name: f.name?.trim() || id }))
+      .map(([id, f]) => ({ id, name: f.name?.trim() || id, ...(f.schema?.type ? { type: f.schema.type } : {}), ...(f.schema?.custom ? { custom: f.schema.custom } : {}) }))
     return { priorities, required }
   } catch {
     return null
@@ -161,7 +164,7 @@ export async function projectCreateSchema(
     const res = await fetchImpl(url, { headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' } })
     if (!res.ok) return null
     const body = await res.json() as {
-      projects?: { issuetypes?: { name?: string, fields?: Record<string, { name?: string, required?: boolean, hasDefaultValue?: boolean, allowedValues?: { name?: string, value?: string }[] }> }[] }[]
+      projects?: { issuetypes?: { name?: string, fields?: Record<string, { name?: string, required?: boolean, hasDefaultValue?: boolean, allowedValues?: { name?: string, value?: string }[], schema?: { type?: string, custom?: string } }> }[] }[]
     }
     const types = body.projects?.[0]?.issuetypes
     if (!types?.length) return null
@@ -174,7 +177,7 @@ export async function projectCreateSchema(
           .filter((n): n is string => typeof n === 'string' && n.trim().length > 0),
         required: Object.entries(t.fields)
           .filter(([id, f]) => f.required && !f.hasDefaultValue && !NEVER_ASK.has(id))
-          .map(([id, f]) => ({ id, name: f.name?.trim() || id })),
+          .map(([id, f]) => ({ id, name: f.name?.trim() || id, ...(f.schema?.type ? { type: f.schema.type } : {}), ...(f.schema?.custom ? { custom: f.schema.custom } : {}) })),
       }
     }
     return Object.keys(out).length ? out : null
@@ -193,13 +196,48 @@ function customValues(fields: Record<string, unknown>, schema: CreateSchema | nu
     ? fields.custom as Record<string, unknown>
     : {}
   const byName = new Map((schema?.required ?? []).map(f => [f.name.toLowerCase(), f.id]))
+  const byId = new Map((schema?.required ?? []).map(f => [f.id, f]))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(raw)) {
     if (v === undefined || v === null || v === '') continue
     const id = byName.get(k.trim().toLowerCase()) ?? k
-    out[id] = typeof v === 'string' ? plainTextToAdf(v) : v
+    out[id] = shapeFor(v, byId.get(id))
   }
   return out
+}
+
+/**
+ * One value, in the shape its field actually takes.
+ *
+ * Everything used to be wrapped in ADF, because the first required field we met
+ * was a rich-text one. The second was "Business Value", a NUMBER, and Jira
+ * refused the entire issue: `customfield_10202: Operation value must be a
+ * number`. The field's own type comes back from createmeta alongside its name -
+ * there is no need to guess, and guessing costs the whole ticket.
+ *
+ * An unknown type passes through untouched: a value Jira rejects produces a
+ * named refusal, which is better than a coercion nobody asked for.
+ */
+function shapeFor(value: unknown, field?: { type?: string, custom?: string }): unknown {
+  const type = field?.type
+  if (type === 'number') {
+    const n = typeof value === 'number' ? value : Number(String(value).trim())
+    // NaN is handed over as written, so the refusal names the field and the
+    // value rather than reporting a silent NaN.
+    return Number.isFinite(n) ? n : value
+  }
+  if (type === 'option') return { value: String(value) }
+  if (type === 'array') {
+    const items = Array.isArray(value) ? value : [value]
+    return field?.custom?.includes('multiselect') || field?.custom?.includes('checkbox')
+      ? items.map(i => ({ value: String(i) }))
+      : items
+  }
+  if (typeof value !== 'string') return value
+  // Only the rich-text custom fields take ADF; a single-line text field takes
+  // the string itself and rejects a document.
+  const richText = field?.custom?.includes('textarea') || field?.type === 'doc'
+  return richText ? plainTextToAdf(value) : value
 }
 
 /**
