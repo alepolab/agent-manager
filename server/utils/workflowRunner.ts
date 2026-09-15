@@ -47,6 +47,7 @@ import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { childrenSettled } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { workspaceRootFor } from './workspace.ts'
+import { reapRunContainers } from './runContainers.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 const log = createLogger('runner')
@@ -141,6 +142,10 @@ interface Live {
   aborts: Map<string, AbortController>
   /** Live output per step id: what the agent is doing right now, newest last. Capped; the full log is the step's .log artifact. */
   logs: Record<string, string[]>
+  /** stepId -> when its FIRST visit began. rec.startedAt is per-visit, so a
+   *  retry moves it forward, and anything an earlier visit left running falls
+   *  outside the window that would have reaped it. */
+  firstStartedAt: Record<string, number>
   /**
    * stepId -> the SDK session its next visit continues. Set by the three
    * places a step runs again for a reason that is not "the work was wrong":
@@ -765,6 +770,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     })
   }
   markRunning(l.state, id)
+  l.firstStartedAt[id] ??= Date.now()
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
@@ -1124,6 +1130,15 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
+    // Whatever the agent left running outlives the agent: `docker run` is a
+    // client, so aborting the CLI mid-build leaves the build going. Reaped
+    // before the retry below, because the retry re-runs the same command and a
+    // second copy of a container named by the first one cannot start. Narrow by
+    // construction - only this run's own worktree - so a stack a runbook left up
+    // for its later steps is untouched. See runContainers.ts.
+    for (const line of await reapRunContainers({ worktree: run.projectDir ?? '', since: l.firstStartedAt[id] ?? rec.startedAt ?? 0 })) {
+      logLine(l, run, rec, line)
+    }
     // A step that ran out of either budget - turns or wall-clock - has usually
     // done most of its work, and its log tail says how far it got. One retry
     // that starts from there is cheaper than a dead run: the budget becomes a
@@ -2227,7 +2242,7 @@ async function beginRun(
   const graph = buildGraph(workflow.steps)
   const l: Live = {
     workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
+    outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, firstStartedAt: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   live.set(run.id, l)
   void driveToSettlement(l, run)
@@ -2664,7 +2679,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, firstStartedAt: {}, approved: new Set(), notes: {}, steer: new Map(),
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id, undefined, run.parameters)
   // A declared skip is a settled outcome, the same as completed: a restart of a

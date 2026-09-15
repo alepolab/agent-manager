@@ -345,10 +345,13 @@ export async function callAgent(
   // or model request in flight completes, without ending the turn. ('now' would
   // abort whatever is in flight, and an aborted model request comes back as an
   // error result that ends the step - seen live.) The stream ends at the first result
-  // with nothing pending; a note that arrives after that is refused (deliver
+  // that answers the input with nothing pending (a resume's replay turn does not
+  // count - see isResumeReplay); a note that arrives after that is refused (deliver
   // returns false) and the runner falls back to queueing it for the next step.
   const pending: string[] = []
   let finished = false
+  let results = 0
+  let modelSpoke = false
   let wake: (() => void) | undefined
   const kick = () => { const w = wake; wake = undefined; w?.() }
   onSteer?.((text) => { if (finished) return false; pending.push(text); kick(); return true })
@@ -440,6 +443,7 @@ export async function callAgent(
     }
     if (message.type === 'assistant') {
       turn += 1
+      if ((message as { message?: { model?: unknown } }).message?.model !== SYNTHETIC_MODEL) modelSpoke = true
       // Duck-typed on purpose: the SDK's BetaMessage content-block union is
       // deep and version-sensitive (see the doc comment on AgentProgress),
       // and all this needs is "was one of this turn's blocks a tool_use, and
@@ -472,11 +476,16 @@ export async function callAgent(
     }
     if (message.type === 'result') {
       const interpreted = interpretResultMessage(message, maxTurns)
-      result = interpreted.output
-      usage = interpreted.usage
-      // The turn is over. Close the input stream unless a note is still queued,
-      // in which case the agent gets one more turn to act on it.
-      if (!pending.length) finished = true
+      const replay = isResumeReplay({ resuming: Boolean(resume), resultsSoFar: results, modelSpoke })
+      results += 1
+      modelSpoke = false
+      if (!replay) {
+        result = interpreted.output
+        usage = interpreted.usage
+        // The turn is over. Close the input stream unless a note is still queued,
+        // in which case the agent gets one more turn to act on it.
+        if (!pending.length) finished = true
+      }
       kick()
     }
   }
@@ -558,6 +567,32 @@ export async function declaredModelOf(agentSlug: string): Promise<string | undef
     return parseFrontmatter<AgentFrontmatter>(await readFile(agentPath, 'utf-8')).frontmatter?.model
   }
   catch { return undefined }
+}
+
+/** The model id Claude Code stamps on messages it writes itself, without a model call. */
+export const SYNTHETIC_MODEL = '<synthetic>'
+
+/**
+ * Whether a `result` is the CLI replaying an interrupted turn rather than
+ * answering this call's input.
+ *
+ * Resuming a session whose process died holding a live tool call or a
+ * background task makes the CLI first close that turn itself - "Continue from
+ * where you left off." answered by a `<synthetic>` "No response requested.",
+ * no model call behind it - and emit a `result` for it before it reads the
+ * input. Taking that result as the end of the call closed the input stream
+ * while the real instruction was still queued, and the CLI then refused every
+ * `run_in_background` call with "The user doesn't want to take this action
+ * right now": a test-author retried after its time budget could no longer
+ * start the build it had to wait for, and halted with its oracle unrun.
+ * Reproduced through the runner with a stale background task; the same resume
+ * without one has no replay turn and the background call succeeds.
+ *
+ * Only the first result of a resumed call can be a replay, so a misread costs
+ * at most one turn, still bounded by the call's deadline.
+ */
+export function isResumeReplay(opts: { resuming: boolean, resultsSoFar: number, modelSpoke: boolean }): boolean {
+  return opts.resuming && opts.resultsSoFar === 0 && !opts.modelSpoke
 }
 
 export class AgentResultError extends Error {
