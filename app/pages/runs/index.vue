@@ -238,33 +238,33 @@ async function deleteFailed() {
               <th class="px-3 py-2 font-medium">Workflow</th>
               <th class="px-3 py-2 font-medium hidden md:table-cell">By</th>
               <th class="px-3 py-2 font-medium">Status</th>
-              <th class="px-3 py-2 font-medium hidden xl:table-cell">Started</th>
+              <th class="px-3 py-2 font-medium hidden 2xl:table-cell">Started</th>
               <th class="px-3 py-2 font-medium hidden sm:table-cell" :title="RUN_DURATION_HINT">Duration</th>
               <th class="px-3 py-2 font-medium w-24 hidden md:table-cell">Steps</th>
-              <th class="px-3 py-2 font-medium hidden lg:table-cell">Prompt</th>
+              <th class="px-3 py-2 font-medium hidden 2xl:table-cell">Prompt</th>
               <th class="px-3 py-2 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody aria-live="polite">
             <tr v-for="r in shown" :key="r.id" style="border-top: 1px solid var(--border-subtle);">
-              <td class="px-3 py-2 font-medium"><div class="max-w-[12rem] truncate" :title="r.workflowName">{{ r.workflowName }}</div></td>
-              <td class="px-3 py-2 text-label hidden md:table-cell"><div class="max-w-[9rem] truncate" :title="r.startedBy || ''">{{ r.startedBy || '' }}</div></td>
+              <td class="px-3 py-2 font-medium"><div class="truncate" :title="r.workflowName">{{ r.workflowName }}</div></td>
+              <td class="px-3 py-2 text-label hidden md:table-cell"><div class="truncate" :title="r.startedBy || ''">{{ r.startedBy || '' }}</div></td>
               <td class="px-3 py-2 font-mono t-label" :style="{ color: RUN_STATUS_COLOR[r.status] }">
                 {{ r.status }}
                 <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans t-small underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
               </td>
-              <td class="px-3 py-2 text-label whitespace-nowrap hidden xl:table-cell">{{ new Date(r.startedAt).toLocaleString() }}</td>
-              <td class="px-3 py-2 text-label whitespace-nowrap hidden sm:table-cell" :title="RUN_DURATION_HINT">{{ duration(r) }}</td>
+              <td class="px-3 py-2 text-label hidden 2xl:table-cell"><div class="truncate">{{ new Date(r.startedAt).toLocaleString() }}</div></td>
+              <td class="px-3 py-2 text-label hidden sm:table-cell" :title="RUN_DURATION_HINT"><div class="truncate">{{ duration(r) }}</div></td>
               <td class="px-3 py-2 hidden md:table-cell"><RunProgressBar :steps="r.steps" /></td>
-              <td class="px-3 py-2 text-label hidden lg:table-cell"><div class="max-w-[14rem] truncate" :title="r.initialPrompt">{{ r.initialPrompt }}</div></td>
+              <td class="px-3 py-2 text-label hidden 2xl:table-cell"><div class="truncate" :title="r.initialPrompt">{{ r.initialPrompt }}</div></td>
               <td class="px-3 py-2">
                 <div class="flex gap-1 justify-end">
                   <UButton size="xs" variant="ghost" label="Open" :to="`/runs/${r.id}`" />
-                  <UButton v-if="canRestart(r)" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Restart" :loading="busy === r.id" @click="act(r, 'restart', { stepId: restartPoint(r) })" />
+                  <UButton v-if="canRestart(r)" class="hidden lg:inline-flex" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Restart" :loading="busy === r.id" @click="act(r, 'restart', { stepId: restartPoint(r) })" />
                   <!-- Clone lands in the workflow builder, which has no role
                        gating of its own: for a manager that meant Run, Save and
                        Delete workflow, reached from a read-only page. -->
-                  <UButton v-if="can('startRun')" size="xs" variant="ghost" icon="i-lucide-copy" label="Clone" :to="`/workflows/${r.workflowSlug}?clone=${r.id}`" />
+                  <UButton v-if="can('startRun')" class="hidden lg:inline-flex" size="xs" variant="ghost" icon="i-lucide-copy" label="Clone" :to="`/workflows/${r.workflowSlug}?clone=${r.id}`" />
                   <UButton
                     v-if="canStop(r)"
                     size="xs" :variant="confirmingStop === r.id ? 'solid' : 'ghost'" :color="confirmingStop === r.id ? 'error' : 'neutral'"
@@ -272,6 +272,7 @@ async function deleteFailed() {
                   />
                   <UButton
                     v-if="canDelete(r)"
+                    class="hidden lg:inline-flex"
                     size="xs" variant="ghost" :color="confirmingDelete === r.id ? 'error' : 'neutral'"
                     :icon="confirmingDelete === r.id ? undefined : 'i-lucide-trash-2'"
                     :label="confirmingDelete === r.id ? 'Confirm delete' : ''" :title="`Delete run and its evidence`"
