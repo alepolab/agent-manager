@@ -16,6 +16,10 @@ const props = defineProps<{
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
   }
+  /** Whether this node may be changed. False for anyone without `configure`,
+   *  who can read the pipeline but not edit it. Defaults true so the existing
+   *  callers keep their behaviour until they opt in. */
+  editable?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -75,7 +79,7 @@ const verdictColor: Record<string, string> = {
           <button class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Step settings" aria-label="Step settings" @click="emit('settings')">
             <UIcon name="i-lucide-settings-2" class="size-3" />
           </button>
-          <button class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Remove step" aria-label="Remove step" @click="emit('remove')">
+          <button v-if="editable !== false" class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Remove step" aria-label="Remove step" @click="emit('remove')">
             <UIcon name="i-lucide-x" class="size-3" />
           </button>
         </div>
