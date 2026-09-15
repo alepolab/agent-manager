@@ -281,6 +281,21 @@ export async function createIssuesFrom(
     const fields = (entry.fields && typeof entry.fields === 'object' && !Array.isArray(entry.fields))
       ? entry.fields as Record<string, unknown>
       : {}
+    // Already filed: the review path creates the approved entries itself and
+    // stamps the key onto the artifact, then the run resumes and the workflow's
+    // own create step reads the SAME file. A real run filed ASECRM-196/197 at
+    // the approval and ASECRM-198/199 from the step - four tickets for two
+    // findings. It stayed invisible while creation always failed on a required
+    // field; the moment creation worked, so did the duplication.
+    //
+    // Checked here rather than in either caller, because it is the same
+    // question whichever of them asks: this entry already has its issue.
+    const already = typeof entry.jira_key === 'string' ? entry.jira_key.trim() : ''
+    if (already) {
+      out.push({ index, key, jiraKey: already, line: `${already} already exists for ${key}; nothing created.` })
+      continue
+    }
+
     const project = typeof fields.project === 'string' ? fields.project.trim() : ''
     const issueType = typeof fields.issue_type === 'string' ? fields.issue_type.trim() : ''
     const summary = typeof entry.summary === 'string' ? entry.summary.trim() : ''

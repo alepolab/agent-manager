@@ -414,4 +414,40 @@ function seed(id, name, entries) {
     row.expect(fetchImpl.posts()[0].body.fields[row.field.id])
   }
 }
+
+// ── 13. An entry that already has its issue is never filed twice ──────────
+//
+// applyReviewDecisions files the approved drafts itself and stamps jira_key
+// onto the artifact; the run then resumes and the workflow's own create step
+// reads the same file. Run 127097db filed ASECRM-196/197 at the approval and
+// ASECRM-198/199 from the step - four tickets for two findings. It was hidden
+// for as long as creation failed on a required field.
+{
+  const entry = draft({ jira_key: 'SEC-90' })
+  const fetchImpl = stubJira([{ json: { key: 'SEC-91' } }])
+  const out = await createIssuesFrom(run, [{ index: 0, entry }], fetchImpl)
+
+  assert.equal(out[0].jiraKey, 'SEC-90', 'the existing key is reported, not a new one')
+  assert.equal(fetchImpl.posts().length, 0, 'and nothing is filed')
+  assert.match(out[0].line, /SEC-90 already exists/)
+  assert.equal(entry.jira_key, 'SEC-90', 'the entry keeps the key it had')
+}
+{
+  // A mixed batch files only what has no ticket yet.
+  const entries = [draft({ jira_key: 'SEC-90' }), draft({ draft_id: 'DRAFT-002' })]
+  const fetchImpl = stubJira([{ json: { key: 'SEC-92' } }])
+  const out = await createIssuesFrom(run, entries.map((entry, index) => ({ index, entry })), fetchImpl)
+
+  assert.deepEqual(out.map(o => o.jiraKey), ['SEC-90', 'SEC-92'])
+  assert.equal(fetchImpl.posts().length, 1, 'exactly one issue is filed')
+}
+{
+  // And a batch of entries that all already exist is NOT a halt: nothing was
+  // refused, the work was simply already done.
+  const r13 = { ...run, id: 'run-13' }
+  seed(r13.id, 'approved-drafts.json', [draft({ jira_key: 'SEC-90' })])
+  const output = await createFromArtifact(r13, 'approved-drafts.json', stubJira([]))
+  assert.doesNotMatch(output, /PIPELINE-HALT/, 'already-filed is not a refusal')
+  assert.match(output, /SEC-90 already exists/)
+}
 console.log('jira create: declared drafts become real issues, and every refusal is named')
