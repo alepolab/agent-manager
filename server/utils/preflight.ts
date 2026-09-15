@@ -186,12 +186,24 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
     for (const target of [...new Set(jiraTargets)]) {
       await guard(`jira: ${target}`, async () => {
         const r = await transitionReachable(run, run.ticketKey!, target, fetchImpl)
-        // Only the FIRST status is reachable from where the ticket is now; a
-        // later one is reached from wherever the run leaves it, which no check
-        // before the run can know. So a later target that does not match is a
-        // warning, and the run decides at the step.
-        const first = jiraTargets[0] === target
-        return { name: `jira: ${target}`, level: r.ok ? 'ok' : first ? 'fail' : 'warn', detail: r.detail }
+        // Never fatal. Only the FIRST status is even reachable from where the
+        // ticket is now — a later one is reached from wherever the run leaves
+        // it, which no check before the run can know — but an unreachable
+        // first status is not a reason to refuse the work either.
+        //
+        // It used to fail the run, and CSUP-7516 showed what that costs: a
+        // billing bug with a production impact, sitting in an untriaged "New"
+        // whose only transitions were "Close as invalid" and "Cancel". The run
+        // died at dispatch having done nothing, because a ticket nobody had
+        // triaged could not be moved to "In Progress". The fix never depended
+        // on the bookkeeping, and moveTicket already treats "nothing safe to
+        // move it to" as a normal outcome it reports and carries on from.
+        //
+        // A check that THROWS is different and still fails the run: that means
+        // Jira is unreachable or the credentials are refused, and the same
+        // outage may have left the run working from a bare ticket key with no
+        // description at all.
+        return { name: `jira: ${target}`, level: r.ok ? 'ok' : 'warn', detail: r.detail }
       })
     }
   }

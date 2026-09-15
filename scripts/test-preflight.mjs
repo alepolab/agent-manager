@@ -109,14 +109,25 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
     'a later status is reached from wherever the run leaves the ticket, which no check before the run can know')
   assert.equal(preflightFailure(r), null, 'so a later status never blocks the run')
 
-  // The SCN-658 shape: the first status is not reachable and has no synonym or category match.
+  // The SCN-658 shape, which CSUP-7516 then repeated in production: the ticket
+  // sits in an untriaged status whose only transition lands in `done`
+  // ("Close as invalid", "Cancel"), so the first status is unreachable by name,
+  // synonym or category.
+  //
+  // This used to FAIL the run, and the cost was real: a billing bug with a
+  // production impact died at dispatch having done nothing, because nobody had
+  // triaged its ticket. Fixing the bug never depended on the bookkeeping, and
+  // moveTicket already treats "nothing safe to move it to" as a normal outcome
+  // it reports and carries on from. So it warns, names where the ticket is and
+  // what it offers, and lets the work proceed.
   const stuck = { transitions: [{ id: '1', name: 'Close', to: { name: 'Closed', statusCategory: { key: 'done' } } }] }
   const jira2 = async (url) => String(url).endsWith('?fields=status')
     ? new Response(JSON.stringify({ fields: { status: { name: 'Submitted', statusCategory: { key: 'new' } } } }), { status: 200 })
     : new Response(JSON.stringify(stuck), { status: 200 })
   const bad = await runPreflight(run({ ticketKey: 'SCN-658' }), steps, jira2)
-  assert.equal(of(bad, 'jira: In Progress').level, 'fail')
+  assert.equal(of(bad, 'jira: In Progress').level, 'warn')
   assert.match(of(bad, 'jira: In Progress').detail, /Submitted.*Closed/s, 'naming where the ticket is and what it offers')
+  assert.equal(preflightFailure(bad), null, 'an untriaged ticket must not stop the run doing the engineering work')
 }
 
 // ── 6. a step that owns its tests needs .agent/ writable, and says so before it runs ──
