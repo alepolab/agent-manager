@@ -47,7 +47,7 @@ check('it clones the deployment repo',
   'the rule is unusable if the repo is not on disk; the provisioner already clones the product repo and must clone this one too')
 
 check('the build/run split is named',
-  /product repo is for \*\*building and testing\*\*[\s\S]{0,120}deployment\n?repo is for \*\*running\*\*/.test(prov),
+  /product repo is for \*\*building and testing\*\*[\s\S]{0,120}deployment\r?\n?repo is for \*\*running\*\*/.test(prov),
   'without the split someone reads "always use the infra repo" as forbidding product-repo builds, which is not the rule')
 
 check('a missing compose is a halt, not a fallback',

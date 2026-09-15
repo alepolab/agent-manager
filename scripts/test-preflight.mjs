@@ -122,12 +122,21 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   const r = await runPreflight(run({ projectDir: ok }), [{ agentSlug: 'sdlc-ce-work', label: 'Implement Fix', testsUnlocked: true }])
   assert.equal(of(r, 'test unlock').level, 'ok', JSON.stringify(of(r, 'test unlock')))
 
+  // chmod's POSIX bits are what Windows ignores for directories - NTFS never
+  // consults them, so a 0o555 dir there still lets mkdir create children.
+  // icacls denying Write actually blocks it, which is what this check needs.
   const locked = repo(join(root, 'readonly'))
-  chmodSync(locked, 0o555)
+  const lock = () => process.platform === 'win32'
+    ? execFileSync('icacls', [locked, '/deny', `${process.env.USERNAME}:(OI)(CI)W`])
+    : chmodSync(locked, 0o555)
+  const unlock = () => process.platform === 'win32'
+    ? execFileSync('icacls', [locked, '/grant', `${process.env.USERNAME}:(OI)(CI)F`])
+    : chmodSync(locked, 0o755)
+  lock()
   try {
     const bad = await runPreflight(run({ projectDir: locked }), [{ agentSlug: 'sdlc-ce-work', label: 'Implement Fix', testsUnlocked: true }])
     assert.equal(of(bad, 'test unlock').level, 'fail', JSON.stringify(of(bad, 'test unlock')))
-  } finally { chmodSync(locked, 0o755) }
+  } finally { unlock() }
 }
 
 // ── 7. a check that throws is that check failing, never the preflight crashing ──

@@ -1,7 +1,7 @@
 /** Checkout state, run branches, parking changes and the artifacts probe, against throwaway git repos. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -71,7 +71,9 @@ git(wt, ['reset', '-q'])
   git(sup, ['-c', 'protocol.file.allow=always', 'submodule', '--quiet', 'add', subSrc, 'modules/common']); git(sup, ['commit', '--quiet', '-m', 'add submodule'])
   const [swt, mwt] = await W.ensureRunBranch(sup, 'fix/BIL-1-01234567')
   assert.equal(mwt, join(swt, 'modules', 'common'), 'the submodule gets its own worktree at the same relative path')
-  assert.equal(git(mwt, ['rev-parse', '--show-toplevel']), mwt, 'and it is a worktree of the module, not an empty placeholder answering for the parent')
+  // git always answers with forward slashes and the real (non-8.3) path, even
+  // on Windows where TEMP can be a short name - normalise both before comparing.
+  assert.equal(git(mwt, ['rev-parse', '--show-toplevel']), realpathSync.native(mwt).replace(/\\/g, '/'), 'and it is a worktree of the module, not an empty placeholder answering for the parent')
   assert.equal(git(mwt, ['branch', '--show-current']), 'fix/BIL-1-01234567')
   assert.ok(existsSync(join(mwt, 's.txt')), 'with the module\'s files in it')
 }

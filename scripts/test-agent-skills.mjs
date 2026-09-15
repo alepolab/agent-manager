@@ -26,6 +26,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentTemplates } from '../app/utils/templates.ts'
 import { resolveSkillInvocation } from '../server/utils/resolveSkill.ts'
+import { getClaudeDir } from '../server/utils/claudeDir.ts'
 
 const sdlc = agentTemplates.filter(t => t.id.startsWith('sdlc-'))
 assert.ok(sdlc.length >= 7, `expected the sdlc agents, found ${sdlc.length}`)
@@ -42,7 +43,11 @@ assert.ok(sdlc.length >= 7, `expected the sdlc agents, found ${sdlc.length}`)
 // missing one is a real failure and still fails — that is the case this file
 // exists to catch, and the distinction is the whole point. The repo-side
 // assertions below always run, on every machine.
-const skillsDir = join(process.env.CLAUDE_DIR || join(process.env.HOME || '', '.claude'), 'skills')
+// Resolved the same way the real runtime does (getClaudeDir - os.homedir(),
+// not a raw HOME read), or a missing HOME on Windows (it's USERPROFILE there)
+// collapses this to a relative '.claude' that never exists, and a real,
+// seeded config gets silently skipped for the wrong reason.
+const skillsDir = join(getClaudeDir(), 'skills')
 const deployed = existsSync(skillsDir) && readdirSync(skillsDir).length > 0
 
 const failures = []
@@ -128,10 +133,11 @@ assert.ok(commandFiles.length, 'engineering/commands/ must ship at least one com
 
 for (const file of commandFiles) {
   const raw = readFileSync(join(commandsDir, file), 'utf8')
-  assert.ok(raw.startsWith('---\n'), `${file} must open with YAML frontmatter`)
-  const end = raw.indexOf('\n---', 4)
-  assert.ok(end > 0, `${file} frontmatter must be closed`)
-  const fm = raw.slice(4, end)
+  // Windows checkouts are CRLF, so the frontmatter fence is '---\r\n', not '---\n'.
+  assert.ok(/^---\r?\n/.test(raw), `${file} must open with YAML frontmatter`)
+  const closeMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)
+  assert.ok(closeMatch, `${file} frontmatter must be closed`)
+  const fm = closeMatch[1]
 
   // A command's name comes from its FILENAME, not a frontmatter field - which
   // is why none of the commands shipped here declare one. If a file does

@@ -9,6 +9,27 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+/**
+ * Windows refuses to create a real symlink without Developer Mode or admin
+ * rights (EPERM), which is exactly the developer-laptop case this fixture
+ * needs to run under — the pipeline's Linux containers hit none of this. A
+ * junction is the privilege-free Windows equivalent for a directory target
+ * and reads back as a symlink from lstat, which is all this test checks for,
+ * so it exercises the same "skill dir is a link into another tree" case the
+ * symlink path exercises on POSIX.
+ */
+function symlinkDir(target, path) {
+  try {
+    symlinkSync(target, path)
+  } catch (e) {
+    if (process.platform === 'win32' && (e.code === 'EPERM' || e.code === 'EACCES')) {
+      symlinkSync(target, path, 'junction')
+    } else {
+      throw e
+    }
+  }
+}
+
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'team-'))
 const cache = join(process.env.CLAUDE_DIR, 'plugins', 'cache', 'alepo-engineering', 'alepo-engineering', '0.1.0')
 mkdirSync(join(cache, 'skills', 'intent-template'), { recursive: true })
@@ -245,7 +266,7 @@ rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
   writeFileSync(join(elsewhere, 'SKILL.md'), 'stale\n')
   rmSync(skill, { recursive: true, force: true })
   mkdirSync(join(process.env.CLAUDE_DIR, 'skills'), { recursive: true })
-  symlinkSync(elsewhere, skill)
+  symlinkDir(elsewhere, skill)
 
   const after = await T.teamSync()
   assert.equal(after.drifted, 0, 'a symlinked skill is replaced, not fatal')

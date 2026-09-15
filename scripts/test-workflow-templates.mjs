@@ -287,12 +287,15 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 //    place is guaranteed to still match every body it was copied into. ──────
 {
   const source = readFileSync(new URL('../app/utils/templates.ts', import.meta.url), 'utf8')
-  const constMatch = source.match(/const SDLC_STANDING_RULES = `([\s\S]*?)`\n/)
+  const constMatch = source.match(/const SDLC_STANDING_RULES = `([\s\S]*?)`\r?\n/)
   assert.ok(constMatch, 'SDLC_STANDING_RULES constant must exist in app/utils/templates.ts')
   // The constant's own source uses \` to escape literal backticks inside the
   // template literal; un-escape those the same way the JS engine would so the
   // comparison is against the actual runtime string, not its escaped source.
-  const standingRules = constMatch[1].replace(/\\`/g, '`').replace(/\\\$/g, '$')
+  // CRLF is normalised to LF as well: a template literal's own value never
+  // carries \r (the engine folds <CR><LF> to <LF>), so on a CRLF checkout the
+  // raw source would otherwise match no body at all.
+  const standingRules = constMatch[1].replace(/\\`/g, '`').replace(/\\\$/g, '$').replace(/\r\n/g, '\n')
 
   const sdlcIds = ['sdlc-ticket-intake', 'sdlc-stack-provisioner', 'sdlc-test-author',
                     'sdlc-fix-implementer', 'sdlc-verifier', 'sdlc-trace-capture',
@@ -318,7 +321,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   const source = readFileSync(new URL('../app/utils/templates.ts', import.meta.url), 'utf8')
   // Each agent template entry starts with `id: '<id>',` at the object's top level
   // (two-space indent) - split the file into per-entry chunks on that boundary.
-  const entryStarts = [...source.matchAll(/^  \{\n    id: '([^']+)',/gm)]
+  const entryStarts = [...source.matchAll(/^  \{\r?\n    id: '([^']+)',/gm)]
   assert.ok(entryStarts.length > 0, 'expected to find at least one agent template entry')
 
   for (let i = 0; i < entryStarts.length; i++) {
@@ -327,7 +330,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     const end = i + 1 < entryStarts.length ? entryStarts[i + 1].index : source.length
     const entry = source.slice(start, end)
 
-    const frontmatterMatch = entry.match(/frontmatter: \{([\s\S]*?)\n    \},\n    body:/)
+    const frontmatterMatch = entry.match(/frontmatter: \{([\s\S]*?)\r?\n    \},\r?\n    body:/)
     assert.ok(frontmatterMatch, `${id}: expected a frontmatter block bounded by 'frontmatter: {' ... '},\\n    body:'`)
 
     // Frontmatter values in this file are strings, numbers, or flat arrays -
