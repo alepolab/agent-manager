@@ -45,7 +45,7 @@ onUnmounted(() => {
 <template>
   <div ref="dropdownRef" class="relative z-10 min-w-0">
     <button
-      class="flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-medium transition-all max-w-full hover:bg-[var(--surface-hover)]"
+      class="flex items-center gap-2 px-3 py-1.5 rounded-full t-small font-medium transition-all max-w-full hover:bg-[var(--surface-hover)]"
       style="color: var(--text-secondary);"
       @click="isOpen = !isOpen"
     >
@@ -86,11 +86,11 @@ onUnmounted(() => {
                 v-else
                 class="size-3.5"
               />
-              <span class="text-[12px] font-medium" style="color: var(--text-primary);">
+              <span class="t-small font-medium" style="color: var(--text-primary);">
                 {{ option.label }}
               </span>
             </div>
-            <div class="text-[10px] mt-0.5 ml-5.5" style="color: var(--text-secondary);">
+            <div class="t-small mt-0.5 ml-5.5" style="color: var(--text-secondary);">
               {{ option.description }}
             </div>
           </button>

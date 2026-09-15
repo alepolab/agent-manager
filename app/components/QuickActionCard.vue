@@ -27,10 +27,10 @@ defineEmits<{
       <UIcon :name="icon" class="size-5" style="color: var(--accent);" />
     </div>
     <div class="flex-1 text-left">
-      <div class="text-[13px] font-medium" style="color: var(--text-primary); font-family: var(--font-sans);">
+      <div class="t-ui font-medium" style="color: var(--text-primary); font-family: var(--font-sans);">
         {{ title }}
       </div>
-      <div class="text-[11px] mt-0.5" style="color: var(--text-tertiary);">
+      <div class="t-small mt-0.5" style="color: var(--text-tertiary);">
         {{ description }}
       </div>
     </div>
@@ -51,10 +51,10 @@ defineEmits<{
       <UIcon :name="icon" class="size-5" style="color: var(--accent);" />
     </div>
     <div class="flex-1 text-left">
-      <div class="text-[13px] font-medium" style="color: var(--text-primary); font-family: var(--font-sans);">
+      <div class="t-ui font-medium" style="color: var(--text-primary); font-family: var(--font-sans);">
         {{ title }}
       </div>
-      <div class="text-[11px] mt-0.5" style="color: var(--text-tertiary);">
+      <div class="t-small mt-0.5" style="color: var(--text-tertiary);">
         {{ description }}
       </div>
     </div>

@@ -17,7 +17,7 @@ const emit = defineEmits<{
       @click="emit('select', action.prompt)"
     >
       <UIcon :name="action.icon" class="size-3.5 shrink-0" style="color: var(--text-disabled);" />
-      <span class="text-[11px] font-medium" style="font-family: var(--font-sans);">{{ action.label }}</span>
+      <span class="t-small font-medium" style="font-family: var(--font-sans);">{{ action.label }}</span>
     </button>
   </div>
 </template>

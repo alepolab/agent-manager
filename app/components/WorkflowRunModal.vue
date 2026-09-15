@@ -44,7 +44,7 @@ watch(() => props.open, (val) => {
     <template #content>
       <div class="p-6 space-y-4 bg-overlay">
         <h3 class="text-page-title">Run Workflow</h3>
-        <p class="text-[12px] text-label">
+        <p class="t-small text-label">
           What should this workflow process? The output of each step becomes the input for the next.
         </p>
         <form @submit.prevent="onStart">
@@ -61,7 +61,7 @@ watch(() => props.open, (val) => {
             <div class="field-group">
               <label class="field-label">
                 Project folder
-                <span class="text-[10px] font-normal ml-1" style="color: var(--text-disabled);">optional</span>
+                <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">optional</span>
               </label>
               <input
                 v-model="projectDir"

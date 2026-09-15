@@ -382,14 +382,14 @@ function onNodeClick(first: unknown, second?: unknown) {
       style="background: color-mix(in srgb, var(--surface-base) 85%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border-subtle);"
     >
       <h1 class="text-page-title flex-1">Graph</h1>
-      <span class="font-mono text-[11px]" style="color: var(--text-disabled);">
+      <span class="font-mono t-small" style="color: var(--text-disabled);">
         {{ nodes.filter(n => n.type !== 'columnHeader').length }} nodes
       </span>
-      <span class="font-mono text-[11px]" style="color: var(--text-disabled);">
+      <span class="font-mono t-small" style="color: var(--text-disabled);">
         {{ edges.length }} edges
       </span>
       <button
-        class="font-mono text-[11px] px-2 py-1 rounded focus-ring"
+        class="font-mono t-small px-2 py-1 rounded focus-ring"
         style="color: var(--text-tertiary); background: var(--surface-raised); border: 1px solid var(--border-default);"
         @click="showLegend = !showLegend"
       >
@@ -432,12 +432,12 @@ function onNodeClick(first: unknown, second?: unknown) {
           >
             <div class="flex items-center gap-2">
               <div class="size-2 rounded-full shrink-0" :style="{ background: data.color }" />
-              <span class="font-mono text-[11px] font-medium truncate" style="color: var(--text-primary);">
+              <span class="font-mono t-small font-medium truncate" style="color: var(--text-primary);">
                 {{ data.label }}
               </span>
               <span
                 v-if="data.model"
-                class="ml-auto text-[9px] font-mono font-medium px-1.5 py-px rounded-full shrink-0"
+                class="ml-auto t-small font-mono font-medium px-1.5 py-px rounded-full shrink-0"
                 :style="getModelBadgeStyle(data.model)"
               >
                 {{ data.model }}
@@ -450,10 +450,10 @@ function onNodeClick(first: unknown, second?: unknown) {
         <template #node-command="{ data }">
           <div class="graph-node graph-node--command" :class="{ 'graph-node--orphan': data.orphan }">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono text-[10px] font-medium shrink-0" style="color: var(--text-disabled);">
+              <span class="font-mono t-small font-medium shrink-0" style="color: var(--text-disabled);">
                 &gt;_
               </span>
-              <span class="font-mono text-[11px] truncate" style="color: var(--text-secondary);">
+              <span class="font-mono t-small truncate" style="color: var(--text-secondary);">
                 /{{ data.label }}
               </span>
             </div>
@@ -465,7 +465,7 @@ function onNodeClick(first: unknown, second?: unknown) {
           <div class="graph-node graph-node--skill" :class="{ 'graph-node--orphan': data.orphan }">
             <div class="flex items-center gap-1.5">
               <UIcon name="i-lucide-zap" class="size-3 shrink-0" style="color: var(--model-haiku);" />
-              <span class="font-mono text-[11px] font-medium truncate" style="color: var(--text-secondary);">
+              <span class="font-mono t-small font-medium truncate" style="color: var(--text-secondary);">
                 {{ data.label }}
               </span>
             </div>
@@ -477,11 +477,11 @@ function onNodeClick(first: unknown, second?: unknown) {
           <div class="graph-node graph-node--plugin" :class="{ 'graph-node--orphan': data.orphan }">
             <div class="flex items-center gap-1.5">
               <UIcon name="i-lucide-puzzle" class="size-3 shrink-0" style="color: var(--model-sonnet);" />
-              <span class="font-mono text-[11px] font-medium truncate" style="color: var(--text-secondary);">
+              <span class="font-mono t-small font-medium truncate" style="color: var(--text-secondary);">
                 {{ data.label }}
               </span>
               <span
-                class="ml-auto text-[9px] font-mono px-1 py-px rounded-full shrink-0"
+                class="ml-auto t-small font-mono px-1 py-px rounded-full shrink-0"
                 :style="{
                   background: data.enabled ? 'rgba(74,222,128,0.15)' : 'var(--badge-subtle-bg)',
                   color: data.enabled ? 'var(--success)' : 'var(--text-disabled)',
@@ -490,7 +490,7 @@ function onNodeClick(first: unknown, second?: unknown) {
                 {{ data.enabled ? 'on' : 'off' }}
               </span>
             </div>
-            <div v-if="data.skillCount" class="text-[10px] mt-0.5" style="color: var(--text-tertiary);">
+            <div v-if="data.skillCount" class="t-small mt-0.5" style="color: var(--text-tertiary);">
               {{ data.skillCount }} skill{{ data.skillCount !== 1 ? 's' : '' }}
             </div>
           </div>
@@ -501,11 +501,11 @@ function onNodeClick(first: unknown, second?: unknown) {
           <div class="graph-node graph-node--mcp" :class="{ 'graph-node--orphan': data.orphan }">
             <div class="flex items-center gap-1.5">
               <UIcon name="i-lucide-server" class="size-3 shrink-0" style="color: var(--accent);" />
-              <span class="font-mono text-[11px] font-medium truncate" style="color: var(--text-secondary);">
+              <span class="font-mono t-small font-medium truncate" style="color: var(--text-secondary);">
                 {{ data.label }}
               </span>
               <span
-                class="ml-auto text-[8px] font-mono px-1 py-px rounded-full shrink-0 uppercase border"
+                class="ml-auto t-small font-mono px-1 py-px rounded-full shrink-0 uppercase border"
                 :style="{
                   borderColor: data.scope === 'global' ? 'rgba(229,169,62,0.3)' : 'var(--border-subtle)',
                   color: data.scope === 'global' ? 'var(--accent)' : 'var(--text-disabled)',
@@ -534,7 +534,7 @@ function onNodeClick(first: unknown, second?: unknown) {
       <Transition name="page">
         <div
           v-if="showLegend"
-          class="absolute bottom-4 left-4 z-10 rounded-lg p-3 text-[11px] space-y-2"
+          class="absolute bottom-4 left-4 z-10 rounded-lg p-3 t-small space-y-2"
           style="background: color-mix(in srgb, var(--surface-base) 92%, transparent); backdrop-filter: blur(12px); border: 1px solid var(--border-default);"
         >
           <div class="font-mono font-semibold mb-2" style="color: var(--text-secondary);">Legend</div>
@@ -543,7 +543,7 @@ function onNodeClick(first: unknown, second?: unknown) {
             <span style="color: var(--text-tertiary);">Agent</span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="font-mono text-[9px]" style="color: var(--text-disabled);">&gt;_</span>
+            <span class="font-mono t-small" style="color: var(--text-disabled);">&gt;_</span>
             <span style="color: var(--text-tertiary);">Command</span>
           </div>
           <div class="flex items-center gap-2">

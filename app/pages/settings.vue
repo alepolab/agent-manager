@@ -299,7 +299,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
     <PageHeader title="Settings">
       <template #right>
         <button
-          class="text-[12px] px-2 py-1 rounded focus-ring text-label"
+          class="t-small px-2 py-1 rounded focus-ring text-label"
           style="background: var(--surface-raised); border: 1px solid var(--border-default);"
           @click="viewMode = viewMode === 'structured' ? 'raw' : 'structured'"
         >
@@ -326,8 +326,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <!-- Always Thinking toggle -->
           <div class="flex items-start justify-between gap-4 py-3">
             <div>
-              <div class="text-[13px] font-medium">Labs pages</div>
-              <div class="text-[12px] mt-0.5 text-label">
+              <div class="t-ui font-medium">Labs pages</div>
+              <div class="t-small mt-0.5 text-label">
                 Show Graph, Explore and Output styles in the sidebar. They work, but are not part of the daily set yet.
               </div>
             </div>
@@ -344,14 +344,14 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Model for pipeline agents</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              <div class="t-ui font-medium">Model for pipeline agents</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
                 Runs every pipeline agent, monitors included, on one model, overriding each agent's own choice. Default keeps those choices: Opus for the fix and test agents, Sonnet for the rest. Fable is the strongest; its steps show as unpriced, since it has no list price here.
               </div>
             </div>
             <!-- field-input is full-width by design; these controls sit beside their text, so the width is pinned here. -->
             <select
-              class="field-input text-[12px]" style="width: 16rem; flex: none;" aria-label="Model for pipeline agents"
+              class="field-input t-small" style="width: 16rem; flex: none;" aria-label="Model for pipeline agents"
               :value="settings?.agentManager?.agentModel ?? ''"
               @change="setAgentModel(($event.target as HTMLSelectElement).value)"
             >
@@ -361,30 +361,30 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Run budget</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              <div class="t-ui font-medium">Run budget</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
                 Caps for each new run; when one is reached the run pauses and asks whether to continue with a fresh allowance. Defaults are 8,000,000 tokens and 180 minutes, overridden by AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES on the instance.
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <input
-                type="number" min="1" step="100000" class="field-input text-[12px]" style="width: 9rem; flex: none;" placeholder="8000000" aria-label="Max tokens per run"
+                type="number" min="1" step="100000" class="field-input t-small" style="width: 9rem; flex: none;" placeholder="8000000" aria-label="Max tokens per run"
                 :value="settings?.agentManager?.runBudget?.maxTokens ?? ''"
                 @change="setRunBudget('maxTokens', ($event.target as HTMLInputElement).value)"
               />
-              <span class="text-[11px] text-label">tokens</span>
+              <span class="t-small text-label">tokens</span>
               <input
-                type="number" min="1" step="10" class="field-input text-[12px]" style="width: 6rem; flex: none;" placeholder="180" aria-label="Max minutes per run"
+                type="number" min="1" step="10" class="field-input t-small" style="width: 6rem; flex: none;" placeholder="180" aria-label="Max minutes per run"
                 :value="settings?.agentManager?.runBudget?.maxMinutes ?? ''"
                 @change="setRunBudget('maxMinutes', ($event.target as HTMLInputElement).value)"
               />
-              <span class="text-[11px] text-label">min</span>
+              <span class="t-small text-label">min</span>
             </div>
           </div>
           <div class="flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Always Thinking</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              <div class="t-ui font-medium">Always Thinking</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
                 When enabled, Claude takes more time to reason through complex problems before responding. Better answers, but slower and uses more resources.
               </div>
             </div>
@@ -403,8 +403,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <!-- /tasks-picker-infra lookback window -->
           <div class="flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Task picker window</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              <div class="t-ui font-medium">Task picker window</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
                 How far back <code>/tasks-picker-infra</code> looks for newly raised DEVOPS issues.
                 Jira cannot filter below one minute, so the command queries the window rounded up to
                 whole minutes and applies the exact seconds itself.
@@ -414,12 +414,12 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <input
                 type="number"
                 min="1"
-                class="w-24 text-[13px] px-2 py-1 rounded-md bg-card border border-subtle text-right tabular-nums"
+                class="w-24 t-ui px-2 py-1 rounded-md bg-card border border-subtle text-right tabular-nums"
                 data-testid="tasks-picker-window"
                 :value="settings?.tasksPickerWindowSeconds ?? TASKS_PICKER_DEFAULT_SECONDS"
                 @change="updateTasksPickerWindow(($event.target as HTMLInputElement).value)"
               />
-              <span class="text-[12px] text-label">seconds</span>
+              <span class="t-small text-label">seconds</span>
             </div>
           </div>
         </div>
@@ -430,7 +430,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         class="rounded-xl p-5 space-y-4 bg-card"
       >
         <h3 class="text-section-title">Status Line</h3>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Shows custom information in Claude Code's interface. Use a bash command to display dynamic content.
         </p>
 
@@ -458,7 +458,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           Extensions
           <HelpTip title="Managing extensions" body="Enable or disable extensions here. Install new ones via the Claude Code CLI." />
         </h3>
-        <div v-if="plugins.length === 0" class="text-[13px] text-label">
+        <div v-if="plugins.length === 0" class="t-ui text-label">
           No plugins configured.
         </div>
         <div v-else class="space-y-2">
@@ -468,7 +468,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             class="flex items-center justify-between py-2 px-3 rounded-lg"
             style="background: var(--input-bg);"
           >
-            <span class="font-mono text-[12px] text-body">{{ plugin.name }}</span>
+            <span class="font-mono t-small text-body">{{ plugin.name }}</span>
             <div class="flex items-center gap-3">
               <label class="field-toggle">
                 <input
@@ -505,11 +505,11 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             @click="onCheckUpdates"
           />
         </div>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Manage repositories imported from GitHub.
         </p>
 
-        <div v-if="githubImports.length === 0" class="text-[13px] text-label">
+        <div v-if="githubImports.length === 0" class="t-ui text-label">
           No GitHub imports. Use the Explore page to import skills from GitHub.
         </div>
 
@@ -521,19 +521,19 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             style="background: var(--input-bg);"
           >
             <div class="flex-1 min-w-0 flex items-center gap-2">
-              <span class="font-mono text-[12px] text-body">{{ entry.owner }}/{{ entry.repo }}</span>
+              <span class="font-mono t-small text-body">{{ entry.owner }}/{{ entry.repo }}</span>
               <span 
-                class="text-[9px] font-mono px-1.5 py-px rounded-full uppercase" 
+                class="t-small font-mono px-1.5 py-px rounded-full uppercase" 
                 style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);"
               >
                 {{ entry.type }}
               </span>
-              <span class="text-[10px] text-meta ml-1">{{ entry.selectedItems?.length || 0 }} items</span>
+              <span class="t-small text-meta ml-1">{{ entry.selectedItems?.length || 0 }} items</span>
             </div>
             <div class="flex items-center gap-2">
               <span
                 v-if="entry.currentSha !== entry.remoteSha"
-                class="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                class="t-small font-medium px-2 py-0.5 rounded-full"
                 style="background: rgba(59, 130, 246, 0.1); color: var(--info, #3b82f6);"
               >
                 Update available
@@ -565,11 +565,11 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <h3 class="text-section-title">Automations</h3>
           <UButton label="Add Automation" icon="i-lucide-plus" size="xs" variant="soft" @click="() => { showAddHookModal = true }" />
         </div>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Run shell commands automatically when certain events happen in Claude Code.
         </p>
 
-        <div v-if="hooks.length === 0" class="text-[13px] text-label">
+        <div v-if="hooks.length === 0" class="t-ui text-label">
           No automations configured.
         </div>
 
@@ -577,8 +577,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <div v-for="hook in hooks" :key="hook.event">
             <div class="flex items-center gap-2 mb-1.5">
               <UIcon name="i-lucide-webhook" class="size-3.5 text-meta" />
-              <span class="text-[12px] font-medium text-body">{{ hookEventLabels[hook.event] || hook.event }}</span>
-              <span class="font-mono text-[10px] text-meta">{{ hook.commands.length }}</span>
+              <span class="t-small font-medium text-body">{{ hookEventLabels[hook.event] || hook.event }}</span>
+              <span class="font-mono t-small text-meta">{{ hook.commands.length }}</span>
             </div>
             <div class="ml-5 space-y-1">
               <div
@@ -588,12 +588,12 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                 style="background: var(--input-bg);"
               >
                 <div class="flex-1 min-w-0">
-                  <span class="font-mono text-[12px] truncate block text-label">
+                  <span class="font-mono t-small truncate block text-label">
                     {{ typeof cmd === 'string' ? cmd : (cmd as any).command || JSON.stringify(cmd) }}
                   </span>
                   <span
                     v-if="typeof cmd === 'object' && (cmd as any).matcher"
-                    class="font-mono text-[10px] block mt-0.5 text-meta"
+                    class="font-mono t-small block mt-0.5 text-meta"
                   >
                     matcher: {{ (cmd as any).matcher }}
                   </span>
@@ -622,10 +622,10 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         <div class="flex items-center justify-between px-4 py-2.5" style="background: var(--surface-raised); border-bottom: 1px solid var(--border-subtle);">
           <h3 class="text-section-title">settings.json</h3>
           <div class="flex items-center gap-3">
-            <span class="font-mono text-[10px] text-meta">
+            <span class="font-mono t-small text-meta">
               {{ lineCount }} lines
             </span>
-            <span class="font-mono text-[10px] text-meta">
+            <span class="font-mono t-small text-meta">
               {{ charCount.toLocaleString() }} chars
             </span>
           </div>
@@ -644,7 +644,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Add Automation</h3>
-          <p class="text-[12px] leading-relaxed text-label">
+          <p class="t-small leading-relaxed text-label">
             Run a shell command automatically when a specific event happens.
           </p>
 
@@ -687,13 +687,13 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <UIcon name="i-lucide-alert-triangle" class="size-6 text-error" />
             </div>
             <div>
-              <h3 class="text-[15px] font-semibold text-primary">Remove Repository?</h3>
-              <p class="text-[12px] text-label mt-1">This action cannot be undone.</p>
+              <h3 class="t-body font-semibold text-primary">Remove Repository?</h3>
+              <p class="t-small text-label mt-1">This action cannot be undone.</p>
             </div>
           </div>
 
           <div class="rounded-lg p-3 border" style="background: var(--surface-base); border-color: var(--border-subtle);">
-            <p class="text-[13px] leading-relaxed">
+            <p class="t-ui leading-relaxed">
               Removing <span class="font-mono font-bold">{{ repoToRemove?.owner }}/{{ repoToRemove?.repo }}</span> will delete the local clone and unlink 
               <strong class="text-error">{{ repoToRemove?.count }} {{ repoToRemove?.type }}</strong> currently installed on your system.
             </p>

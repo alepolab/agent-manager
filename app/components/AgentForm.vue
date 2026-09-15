@@ -140,12 +140,12 @@ async function save() {
     <div v-if="mode === 'edit' && initial?.filePath" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-base border border-border-subtle group transition-colors hover:border-accent/30 w-full">
       <UIcon name="i-lucide-file-text" class="size-3.5 text-secondary group-hover:text-accent transition-colors" />
       <div class="flex flex-col min-w-0">
-        <span class="text-[9px] font-mono text-meta uppercase tracking-wider">File Location</span>
-        <span class="text-[11px] font-mono text-text-secondary truncate select-all">{{ initial.filePath }}</span>
+        <span class="t-small font-mono text-meta uppercase tracking-wider">File Location</span>
+        <span class="t-small font-mono text-text-secondary truncate select-all">{{ initial.filePath }}</span>
       </div>
     </div>
 
-    <p class="text-[12px] leading-relaxed text-label">
+    <p class="t-small leading-relaxed text-label">
       Agents are specialized AI assistants with custom instructions. Give yours
       a name and describe when it should be used.
     </p>
@@ -221,7 +221,7 @@ async function save() {
           v-for="opt in memoryOptions"
           :key="opt.value"
           type="button"
-          class="px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-all"
+          class="px-2.5 py-1.5 rounded-lg border t-small font-medium transition-all"
           :style="{
             background: frontmatter.memory === opt.value ? 'var(--accent-muted)' : 'transparent',
             borderColor: frontmatter.memory === opt.value ? 'var(--accent)' : 'var(--border-subtle)',
@@ -242,7 +242,7 @@ async function save() {
           v-for="tool in toolOptions"
           :key="tool.value"
           type="button"
-          class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] transition-all"
+          class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border t-small transition-all"
           :style="{
             background: frontmatter.tools?.includes(tool.value) ? 'var(--accent-muted)' : 'transparent',
             borderColor: frontmatter.tools?.includes(tool.value) ? 'var(--accent)' : 'var(--border-subtle)',

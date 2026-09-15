@@ -249,7 +249,7 @@ onMounted(async () => {
         v-model="localValue"
         :disabled="disabled"
         rows="1"
-        class="flex-1 bg-transparent text-[13px] resize-none focus:outline-none leading-5"
+        class="flex-1 bg-transparent t-ui resize-none focus:outline-none leading-5"
         :style="{
           color: disabled ? 'var(--text-disabled)' : 'var(--text-primary)',
         }"
@@ -304,13 +304,13 @@ onMounted(async () => {
 
     <!-- Bottom hints -->
     <div class="flex flex-wrap items-center justify-between mt-1.5 px-1 gap-2">
-      <div class="flex flex-wrap items-center gap-3 text-[10px]" style="color: var(--text-tertiary);">
+      <div class="flex flex-wrap items-center gap-3 t-small" style="color: var(--text-tertiary);">
         <span class="flex items-center gap-1">
-          <kbd class="px-1 py-0.5 rounded text-[9px]" style="background: var(--surface-raised);">Enter</kbd>
+          <kbd class="px-1 py-0.5 rounded t-small" style="background: var(--surface-raised);">Enter</kbd>
           send
         </span>
         <span class="flex items-center gap-1">
-          <kbd class="px-1 py-0.5 rounded text-[9px]" style="background: var(--surface-raised);">Shift+Enter</kbd>
+          <kbd class="px-1 py-0.5 rounded t-small" style="background: var(--surface-raised);">Shift+Enter</kbd>
           newline
         </span>
       </div>
@@ -319,7 +319,7 @@ onMounted(async () => {
         <!-- Character counter -->
         <span
           v-if="localValue.length > 0"
-          class="text-[10px] font-mono"
+          class="t-small font-mono"
           :style="{
             color: localValue.length > 10000 ? '#ef4444' : 'var(--text-tertiary)',
           }"
@@ -330,7 +330,7 @@ onMounted(async () => {
         <!-- Streaming indicator -->
         <span
           v-if="isStreaming"
-          class="text-[10px] flex items-center gap-1"
+          class="t-small flex items-center gap-1"
           style="color: var(--accent);"
         >
           <UIcon name="i-lucide-loader-2" class="size-3 animate-spin" />

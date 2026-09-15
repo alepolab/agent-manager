@@ -157,14 +157,14 @@ useUnsavedChanges(isDirty)
         </NuxtLink>
       </template>
       <template #subtitle>
-        <div v-if="filePath" class="flex items-center gap-1.5 text-[10px] text-meta font-mono max-w-2xl truncate">
+        <div v-if="filePath" class="flex items-center gap-1.5 t-small text-meta font-mono max-w-2xl truncate">
           <UIcon name="i-lucide-file-text" class="size-3" />
           <span class="select-all">{{ filePath }}</span>
         </div>
       </template>
       <template #trailing>
         <div class="size-2 rounded-full" :style="{ background: frontmatter.color || 'var(--accent)' }" />
-        <span v-if="isDirty" class="text-[9px] font-mono px-1.5 py-px rounded-full bg-accent/10 text-accent">Unsaved</span>
+        <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full bg-accent/10 text-accent">Unsaved</span>
       </template>
       <template #right>
         <UButton
@@ -238,11 +238,11 @@ useUnsavedChanges(isDirty)
             style="background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.12);"
           >
             <UIcon name="i-lucide-archive-restore" class="size-4 shrink-0" style="color: var(--info, #3b82f6);" />
-            <span class="text-[12px] flex-1" style="color: var(--text-secondary);">
+            <span class="t-small flex-1" style="color: var(--text-secondary);">
               You have an unsaved draft from {{ draftAge }}.
             </span>
-            <button class="text-[12px] font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
-            <button class="text-[12px] px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
+            <button class="t-small font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
+            <button class="t-small px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
           </div>
         </ClientOnly>
 
@@ -272,11 +272,11 @@ useUnsavedChanges(isDirty)
     <Teleport to="body">
       <div v-if="showDeleteConfirm" class="fixed inset-0 z-50 flex items-center justify-center" style="background: rgba(0,0,0,0.4);">
         <div class="rounded-2xl p-6 max-w-sm w-full mx-4 space-y-4" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-          <h3 class="text-[15px] font-semibold" style="color: var(--text-primary);">Delete {{ frontmatter.name }}?</h3>
-          <p class="text-[13px]" style="color: var(--text-secondary);">This will permanently delete this agent and cannot be undone.</p>
+          <h3 class="t-body font-semibold" style="color: var(--text-primary);">Delete {{ frontmatter.name }}?</h3>
+          <p class="t-ui" style="color: var(--text-secondary);">This will permanently delete this agent and cannot be undone.</p>
           <div class="flex gap-2 justify-end">
-            <button class="px-3 py-1.5 rounded-lg text-[12px] font-medium hover-bg" style="color: var(--text-tertiary);" @click="showDeleteConfirm = false">Cancel</button>
-            <button class="px-3 py-1.5 rounded-lg text-[12px] font-medium" style="background: var(--error); color: white;" @click="handleDelete">Delete</button>
+            <button class="px-3 py-1.5 rounded-lg t-small font-medium hover-bg" style="color: var(--text-tertiary);" @click="showDeleteConfirm = false">Cancel</button>
+            <button class="px-3 py-1.5 rounded-lg t-small font-medium" style="background: var(--error); color: white;" @click="handleDelete">Delete</button>
           </div>
         </div>
       </div>

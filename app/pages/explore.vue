@@ -421,7 +421,7 @@ function scrollToMarketplace(name: string) {
   <div>
     <PageHeader title="Explore">
       <template #trailing>
-        <span class="text-[12px] text-meta"
+        <span class="t-small text-meta"
           >{{ agentTemplates.length + commandTemplates.length }} templates</span
         >
       </template>
@@ -452,7 +452,7 @@ function scrollToMarketplace(name: string) {
         style="background: var(--badge-subtle-bg)"
       >
         <button
-          class="px-3 py-1.5 rounded-md text-[12px] font-medium transition-all"
+          class="px-3 py-1.5 rounded-md t-small font-medium transition-all"
           :style="{
             background:
               activeTab === 'templates' ? 'var(--surface-base)' : 'transparent',
@@ -470,7 +470,7 @@ function scrollToMarketplace(name: string) {
           Templates
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-[12px] font-medium transition-all"
+          class="px-3 py-1.5 rounded-md t-small font-medium transition-all"
           :style="{
             background:
               activeTab === 'import-agent' ? 'var(--surface-base)' : 'transparent',
@@ -488,7 +488,7 @@ function scrollToMarketplace(name: string) {
           Imported Agents ({{ importedAgentRepos.length }})
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-[12px] font-medium transition-all"
+          class="px-3 py-1.5 rounded-md t-small font-medium transition-all"
           :style="{
             background:
               activeTab === 'import-skill' ? 'var(--surface-base)' : 'transparent',
@@ -506,7 +506,7 @@ function scrollToMarketplace(name: string) {
           Imported Skills ({{ importedSkillRepos.length }})
         </button>
         <button
-          class="px-3 py-1.5 rounded-md text-[12px] font-medium transition-all"
+          class="px-3 py-1.5 rounded-md t-small font-medium transition-all"
           :style="{
             background:
               activeTab === 'marketplace'
@@ -543,7 +543,7 @@ function scrollToMarketplace(name: string) {
       <!-- Import Agent Tab -->
       <template v-if="activeTab === 'import-agent'">
         <div class="flex items-center justify-between">
-          <p class="text-[13px] leading-relaxed text-label">
+          <p class="t-ui leading-relaxed text-label">
             Agents imported from GitHub repositories.
           </p>
           <UButton
@@ -582,8 +582,8 @@ function scrollToMarketplace(name: string) {
             <UIcon name="i-lucide-users" class="size-8 text-meta" />
           </div>
           <div class="space-y-1">
-            <p class="text-[14px] font-medium">No imported agents yet</p>
-            <p class="text-[12px] text-label max-w-xs mx-auto">
+            <p class="t-body font-medium">No imported agents yet</p>
+            <p class="t-small text-label max-w-xs mx-auto">
               Import specialized agents from GitHub repositories to expand your assistant's capabilities.
             </p>
           </div>
@@ -597,7 +597,7 @@ function scrollToMarketplace(name: string) {
 
       <!-- Templates Tab -->
       <template v-if="activeTab === 'templates'">
-        <p class="text-[13px] leading-relaxed text-label">
+        <p class="t-ui leading-relaxed text-label">
           Ready-made configurations you can create with one click. Customize
           them after creation.
         </p>
@@ -637,11 +637,11 @@ function scrollToMarketplace(name: string) {
                     />
                   </div>
                   <div class="flex-1 min-w-0">
-                    <div class="text-[13px] font-medium truncate">
+                    <div class="t-ui font-medium truncate">
                       {{ template.frontmatter.name }}
                     </div>
                     <span
-                      class="text-[10px] px-1.5 py-px rounded-full"
+                      class="t-small px-1.5 py-px rounded-full"
                       style="
                         background: var(--badge-subtle-bg);
                         color: var(--text-disabled);
@@ -651,11 +651,11 @@ function scrollToMarketplace(name: string) {
                     </span>
                   </div>
                 </div>
-                <p class="text-[12px] text-label leading-relaxed">
+                <p class="t-small text-label leading-relaxed">
                   {{ template.frontmatter.description }}
                 </p>
                 <button
-                  class="text-[12px] text-meta hover:text-label transition-colors"
+                  class="t-small text-meta hover:text-label transition-colors"
                   @click="
                     previewId = previewId === template.id ? null : template.id
                   "
@@ -668,7 +668,7 @@ function scrollToMarketplace(name: string) {
                 </button>
                 <div
                   v-if="previewId === template.id"
-                  class="rounded-lg p-3 text-[12px] font-mono leading-relaxed text-label max-h-48 overflow-y-auto"
+                  class="rounded-lg p-3 t-small font-mono leading-relaxed text-label max-h-48 overflow-y-auto"
                   style="
                     background: var(--surface-base);
                     border: 1px solid var(--border-subtle);
@@ -699,7 +699,7 @@ function scrollToMarketplace(name: string) {
           "
           class="text-center py-12"
         >
-          <p class="text-[13px] text-label">No templates match your search.</p>
+          <p class="t-ui text-label">No templates match your search.</p>
         </div>
 
         <!-- Action templates -->
@@ -729,16 +729,16 @@ function scrollToMarketplace(name: string) {
                     />
                   </div>
                   <div class="flex-1 min-w-0">
-                    <div class="text-[13px] font-medium truncate">
+                    <div class="t-ui font-medium truncate">
                       /{{ template.frontmatter.name }}
                     </div>
                   </div>
                 </div>
-                <p class="text-[12px] text-label leading-relaxed">
+                <p class="t-small text-label leading-relaxed">
                   {{ template.frontmatter.description }}
                 </p>
                 <button
-                  class="text-[12px] text-meta hover:text-label transition-colors"
+                  class="t-small text-meta hover:text-label transition-colors"
                   @click="
                     previewId = previewId === template.id ? null : template.id
                   "
@@ -751,7 +751,7 @@ function scrollToMarketplace(name: string) {
                 </button>
                 <div
                   v-if="previewId === template.id"
-                  class="rounded-lg p-3 text-[12px] font-mono leading-relaxed text-label max-h-48 overflow-y-auto"
+                  class="rounded-lg p-3 t-small font-mono leading-relaxed text-label max-h-48 overflow-y-auto"
                   style="
                     background: var(--surface-base);
                     border: 1px solid var(--border-subtle);
@@ -780,7 +780,7 @@ function scrollToMarketplace(name: string) {
       <!-- Import Skill Tab -->
       <template v-if="activeTab === 'import-skill'">
         <div class="flex items-center justify-between">
-          <p class="text-[13px] leading-relaxed text-label">
+          <p class="t-ui leading-relaxed text-label">
             Skill repositories imported from GitHub.
           </p>
           <UButton
@@ -819,8 +819,8 @@ function scrollToMarketplace(name: string) {
             <UIcon name="i-lucide-sparkles" class="size-8 text-meta" />
           </div>
           <div class="space-y-1">
-            <p class="text-[14px] font-medium">No imported skills yet</p>
-            <p class="text-[12px] text-label max-w-xs mx-auto">
+            <p class="t-body font-medium">No imported skills yet</p>
+            <p class="t-small text-label max-w-xs mx-auto">
               Import specialized skills from GitHub repositories to give your agents new capabilities.
             </p>
           </div>
@@ -834,7 +834,7 @@ function scrollToMarketplace(name: string) {
 
       <!-- Marketplace Tab -->
       <template v-if="activeTab === 'marketplace'">
-        <p class="text-[13px] leading-relaxed text-label">
+        <p class="t-ui leading-relaxed text-label">
           Browse, install, and manage plugins from your registered marketplaces.
         </p>
 
@@ -844,7 +844,7 @@ function scrollToMarketplace(name: string) {
           style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
         >
           <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error)" />
-          <span class="text-[12px]" style="color: var(--error)">{{ pluginsError }}</span>
+          <span class="t-small" style="color: var(--error)">{{ pluginsError }}</span>
         </div>
 
         <!-- Section 1: Marketplace Sources -->
@@ -869,7 +869,7 @@ function scrollToMarketplace(name: string) {
               />
             </div>
 
-            <p v-else class="text-[11px] text-meta">No marketplace sources registered.</p>
+            <p v-else class="t-small text-meta">No marketplace sources registered.</p>
 
             <UButton
               label="Add Marketplace"
@@ -906,8 +906,8 @@ function scrollToMarketplace(name: string) {
                       <UIcon name="i-lucide-puzzle" class="size-4" style="color: var(--accent);" />
                     </div>
                     <div class="flex-1 min-w-0">
-                      <div class="text-[13px] font-medium truncate">{{ plugin.name }}</div>
-                      <span class="text-[10px] px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
+                      <div class="t-ui font-medium truncate">{{ plugin.name }}</div>
+                      <span class="t-small px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
                         v{{ plugin.version }}
                       </span>
                     </div>
@@ -922,16 +922,16 @@ function scrollToMarketplace(name: string) {
                       </span>
                     </label>
                   </div>
-                  <p class="text-[12px] text-label leading-relaxed">{{ plugin.description }}</p>
+                  <p class="t-small text-label leading-relaxed">{{ plugin.description }}</p>
                   <div class="flex items-center gap-3">
-                    <span v-if="plugin.skills.length" class="font-mono text-[10px] text-meta">
+                    <span v-if="plugin.skills.length" class="font-mono t-small text-meta">
                       {{ plugin.skills.length }} skill{{ plugin.skills.length === 1 ? '' : 's' }}
                     </span>
-                    <span class="font-mono text-[10px] text-meta">{{ formatDate(plugin.installedAt) }}</span>
+                    <span class="font-mono t-small text-meta">{{ formatDate(plugin.installedAt) }}</span>
                   </div>
                 </div>
                 <div class="px-4 py-3 flex items-center justify-between" style="border-top: 1px solid var(--border-subtle);">
-                  <NuxtLink :to="`/plugins/${plugin.id}`" class="text-[12px] text-meta hover:text-label transition-colors">
+                  <NuxtLink :to="`/plugins/${plugin.id}`" class="t-small text-meta hover:text-label transition-colors">
                     View details
                   </NuxtLink>
                   <UButton
@@ -966,8 +966,8 @@ function scrollToMarketplace(name: string) {
           <div v-for="(group, marketplace) in availableGroupedByMarketplace" :key="marketplace" :id="`available-${marketplace}`" class="space-y-3 pt-6">
             <div class="flex items-center gap-2">
               <UIcon name="i-lucide-store" class="size-3.5 text-meta" />
-              <span class="font-mono text-[12px] font-medium text-body">{{ marketplace }}</span>
-              <span class="font-mono text-[11px] text-meta">{{ group.length }}</span>
+              <span class="font-mono t-small font-medium text-body">{{ marketplace }}</span>
+              <span class="font-mono t-small text-meta">{{ group.length }}</span>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div
@@ -984,15 +984,15 @@ function scrollToMarketplace(name: string) {
                       <UIcon name="i-lucide-puzzle" class="size-4 text-label" />
                     </div>
                     <div class="flex-1 min-w-0">
-                      <div class="text-[13px] font-medium truncate">{{ plugin.name }}</div>
+                      <div class="t-ui font-medium truncate">{{ plugin.name }}</div>
                     </div>
                   </div>
-                  <p class="text-[12px] text-label leading-relaxed">{{ plugin.description || 'No description' }}</p>
+                  <p class="t-small text-label leading-relaxed">{{ plugin.description || 'No description' }}</p>
                   <div class="flex items-center gap-3">
-                    <span v-if="plugin.skillCount" class="font-mono text-[10px] text-meta">
+                    <span v-if="plugin.skillCount" class="font-mono t-small text-meta">
                       {{ plugin.skillCount }} skill{{ plugin.skillCount === 1 ? '' : 's' }}
                     </span>
-                    <span v-if="plugin.commandCount" class="font-mono text-[10px] text-meta">
+                    <span v-if="plugin.commandCount" class="font-mono t-small text-meta">
                       {{ plugin.commandCount }} cmd{{ plugin.commandCount === 1 ? '' : 's' }}
                     </span>
                   </div>
@@ -1069,13 +1069,13 @@ function scrollToMarketplace(name: string) {
               <UIcon name="i-lucide-alert-triangle" class="size-6 text-error" />
             </div>
             <div>
-              <h3 class="text-[15px] font-semibold text-primary">Remove Repository?</h3>
-              <p class="text-[12px] text-label mt-1">This action cannot be undone.</p>
+              <h3 class="t-body font-semibold text-primary">Remove Repository?</h3>
+              <p class="t-small text-label mt-1">This action cannot be undone.</p>
             </div>
           </div>
 
           <div class="rounded-lg p-3 border" style="background: var(--surface-base); border-color: var(--border-subtle);">
-            <p class="text-[13px] leading-relaxed">
+            <p class="t-ui leading-relaxed">
               Removing <span class="font-mono font-bold">{{ repoToRemove?.owner }}/{{ repoToRemove?.repo }}</span> will delete the local clone and unlink 
               <strong class="text-error">{{ repoToRemove?.count }} {{ repoToRemove?.type }}</strong> currently installed on your system.
             </p>

@@ -141,7 +141,7 @@ if (import.meta.client) {
       </template>
       <template #right>
         <button
-          class="text-[12px] px-2 py-1 rounded focus-ring text-label"
+          class="t-small px-2 py-1 rounded focus-ring text-label"
           @click="showUninstallConfirm = true"
         >
           Uninstall
@@ -186,22 +186,22 @@ if (import.meta.client) {
 
             <div class="flex-1 min-w-0 pt-0.5">
               <div class="flex items-center gap-2.5 flex-wrap">
-                <span class="text-[15px] font-semibold tracking-tight truncate">
+                <span class="t-body font-semibold tracking-tight truncate">
                   {{ plugin.name }}
                 </span>
                 <span
-                  class="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full shrink-0 badge badge-subtle"
+                  class="t-small font-mono font-medium px-2 py-0.5 rounded-full shrink-0 badge badge-subtle"
                 >
                   v{{ plugin.version }}
                 </span>
                 <span
-                  class="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full shrink-0 badge"
+                  class="t-small font-mono font-medium px-2 py-0.5 rounded-full shrink-0 badge"
                   :class="plugin.enabled ? 'badge-success' : 'badge-subtle'"
                 >
                   {{ plugin.enabled ? 'enabled' : 'disabled' }}
                 </span>
               </div>
-              <p v-if="plugin.description" class="text-[12px] mt-1 leading-relaxed text-label">
+              <p v-if="plugin.description" class="t-small mt-1 leading-relaxed text-label">
                 {{ plugin.description }}
               </p>
             </div>
@@ -211,20 +211,20 @@ if (import.meta.client) {
         <!-- Metadata -->
         <div class="px-5 py-3 flex items-center gap-6 flex-wrap" style="background: var(--surface-base); border-top: 1px solid var(--border-subtle);">
           <div class="flex items-center gap-1.5">
-            <span class="text-[12px] text-meta">Marketplace</span>
-            <span class="font-mono text-[12px] text-body">{{ plugin.marketplace }}</span>
+            <span class="t-small text-meta">Marketplace</span>
+            <span class="font-mono t-small text-body">{{ plugin.marketplace }}</span>
           </div>
           <div v-if="plugin.author" class="flex items-center gap-1.5">
-            <span class="text-[12px] text-meta">Author</span>
-            <span class="font-mono text-[12px] text-body">{{ plugin.author.name }}</span>
+            <span class="t-small text-meta">Author</span>
+            <span class="font-mono t-small text-body">{{ plugin.author.name }}</span>
           </div>
           <div class="flex items-center gap-1.5">
-            <span class="text-[12px] text-meta">Installed</span>
-            <span class="font-mono text-[12px] text-body">{{ formatDate(plugin.installedAt) }}</span>
+            <span class="t-small text-meta">Installed</span>
+            <span class="font-mono t-small text-body">{{ formatDate(plugin.installedAt) }}</span>
           </div>
           <div class="flex items-center gap-1.5">
-            <span class="text-[12px] text-meta">Skills</span>
-            <span class="font-mono text-[12px] text-body">{{ plugin.skillDetails.length }}</span>
+            <span class="t-small text-meta">Skills</span>
+            <span class="font-mono t-small text-body">{{ plugin.skillDetails.length }}</span>
           </div>
         </div>
       </div>
@@ -249,25 +249,25 @@ if (import.meta.client) {
                 :name="editingSkill === skill.slug ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
                 class="size-3.5 shrink-0 text-meta"
               />
-              <span class="text-[13px] font-medium w-40 shrink-0 truncate">
+              <span class="t-ui font-medium w-40 shrink-0 truncate">
                 {{ skill.frontmatter.name }}
               </span>
               <span
                 v-if="skill.frontmatter.context"
-                class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
+                class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
               >
                 {{ skill.frontmatter.context }}
               </span>
               <span
                 v-if="skill.frontmatter.agent"
-                class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-agent"
+                class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-agent"
               >
                 agent: {{ skill.frontmatter.agent }}
               </span>
-              <span class="flex-1 text-[12px] truncate text-label">
+              <span class="flex-1 t-small truncate text-label">
                 {{ skill.frontmatter.description }}
               </span>
-              <span class="font-mono text-[10px] shrink-0 text-meta">
+              <span class="font-mono t-small shrink-0 text-meta">
                 {{ Math.round((skill.body?.length ?? 0) / 100) / 10 }}k chars
               </span>
             </button>
@@ -302,10 +302,10 @@ if (import.meta.client) {
                 <div class="flex items-center justify-between px-4 py-2.5" style="background: var(--surface-raised); border-bottom: 1px solid var(--border-subtle);">
                   <h4 class="text-section-label">Instructions</h4>
                   <div class="flex items-center gap-3">
-                    <span class="font-mono text-[10px] text-meta">
+                    <span class="font-mono t-small text-meta">
                       {{ bodyFor(skill.slug).split('\n').length }} lines
                     </span>
-                    <span class="font-mono text-[10px] text-meta">
+                    <span class="font-mono t-small text-meta">
                       {{ bodyFor(skill.slug).length.toLocaleString() }} chars
                     </span>
                   </div>
@@ -321,7 +321,7 @@ if (import.meta.client) {
 
               <!-- Save bar -->
               <div class="flex items-center justify-between px-4 py-3" style="background: var(--surface-raised); border-top: 1px solid var(--border-subtle);">
-                <span class="font-mono text-[10px] truncate text-meta">
+                <span class="font-mono t-small truncate text-meta">
                   {{ skill.filePath }}
                 </span>
                 <UButton label="Save Skill" icon="i-lucide-save" size="sm" :loading="savingSkill" @click="saveSkill(skill.slug)" />
@@ -334,16 +334,16 @@ if (import.meta.client) {
       <!-- No skills -->
       <div v-else class="flex flex-col items-center justify-center py-12 space-y-3">
         <UIcon name="i-lucide-puzzle" class="size-8 text-meta" />
-        <p class="text-[13px] text-label">This plugin has no skills.</p>
+        <p class="t-ui text-label">This plugin has no skills.</p>
       </div>
 
       <!-- File location (collapsed) -->
       <details class="group">
-        <summary class="text-[10px] cursor-pointer list-none flex items-center gap-1.5 text-meta">
+        <summary class="t-small cursor-pointer list-none flex items-center gap-1.5 text-meta">
           <UIcon name="i-lucide-file" class="size-3" />
           Show file location
         </summary>
-        <div class="mt-1 font-mono text-[10px] pl-4.5 text-meta">
+        <div class="mt-1 font-mono t-small pl-4.5 text-meta">
           {{ plugin.installPath }}
         </div>
       </details>
@@ -354,7 +354,7 @@ if (import.meta.client) {
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Uninstall Plugin</h3>
-          <p class="text-[13px] text-body">
+          <p class="t-ui text-body">
             Uninstall <strong>{{ plugin?.name }}</strong>? The plugin will be removed but its files will remain on your computer.
           </p>
           <div class="flex justify-end gap-2">

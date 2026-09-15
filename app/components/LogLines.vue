@@ -26,10 +26,10 @@ const color = (k: Row['kind']) => k === 'error' ? 'var(--error)' : k === 'result
 </script>
 
 <template>
-  <div class="text-[11px] leading-5 font-mono space-y-px">
+  <div class="t-small leading-5 font-mono space-y-px">
     <div v-for="(r, i) in rows" :key="i" class="flex gap-2 items-start">
       <span class="shrink-0 tabular-nums" style="color: var(--text-disabled);">{{ r.time }}</span>
-      <span v-if="r.kind === 'tool'" class="shrink-0 px-1 rounded text-[10px] font-semibold" style="background: var(--accent-muted); color: var(--accent);">{{ r.tool }}</span>
+      <span v-if="r.kind === 'tool'" class="shrink-0 px-1 rounded t-small font-semibold" style="background: var(--accent-muted); color: var(--accent);">{{ r.tool }}</span>
       <span v-else-if="r.kind === 'result'" class="shrink-0" style="color: var(--text-disabled);">→</span>
       <span v-else-if="r.kind === 'error'" class="shrink-0" style="color: var(--error);">✗</span>
       <span class="whitespace-pre-wrap break-words min-w-0" :style="{ color: color(r.kind), fontFamily: r.kind === 'text' ? 'var(--font-sans)' : undefined }">{{ r.text }}</span>

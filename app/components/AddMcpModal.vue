@@ -56,7 +56,7 @@ function submit() {
 <template>
   <div class="p-6 space-y-4 bg-overlay">
     <h3 class="text-page-title">New MCP Server</h3>
-    <p class="text-[12px] leading-relaxed text-label">
+    <p class="t-small leading-relaxed text-label">
       Add a new Model Context Protocol (MCP) server to extend Claude's capabilities with custom tools and resources.
     </p>
     
@@ -72,17 +72,17 @@ function submit() {
         <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
           <label class="flex items-center gap-2 cursor-pointer group">
             <input v-model="transport" type="radio" value="stdio" class="accent-accent" />
-            <span class="text-[13px] text-body group-hover:text-primary transition-colors">stdio (Local)</span>
+            <span class="t-ui text-body group-hover:text-primary transition-colors">stdio (Local)</span>
           </label>
           <label class="flex items-center gap-2 cursor-pointer group">
             <input v-model="transport" type="radio" value="http" class="accent-accent" />
-            <span class="text-[13px] text-body group-hover:text-primary transition-colors">http (Streamable)</span>
+            <span class="t-ui text-body group-hover:text-primary transition-colors">http (Streamable)</span>
           </label>
           <label class="flex items-center gap-2 cursor-pointer group">
             <input v-model="transport" type="radio" value="sse" class="accent-accent" />
             <div class="flex items-center gap-1.5">
-              <span class="text-[13px] text-body group-hover:text-primary transition-colors">sse (Classic)</span>
-              <span class="text-[9px] font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">Deprecated</span>
+              <span class="t-ui text-body group-hover:text-primary transition-colors">sse (Classic)</span>
+              <span class="t-small font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">Deprecated</span>
             </div>
           </label>
         </div>
@@ -92,56 +92,56 @@ function submit() {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="field-group">
             <label class="field-label" data-required>Command</label>
-            <input v-model="command" type="text" class="field-input font-mono text-[13px]" placeholder="e.g. npx" />
+            <input v-model="command" type="text" class="field-input font-mono t-ui" placeholder="e.g. npx" />
           </div>
 
           <div class="field-group">
             <label class="field-label">Arguments</label>
-            <input v-model="argsString" type="text" class="field-input font-mono text-[13px]" placeholder="e.g. -y @mcp/server-everything" />
+            <input v-model="argsString" type="text" class="field-input font-mono t-ui" placeholder="e.g. -y @mcp/server-everything" />
           </div>
         </div>
 
         <div class="field-group">
           <div class="flex items-center justify-between mb-1">
             <label class="field-label">Environment Variables</label>
-            <button class="text-[11px] font-medium transition-colors" style="color: var(--accent);" @click="addEnvRow">
+            <button class="t-small font-medium transition-colors" style="color: var(--accent);" @click="addEnvRow">
               + Add Row
             </button>
           </div>
           <div v-for="(pair, idx) in envPairs" :key="idx" class="flex items-center gap-2 mb-2 group">
-            <input v-model="pair.key" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="KEY" />
+            <input v-model="pair.key" type="text" class="field-input flex-1 font-mono t-small" placeholder="KEY" />
             <span class="opacity-40">=</span>
-            <input v-model="pair.value" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="VALUE" />
+            <input v-model="pair.value" type="text" class="field-input flex-1 font-mono t-small" placeholder="VALUE" />
             <button class="p-1.5 rounded-lg opacity-60 hover:opacity-100 transition-all hover:bg-error/10 text-error" @click="removeEnvRow(idx)">
               <UIcon name="i-lucide-trash-2" class="size-3.5" />
             </button>
           </div>
-          <p v-if="!envPairs.length" class="text-[11px] italic opacity-40">No environment variables configured</p>
+          <p v-if="!envPairs.length" class="t-small italic opacity-40">No environment variables configured</p>
         </div>
       </template>
 
       <template v-else>
         <div class="field-group">
           <label class="field-label" data-required>URL</label>
-          <input v-model="url" type="text" class="field-input font-mono text-[13px]" placeholder="https://example.com/sse" />
+          <input v-model="url" type="text" class="field-input font-mono t-ui" placeholder="https://example.com/sse" />
         </div>
 
         <div class="field-group">
           <div class="flex items-center justify-between mb-1">
             <label class="field-label">Headers</label>
-            <button class="text-[11px] font-medium transition-colors" style="color: var(--accent);" @click="addHeaderRow">
+            <button class="t-small font-medium transition-colors" style="color: var(--accent);" @click="addHeaderRow">
               + Add Row
             </button>
           </div>
           <div v-for="(pair, idx) in headerPairs" :key="idx" class="flex items-center gap-2 mb-2 group">
-            <input v-model="pair.key" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="Name" />
+            <input v-model="pair.key" type="text" class="field-input flex-1 font-mono t-small" placeholder="Name" />
             <span class="opacity-40">:</span>
-            <input v-model="pair.value" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="Value" />
+            <input v-model="pair.value" type="text" class="field-input flex-1 font-mono t-small" placeholder="Value" />
             <button class="p-1.5 rounded-lg opacity-60 hover:opacity-100 transition-all hover:bg-error/10 text-error" @click="removeHeaderRow(idx)">
               <UIcon name="i-lucide-trash-2" class="size-3.5" />
             </button>
           </div>
-          <p v-if="!headerPairs.length" class="text-[11px] italic opacity-40">No custom headers configured</p>
+          <p v-if="!headerPairs.length" class="t-small italic opacity-40">No custom headers configured</p>
         </div>
       </template>
 
@@ -165,7 +165,7 @@ function submit() {
           </span>
         </label>
         <div class="flex flex-col">
-          <span class="text-[13px] font-medium" :style="{ color: !enabled ? 'var(--text-secondary)' : 'var(--text-primary)' }">
+          <span class="t-ui font-medium" :style="{ color: !enabled ? 'var(--text-secondary)' : 'var(--text-primary)' }">
             {{ !enabled ? 'Create as Disabled' : 'Server Enabled' }}
           </span>
         </div>

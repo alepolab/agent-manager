@@ -80,7 +80,7 @@ async function createBlank() {
   <div>
     <PageHeader title="Workflows">
       <template #trailing>
-        <span class="text-[12px] text-meta">{{ workflows.length }}</span>
+        <span class="t-small text-meta">{{ workflows.length }}</span>
       </template>
       <template #right>
         <UButton v-if="can('configure')" label="New Workflow" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
@@ -88,7 +88,7 @@ async function createBlank() {
     </PageHeader>
 
     <div class="px-6 py-4">
-      <p class="text-[13px] mb-4 leading-relaxed text-label">
+      <p class="t-ui mb-4 leading-relaxed text-label">
         Chain agents together into multi-step pipelines that pass work from one agent to the next.
       </p>
 
@@ -109,7 +109,7 @@ async function createBlank() {
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px] flex-1" style="color: var(--error);">{{ error }}</span>
+        <span class="t-small flex-1" style="color: var(--error);">{{ error }}</span>
         <UButton size="xs" variant="ghost" color="neutral" label="Try again" :loading="loading" @click="fetchAll()" />
       </div>
 
@@ -129,7 +129,7 @@ async function createBlank() {
 
       <!-- Empty state: search miss -->
       <div v-else-if="searchQuery" class="flex flex-col items-center justify-center py-16 space-y-3">
-        <p class="text-[13px] text-label">No workflows match your search.</p>
+        <p class="t-ui text-label">No workflows match your search.</p>
       </div>
 
       <!-- Empty state: no workflows — show templates -->
@@ -143,8 +143,8 @@ async function createBlank() {
               <UIcon name="i-lucide-git-branch" class="size-6" style="color: var(--accent);" />
             </div>
           </div>
-          <h3 class="text-[18px] font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">Chain your agents together</h3>
-          <p class="text-[13px] text-label max-w-md mx-auto">
+          <h3 class="t-head font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">Chain your agents together</h3>
+          <p class="t-ui text-label max-w-md mx-auto">
             Create workflows that pass work from one agent to the next. Start from a template or create your own.
           </p>
         </div>
@@ -152,7 +152,7 @@ async function createBlank() {
         <!-- Each card creates a workflow, so the whole grid is `configure`.
              Offering a reviewer a template they cannot instantiate is the same
              dead control as the New Workflow button above it. -->
-        <p v-if="!can('configure')" class="text-[13px] text-label">
+        <p v-if="!can('configure')" class="t-ui text-label">
           No workflows on this instance yet. An operator sets them up.
         </p>
         <h4 v-if="can('configure')" class="text-section-label">Templates</h4>
@@ -166,21 +166,21 @@ async function createBlank() {
           >
             <div class="flex items-center gap-2.5 mb-2">
               <UIcon :name="template.icon" class="size-4 shrink-0 text-label" />
-              <span class="text-[13px] font-medium">{{ template.name }}</span>
+              <span class="t-ui font-medium">{{ template.name }}</span>
               <UIcon
                 v-if="creatingTemplate === template.id"
                 name="i-lucide-loader-2"
                 class="size-3.5 ml-auto animate-spin text-meta"
               />
             </div>
-            <p class="text-[12px] text-label leading-relaxed line-clamp-2">
+            <p class="t-small text-label leading-relaxed line-clamp-2">
               {{ template.description }}
             </p>
             <div class="flex items-center gap-1 mt-2">
               <span
                 v-for="(step, idx) in template.steps"
                 :key="idx"
-                class="text-[10px] font-mono text-meta"
+                class="t-small font-mono text-meta"
               >
                 {{ step.label }}<span v-if="idx < template.steps.length - 1" class="mx-1" style="color: var(--text-disabled);">-></span>
               </span>
@@ -201,7 +201,7 @@ async function createBlank() {
           <h3 class="text-page-title">New Workflow</h3>
           <form class="space-y-3" @submit.prevent="createBlank">
             <div>
-              <label for="wf-name" class="text-[12px] font-medium text-label block mb-1">Name</label>
+              <label for="wf-name" class="t-small font-medium text-label block mb-1">Name</label>
               <input
                 id="wf-name"
                 v-model="newName"
@@ -211,7 +211,7 @@ async function createBlank() {
               />
             </div>
             <div>
-              <label for="wf-desc" class="text-[12px] font-medium text-label block mb-1">Description</label>
+              <label for="wf-desc" class="t-small font-medium text-label block mb-1">Description</label>
               <input
                 id="wf-desc"
                 v-model="newDescription"

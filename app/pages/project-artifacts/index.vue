@@ -61,14 +61,14 @@ useHead({
   <div class="h-full flex flex-col overflow-hidden">
     <PageHeader title="Project Artifacts">
       <template #trailing>
-        <span class="text-[12px] text-meta">
+        <span class="t-small text-meta">
           {{ projects.length }}
         </span>
       </template>
       <template #right>
         <div class="flex items-center gap-3">
           <button
-            class="px-4 py-2 rounded-xl text-[13px] font-semibold transition-all flex items-center gap-2"
+            class="px-4 py-2 rounded-xl t-ui font-semibold transition-all flex items-center gap-2"
             style="background: var(--accent); color: white;"
             @click="openAddModal"
           >
@@ -96,10 +96,10 @@ useHead({
         <div class="size-20 rounded-3xl flex items-center justify-center mb-6" style="background: var(--surface-raised);">
           <UIcon name="i-lucide-folder-x" class="size-10 text-meta" />
         </div>
-        <h2 class="text-[18px] font-semibold mb-2" style="color: var(--text-primary);">
+        <h2 class="t-head font-semibold mb-2" style="color: var(--text-primary);">
           No Claude projects found
         </h2>
-        <p class="text-[14px] text-meta max-w-sm mx-auto mb-8">
+        <p class="t-body text-meta max-w-sm mx-auto mb-8">
           Projects will appear here after you start a chat in a specific directory using Claude Code CLI.
         </p>
       </div>
@@ -111,7 +111,7 @@ useHead({
       <div v-if="showAddModal" class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(0,0,0,0.5);" @click.self="showAddModal = false">
         <div class="w-full max-w-md rounded-2xl p-6 flex flex-col gap-5" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">
           <div class="flex items-center justify-between">
-            <h2 class="text-[17px] font-semibold" style="color: var(--text-primary);">Add Project</h2>
+            <h2 class="t-head font-semibold" style="color: var(--text-primary);">Add Project</h2>
             <button class="p-1.5 rounded-lg hover-bg" style="color: var(--text-secondary);" @click="showAddModal = false">
               <UIcon name="i-lucide-x" class="size-4" />
             </button>
@@ -119,7 +119,7 @@ useHead({
 
           <div class="flex flex-col gap-4">
             <div class="space-y-1">
-              <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Directory Path <span style="color: var(--error);">*</span></label>
+              <label class="t-small font-medium" style="color: var(--text-tertiary);">Directory Path <span style="color: var(--error);">*</span></label>
               <div class="flex gap-2">
                 <input
                   v-model="newPath"
@@ -129,7 +129,7 @@ useHead({
                   @keydown.enter="addProject"
                 />
                 <button
-                  class="px-3 py-2 rounded-xl text-[13px] font-medium transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                  class="px-3 py-2 rounded-xl t-ui font-medium transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
                   style="background: var(--surface-raised); border: 1px solid var(--border-subtle); color: var(--text-secondary);"
                   :disabled="browsing"
                   v-if="localDesktop"
@@ -143,7 +143,7 @@ useHead({
             </div>
 
             <div class="space-y-1">
-              <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Display Name <span style="color: var(--text-tertiary); font-weight: normal;">(optional)</span></label>
+              <label class="t-small font-medium" style="color: var(--text-tertiary);">Display Name <span style="color: var(--text-tertiary); font-weight: normal;">(optional)</span></label>
               <input
                 v-model="newDisplayName"
                 placeholder="My Project"
@@ -155,14 +155,14 @@ useHead({
 
           <div class="flex items-center justify-end gap-3">
             <button
-              class="px-4 py-2 rounded-xl text-[13px] font-medium transition-all hover-bg"
+              class="px-4 py-2 rounded-xl t-ui font-medium transition-all hover-bg"
               style="color: var(--text-secondary);"
               @click="showAddModal = false"
             >
               Cancel
             </button>
             <button
-              class="px-4 py-2 rounded-xl text-[13px] font-semibold transition-all flex items-center gap-2 disabled:opacity-50"
+              class="px-4 py-2 rounded-xl t-ui font-semibold transition-all flex items-center gap-2 disabled:opacity-50"
               style="background: var(--accent); color: white;"
               :disabled="!newPath.trim() || adding"
               @click="addProject"

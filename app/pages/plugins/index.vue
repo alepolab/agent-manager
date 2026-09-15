@@ -54,7 +54,7 @@ function onPluginInstalled() {
   <div>
     <PageHeader title="Plugins">
       <template #trailing>
-        <span class="font-mono text-[12px] text-meta">{{ plugins.length }}</span>
+        <span class="font-mono t-small text-meta">{{ plugins.length }}</span>
       </template>
       <template #right>
         <UButton
@@ -68,7 +68,7 @@ function onPluginInstalled() {
     </PageHeader>
 
     <div class="px-6 py-4">
-      <p class="text-[13px] mb-4 leading-relaxed text-label">
+      <p class="t-ui mb-4 leading-relaxed text-label">
         Pre-built extensions that add new features and capabilities.
       </p>
 
@@ -87,7 +87,7 @@ function onPluginInstalled() {
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ error }}</span>
+        <span class="t-small" style="color: var(--error);">{{ error }}</span>
       </div>
 
       <div v-if="loading" class="space-y-1">
@@ -99,8 +99,8 @@ function onPluginInstalled() {
           <!-- Marketplace header -->
           <div class="flex items-center gap-2 py-2 px-2 -mx-2">
             <UIcon name="i-lucide-store" class="size-3.5 text-meta" />
-            <span class="font-mono text-[13px] font-medium text-body">{{ marketplace }}</span>
-            <span class="font-mono text-[12px] text-meta">{{ group.length }}</span>
+            <span class="font-mono t-ui font-medium text-body">{{ marketplace }}</span>
+            <span class="font-mono t-small text-meta">{{ group.length }}</span>
           </div>
 
           <!-- Plugin list -->
@@ -128,19 +128,19 @@ function onPluginInstalled() {
                 class="flex items-center gap-3 flex-1 min-w-0 focus-ring rounded"
               >
                 <!-- Name -->
-                <span class="text-[13px] font-medium w-44 shrink-0 truncate">
+                <span class="t-ui font-medium w-44 shrink-0 truncate">
                   {{ plugin.name }}
                 </span>
 
                 <!-- Version badge -->
                 <span
-                  class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
+                  class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
                 >
                   v{{ plugin.version }}
                 </span>
 
                 <!-- Description -->
-                <span class="flex-1 text-[12px] truncate text-label">
+                <span class="flex-1 t-small truncate text-label">
                   {{ plugin.description }}
                 </span>
 
@@ -148,12 +148,12 @@ function onPluginInstalled() {
                 <div class="flex items-center gap-3 shrink-0">
                   <span
                     v-if="plugin.skills.length"
-                    class="font-mono text-[10px] text-meta"
+                    class="font-mono t-small text-meta"
                     :title="plugin.skills.join(', ')"
                   >
                     {{ plugin.skills.length }} skill{{ plugin.skills.length === 1 ? '' : 's' }}
                   </span>
-                  <span class="font-mono text-[10px] text-meta">
+                  <span class="font-mono t-small text-meta">
                     {{ formatDate(plugin.installedAt) }}
                   </span>
                   <UIcon
@@ -169,17 +169,17 @@ function onPluginInstalled() {
 
       <!-- Empty state: search miss -->
       <div v-else-if="searchQuery" class="flex flex-col items-center justify-center py-16">
-        <p class="text-[13px] text-label">No plugins match your search.</p>
+        <p class="t-ui text-label">No plugins match your search.</p>
       </div>
 
       <!-- Empty state: no plugins -->
       <div v-else class="flex flex-col items-center justify-center py-12 space-y-6">
-        <div class="rounded-2xl p-8 bg-card max-w-sm w-full font-mono text-[12px] text-label leading-relaxed text-center space-y-6 shadow-sm border border-border-subtle">
+        <div class="rounded-2xl p-8 bg-card max-w-sm w-full font-mono t-small text-label leading-relaxed text-center space-y-6 shadow-sm border border-border-subtle">
           <div class="size-16 mx-auto rounded-2xl bg-accent-muted flex items-center justify-center">
             <UIcon name="i-lucide-puzzle" class="size-8 text-accent" />
           </div>
           <div class="space-y-4">
-            <p class="text-[13px] text-body font-sans font-medium">No plugins installed yet</p>
+            <p class="t-ui text-body font-sans font-medium">No plugins installed yet</p>
             <div class="px-3 py-2 rounded-lg bg-surface-base text-meta border border-border-subtle text-left overflow-hidden">
               <span class="opacity-50"># Install via CLI</span><br/>
               <span class="text-accent">claude</span> plugin add &lt;name&gt;

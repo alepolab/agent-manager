@@ -46,16 +46,16 @@ function cancelRemove() {
     <div class="flex items-center gap-3 flex-1 min-w-0">
       <UIcon name="i-lucide-store" class="size-3.5 shrink-0 text-meta" />
       <button 
-        class="font-mono text-[12px] font-medium text-body hover:text-accent transition-colors truncate"
+        class="font-mono t-small font-medium text-body hover:text-accent transition-colors truncate"
         @click="emit('clickName', source.name)"
       >
         {{ source.name }}
       </button>
-      <span class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle">
+      <span class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle">
         {{ source.sourceType }}
       </span>
-      <span class="text-[11px] text-meta truncate flex-1">{{ source.sourceUrl }}</span>
-      <span class="font-mono text-[10px] text-meta shrink-0">{{ formatDate(source.lastUpdated) }}</span>
+      <span class="t-small text-meta truncate flex-1">{{ source.sourceUrl }}</span>
+      <span class="font-mono t-small text-meta shrink-0">{{ formatDate(source.lastUpdated) }}</span>
     </div>
     <div class="flex items-center gap-2 ml-3">
       <template v-if="showConfirm">
@@ -65,7 +65,7 @@ function cancelRemove() {
             @click="onRemove"
           >
             <UIcon name="i-lucide-alert-circle" class="size-3.5" />
-            <span class="text-[10px] font-bold uppercase tracking-wider">Confirm?</span>
+            <span class="t-small font-bold uppercase tracking-wider">Confirm?</span>
           </button>
           <button
             class="p-1 rounded hover:bg-surface-raised text-meta hover:text-label transition-colors focus-ring"

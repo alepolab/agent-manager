@@ -590,7 +590,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
       <div v-if="message.images && message.images.length > 0" class="flex flex-wrap gap-2 mb-2">
         <img v-for="(img, i) in message.images" :key="i" :src="img" class="max-w-[200px] max-h-[200px] rounded object-contain border" style="border-color: var(--border-subtle);" />
       </div>
-      <div v-if="message.content" class="text-[13px] whitespace-pre-wrap break-words" style="color: var(--text-primary);">
+      <div v-if="message.content" class="t-ui whitespace-pre-wrap break-words" style="color: var(--text-primary);">
         {{ message.content }}
       </div>
     </template>
@@ -599,7 +599,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
     <template v-else-if="message.kind === 'text' && message.content">
       <div class="group relative">
         <div
-          class="prose prose-sm max-w-none text-[13px] leading-relaxed break-words"
+          class="prose prose-sm max-w-none t-ui leading-relaxed break-words"
           style="color: var(--text-primary);"
           v-html="renderedContent"
         />
@@ -631,7 +631,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
     <!-- Thinking Block - Compact inline style -->
     <template v-else-if="message.kind === 'thinking'">
       <button
-        class="inline-flex items-center gap-1 md:gap-1.5 px-2 md:px-2.5 py-1 rounded-lg text-[11px] md:text-[12px] transition-all"
+        class="inline-flex items-center gap-1 md:gap-1.5 px-2 md:px-2.5 py-1 rounded-lg t-small md:t-small transition-all"
         style="background: var(--surface-raised); color: var(--text-secondary);"
         @click="showThinking = !showThinking"
       >
@@ -645,7 +645,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
 
       <div
         v-if="showThinking"
-        class="mt-2 p-2 md:p-3 rounded-lg text-[11px] md:text-[12px] whitespace-pre-wrap break-words"
+        class="mt-2 p-2 md:p-3 rounded-lg t-small md:t-small whitespace-pre-wrap break-words"
         style="background: var(--surface-raised); color: var(--text-tertiary); border-left: 2px solid #8b5cf6;"
       >
         {{ message.thinking || message.content }}
@@ -669,20 +669,20 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           </div>
 
           <!-- Command -->
-          <div class="px-3 md:px-4 py-2 md:py-3 pl-8 md:pl-9 font-mono text-[11px] md:text-[12px] break-all" style="color: #9ece6a;">
+          <div class="px-3 md:px-4 py-2 md:py-3 pl-8 md:pl-9 font-mono t-small md:t-small break-all" style="color: #9ece6a;">
             <span style="color: #7aa2f7;">$</span> {{ bashCommand }}
           </div>
         </div>
 
         <!-- Description -->
-        <p v-if="bashDescription" class="text-[11px] px-1 italic break-words" style="color: var(--text-tertiary);">
+        <p v-if="bashDescription" class="t-small px-1 italic break-words" style="color: var(--text-tertiary);">
           {{ bashDescription }}
         </p>
 
         <!-- Expandable output (if there's a result) -->
         <button
           v-if="message.toolResult"
-          class="inline-flex items-center gap-1.5 text-[11px] px-1"
+          class="inline-flex items-center gap-1.5 t-small px-1"
           style="color: var(--text-tertiary);"
           @click="showToolDetails = !showToolDetails"
         >
@@ -696,7 +696,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <!-- Output -->
         <div
           v-if="showToolDetails && message.toolResult"
-          class="rounded-lg overflow-x-auto max-h-48 max-w-full font-mono text-[11px] p-3"
+          class="rounded-lg overflow-x-auto max-h-48 max-w-full font-mono t-small p-3"
           style="background: #1a1b26; color: #a9b1d6;"
         >
           <pre class="whitespace-pre-wrap break-all">{{ typeof message.toolResult === 'string' ? message.toolResult : JSON.stringify(message.toolResult, null, 2) }}</pre>
@@ -716,7 +716,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <div class="flex-1 min-w-0">
           <!-- Header (clickable to expand/collapse) -->
           <button
-            class="inline-flex items-center gap-1.5 text-[12px] font-medium"
+            class="inline-flex items-center gap-1.5 t-small font-medium"
             style="color: var(--text-secondary);"
             @click="showToolDetails = !showToolDetails"
           >
@@ -727,7 +727,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             <span>TodoWrite</span>
             <span style="color: var(--text-tertiary);">/</span>
             <span style="color: #22c55e;">Updating todo list</span>
-            <span class="text-[10px] ml-1" style="color: var(--text-tertiary);">
+            <span class="t-small ml-1" style="color: var(--text-tertiary);">
               ({{ todoItems.length }} items)
             </span>
           </button>
@@ -749,7 +749,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
 
               <!-- Todo Content -->
               <span
-                class="flex-1 text-[12px] break-words"
+                class="flex-1 t-small break-words"
                 :style="{
                   color: todo.status === 'completed' ? 'var(--text-tertiary)' : 'var(--text-primary)',
                   textDecoration: todo.status === 'completed' ? 'line-through' : 'none',
@@ -760,7 +760,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
 
               <!-- Status Badge -->
               <span
-                class="px-2 py-0.5 rounded text-[10px] font-medium"
+                class="px-2 py-0.5 rounded t-small font-medium"
                 :style="{
                   background: getTodoStatusBadge(todo.status).bg,
                   color: getTodoStatusBadge(todo.status).color,
@@ -784,7 +784,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         />
 
         <div class="flex-1 min-w-0">
-          <div class="text-[12px] flex items-center gap-2 flex-wrap">
+          <div class="t-small flex items-center gap-2 flex-wrap">
             <span style="color: var(--text-secondary);">{{ message.toolName }}</span>
 
             <!-- Clickable filename for Read -->
@@ -803,7 +803,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             <!-- Non-clickable pattern for Glob -->
             <template v-else-if="['glob', 'glob_search'].includes((message.toolName || '').toLowerCase()) && toolFileName">
               <span style="color: var(--text-tertiary);">:</span>
-              <span class="font-mono text-[11px] text-meta break-all" :title="toolFileName">
+              <span class="font-mono t-small text-meta break-all" :title="toolFileName">
                 {{ toolFileName }}
               </span>
             </template>
@@ -819,7 +819,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             <!-- Error badge -->
             <span
               v-if="message.isError"
-              class="px-1.5 py-0.5 rounded text-[10px]"
+              class="px-1.5 py-0.5 rounded t-small"
               style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
             >
               Error
@@ -841,7 +841,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <div class="flex-1 min-w-0">
           <!-- Header (clickable to expand/collapse prompt) -->
           <button
-            class="inline-flex items-center gap-1.5 text-[12px] font-medium"
+            class="inline-flex items-center gap-1.5 t-small font-medium"
             style="color: var(--text-secondary);"
             @click="showAgentPrompt = !showAgentPrompt"
           >
@@ -863,7 +863,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <!-- Expandable prompt rendered as markdown -->
           <div
             v-if="showAgentPrompt && renderedAgentPrompt"
-            class="mt-2 p-3 rounded-lg text-[12px] break-words"
+            class="mt-2 p-3 rounded-lg t-small break-words"
             style="background: var(--surface-raised); border-left: 2px solid #f59e0b;"
           >
             <div
@@ -888,7 +888,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <div class="flex-1 min-w-0">
           <!-- Header (clickable to expand/collapse plan) -->
           <button
-            class="inline-flex items-center gap-1.5 text-[12px] font-medium"
+            class="inline-flex items-center gap-1.5 t-small font-medium"
             style="color: var(--text-secondary);"
             @click="showPlan = !showPlan"
           >
@@ -911,7 +911,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <!-- Expandable plan rendered as markdown -->
           <div
             v-if="showPlan && renderedPlan"
-            class="mt-2 p-3 rounded-lg text-[12px] break-words border border-dashed"
+            class="mt-2 p-3 rounded-lg t-small break-words border border-dashed"
             style="background: var(--surface-raised); border-color: var(--accent);"
           >
             <div
@@ -934,7 +934,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         />
 
         <div class="flex-1 min-w-0">
-          <div class="text-[12px] flex items-center gap-2 flex-wrap">
+          <div class="t-small flex items-center gap-2 flex-wrap">
             <span style="color: var(--text-secondary);">Skill</span>
             <template v-if="skillName">
               <span style="color: var(--text-tertiary);">/</span>
@@ -960,7 +960,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <!-- TaskCreate: show subject + description -->
           <template v-if="taskAction === 'Create'">
             <div class="space-y-1">
-              <div class="text-[12px] flex items-center gap-1.5 flex-wrap">
+              <div class="t-small flex items-center gap-1.5 flex-wrap">
                 <UIcon name="i-lucide-circle-plus" class="size-3.5" style="color: #22c55e;" />
                 <span class="font-medium" style="color: var(--text-secondary);">New Task</span>
                 <template v-if="taskSubject">
@@ -968,12 +968,12 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
                   <span class="break-all" style="color: var(--text-primary);">{{ taskSubject }}</span>
                 </template>
               </div>
-              <div v-if="taskDescription" class="text-[11px] pl-5 break-words" style="color: var(--text-tertiary);">
+              <div v-if="taskDescription" class="t-small pl-5 break-words" style="color: var(--text-tertiary);">
                 {{ taskDescription }}
               </div>
               <div
                 v-if="taskActiveForm"
-                class="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full ml-5"
+                class="inline-flex items-center gap-1 t-small px-2 py-0.5 rounded-full ml-5"
                 style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;"
               >
                 <UIcon name="i-lucide-loader-2" class="size-2.5 animate-spin" />
@@ -984,7 +984,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
 
           <!-- TaskUpdate: show taskId + status change -->
           <template v-else-if="taskAction === 'Update'">
-            <div class="text-[12px] flex items-center gap-1.5 flex-wrap">
+            <div class="t-small flex items-center gap-1.5 flex-wrap">
               <UIcon
                 :name="taskStatus ? getTaskStatusStyle(taskStatus).icon : 'i-lucide-refresh-cw'"
                 class="size-3.5"
@@ -994,7 +994,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
               <span class="font-medium" style="color: var(--text-secondary);">Task {{ taskId }}</span>
               <template v-if="taskStatus">
                 <span
-                  class="px-2 py-0.5 rounded-full text-[10px] font-medium"
+                  class="px-2 py-0.5 rounded-full t-small font-medium"
                   :style="{
                     background: getTaskStatusStyle(taskStatus).bg,
                     color: getTaskStatusStyle(taskStatus).color,
@@ -1008,7 +1008,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
 
           <!-- TaskGet / TaskList: simple display -->
           <template v-else>
-            <div class="text-[12px] flex items-center gap-1.5">
+            <div class="t-small flex items-center gap-1.5">
               <UIcon
                 :name="taskAction === 'List' ? 'i-lucide-list' : 'i-lucide-search'"
                 class="size-3.5"
@@ -1037,7 +1037,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <!-- Tool header (clickable only if not Edit/Write or if Error) -->
           <component
             :is="(['edit', 'write', 'applypatch', 'replace', 'write_file', 'apply_patch'].includes((message.toolName || '').toLowerCase()) && !message.isError) ? 'div' : 'button'"
-            class="inline-flex items-center gap-1.5 text-[12px] font-medium w-full text-left"
+            class="inline-flex items-center gap-1.5 t-small font-medium w-full text-left"
             :class="{ 'cursor-default': (['edit', 'write', 'applypatch', 'replace', 'write_file', 'apply_patch'].includes((message.toolName || '').toLowerCase()) && !message.isError) }"
             style="color: var(--text-secondary);"
             @click="(['edit', 'write', 'applypatch', 'replace', 'write_file', 'apply_patch'].includes((message.toolName || '').toLowerCase()) && !message.isError) ? null : showToolDetails = !showToolDetails"
@@ -1064,7 +1064,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             <!-- Error badge -->
             <span
               v-if="message.isError"
-              class="px-1.5 py-0.5 rounded text-[10px] ml-1"
+              class="px-1.5 py-0.5 rounded t-small ml-1"
               style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
             >
               Error
@@ -1085,18 +1085,18 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <div v-if="showToolDetails && !(['edit', 'write', 'applypatch', 'replace', 'write_file', 'apply_patch'].includes((message.toolName || '').toLowerCase()) && !message.isError)" class="mt-2 space-y-2 max-w-full overflow-hidden">
             <!-- Input -->
             <div v-if="message.toolInput">
-              <div class="text-[10px] font-medium mb-1" style="color: var(--text-tertiary);">Input</div>
+              <div class="t-small font-medium mb-1" style="color: var(--text-tertiary);">Input</div>
               <pre
-                class="text-[11px] p-2 rounded-lg overflow-x-auto max-h-48 max-w-full font-mono whitespace-pre-wrap break-all"
+                class="t-small p-2 rounded-lg overflow-x-auto max-h-48 max-w-full font-mono whitespace-pre-wrap break-all"
                 style="background: var(--surface-base); color: var(--text-secondary);"
               >{{ JSON.stringify(message.toolInput, null, 2) }}</pre>
             </div>
 
             <!-- Result -->
             <div v-if="message.toolResult">
-              <div class="text-[10px] font-medium mb-1" style="color: var(--text-tertiary);">Result</div>
+              <div class="t-small font-medium mb-1" style="color: var(--text-tertiary);">Result</div>
               <pre
-                class="text-[11px] p-2 rounded-lg overflow-x-auto max-h-48 max-w-full font-mono whitespace-pre-wrap break-all"
+                class="t-small p-2 rounded-lg overflow-x-auto max-h-48 max-w-full font-mono whitespace-pre-wrap break-all"
                 :style="{
                   background: 'var(--surface-base)',
                   color: message.isError ? '#ef4444' : 'var(--text-secondary)',
@@ -1115,7 +1115,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <!-- Collapsible AskUserQuestion History -->
         <template v-if="isAskUserQuestion && askUserQuestions">
           <button
-            class="flex items-start gap-1.5 text-[11px] md:text-[12px] w-full text-left"
+            class="flex items-start gap-1.5 t-small md:t-small w-full text-left"
             style="color: var(--text-secondary);"
             @click="showAskUserHistory = !showAskUserHistory"
           >
@@ -1124,7 +1124,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
               class="size-3 mt-0.5 shrink-0"
             />
             <span class="font-medium flex-1 whitespace-normal">{{ askUserQuestions[0]?.question }}</span>
-            <span v-if="askUserQuestions.length > 1" class="text-[10px] shrink-0" style="color: var(--text-tertiary);">
+            <span v-if="askUserQuestions.length > 1" class="t-small shrink-0" style="color: var(--text-tertiary);">
               (+{{ askUserQuestions.length - 1 }} more)
             </span>
           </button>
@@ -1132,10 +1132,10 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <!-- Expanded View: Questions + Options -->
           <div v-if="showAskUserHistory" class="mt-1 space-y-3 pl-4 border-l-2 border-accent/20">
             <div v-for="(q, qi) in askUserQuestions" :key="qi">
-              <p v-if="q.header" class="text-[11px] font-bold mb-0.5 whitespace-normal" style="color: var(--text-primary);">
+              <p v-if="q.header" class="t-small font-bold mb-0.5 whitespace-normal" style="color: var(--text-primary);">
                 {{ q.header }}
               </p>
-              <p class="text-[11px] md:text-[12px] mb-1.5 whitespace-normal" style="color: var(--text-secondary);">
+              <p class="t-small md:t-small mb-1.5 whitespace-normal" style="color: var(--text-secondary);">
                 {{ q.question }}
               </p>
               
@@ -1144,7 +1144,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
                 <div
                   v-for="(opt, oi) in q.options"
                   :key="oi"
-                  class="flex items-start gap-2 px-2 py-1 rounded text-[11px]"
+                  class="flex items-start gap-2 px-2 py-1 rounded t-small"
                   :style="{
                     background: isOptionSubmitted(opt.label) ? 'rgba(229, 169, 62, 0.1)' : 'var(--surface-raised)',
                     border: isOptionSubmitted(opt.label) ? '1px solid var(--accent)' : '1px solid transparent',
@@ -1159,7 +1159,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
                     <span class="whitespace-normal" :style="{ color: isOptionSubmitted(opt.label) ? 'var(--text-primary)' : 'var(--text-secondary)' }">
                       {{ opt.label }}
                     </span>
-                    <p v-if="opt.description" class="text-[10px] opacity-70 whitespace-normal" style="color: var(--text-tertiary);">
+                    <p v-if="opt.description" class="t-small opacity-70 whitespace-normal" style="color: var(--text-tertiary);">
                       {{ opt.description }}
                     </p>
                   </div>
@@ -1174,7 +1174,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <!-- AskUserQuestion Allow: show "Submitted: <answer>" -->
           <template v-if="isAskUserQuestion && permissionDecision === 'allow' && submittedAnswer !== null">
             <UIcon name="i-lucide-message-square-reply" class="size-3.5 mt-0.5 shrink-0" style="color: #3b82f6;" />
-            <span class="text-[11px] md:text-[12px] flex-1 whitespace-normal" style="color: var(--text-secondary);">
+            <span class="t-small md:t-small flex-1 whitespace-normal" style="color: var(--text-secondary);">
               <span class="font-medium" style="color: #3b82f6;">Submitted:</span>
               <span class="ml-1" style="color: var(--text-primary);">{{ submittedAnswer }}</span>
             </span>
@@ -1186,7 +1186,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
               class="size-3.5"
               :style="{ color: permissionDecision === 'allow' ? '#22c55e' : '#ef4444' }"
             />
-            <span class="text-[11px] md:text-[12px]" style="color: var(--text-secondary);">
+            <span class="t-small md:t-small" style="color: var(--text-secondary);">
               <span class="font-medium" :style="{ color: permissionDecision === 'allow' ? '#22c55e' : '#ef4444' }">
                 {{ permissionDecision === 'allow' ? 'Allowed' : 'Denied' }}
               </span>
@@ -1204,7 +1204,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
       >
         <div class="flex items-center gap-2 mb-2">
           <UIcon name="i-lucide-shield-question" class="size-3.5 md:size-4" style="color: var(--accent);" />
-          <span class="text-[11px] md:text-[12px] font-semibold" style="color: var(--text-primary);">
+          <span class="t-small md:t-small font-semibold" style="color: var(--text-primary);">
             Action Required
           </span>
         </div>
@@ -1212,10 +1212,10 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <!-- AskUserQuestion: render as formatted text -->
         <template v-if="isAskUserQuestion && askUserQuestions">
           <div v-for="(q, qi) in askUserQuestions" :key="qi" class="mb-3">
-            <p v-if="q.header" class="text-[11px] md:text-[12px] font-semibold mb-1 whitespace-normal" style="color: var(--text-primary);">
+            <p v-if="q.header" class="t-small md:t-small font-semibold mb-1 whitespace-normal" style="color: var(--text-primary);">
               {{ q.header }}
             </p>
-            <p class="text-[11px] md:text-[12px] mb-2 whitespace-normal" style="color: var(--text-secondary);">
+            <p class="t-small md:t-small mb-2 whitespace-normal" style="color: var(--text-secondary);">
               {{ q.question }}
             </p>
             <div v-if="q.options && q.options.length" class="space-y-1.5">
@@ -1239,10 +1239,10 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
                   :style="{ color: isAnswerSelected(qi, opt.label) ? 'var(--accent)' : 'var(--text-tertiary)' }"
                 />
                 <div class="min-w-0 flex-1">
-                  <span class="text-[11px] md:text-[12px] font-medium whitespace-normal" style="color: var(--text-primary);">
+                  <span class="t-small md:t-small font-medium whitespace-normal" style="color: var(--text-primary);">
                     {{ opt.label }}
                   </span>
-                  <p v-if="opt.description" class="text-[10px] md:text-[11px] mt-0.5 whitespace-normal" style="color: var(--text-tertiary);">
+                  <p v-if="opt.description" class="t-small md:t-small mt-0.5 whitespace-normal" style="color: var(--text-tertiary);">
                     {{ opt.description }}
                   </p>
                 </div>
@@ -1253,13 +1253,13 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
 
         <!-- Other tools: show tool name and raw input -->
         <template v-else>
-          <p class="text-[11px] md:text-[12px] mb-3 whitespace-normal" style="color: var(--text-secondary);">
+          <p class="t-small md:t-small mb-3 whitespace-normal" style="color: var(--text-secondary);">
             <span class="font-mono font-semibold" style="color: var(--text-primary);">{{ message.toolName || 'Tool' }}</span> wants to perform an action:
           </p>
 
           <pre
             v-if="message.toolInput"
-            class="text-[10px] md:text-[11px] p-2 rounded-lg mb-3 overflow-auto max-h-24 font-mono"
+            class="t-small md:t-small p-2 rounded-lg mb-3 overflow-auto max-h-24 font-mono"
             style="background: var(--surface-raised); color: var(--text-tertiary);"
           >{{ typeof message.toolInput === 'string' ? message.toolInput : JSON.stringify(message.toolInput, null, 2) }}</pre>
         </template>
@@ -1269,7 +1269,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <!-- Multi-select or multi-question: show explicit Submit -->
           <button
             v-if="askUserQuestions.some(q => q.multiSelect) || askUserQuestions.length > 1"
-            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg text-[11px] md:text-[12px] font-medium transition-all"
+            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg t-small md:t-small font-medium transition-all"
             :style="{
               background: hasSelectedAnswer ? 'var(--accent)' : 'var(--surface-raised)',
               color: hasSelectedAnswer ? 'white' : 'var(--text-tertiary)',
@@ -1282,7 +1282,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             Submit
           </button>
           <button
-            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg text-[11px] md:text-[12px] font-medium transition-all hover:opacity-90"
+            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg t-small md:t-small font-medium transition-all hover:opacity-90"
             style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
             @click="handlePermissionDeny"
           >
@@ -1293,14 +1293,14 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <!-- Regular tools: Submit / Cancel -->
         <div v-else class="flex flex-wrap items-center gap-2">
           <button
-            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg text-[11px] md:text-[12px] font-medium transition-all hover:opacity-90"
+            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg t-small md:t-small font-medium transition-all hover:opacity-90"
             style="background: var(--accent); color: white;"
             @click="handlePermissionAllow(false)"
           >
             Submit
           </button>
           <button
-            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg text-[11px] md:text-[12px] font-medium transition-all hover:opacity-90"
+            class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg t-small md:t-small font-medium transition-all hover:opacity-90"
             style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
             @click="handlePermissionDeny"
           >
@@ -1321,7 +1321,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             color: message.taskProgress.status === 'completed' ? '#22c55e' : message.taskProgress.status === 'failed' ? '#ef4444' : 'var(--accent)',
           }"
         />
-        <span class="text-[12px]" style="color: var(--text-secondary);">
+        <span class="t-small" style="color: var(--text-secondary);">
           {{ message.taskProgress.label }}
         </span>
 
@@ -1347,7 +1347,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         class="px-4 py-3 rounded-xl border"
         style="background: var(--surface-overlay); border-color: var(--accent);"
       >
-        <p class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">
+        <p class="t-small font-medium mb-2" style="color: var(--text-primary);">
           {{ message.interactivePrompt.question }}
         </p>
 
@@ -1355,7 +1355,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <button
             v-for="option in message.interactivePrompt.options"
             :key="option"
-            class="w-full px-3 py-1.5 rounded-lg text-[12px] text-left hover:opacity-80 transition-all"
+            class="w-full px-3 py-1.5 rounded-lg t-small text-left hover:opacity-80 transition-all"
             style="background: var(--surface-raised); color: var(--text-secondary);"
           >
             {{ option }}
@@ -1364,7 +1364,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
 
         <div v-else>
           <textarea
-            class="w-full px-3 py-2 rounded-lg text-[12px] resize-none focus:outline-none"
+            class="w-full px-3 py-2 rounded-lg t-small resize-none focus:outline-none"
             :rows="message.interactivePrompt.multiline ? 3 : 1"
             :placeholder="message.interactivePrompt.placeholder || 'Type your answer...'"
             style="background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--border-subtle);"
@@ -1380,7 +1380,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" />
-        <div class="text-[12px]">{{ message.content }}</div>
+        <div class="t-small">{{ message.content }}</div>
       </div>
     </template>
 
@@ -1388,7 +1388,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
     <ClientOnly>
       <div
         v-if="showTimestamp"
-        class="text-[10px] mt-1.5"
+        class="t-small mt-1.5"
         style="color: var(--text-tertiary);"
       >
         {{ new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}

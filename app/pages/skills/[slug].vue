@@ -166,7 +166,7 @@ useUnsavedChanges(isDirty)
         </NuxtLink>
       </template>
       <template #subtitle>
-        <div v-if="skill?.filePath" class="flex items-center gap-1.5 text-[10px] text-meta font-mono max-w-2xl truncate">
+        <div v-if="skill?.filePath" class="flex items-center gap-1.5 t-small text-meta font-mono max-w-2xl truncate">
           <UIcon name="i-lucide-file-text" class="size-3" />
           <span class="select-all">{{ skill.filePath }}</span>
         </div>
@@ -239,11 +239,11 @@ useUnsavedChanges(isDirty)
             style="background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.12);"
           >
             <UIcon name="i-lucide-archive-restore" class="size-4 shrink-0" style="color: var(--info, #3b82f6);" />
-            <span class="text-[12px] flex-1" style="color: var(--text-secondary);">
+            <span class="t-small flex-1" style="color: var(--text-secondary);">
               You have an unsaved draft from {{ draftAge }}.
             </span>
-            <button class="text-[12px] font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
-            <button class="text-[12px] px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
+            <button class="t-small font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
+            <button class="t-small px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
           </div>
         </ClientOnly>
 
@@ -256,7 +256,7 @@ useUnsavedChanges(isDirty)
           <svg class="size-4 shrink-0 text-label" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
           </svg>
-          <span class="text-[12px] flex-1 text-label">
+          <span class="t-small flex-1 text-label">
             This skill is imported from GitHub and is read-only. Updates from the source may overwrite local changes.
           </span>
           <UButton label="Edit a copy" size="xs" variant="soft" @click="editCopy" />
@@ -286,24 +286,24 @@ useUnsavedChanges(isDirty)
 
               <div class="flex-1 min-w-0 pt-0.5">
                 <div class="flex items-center gap-2.5 flex-wrap">
-                  <span class="text-[15px] font-semibold tracking-tight truncate">
+                  <span class="t-body font-semibold tracking-tight truncate">
                     {{ frontmatter.name || 'Unnamed Skill' }}
                   </span>
                   <span
                     v-if="frontmatter.context"
-                    class="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 badge badge-subtle"
+                    class="t-small font-medium px-2 py-0.5 rounded-full shrink-0 badge badge-subtle"
                   >
                     {{ frontmatter.context }}
                   </span>
                   <span
                     v-if="skill.mcpServer"
-                    class="text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0"
+                    class="t-small font-mono px-2 py-0.5 rounded-full shrink-0"
                     style="background: rgba(99, 102, 241, 0.1); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.2);"
                   >
                     mcp: {{ skill.mcpServer.name }}
                   </span>
                 </div>
-                <p v-if="frontmatter.description" class="text-[12px] mt-1 leading-relaxed text-label">
+                <p v-if="frontmatter.description" class="t-small mt-1 leading-relaxed text-label">
                   {{ frontmatter.description }}
                 </p>
               </div>
@@ -337,7 +337,7 @@ useUnsavedChanges(isDirty)
 
         <!-- MCP Server Info -->
         <div v-if="skill.mcpServer" class="space-y-3">
-          <label class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Associated MCP Server</label>
+          <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Associated MCP Server</label>
           
           <NuxtLink 
             :to="`/mcp/${encodeURIComponent(skill.mcpServer.name)}?scope=${skill.mcpServer.scope}`"
@@ -348,13 +348,13 @@ useUnsavedChanges(isDirty)
               <UIcon name="i-lucide-server" class="size-4" style="color: #818cf8;" />
             </div>
             <div class="flex-1 min-w-0">
-              <div class="text-[12px] font-medium truncate group-hover/mcp:text-accent transition-colors" style="color: var(--text-primary);">{{ skill.mcpServer.name }}</div>
-              <div class="text-[10px] truncate" style="color: var(--text-tertiary);">
+              <div class="t-small font-medium truncate group-hover/mcp:text-accent transition-colors" style="color: var(--text-primary);">{{ skill.mcpServer.name }}</div>
+              <div class="t-small truncate" style="color: var(--text-tertiary);">
                 This skill appears to be part of or uses the {{ skill.mcpServer.name }} MCP server.
               </div>
             </div>
             <div class="flex flex-col items-end gap-1 shrink-0">
-              <span class="text-[9px] font-mono px-1.5 py-px rounded-full capitalize" style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);">{{ skill.mcpServer.scope }}</span>
+              <span class="t-small font-mono px-1.5 py-px rounded-full capitalize" style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);">{{ skill.mcpServer.scope }}</span>
             </div>
             <div class="shrink-0">
               <UIcon name="i-lucide-chevron-right" class="size-3.5 opacity-0 group-hover/mcp:opacity-100 transition-all text-meta" />
@@ -364,7 +364,7 @@ useUnsavedChanges(isDirty)
 
         <!-- Agents using this skill -->
         <div v-if="skill.agents?.length" class="space-y-3">
-          <label class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Agents Preloading This Skill</label>
+          <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Agents Preloading This Skill</label>
           
           <div class="space-y-2">
             <NuxtLink 
@@ -378,15 +378,15 @@ useUnsavedChanges(isDirty)
                 <UIcon name="i-lucide-user" class="size-4" style="color: var(--accent);" />
               </div>
               <div class="flex-1 min-w-0">
-                <div class="text-[12px] font-medium truncate group-hover/agent:text-accent transition-colors" style="color: var(--text-primary);">{{ agent.name }}</div>
-                <div class="text-[10px] truncate" style="color: var(--text-tertiary);">This agent will have this skill available in its context by default.</div>
+                <div class="t-small font-medium truncate group-hover/agent:text-accent transition-colors" style="color: var(--text-primary);">{{ agent.name }}</div>
+                <div class="t-small truncate" style="color: var(--text-tertiary);">This agent will have this skill available in its context by default.</div>
               </div>
               <div class="shrink-0">
                 <UIcon name="i-lucide-chevron-right" class="size-3.5 opacity-0 group-hover/agent:opacity-100 transition-all text-meta" />
               </div>
             </NuxtLink>
           </div>
-          <p class="text-[10px] leading-relaxed" style="color: var(--text-tertiary);">
+          <p class="t-small leading-relaxed" style="color: var(--text-tertiary);">
             These agents have this skill explicitly listed in their preloaded skills. You can manage this in each agent's settings.
           </p>
         </div>
@@ -411,7 +411,7 @@ useUnsavedChanges(isDirty)
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Delete Skill</h3>
-          <p class="text-[13px] text-label">
+          <p class="t-ui text-label">
             Permanently delete <strong>{{ skill?.frontmatter.name }}</strong>? This action cannot be undone.
           </p>
           <div class="flex justify-end gap-2">
