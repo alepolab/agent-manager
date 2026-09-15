@@ -46,6 +46,20 @@ const { callAgent, ceSkillsDir } = await import('../server/utils/agentCaller.ts'
   writeFileSync(installed, '{ not json')
   assert.equal(await ceSkillsDir(), '', 'a broken registry reads as no plugin')
   rmSync(installed)
+
+  // The copy the image ships (Dockerfile: /app/vendor/compound-engineering) is
+  // the fallback, so a container needs no plugin installed in its config
+  // directory. It only counts when ce-plan is actually in it — an empty
+  // directory is still "not installed", not a path the ce steps would halt in.
+  const shipped = mkdtempSync(join(tmpdir(), 'ce-shipped-'))
+  assert.equal(await ceSkillsDir(shipped), '', 'a shipped directory without ce-plan is no fallback')
+  mkdirSync(join(shipped, 'ce-plan'), { recursive: true })
+  writeFileSync(join(shipped, 'ce-plan', 'SKILL.md'), '# ce-plan')
+  assert.equal(await ceSkillsDir(shipped), shipped, 'with no plugin installed, the shipped copy is the answer')
+  writeFileSync(installed, JSON.stringify({ plugins: { 'compound-engineering@compound-engineering-plugin': [{ installPath: '/p/ce/3.21.1' }] } }))
+  assert.equal(await ceSkillsDir(shipped), '/p/ce/3.21.1/skills', 'an installed plugin still wins over the shipped copy')
+  rmSync(installed)
+  rmSync(shipped, { recursive: true, force: true })
 }
 
 // ── 1. Importing workflowRunner.ts alone wires the real caller ────────────
