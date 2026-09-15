@@ -1,6 +1,7 @@
 import { stopRun } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
+import { recordDecision } from '../../../../shared/utils/runDecisions'
 
 /**
  * Refuse at a gate.
@@ -40,8 +41,12 @@ export default defineEventHandler(async (event) => {
 
   const user = await currentUser(event)
   const step = before.steps.find(s => s.stepId === before.question!.stepId)
+  // Built from `before`, which still has the question stopRun is about to make
+  // unreachable. Carried onto the stopped run below rather than saved twice.
+  const decision = recordDecision(before, 'rejected', user?.login ?? 'a reviewer', note)
   const run = await stopRun(id)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
+  if (decision) run.decisions = [...(run.decisions ?? []), decision]
 
   // stopRun records no reason, so a rejected run would read exactly like a
   // crashed one on the run page and in the record. Attribute it instead.

@@ -80,6 +80,13 @@ export function useWorkflowRun(slug: string) {
     continueRun: (note?: string) => act('continue')(note?.trim() ? { note: note.trim() } : undefined),
     sendNote: async (text: string) => run.value ? $fetch<{ delivered?: string[], queued?: string }>(`/api/runs/${run.value.id}/note`, { method: 'POST', body: { text } }) : undefined,
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
+    // The gate panel renders in the builder's slide-over too, and emitted both
+    // of these into nothing there: a reviewer could press Reject or Send back
+    // and watch the run carry on. Same two actions as useRun, same routes.
+    /** End the run at a gate, with the reason on the record. */
+    reject: (note: string) => act('reject')({ note: note.trim() }),
+    /** Hand the work back to a chosen earlier step with an instruction; the run continues. */
+    rework: (stepId: string, note: string) => act('rework')({ stepId, note: note.trim() }),
     respond: async (reply: string) => {
       if (!run.value) return
       run.value = await $fetch<WorkflowRun>(`/api/runs/${run.value.id}/respond`, { method: 'POST', body: { reply } })

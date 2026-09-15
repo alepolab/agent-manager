@@ -99,6 +99,38 @@ export interface ProductMatch {
   alsoInScope?: { name: string, repos: string[], stack?: { compose: string, topology_default: string }, tests: Record<string, string> }[]
 }
 
+/**
+ * One human decision at one gate, kept on the run.
+ *
+ * Nothing survived a decision before this. An approval note went into the
+ * runner's in-memory `l.notes` and died with the process; a rejection was
+ * concatenated into `run.error`. So by the time a reviewer reached the fourth
+ * gate of a runbook, the record could not say who had said yes to the first
+ * three, or why — and no screen could show how long any gate had waited,
+ * because `run.question` is cleared the moment it is answered.
+ *
+ * `waitedMs` is that lost number: how long the pipeline sat waiting for a
+ * person. It is computed once, here, from the question's own `askedAt`, because
+ * after this it is unrecoverable.
+ */
+export interface RunDecision {
+  stepId: string
+  /** The step's label at the time, so the record reads without the workflow beside it. */
+  label: string
+  at: number
+  /** GitHub login of whoever decided. */
+  by: string
+  verdict: 'approved' | 'rejected' | 'sent-back'
+  /** The reviewer's reason. Required for every verdict except a plain approval. */
+  note?: string
+  /** Milliseconds this gate waited for a person, from `question.askedAt` to `at`. */
+  waitedMs: number
+  /** For `sent-back`: the step the work was returned to. */
+  target?: string
+  /** The run's blast radius at the time, so a later reader can see what the tier demanded. */
+  blastRadius?: string
+}
+
 export interface WorkflowRun {
   id: string
   workflowSlug: string
@@ -124,10 +156,22 @@ export interface WorkflowRun {
   /** Intake's classification, read from meta.json once written: the kind of work and where the defect was found. */
   workType?: string
   origin?: string
+  /**
+   * How far a mistake here reaches, from intake's own classification: one of
+   * `docs`, `ui_parsing`, `schema`, `deployment`, `protocol`, `money`.
+   *
+   * Read from the same meta.json as the two above, which has always carried it
+   * — the reader simply dropped it, so the run record had no risk tier and
+   * every gate fired identically whether the change was a typo or the tax
+   * base. shared/utils/oversight.ts turns this into whether a gate stops.
+   */
+  blastRadius?: string
   /** The branch the run branch was cut from and the pull request targets (see server/utils/branchPolicy.ts). */
   baseBranch?: string
   /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
   reworks?: number
+  /** Every human decision taken at a gate on this run, oldest first. Append-only. */
+  decisions?: RunDecision[]
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */

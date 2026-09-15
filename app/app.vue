@@ -25,6 +25,11 @@ function toggleTheme() {
 if (import.meta.client) {
   const chatHandler = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+      // The same `configure` gate as the button and the panel. Gating only the
+      // two visible affordances would leave the shortcut as an undocumented way
+      // in — the panel would not render, so the key would silently do nothing,
+      // which is a worse answer than the key not being ours to press.
+      if (!can('configure')) return
       e.preventDefault()
       chatOpen.value = !chatOpen.value
     }
@@ -53,6 +58,7 @@ const navTopAll = [
   { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
   { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
   { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
+  { label: 'Board', icon: 'i-lucide-gauge', to: '/board' },
   { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
   { label: 'Team', icon: 'i-lucide-users', to: '/team' },
   { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
@@ -71,7 +77,8 @@ const navTopAll = [
 const NAV_BY_ROLE: Record<string, string[]> = {
   developer: ['/', '/runs', '/agents', '/skills', '/commands'],
   qa: ['/', '/runs'],
-  manager: ['/', '/runs'],
+  // A manager's screen is the board, not the run list with its buttons removed.
+  manager: ['/', '/board', '/runs'],
 }
 
 const navTop = computed(() => {
@@ -305,8 +312,11 @@ function badgeFor(to: string) {
           </NuxtLink>
         </nav>
 
-        <!-- Chat with Claude -->
-        <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
+        <!-- Chat with Claude. `configure` only, matching /cli in navMid above and
+             the server check on /api/chat: this panel runs an agent over the
+             config directory with permissions bypassed, so offering it to a
+             reviewer contradicted the link we deliberately hid from them. -->
+        <div v-if="can('configure')" :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
           <button
             class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
             :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
@@ -388,7 +398,7 @@ function badgeFor(to: string) {
     </div>
     <template v-if="!isLogin">
       <GlobalSearch />
-      <ChatPanel v-model:open="chatOpen" />
+      <ChatPanel v-if="can('configure')" v-model:open="chatOpen" />
       <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
     </template>
   </UApp>

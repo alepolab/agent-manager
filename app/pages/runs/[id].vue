@@ -8,14 +8,23 @@ import { RUN_STATUS_COLOR } from '~/utils/runStatus'
  */
 const route = useRoute()
 const id = route.params.id as string
-const { run, logs, error, load, continueRun, stop, restart, respond, sendNote, reject } = useRun(id)
+const { run, logs, error, load, continueRun, stop, restart, respond, sendNote, reject, rework } = useRun(id)
 // The builder and Clone are pipeline controls; a reviewer opening the run they
 // hold a gate on has no use for either, and the API refuses them anyway.
 const { can } = useUser()
 async function onReject(note: string) {
   try {
     await reject(note)
-    toast.add({ title: 'Sent back', description: 'The run is stopped and your reason is on the record.', color: 'success' })
+    // This toast used to say "Sent back", which described something the route
+    // does not do: reject stops the run. Sending back to a step is `onRework`.
+    toast.add({ title: 'Run rejected', description: 'The run is stopped and your reason is on the record.', color: 'success' })
+  } catch (e: any) { toast.add({ title: 'Could not reject it', description: e.data?.message || e.message, color: 'error' }) }
+}
+async function onRework(stepId: string, note: string) {
+  try {
+    await rework(stepId, note)
+    const label = run.value?.steps.find(s => s.stepId === stepId)?.label ?? 'that step'
+    toast.add({ title: `Sent back to ${label}`, description: 'It restarts with your instruction.', color: 'success' })
   } catch (e: any) { toast.add({ title: 'Could not send it back', description: e.data?.message || e.message, color: 'error' }) }
 }
 async function onNote(text: string) {
@@ -53,7 +62,7 @@ async function onRestart(stepId: string, note?: string) {
     <div v-if="error" class="px-6 py-4 text-[12px]" style="color: var(--error);">{{ error }}</div>
     <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 px-6 py-4" style="grid-template-columns: minmax(22rem, 2fr) minmax(0, 3fr);">
       <div class="min-h-0 overflow-y-auto pr-1">
-        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
+        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
       </div>
       <RunArtifacts :run-id="id" :live="live" class="min-h-0" />
     </div>
