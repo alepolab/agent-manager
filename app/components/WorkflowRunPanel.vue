@@ -13,9 +13,24 @@ const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: str
  * refuses those routes for them too; this only stops us offering what would
  * then be refused.
  */
-const { can } = useUser()
+const { can, role } = useUser()
 const mayDrive = computed(() => can('runEngine'))
-const mayAnswer = computed(() => can('answerGate'))
+
+/**
+ * Whose gate this is, and whether it is mine to answer.
+ *
+ * Mirrors requireGateRole on the server — deliberately, and only as a courtesy:
+ * the server is what actually refuses. Without it a developer would be shown
+ * Approve on QA's verification gate and get a 403 after clicking, which is the
+ * "click and see what happens" pattern the role model exists to end.
+ *
+ * A gate with no declared owner is anyone's, and an operator answers anything as
+ * the backstop for a role nobody on this instance holds.
+ */
+const gateOwner = computed(() => props.run?.question?.role)
+const mineToAnswer = computed(() =>
+  !gateOwner.value || !role.value || role.value === 'operator' || role.value === gateOwner.value)
+const mayAnswer = computed(() => can('answerGate') && mineToAnswer.value)
 /** An owner-gated run cannot be approved in silence — the same rule the server
  *  enforces, applied here so the reviewer learns it from the button rather than
  *  from a 400 after they have already clicked. */
@@ -248,7 +263,22 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <p class="text-[11px] text-label">
         Waiting {{ waitingLabel }}<template v-if="(run.reworks ?? 0) > 0"> · sent back {{ run.reworks }} of 2 times already</template>
       </p>
+      <!-- Whose decision this is. Said out loud when it is not yours, because a
+           panel with the controls quietly removed is indistinguishable from a
+           broken one. -->
+      <p v-if="gateOwner" class="text-[11px]" :style="{ color: mineToAnswer ? 'var(--text-tertiary)' : 'var(--warning)' }">
+        <template v-if="mineToAnswer">This gate is <span class="font-mono">{{ gateOwner }}</span>'s decision — yours to answer.</template>
+        <template v-else>This gate is <span class="font-mono">{{ gateOwner }}</span>'s decision, not yours. You are {{ role }}.</template>
+      </p>
     </div>
+
+    <!-- What the reviewer is actually approving. The gate used to show a step
+         label and one line of agent prose, with the measured change, the test
+         results and the security verdict all sitting unread in the bundle. -->
+    <RunVerdictCard
+      v-if="run.question?.kind === 'approval' && run.question.reason !== 'budget'"
+      :run="run"
+    />
 
     <!-- What was decided at this run's earlier gates. A four-gate runbook used
          to arrive at its last gate with no record of who approved the first

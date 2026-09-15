@@ -2,6 +2,7 @@ import { continueRun, ApprovalNeedsReason } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
+import { requireGateRole } from '../../../utils/gateRole'
 
 /** Continue a paused run. `note` reaches the step being approved, or whichever step starts next. */
 export default defineEventHandler(async (event) => {
@@ -12,6 +13,10 @@ export default defineEventHandler(async (event) => {
   // Read before continuing: continueRun clears `run.question`, and with it the
   // `askedAt` that is the only record of how long this gate waited for a person.
   const before = await getRun(id)
+  // `answerGate` says you may answer a gate; this says you may answer THIS one.
+  // Both roles that hold the capability would otherwise be interchangeable, and
+  // a developer could accept QA's verification of their own change.
+  if (before) await requireGateRole(event, before)
   const user = await currentUser(event)
   let run
   try {

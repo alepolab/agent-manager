@@ -2,6 +2,7 @@ import { restartRun } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
+import { requireGateRole } from '../../../utils/gateRole'
 
 /**
  * Send the work back to an earlier step, with an instruction.
@@ -43,6 +44,8 @@ export default defineEventHandler(async (event) => {
   if (before.status !== 'paused' || !before.question) {
     throw createError({ statusCode: 409, message: `This run is ${before.status}, not waiting on a decision; there is nothing to send back.` })
   }
+  // Sending work back is this gate's third answer, so it carries the same owner.
+  await requireGateRole(event, before)
 
   const target = before.steps.find(s => s.stepId === stepId)
   if (!target) {

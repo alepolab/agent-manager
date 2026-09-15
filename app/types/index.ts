@@ -1,3 +1,5 @@
+import type { Role } from '~~/shared/types/role'
+
 export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
 export type AgentTool = 'Read' | 'Grep' | 'Glob' | 'Bash' | 'Write' | 'Edit'
@@ -248,6 +250,18 @@ export interface WorkflowStep {
   maxVisits?: number
   /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
   approval?: boolean
+  /**
+   * Whose decision this gate is. Copied onto `run.question.role` when the gate
+   * fires, and enforced by the gate routes.
+   *
+   * Without it, any holder of `answerGate` could answer any gate: a developer
+   * could accept QA's verification, and QA could approve a plan. The runbooks
+   * already asserted the mapping in their own comments ("Gate 3 of 4:
+   * verification. QA answers this one") — this makes the workflow say it in data
+   * rather than in prose nothing reads. An operator may always answer, as the
+   * backstop for a role nobody on this instance holds.
+   */
+  gateRole?: Role
   /** Canvas position, persisted so branches and loops keep their layout. */
   position?: { x: number, y: number }
   /**

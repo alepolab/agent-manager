@@ -1,3 +1,5 @@
+import type { Role } from './role'
+
 export type WorkflowRunStatus =
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
 
@@ -190,7 +192,17 @@ export interface WorkflowRun {
    */
   interruptions?: number
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
-  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
+  /**
+   * Why the run is paused, and — for an approval — whose decision it is.
+   *
+   * `role` is copied from the gated step's `gateRole` when the gate fires. Without
+   * it every holder of `answerGate` could answer every gate, so "QA answers the
+   * verification gate" was a sentence in a code comment rather than something the
+   * system did. Absent means nobody in particular: any `answerGate` holder may
+   * answer, which is the old behaviour and the right default for a workflow that
+   * never said.
+   */
+  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
