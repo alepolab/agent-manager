@@ -2,18 +2,24 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
+import { oversightFor } from '~~/shared/utils/oversight'
 
 /**
- * Home answers "what needs me" first, then "what did I run", then "how is
- * the team set up", and offers one primary action: start a run from a ticket.
+ * Home answers one question: what is open, addressed to me, and how long has it
+ * been open. Everything that did not answer it has gone — the counts of static
+ * configuration the sidebar already carries, the badge announcing the reader's
+ * own job title, and a copy of /runs?mine=1.
+ *
+ * ROLE_BLURB lived here and was a second, drifted copy of ROLE_LABEL in
+ * shared/types/role.ts. One map, in one place, or they disagree — which they
+ * already did.
  */
 const { me, can, role, viewingAs, viewAs } = useUser()
-const ROLE_BLURB: Record<string, string> = {
-  developer: 'You decide at the gates on your runs.',
-  qa: 'You verify evidence and answer the verification gate.',
-  manager: 'You are reading progress. Nothing here changes a run.',
-  operator: 'You run the pipeline.',
-}
+
+// A manager's only question — where is the pipeline stuck, how often does work
+// come back, what does it cost — is answered by /board with real figures. This
+// page was a weaker copy of it for them: no verbs, no gates they can answer.
+watch(role, (r) => { if (r === 'manager') navigateTo('/board') }, { immediate: true })
 const switching = ref(false)
 async function lookAs(next: string | null) {
   switching.value = true
@@ -76,9 +82,17 @@ const attention = computed(() => runs.value
   // Only gates are laned. A failed or interrupted run is not addressed to
   // anyone, and hiding it would leave it for nobody.
   .filter(r => r.status !== 'paused' || mineToAnswer(r))
-  // Most recently active first, for the same reason as `mine` below: a
-  // restarted run is as recent as its last attempt, not as its first.
-  .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a)))
+  // Rank, then longest wait first — the inverse of sorting by recency. A gate
+  // owed to you outranks a broken run, which outranks a failing PR, which
+  // outranks somebody else's gate.
+  .sort((a, b) => {
+    const rank = (r: WorkflowRun) =>
+      r.status === 'paused' && mineToAnswer(r) ? 0
+      : r.status === 'failed' || r.status === 'interrupted' ? 1
+      : r.ci?.status === 'failing' ? 2
+      : 3
+    return rank(a) - rank(b) || waitedMs(b) - waitedMs(a)
+  }))
 const dismissing = ref(false)
 async function dismiss(ids: string[]) {
   dismissing.value = true
@@ -102,7 +116,12 @@ const dismissable = computed(() => attention.value.filter(r => r.status !== 'pau
  * sorts by, so the list reads in the order it is written in.
  */
 const mine = computed(() => runs.value
-  .filter(r => r.startedBy && r.startedBy === me.value?.login)
+  // QA can never start a run, so filtering on `startedBy` left them a section
+  // that is empty by construction, forever. Their own history is the decisions
+  // they took — which the record already carries.
+  .filter(r => (role.value === 'qa'
+    ? (r.decisions ?? []).some(d => d.by === me.value?.login)
+    : r.startedBy && r.startedBy === me.value?.login))
   .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a))
   .slice(0, 8))
 
@@ -149,68 +168,173 @@ async function startFromTicket() {
   }
 }
 
-const why = (r: WorkflowRun) => r.status === 'paused' ? `paused before ${r.steps.find(s => r.nextStepIds.includes(s.stepId))?.label ?? 'the next step'}`
-  : r.status === 'failed' ? (r.error || `failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`)
-  : r.status === 'interrupted' ? 'server restarted; resume it'
-  : r.ci?.status === 'failing' ? 'CI failing on the PR' : r.status
+/**
+ * What this row is actually asking of the reader.
+ *
+ * The old `why()` built a sentence that stood in for the question — "paused
+ * before Push + PR" — naming the step the run is about to take rather than the
+ * decision a person owes. `question.text` was on the record the whole time and
+ * rendered nowhere on this page. A queue that says a run wants you and refuses
+ * to say what for is a queue you have to open every row of.
+ */
+const ask = (r: WorkflowRun): string => {
+  if (r.status === 'paused') {
+    if (r.question?.reason === 'budget') return 'Out of budget — approve more, or stop it'
+    return r.question?.text || 'Paused — open it to see why'
+  }
+  if (r.status === 'failed') return r.error || `Failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`
+  if (r.status === 'interrupted') return 'Stopped when the server restarted'
+  if (r.ci?.status === 'failing') {
+    const bad = (r.ci.checks ?? []).filter(c => c.bucket !== 'pass').map(c => c.name)
+    return bad.length ? `Its pull request is failing: ${bad.join(', ')}` : 'Its pull request is failing checks'
+  }
+  return ''
+}
+
+/** The runner's vocabulary is not a person's: `interrupted` is what the codebase
+ *  calls a process that died, and nobody outside it says that. */
+const STATUS_WORD: Record<string, string> = {
+  paused: 'Waiting', failed: 'Failed', interrupted: 'Stopped',
+  running: 'Running', completed: 'Done', stopped: 'Stopped',
+}
+const statusWord = (s: string) => STATUS_WORD[s] ?? s
+
+/** Hue cannot separate "a person is blocking this" from "the machine broke it",
+ *  and those two want opposite actions from the reader. */
+const kindIcon = (r: WorkflowRun) =>
+  r.status === 'paused' ? 'i-lucide-hand'
+  : r.status === 'completed' && r.ci?.status === 'failing' ? 'i-lucide-git-pull-request-closed'
+  : 'i-lucide-alert-triangle'
+
+/**
+ * How long a PERSON has been owed — not how long ago the machine last moved.
+ *
+ * The queue sorted by `runLastActivityAt`, so a gate nobody had answered in six
+ * hours sat below a CI check that flapped a minute ago. For a paused run the
+ * honest clock is `question.askedAt`.
+ */
+const waitedMs = (r: WorkflowRun) => Date.now() - (r.question?.askedAt ?? runLastActivityAt(r))
+const waitTier = (r: WorkflowRun) => {
+  const ms = waitedMs(r)
+  // A starting calibration. `decisions[].waitedMs` is the real distribution of
+  // how long gates wait on this instance; set these from its median and p90.
+  return ms >= 4 * 3_600_000 ? 'critical' : ms >= 3_600_000 ? 'high' : ms >= 900_000 ? 'warm' : 'cool'
+}
+const shortWait = (ms: number) => {
+  const m = Math.max(0, Math.round(ms / 60000))
+  return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`
+}
 const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago` }
+
+/** Risk, rendered only where it changes what the reader has to do. Most rows
+ *  carry no mark, so the ones that do are unmissable. */
+const riskOf = (r: WorkflowRun) => oversightFor(r.blastRadius)
+
+/**
+ * At most two lines under the input: what you typed resolved to, and the single
+ * worst unresolved thing. The rest collapse.
+ *
+ * Seven conditional hints could render at once, five of them coloured, before
+ * the reader had pressed anything — and the one that is fatal (nothing can write
+ * the evidence directory, so the run refuses to start) was a visual peer of the
+ * one that is trivia (no Jira token). Amber and red are a budget; the page
+ * overdrew it while nothing had gone wrong.
+ */
+interface PreflightNote { level: 'error' | 'warn' | 'info', text: string }
+const preflightNotes = computed<PreflightNote[]>(() => {
+  const p = preflight.value
+  if (!p) return []
+  const n: PreflightNote[] = []
+  if (!p.artifacts.ok) n.push({ level: 'error', text: `Runs cannot start: nothing can write to ${p.artifacts.path}. An operator has to fix the run directory on this server.` })
+  if (!p.tokens.github) n.push({ level: 'warn', text: 'This run gets as far as opening the pull request, then stops — you have no GitHub token. Sign in with GitHub to fix it.' })
+  if (p.checkout?.git && p.checkout.dirty) n.push({ level: 'warn', text: `${p.checkout.dirty} uncommitted change(s) in ${p.checkout.name} will be included in this run. Review them first if they should not be.` })
+  if (p.checkout && !p.checkout.exists) n.push({ level: 'info', text: `${p.checkout.name} is not cloned here yet — the run clones it first, so expect a slower start.` })
+  if (!p.tokens.jira) n.push({ level: 'info', text: 'No Jira token on your profile, so a bare key is not expanded and no result is posted back to Jira. Paste the ticket text instead.' })
+  return n
+})
+const topNote = computed(() => preflightNotes.value[0] ?? null)
+const otherNotes = computed(() => preflightNotes.value.slice(1))
+/** A control must not offer an action the system has already decided to refuse. */
+const startBlocked = computed(() => !!preflight.value && !preflight.value.artifacts.ok)
+const noteColour = (l: string) => (l === 'error' ? 'var(--error)' : l === 'warn' ? 'var(--warning)' : 'var(--text-tertiary)')
+
+/** Per-role wording. QA holds `startRun: false`, so "no runs started by you yet"
+ *  is permanently true for them and tells them nothing. */
+const queueEmpty = computed(() => ({
+  developer: 'No decisions waiting. Start a run below when you have a ticket.',
+  qa: 'Nothing to verify. Runs appear here when they reach the verification gate.',
+  manager: 'Nothing open.',
+  operator: 'No open gates, and nothing failing.',
+}[role.value ?? 'operator'] ?? 'Nothing waiting on you.'))
+const pageTitle = computed(() => (role.value === 'qa' ? 'Verification queue' : 'Your runs'))
+// Not "Your runs" — that is the page's own title, and a section repeating its
+// page's heading says the section has no subject of its own.
+const minedTitle = computed(() => (role.value === 'qa' ? 'Runs you have decided on' : 'Recent'))
+const minedEmpty = computed(() => (role.value === 'qa'
+  ? 'You have not decided on a run yet. Your approvals and send-backs appear here.'
+  : 'You have not started a run yet. Paste a ticket above to start one.'))
 </script>
 
 <template>
   <div>
-    <PageHeader title="Dashboard" />
-    <div class="page space-y-6">
+    <!-- "Dashboard" is a furniture name: the same word for four jobs, telling
+         nobody anything. -->
+    <PageHeader :title="pageTitle" />
+    <!-- Flex with `order`, so the queue leads whenever anything is waiting. A
+         five-hour-old money gate below a text box is the page saying the box
+         matters more. -->
+    <div class="page flex flex-col gap-6">
       <WelcomeOnboarding v-if="loaded && !hasContent" @created="(agent) => navigateTo(`/agents/${agent.slug}`)" />
 
-      <!-- Primary action -->
-      <!-- Who you are here, said out loud. A console that has quietly hidden
-           half its controls is indistinguishable from a broken one, and an
-           operator looking as someone else needs the way back. -->
-      <div v-if="role" class="flex flex-wrap items-center gap-2 t-small mb-4">
-        <span class="font-mono uppercase t-small px-2 py-0.5 rounded" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">{{ role }}</span>
-        <span class="text-label">{{ ROLE_BLURB[role] }}</span>
-        <template v-if="viewingAs">
-          <span class="text-label">Viewing as {{ role }}, not your own role.</span>
-          <button class="underline focus-ring" :disabled="switching" @click="lookAs(null)">Back to operator</button>
-        </template>
-        <template v-else-if="can('configure')">
-          <span class="text-label">View as</span>
-          <button v-for="r in ['developer', 'qa', 'manager']" :key="r" class="underline focus-ring" :disabled="switching" @click="lookAs(r)">{{ r }}</button>
-        </template>
+      <!-- Only while impersonating. A console with controls silently missing is
+           indistinguishable from a broken one, so that state earns a banner —
+           but the rest of the time this row spent the most valuable line on the
+           page telling people their own job title, every load, forever. The
+           "view as" switcher is an operator's occasional tool and belongs with
+           the other role settings, not above the queue. -->
+      <div v-if="viewingAs" class="flex flex-wrap items-center gap-2 t-small rounded-lg px-3 py-2" style="background: var(--accent-muted); border: 1px solid var(--accent);">
+        <span style="color: var(--text-primary);">You are seeing this as a <span class="font-mono">{{ role }}</span>. Controls you normally have are hidden.</span>
+        <button class="ml-auto underline focus-ring" :disabled="switching" @click="lookAs(null)">Back to your own view</button>
       </div>
 
-      <form v-if="can('startRun')" class="rounded-xl p-4 flex flex-wrap items-end gap-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
+      <form v-if="can('startRun')" class="rounded-xl p-4 flex flex-wrap items-end gap-3" :class="attention.length || escalated.length ? 'order-2' : 'order-1'" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
         <div class="flex-1 min-w-[16rem]">
           <label class="field-label" for="ticket">Start a run from a ticket</label>
           <input id="ticket" v-model="ticket" class="field-input w-full" placeholder="SCN-402, or paste the ticket text" :disabled="!runbook" />
           <select v-if="workflows.length > 1" v-model="workflowSlug" class="field-input field-select mt-2" aria-label="Workflow to run">
             <option v-for="w in workflows" :key="w.slug" :value="w.slug">{{ w.name }} ({{ w.steps.length }} steps)</option>
           </select>
-          <span class="field-hint"><template v-if="runbook">{{ workflows.length > 1 ? '' : `Runs ${runbook.name}. ` }}A bare key is expanded from Jira when your profile has a token.</template><template v-else>Create a <NuxtLink to="/workflows" class="underline">workflow</NuxtLink> first.</template></span>
-          <span v-if="routing" class="field-hint block" style="color: var(--success);">Routes to {{ routing.name }}{{ routing.suite ? ` (${routing.suite})` : '' }}: {{ routing.repos.join(', ') || 'no repos listed' }}{{ routing.recipe ? '' : ', no recipe yet' }}</span>
-          <span v-else-if="routing === null" class="field-hint block" style="color: var(--warning);">No product in the registry matches this ticket. Intake will work from the text alone; add the project key or a product label to route it.</span>
-          <template v-if="preflight">
-            <span v-if="preflight.checkout && !preflight.checkout.exists" class="field-hint block">Checkout {{ preflight.checkout.name }} is not on this instance yet; the stack step clones it.</span>
-            <span v-else-if="preflight.checkout?.git && preflight.checkout.dirty" class="field-hint block" style="color: var(--warning);">{{ preflight.checkout.name }} is on {{ preflight.checkout.branch }} with {{ preflight.checkout.dirty }} uncommitted change(s). The run branches from its HEAD and carries them; park them on the <NuxtLink to="/team" class="underline">Team page</NuxtLink> if they are not meant to travel.</span>
-            <span v-else-if="preflight.checkout?.git" class="field-hint block">Checkout {{ preflight.checkout.name }} on {{ preflight.checkout.branch }}, clean. The run gets its own branch.</span>
-            <span v-if="!preflight.artifacts.ok" class="field-hint block" style="color: var(--error);">Evidence cannot be written to {{ preflight.artifacts.path }}; the run will refuse to start. Fix AGENT_RUNS_DIR on the instance.</span>
-            <span v-if="!preflight.tokens.github" class="field-hint block" style="color: var(--warning);">No GitHub token for you: the pull request step will fail. Sign in with GitHub or set AGENT_GH_TOKEN.</span>
-            <span v-if="!preflight.tokens.jira" class="field-hint block">No Jira token on your <NuxtLink to="/profile" class="underline">profile</NuxtLink>: bare keys are not expanded and the outcome comment stays unposted.</span>
-          </template>
-          <label class="flex items-center gap-2 cursor-pointer mt-2">
+          <span v-if="!runbook" class="field-hint block">No runbooks on this instance yet. <NuxtLink to="/workflows" class="underline">Create one</NuxtLink> before you can start a run.</span>
+          <!-- Line 1: the answer to what you typed. Never suppressed, never
+               competing — it is the only line the reader asked for by typing. -->
+          <span v-if="routing" class="field-hint block" style="color: var(--success);">Runs against {{ routing.name }} — {{ routing.repos.join(', ') || 'no repos listed' }}{{ routing.recipe ? '' : '. No recipe yet, so the stack step improvises.' }}</span>
+          <span v-else-if="routing === null" class="field-hint block" style="color: var(--warning);">No matching product — the run works from the ticket text alone. Add the project key to target a codebase.</span>
+          <!-- Line 2: the single worst unresolved thing. Everything else collapses. -->
+          <span v-if="topNote" class="field-hint block" :style="{ color: noteColour(topNote.level) }">{{ topNote.text }}</span>
+          <details v-if="otherNotes.length" class="field-hint block">
+            <summary class="cursor-pointer focus-ring">{{ otherNotes.length }} more thing(s) to know before this runs</summary>
+            <span v-for="n in otherNotes" :key="n.text" class="block mt-1" :style="{ color: noteColour(n.level) }">{{ n.text }}</span>
+          </details>
+          <label class="flex items-center gap-2 cursor-pointer mt-2" title="A failed step or an aborting monitor still stops the run.">
             <input v-model="autoRun" type="checkbox" class="shrink-0" :disabled="!runbook">
-            <span class="field-label mb-0">Run to completion without pausing</span>
+            <span class="field-label mb-0">Don't stop at gates</span>
           </label>
-          <span class="field-hint">Each step starts as soon as the one before it finishes. A failed step or an aborting monitor still stops the run.</span>
         </div>
-        <UButton type="submit" label="Start" icon="i-lucide-play" :loading="starting" :disabled="!ticket.trim() || !runbook" />
+        <UButton
+          type="submit" :label="starting ? 'Starting…' : 'Start run'" icon="i-lucide-play" :loading="starting"
+          :disabled="!ticket.trim() || !runbook || startBlocked"
+          :title="startBlocked ? 'Runs cannot start until the run directory is writable' : ''"
+        />
       </form>
 
       <!-- Needs attention -->
-      <section>
+      <section :class="attention.length || escalated.length ? 'order-1' : 'order-2'">
         <div class="flex items-center gap-3 mb-2">
-          <h2 class="text-section-label">Needs attention <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
-          <button v-if="dismissable.length" class="t-small text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} settled</button>
+          <!-- "Needs attention" is an alert system's passive voice. /board
+               already says "Waiting on a person"; this is the first-person form
+               of the same idea. "Settled" is the codebase's word, not a reader's. -->
+          <h2 class="text-section-label">Waiting on you <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
+          <button v-if="dismissable.length" class="t-small text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} finished</button>
         </div>
         <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
         <div v-else-if="loadError" class="rounded-lg px-3 py-2 flex items-center gap-3 t-small" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
@@ -219,43 +343,76 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
           <span class="text-label truncate">{{ loadError }}</span>
           <button class="ml-auto underline focus-ring shrink-0" style="color: var(--error);" @click="refresh">Retry</button>
         </div>
-        <p v-else-if="!attention.length && !escalated.length" class="t-ui text-label">Nothing waiting on you.</p>
-        <div v-else class="space-y-1">
-          <!-- Same four columns on every row, run or escalation, including the
-               dismiss slot: it is absent on a paused run, and reserving its
-               width is what keeps that row's fields level with the others. -->
-          <div v-for="r in attention" :key="r.id" class="flex items-center gap-3 rounded-lg px-3 py-2 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <NuxtLink :to="`/runs/${r.id}`" class="flex-1 min-w-0 grid grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 focus-ring">
-              <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
-              <!-- The subject leads. Status, reason and timestamp all sat at the
-                   same size as this, so the row had no focal point and the eye
-                   had nowhere to land: in a queue, what the work IS outweighs
-                   every attribute of it. -->
-              <span class="t-head truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
-              <span class="text-label truncate" :title="why(r)">{{ why(r) }}</span>
-              <span class="text-label text-right truncate" :title="`Started ${new Date(r.startedAt).toLocaleString()}`">{{ r.startedBy || '' }} · {{ ago(runLastActivityAt(r)) }}</span>
-            </NuxtLink>
-            <span class="w-6 shrink-0 flex justify-center">
-              <button v-if="r.status !== 'paused'" class="p-1.5 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
+        <p v-else-if="!attention.length && !escalated.length" class="t-ui text-label">{{ queueEmpty }}</p>
+        <!-- Status moved off the text and onto a rail: a coloured word inside a
+             grid cell is not scannable down a stack, and it encoded status twice
+             since the word was already tinted. Solid rail = yours to answer,
+             washed = someone else's — ownership that `mineToAnswer` previously
+             only filtered by, never showed. -->
+        <ul v-else class="attn-list">
+          <li
+            v-for="r in attention" :key="r.id"
+            class="attn-row t-ui"
+            :class="[`attn-row--${waitTier(r)}`, { 'attn-row--mine': r.status === 'paused' && mineToAnswer(r) }]"
+            :style="{ '--rail': RUN_STATUS_COLOR[r.status] }"
+          >
+            <span class="attn-rail" aria-hidden="true" />
+            <UIcon :name="kindIcon(r)" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }" />
+            <!-- The status word is gone from the row, so it goes into the
+                 accessible name instead: dropping a channel must not drop it
+                 from the accessibility tree. -->
+            <NuxtLink
+              :to="`/runs/${r.id}`" class="attn-key focus-ring"
+              :aria-label="`${statusWord(r.status)} — ${r.ticketKey || headline(r)}: ${ask(r)}`"
+            >{{ r.ticketKey || headline(r) }}</NuxtLink>
+            <span class="attn-ask" :title="ask(r)">{{ ask(r) }}</span>
+            <span
+              v-if="r.blastRadius && riskOf(r) !== 'auto'"
+              class="attn-risk t-label" :class="{ 'attn-risk--justify': riskOf(r) === 'justify' }"
+              :title="riskOf(r) === 'justify' ? 'Owner-gated: approving needs a written reason' : 'Stops for a person'"
+            >{{ r.blastRadius }}</span>
+            <span v-else />
+            <RunProgressBar :steps="r.steps" />
+            <span class="attn-wait tabular" :title="`Waiting ${shortWait(waitedMs(r))}`">{{ shortWait(waitedMs(r)) }}</span>
+            <span class="attn-act">
+              <UButton v-if="r.status === 'paused' && mineToAnswer(r)" size="xs" variant="soft" label="Answer" :to="`/runs/${r.id}`" />
+              <button
+                v-else-if="r.status !== 'paused'" class="attn-dismiss focus-ring" :disabled="dismissing"
+                title="Remove this run from your queue"
+                :aria-label="`Remove ${r.ticketKey || headline(r)} from your queue`"
+                @click.stop="dismiss([r.id])"
+              ><UIcon name="i-lucide-x" class="size-3.5" /></button>
             </span>
-          </div>
-          <div v-for="t in escalated" :key="t.watchId + t.key" class="flex items-center gap-3 rounded-lg px-3 py-2 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <NuxtLink to="/watches" class="flex-1 min-w-0 grid grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 focus-ring">
-              <span class="font-mono t-label truncate" style="color: var(--error);">escalated</span>
-              <span class="font-medium truncate" style="color: var(--text-primary);">{{ t.key }}</span>
-              <span class="text-label truncate" :title="t.lastError || ''">{{ t.lastError || 'attempts exhausted; clear the escalation on the watch to retry' }}</span>
-              <span class="text-label text-right truncate">{{ t.watchId }} · {{ ago(t.updatedAt) }}</span>
-            </NuxtLink>
-            <span class="w-6 shrink-0" />
-          </div>
-        </div>
+          </li>
+          <!-- Same row shape, so an escalation competes with the runs on wait
+               rather than being appended below them in its own sorted list. The
+               link goes to /watches only for roles whose nav includes it: QA and
+               manager were being sent to a page they cannot open. -->
+          <li v-for="t in escalated" :key="t.watchId + t.key" class="attn-row t-ui attn-row--high" style="--rail: var(--error);">
+            <span class="attn-rail" aria-hidden="true" />
+            <UIcon name="i-lucide-radio-tower" class="size-3.5 shrink-0" style="color: var(--error);" />
+            <NuxtLink :to="can('configure') ? '/watches' : `/runs?q=${encodeURIComponent(t.key)}`" class="attn-key focus-ring">{{ t.key }}</NuxtLink>
+            <span class="attn-ask" :title="t.lastError || ''">{{ t.lastError || 'Gave up after repeated failures' }}</span>
+            <span />
+            <span />
+            <span class="attn-wait tabular">{{ shortWait(Date.now() - t.updatedAt) }}</span>
+            <span class="attn-act" />
+          </li>
+        </ul>
       </section>
 
-      <div class="grid md:grid-cols-3 gap-4">
-        <!-- My runs -->
-        <section class="md:col-span-2">
-          <h2 class="text-section-label mb-2">My recent runs</h2>
-          <p v-if="loaded && !mine.length" class="t-ui text-label">No runs started by you yet.</p>
+      <!-- The Setup card that used to sit beside this — four counts of static
+           configuration, linking to four pages already in the sidebar — is gone.
+           Nothing on a triage screen is decided by "31 commands", and it was a
+           third of the page width below the primary action. -->
+      <div class="order-3">
+        <section>
+          <h2 class="text-section-label mb-2">{{ minedTitle }}</h2>
+          <!-- Branches on the error, like the queue above it does. This said
+               "No runs started by you yet" when the fetch had failed — the same
+               defect as the queue's, twelve lines away and still live. -->
+          <p v-if="loadError && !mine.length" class="t-ui" style="color: var(--error);">Could not load your runs.</p>
+          <p v-else-if="loaded && !mine.length" class="t-ui text-label">{{ minedEmpty }}</p>
           <!-- Grid, not flex: the progress bar used to sit wherever the title
                ended, so it landed in a different place on every row. Fixed
                columns line the four fields up down the list. -->
@@ -265,7 +422,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
               class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 t-small focus-ring"
               style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
             >
-              <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ statusWord(r.status) }}</span>
               <span class="truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
               <RunProgressBar :steps="r.steps" />
               <span
@@ -273,22 +430,6 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
                 :title="`Started ${new Date(r.startedAt).toLocaleString()}`"
               >{{ ago(runLastActivityAt(r)) }}</span>
             </NuxtLink>
-          </div>
-        </section>
-
-        <!-- Setup. The heading sits OUTSIDE the card, matching "My recent
-             runs" beside it: with it inside, this column's card started level
-             with the other column's heading and every row sat half a line
-             high of its neighbour. -->
-        <section>
-          <h2 class="text-section-label mb-2">Setup</h2>
-          <div class="rounded-lg px-3 py-2 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <div class="grid grid-cols-2 gap-x-3 gap-y-1">
-              <NuxtLink to="/agents" class="flex justify-between focus-ring"><span class="text-label">Agents</span><span>{{ agents.length }}</span></NuxtLink>
-              <NuxtLink to="/commands" class="flex justify-between focus-ring"><span class="text-label">Commands</span><span>{{ commands.length }}</span></NuxtLink>
-              <NuxtLink to="/skills" class="flex justify-between focus-ring"><span class="text-label">Skills</span><span>{{ skills.length }}</span></NuxtLink>
-              <NuxtLink to="/workflows" class="flex justify-between focus-ring"><span class="text-label">Workflows</span><span>{{ workflows.length }}</span></NuxtLink>
-            </div>
           </div>
         </section>
       </div>

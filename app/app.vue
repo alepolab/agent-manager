@@ -35,6 +35,14 @@ onMounted(() => {
 const { isPanelOpen: chatOpen } = useChat()
 const colorMode = useColorMode()
 
+/** Switching to your own role clears the impersonation rather than setting one. */
+const switchingRole = ref(false)
+async function switchRole(next: string) {
+  if (role.value === next) return
+  switchingRole.value = true
+  try { await viewAs(next === 'operator' ? null : next as any) } finally { switchingRole.value = false }
+}
+
 function toggleTheme() {
   colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'
 }
@@ -377,6 +385,31 @@ function badgeFor(to: string) {
             </NuxtLink>
           </div>
         </ClientOnly>
+
+        <!-- Look at the app as a lesser role.
+             On `realRole`, never `can('configure')`: the moment you view as a
+             developer you lose `configure`, so a control gated on it would
+             disappear and strand you in the role you were inspecting.
+             Lives here rather than on the dashboard because it is an occasional
+             operator tool that was occupying the best line of the busiest page,
+             and because a gate or a run list is often what you want to inspect. -->
+        <div v-if="me?.realRole === 'operator' && !sidebarCollapsed" class="px-2.5 pb-1">
+          <div class="t-label mb-1" style="color: var(--text-disabled);">View as</div>
+          <div class="flex rounded-lg overflow-hidden" style="border: 1px solid var(--border-subtle);">
+            <button
+              v-for="r in ['operator', 'developer', 'qa', 'manager']" :key="r"
+              class="flex-1 py-1 t-label focus-ring transition-colors"
+              :style="{
+                background: role === r ? 'var(--accent-muted)' : 'transparent',
+                color: role === r ? 'var(--accent)' : 'var(--text-tertiary)',
+              }"
+              :title="r === 'operator' ? 'Your own role' : `See the app as a ${r}`"
+              :aria-pressed="role === r"
+              :disabled="switchingRole"
+              @click="switchRole(r)"
+            >{{ r === 'operator' ? 'You' : r === 'developer' ? 'Dev' : r === 'manager' ? 'Mgr' : 'QA' }}</button>
+          </div>
+        </div>
 
         <!-- Theme toggle -->
         <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
