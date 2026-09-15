@@ -627,6 +627,17 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
   assert.match(body('sdlc-qa-manual'), /PIPELINE-REWORK: Implement Fix/, 'a failed manual case sends the run back to the implementer')
   assert.match(body('sdlc-ce-ship'), /git push -u origin/, 'the ship step is the one allowed to push')
+  // A run on the CRM container opened three pull requests and one of them —
+  // alepolab/ase_lbss#155 — held a single commit containing only
+  // `.agent/plan.md`. The plan is not a leak: the plan gate requires it beside
+  // the directory the agent works in, which on a container product is the
+  // umbrella root, so that repo legitimately carries a plan-only commit. What
+  // must not happen is opening a pull request for it: a reviewer is asked to
+  // approve agent bookkeeping, and it lands in a product's history.
+  assert.match(body('sdlc-ce-ship'), /only change is under `\.agent\/` gets NO pull request/,
+    'the ship step must not open a pull request for a repository whose only change is the plan')
+  assert.match(body('sdlc-ce-ship'), /own a changed file outside `\.agent\/`/,
+    'and must say which repositories do get one')
 }
 
 // ── a step that writes to a customer's ticket waits for a person ────────────

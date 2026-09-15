@@ -2219,7 +2219,7 @@ ${CE_SKILL_RULES('ce-commit-push-pr', 'the Full workflow, Steps 1 to 5, as if in
 
 ## Git
 
-This brief allows exactly two remote actions, and only for this step: \`git push -u origin <run branch>\` and \`gh pr create\`. Never force-push, never amend, never rebase, never push any other branch. The base branch is the one your header names under the branch policy; the pull request targets it. When the policy says the fix merges back into other branches afterwards, say so in the body.
+This brief allows exactly two remote actions, and only for this step: \`git push -u origin <run branch>\` and \`gh pr create\`. Never force-push, never amend, never rebase, never push any other branch. The base branch is the one your header names under the branch policy; the pull request targets it. When the policy says the fix merges back into other branches afterwards, say so in the body.\n\nA repository whose only change is under \`.agent/\` gets NO pull request. The plan is run scaffolding: the plan gate requires \`.agent/plan.md\` beside the directory you work in, so on a container product the umbrella repo ends up holding a commit with nothing else in it. A pull request carrying only a plan asks a reviewer to approve agent bookkeeping and puts it in a product's history — on a real run that opened three pull requests, one of them was the umbrella with the plan and no fix at all. Open a pull request only for the repositories that own a changed file outside \`.agent/\`, and say in the body which repositories those are and in what order they merge.
 
 ## The pull request
 
