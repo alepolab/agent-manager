@@ -412,18 +412,6 @@ export interface ConversationSummary {
 
 // ── CLI Terminal ──────────────────────────────────
 
-export interface CliSession {
-  id: string
-  agentSlug?: string
-  workingDir: string
-  shell: string
-  status: 'active' | 'idle' | 'terminated'
-  createdAt: string
-  lastActivity: string
-  tokenUsage?: TokenUsage
-  cost?: number
-}
-
 export interface TokenUsage {
   input: number
   output: number
@@ -486,16 +474,6 @@ export type CliWebSocketMessage =
   | { type: 'input'; sessionId: string; data: string }
   | { type: 'resize'; sessionId: string; cols: number; rows: number }
   | { type: 'kill'; sessionId: string }
-
-export type CliWebSocketEvent =
-  | { type: 'session'; sessionId: string }
-  | { type: 'output'; data: string }
-  | { type: 'context_update'; metrics: ContextMetrics }
-  | { type: 'token_update'; tokens: Partial<TokenUsage> }
-  | { type: 'file_change'; change: FileChange }
-  | { type: 'tool_call'; tool: ToolCall }
-  | { type: 'error'; error: string }
-  | { type: 'exit'; exitCode: number }
 
 // ── Claude Code Chat ──────────────────────────────────
 
