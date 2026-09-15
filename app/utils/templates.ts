@@ -65,6 +65,73 @@ These hold at every step in this pipeline, not just this one:
 
 - **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
 
+/**
+ * Shared by the first step of each runbook that has a shell and runs before
+ * any code is written.
+ *
+ * The pipeline's cost is spent on the assumption the work is not already done.
+ * It can be: a fix merged on another branch, a branch pushed and never PR'd, a
+ * PR opened and never merged, or a Jira comment saying it is fixed with the
+ * code nowhere to be found. A run that does not look produces a second PR
+ * against a bug that already has one, after paying for every step.
+ *
+ * ASK, never halt. A branch six weeks stale and a PR merged yesterday look
+ * alike to a grep, and "already fixed" is a claim a person should confirm.
+ * Halting on a false positive costs a whole run for nothing; asking costs one
+ * answer.
+ */
+const PRIOR_ART_CHECK = `## 0. Has this already been fixed?
+
+Before you write anything, spend a few commands finding out whether someone
+already did this work. Run these in the working checkout named at the top of
+your input, with \`KEY\` set to the ticket key from \`meta.json\`:
+
+\`\`\`bash
+KEY=$(python3 -c 'import json;print(json.load(open("meta.json")).get("ticket",""))' 2>/dev/null || echo "")
+git fetch --all --quiet
+echo "--- commits mentioning $KEY on any branch ---"
+git log --all --oneline --grep="$KEY" --regexp-ignore-case | head -20
+echo "--- branches whose name carries it ---"
+git branch --all --list "*$KEY*"
+echo "--- pull requests, any state ---"
+gh pr list --state all --search "$KEY" --limit 10 \\
+  --json number,state,title,headRefName,updatedAt,url 2>&1 | head -40
+\`\`\`
+
+And the ticket's own comments, which the intake packet does not carry — the
+runner fetches only summary, labels and description:
+
+\`\`\`bash
+curl -sS -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \\
+  "$JIRA_BASE_URL/rest/api/3/issue/$KEY/comment?maxResults=20&orderBy=-created" \\
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("-", c["author"]["displayName"], "|", json.dumps(c["body"])[:300]) for c in d.get("comments",[])]'
+\`\`\`
+
+Read what comes back. Then:
+
+- **Found nothing.** Say so in one line and carry on with your step. This is
+  the normal case and costs you four commands.
+- **Found something.** Do NOT start work, and do NOT halt the run. End your
+  output with a single \`PIPELINE-ASK:\` line naming exactly what you found and
+  the choice it forces — the sha and branch, the PR number and its state, or
+  the commenter and date — so the developer can answer without repeating your
+  search. A person decides whether to continue that work, supersede it, or stop.
+
+Two failure modes to be precise about, because both look like "nothing found":
+
+- \`gh\` with no token, or \`curl\` with no \`JIRA_API_TOKEN\`, answers like an
+  empty result. If a command errors or the credential is absent, that search
+  did not happen — say which one, and that the check is partial. Never report
+  a credential failure as "no prior art".
+- The ticket key is not always in the commit subject. When the key search is
+  empty, widen once with a distinctive phrase from the ticket — a function
+  name, an error string — before concluding nothing exists. A negative result
+  is a failed search until you have widened it.
+
+Write what you found to \`prior-art.md\` in the run artifacts directory either
+way, including "none found, searched: commits, branches, PRs, comments". A
+later step, or the next run on this ticket, reads it instead of searching again.`
+
 const SDLC_LANGUAGE_SKILLS = `## Language-matched skills
 
 The stack this run touches is named in the context packet and the product
@@ -807,6 +874,8 @@ not happen.`,
       skills: ['regression-matrix', 'test-driven-development', 'writing-plans', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
+
+${PRIOR_ART_CHECK}
 
 ## Generalise before you write
 
@@ -1871,6 +1940,8 @@ not happen.`,
 ## Read the run artifacts before you touch the filesystem
 
 The run artifacts directory named at the top of your input holds \`context-packet.json\` and \`intent.md\` from intake (the ticket, the acceptance criteria, the affected system, the classification) and \`stack-report.md\` from provisioning (the checkout path, the stack, its URL and seeded users). Read them first, then work in the working checkout the header names. Never search the filesystem for the repository.
+
+${PRIOR_ART_CHECK}
 
 ## Draft first, then refine — a plan that exists beats a plan that is complete
 
