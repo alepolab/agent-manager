@@ -243,14 +243,37 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </div>
     </div>
 
-    <div v-if="intake?.open_questions?.length" class="rounded-lg p-2 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-      <div class="font-medium" style="color: var(--text-primary);">Intake left {{ intake.open_questions.length }} question(s) open</div>
-      <ol class="list-decimal ml-4 space-y-0.5"><li v-for="q in intake.open_questions" :key="q">{{ q }}</li></ol>
-      <p class="text-label">Answer in the note below and restart the step that needs the answer.</p>
+    <!-- The outcome leads. This run finished, opened a pull request and spent
+         96 minutes over 11 steps, and the first thing the page showed was a box
+         of intake questions telling the reader to restart a step — on a run that
+         was over. What the run PRODUCED is the answer to why anyone opened it. -->
+    <div v-if="prLinks.length" class="flex flex-wrap gap-2">
+      <!-- Named as an outcome and an action. A bare "alepolab/billing_cpp14/pull/106"
+           says what it is and never what it is doing on the page or what to do
+           with it — which is the whole answer to why this run existed. -->
+      <a
+        v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener"
+        class="inline-flex items-center gap-2 rounded-lg px-3 py-2 t-ui focus-ring"
+        style="background: var(--accent-muted); border: 1px solid var(--accent); color: var(--accent);"
+      >
+        <UIcon name="i-lucide-git-pull-request" class="size-4 shrink-0" />
+        <span class="flex flex-col leading-tight text-left">
+          <span class="font-medium">{{ settledRun ? 'This run opened a pull request — review it on GitHub' : 'Pull request opened — review it on GitHub' }}</span>
+          <span class="t-small font-mono opacity-80">{{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</span>
+        </span>
+        <UIcon name="i-lucide-external-link" class="size-3.5 shrink-0 ml-1" />
+      </a>
     </div>
-    <div v-if="prLinks.length" class="flex flex-wrap gap-3 t-small">
-      <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
-    </div>
+
+    <!-- Open on a live run, where they are a prompt to act. Collapsed on a
+         settled one, where they are history and were taking the top of the page. -->
+    <details v-if="intake?.open_questions?.length" class="rounded-lg p-2 t-small" :open="!settledRun" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <summary class="font-medium cursor-pointer focus-ring" style="color: var(--text-primary);">
+        Intake left {{ intake.open_questions.length }} question(s) open
+      </summary>
+      <ol class="list-decimal ml-4 space-y-0.5 mt-1"><li v-for="q in intake.open_questions" :key="q">{{ q }}</li></ol>
+      <p v-if="!settledRun" class="text-label mt-1">Answer in the note below and restart the step that needs the answer.</p>
+    </details>
     <div v-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
       <!-- The eyebrow is the label; the question is the thing to read. These were
            the same size, inside a box built exactly like the two informational
@@ -299,8 +322,10 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </div>
     </div>
     <p v-if="sent && run.status === 'running'" class="t-small text-label">Queued for the next step: "{{ sent }}"</p>
+    <!-- A live run or an open gate: the note has somewhere to go the moment it is
+         typed, so it is offered directly. -->
     <textarea
-      v-if="(mayDrive && (settledRun || run.status === 'running')) || (mayAnswer && run.status === 'paused')"
+      v-if="(mayDrive && run.status === 'running') || (mayAnswer && run.status === 'paused')"
       v-model="note"
       rows="2"
       class="field-input w-full resize-none t-small"
@@ -308,18 +333,52 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       :aria-label="notePlaceholder"
       @keydown.meta.enter="noteMode === 'reply' ? send('respond') : noteMode === 'steer' ? send('note') : noteMode === 'continue' ? send('continue') : undefined"
     />
-    <p v-if="mayDrive && settledRun && run.steps.some(s => s.sessionId)" class="t-small text-label">
-      Questions or feedback for a step's agent go to its chat: expand the step and choose Ask this agent, or use the speech bubble on its row. The conversation continues with everything the agent saw. A note typed here goes to the step you restart.
-    </p>
+    <!-- On a finished run, a note has nowhere to go until a step is chosen, so
+         offering an open text box captioned "for the step you restart" asks the
+         reader to act before there is an action. Both it and the explanation it
+         needed now sit behind the thing they are for. -->
+    <details v-if="mayDrive && settledRun" class="t-small rounded-lg p-2" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <summary class="cursor-pointer focus-ring" style="color: var(--text-primary);">Run part of this again</summary>
+      <p class="text-label mt-1">
+        Pick a step below and press its <span class="font-mono">↻</span> to run it again from there. Anything typed
+        here is handed to that step as an instruction.
+      </p>
+      <p v-if="run.steps.some(s => s.sessionId)" class="text-label mt-1">
+        To ask a step's agent a question instead, use the speech bubble on its row — that continues the conversation in
+        the session it already ran in, with everything it saw.
+      </p>
+      <textarea
+        v-model="note"
+        rows="2"
+        class="field-input w-full resize-none t-small mt-2"
+        :placeholder="notePlaceholder"
+        :aria-label="notePlaceholder"
+      />
+    </details>
     <!-- Tokens against the budget cap. The cost figure that used to lead this
          row was removed on request; the totals still come from
          server/utils/costReport.ts, which is the only place that aggregates
          per-step usage, and the cap is what the run pauses against. -->
+    <!-- "20,276,919 tokens of 8,000,000" read as a run two and a half times over
+         its limit, with nothing to say why it kept going. The cap is only worth
+         showing as a denominator while the run is still measured against it. -->
     <div v-if="cost" class="flex items-center gap-2 t-small" data-testid="run-usage-summary">
-      <span class="text-label">{{ (cost.totals.input_tokens + cost.totals.output_tokens).toLocaleString() }} tokens</span>
-      <span v-if="run.budget" class="text-label" :title="`Cap ${run.budget.maxTokens.toLocaleString()} tokens, ${run.budget.maxMinutes} min. Set in Settings; the run pauses and asks when it is reached.`">of {{ run.budget.maxTokens.toLocaleString() }}</span>
+      <span class="text-label" :title="run.budget ? `Cap ${run.budget.maxTokens.toLocaleString()} tokens, ${run.budget.maxMinutes} min.` : ''">
+        {{ (cost.totals.input_tokens + cost.totals.output_tokens).toLocaleString() }} tokens
+      </span>
+      <span
+        v-if="run.budget && (cost.totals.input_tokens + cost.totals.output_tokens) <= run.budget.maxTokens"
+        class="text-label"
+        :title="`Cap ${run.budget.maxTokens.toLocaleString()} tokens, ${run.budget.maxMinutes} min. Set in Settings; the run pauses and asks when it is reached.`"
+      >of {{ run.budget.maxTokens.toLocaleString() }}</span>
+      <span
+        v-else-if="run.budget" class="text-label"
+        :title="`This run was allowed to continue past its cap of ${run.budget.maxTokens.toLocaleString()} tokens.`"
+      >· past its cap</span>
     </div>
-    <p v-else-if="costError" class="t-small text-label">Usage unavailable.</p>
+    <!-- "Usage unavailable" was shown both for a run that reported no usage and
+         for a request that failed. This line is only reached on a failure. -->
+    <p v-else-if="costError" class="t-small" style="color: var(--warning);">Could not read this run's usage.</p>
 
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">
@@ -342,10 +401,30 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
               :aria-label="step.status"
               :title="step.status"
             />
-            <span class="font-medium">{{ step.label }}</span>
-            <span class="text-label font-mono t-small">{{ step.agentSlug }}</span>
-            <span v-if="step.visits > 1" class="t-small text-label">×{{ step.visits }}</span>
-            <span v-if="step.monitorVerdict" class="t-small font-mono">{{ step.monitorVerdict }}</span>
+            <!-- "Stand Up Stack" and its agent slug wrapped to two lines, making
+                 that row taller than the ten around it and breaking the rhythm
+                 the list is read down. The name holds; the slug gives way. -->
+            <span class="font-medium whitespace-nowrap shrink-0">{{ step.label }}</span>
+            <span class="text-label font-mono t-small truncate min-w-0">{{ step.agentSlug }}</span>
+            <span v-if="step.visits > 1" class="t-small text-label" :title="`This step ran ${step.visits} times`">×{{ step.visits }}</span>
+            <!-- The monitor's reasoning was recorded and never rendered: the row
+                 showed an eight-character verdict and kept the sentence that
+                 explains it to itself. -->
+            <!-- Only when the monitor had something to say. CONTINUE is the
+                 boring case and it was printed on all eleven rows in the same
+                 weight as the step's own name, so the two verdicts that matter
+                 had nothing to stand out from. -->
+            <span
+              v-if="step.monitorVerdict && step.monitorVerdict !== 'CONTINUE'"
+              class="t-small font-mono shrink-0"
+              :style="{ color: step.monitorVerdict === 'ABORT' ? STATUS_COLOR.failed : 'var(--warning)' }"
+              :title="step.monitorNote || step.monitorVerdict"
+            >{{ step.monitorVerdict }}</span>
+            <!-- "The agent declared this not applicable" and "the scheduler
+                 passed over it after an upstream failure" both rendered as the
+                 same grey word. The runner treats that distinction as
+                 load-bearing; the row never showed it. -->
+            <span v-if="step.status === 'skipped' && step.skipReason" class="t-small text-label truncate" :title="step.skipReason">skipped: {{ step.skipReason }}</span>
             <span class="ml-auto t-small text-label">{{ elapsed(step) }}</span>
           </button>
           <!-- Visible on the row itself: an action nobody has to discover by
@@ -385,7 +464,11 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </div>
     </div>
 
-    <div class="space-y-1">
+    <!-- Not on the full run page, which already shows the real evidence browser
+         beside this column: two file lists for one bundle, the lesser one
+         rendering raw text in a <pre>. This stays for the builder's slide-over,
+         where there is no other way to reach the files. -->
+    <div v-if="!fullPage" class="space-y-1">
       <button class="t-small text-label underline" @click="artifacts ? (artifacts = null) : loadArtifacts()">
         {{ artifacts ? 'Hide evidence files' : 'Show evidence files' }}
       </button>

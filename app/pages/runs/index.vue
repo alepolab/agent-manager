@@ -47,7 +47,11 @@ let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   refresh()
   timer = setInterval(() => {
-    if (live.value.length) refresh()
+    // `|| loadError` is the recovery path. Polling only while something is live
+    // meant that after a failed load the list was empty, so `live` was empty, so
+    // the poll never fired again — the page stayed broken until someone thought
+    // to press Retry or reload, even once the server came back.
+    if (live.value.length || loadError.value) refresh()
   }, 5000)
   clock = setInterval(() => { now.value = Date.now() }, 1000)
 })
@@ -81,7 +85,11 @@ const duration = (r: WorkflowRun) => runElapsedLabel(r, now.value)
 const restartPoint = (r: WorkflowRun) =>
   r.steps.find(s => s.status === 'failed')?.stepId
   ?? r.currentStepIds[0]
-  ?? r.steps.find(s => s.status !== 'completed')?.stepId
+  // Not a skipped step. A run that died in preflight has every step skipped and
+  // none failed, so this fell through to the first of them and offered a Restart
+  // that the runner answers with a 409. Nothing here can be restarted; the run
+  // has to be started again once whatever preflight objected to is fixed.
+  ?? r.steps.find(s => s.status !== 'completed' && s.status !== 'skipped')?.stepId
 // Each of these is "may this run take the action" AND "may this person take it".
 // Folding the capability in here rather than at each button keeps the two
 // buttons and the bulk control from drifting apart later.
@@ -249,7 +257,11 @@ async function deleteFailed() {
             <tr v-for="r in shown" :key="r.id" style="border-top: 1px solid var(--border-subtle);">
               <td class="px-3 py-2 font-medium"><div class="truncate" :title="r.workflowName">{{ r.workflowName }}</div></td>
               <td class="px-3 py-2 text-label hidden md:table-cell"><div class="truncate" :title="r.startedBy || ''">{{ r.startedBy || '' }}</div></td>
-              <td class="px-3 py-2 font-mono t-label" :style="{ color: RUN_STATUS_COLOR[r.status] }">
+              <!-- Six of thirteen real runs carried a precise, actionable failure
+                   reason on the record and this table showed none of it. One
+                   hover is not a fix, but it beats opening the run to find out
+                   why it is red. -->
+              <td class="px-3 py-2 font-mono t-label" :style="{ color: RUN_STATUS_COLOR[r.status] }" :title="r.error || r.status">
                 {{ r.status }}
                 <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans t-small underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
               </td>
@@ -276,7 +288,8 @@ async function deleteFailed() {
                     size="xs" variant="ghost" :color="confirmingDelete === r.id ? 'error' : 'neutral'"
                     :icon="confirmingDelete === r.id ? undefined : 'i-lucide-trash-2'"
                     :label="confirmingDelete === r.id ? 'Confirm delete' : ''" :title="`Delete run and its evidence`"
-                    :aria-label="`Delete run`" :loading="busy === r.id" @click="del(r)"
+                    :aria-label="`Delete run ${r.ticketKey || r.workflowName} started ${new Date(r.startedAt).toLocaleString()}, and its evidence`"
+                    :loading="busy === r.id" @click="del(r)"
                   />
                 </div>
               </td>

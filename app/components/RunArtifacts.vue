@@ -21,10 +21,22 @@ const wrap = ref(true)
 const search = ref('')
 const rendered = ref('')
 const copied = ref(false)
+/** Why the file list is empty, when it is empty because the fetch failed. */
+const listError = ref<string | null>(null)
 const HIGHLIGHT_MAX = 200 * 1024
 
 async function refresh() {
-  try { files.value = await $fetch<{ name: string, size: number }[]>(`/api/runs/${props.runId}/artifacts`) } catch { files.value = [] }
+  // A failed fetch is NOT an empty bundle. This used to swallow the error and
+  // render "Nothing written yet", so a reviewer standing at a gate could not
+  // tell "this run produced no evidence" from "the evidence is unreachable" —
+  // and those call for opposite decisions.
+  try {
+    files.value = await $fetch<{ name: string, size: number }[]>(`/api/runs/${props.runId}/artifacts`)
+    listError.value = null
+  } catch (e: any) {
+    files.value = []
+    listError.value = e?.data?.message || e?.message || 'Could not load the evidence list'
+  }
 }
 const ext = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
 /** Evidence a reviewer looks at rather than reads. Fetching one as text produced
@@ -129,6 +141,23 @@ const showRaw = computed(() => kind.value !== 'image' && (mode.value === 'raw' |
 async function copy() {
   try { await navigator.clipboard.writeText(raw.value); copied.value = true; setTimeout(() => { copied.value = false }, 1500) } catch { /* clipboard unavailable */ }
 }
+/**
+ * Keep both ends of a long file name.
+ *
+ * These names differ at the TAIL — csup7516-check-baseline-1.log,
+ * -2.log, -3cre.log — and plain truncation clipped exactly that, so four
+ * distinct files rendered as four identical rows reading
+ * "csup7516-check-baseline…". Dropping the middle keeps what makes each one
+ * itself; the full name is on the title and one hover away.
+ */
+function shortName(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const MAX = 30
+  if (name.length <= MAX) return name
+  const tail = Math.min(14, Math.floor(name.length / 2))
+  return `${name.slice(0, MAX - tail - 1)}…${name.slice(-tail)}`
+}
+
 const groups = computed(() => {
   const g: Record<string, { name: string, size: number }[]> = {}
   for (const f of files.value) { const dir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '.'; (g[dir] ??= []).push(f) }
@@ -145,39 +174,44 @@ defineExpose({ refresh })
 
 <template>
   <div class="grid gap-3 h-full min-h-0" style="grid-template-columns: 15rem minmax(0, 1fr);">
-    <div class="overflow-y-auto text-[11px] space-y-2 pr-1 min-h-0">
+    <div class="overflow-y-auto t-small space-y-2 pr-1 min-h-0">
       <div class="flex items-center justify-between"><span class="text-section-label">Evidence files</span><button class="text-label underline focus-ring" @click="refresh">Refresh</button></div>
-      <p v-if="!files.length" class="text-label">Nothing written yet.</p>
+      <div v-if="listError" class="rounded p-2 space-y-1" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
+        <p style="color: var(--error);">Could not load the evidence.</p>
+        <p class="text-label">{{ listError }}</p>
+        <button class="underline focus-ring" style="color: var(--error);" @click="refresh">Try again</button>
+      </div>
+      <p v-else-if="!files.length" class="text-label">Nothing written yet.</p>
       <div v-for="[dir, list] in groups" :key="dir">
-        <div v-if="dir !== '.'" class="font-mono text-[10px] text-label mt-1">{{ dir }}/</div>
+        <div v-if="dir !== '.'" class="font-mono t-small text-label mt-1">{{ dir }}/</div>
         <button v-for="f in list" :key="f.name" class="w-full flex items-center gap-2 px-2 py-1 rounded text-left focus-ring" :style="{ background: selected === f.name ? 'var(--accent-muted)' : 'transparent', color: selected === f.name ? 'var(--text-primary)' : 'var(--text-secondary)' }" @click="open(f.name)">
-          <span class="font-mono truncate">{{ f.name.slice(f.name.lastIndexOf('/') + 1) }}</span>
+          <span class="font-mono truncate" :title="f.name">{{ shortName(f.name) }}</span>
           <span class="ml-auto text-label whitespace-nowrap">{{ size(f.size) }}</span>
         </button>
       </div>
     </div>
 
     <div class="min-h-0 flex flex-col rounded-lg" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-      <div class="px-3 py-1.5 text-[11px] flex items-center gap-2 flex-wrap" style="border-bottom: 1px solid var(--border-subtle);">
+      <div class="px-3 py-1.5 t-small flex items-center gap-2 flex-wrap" style="border-bottom: 1px solid var(--border-subtle);">
         <span class="font-mono truncate max-w-[40%]" :title="selected ?? ''">{{ selected ?? 'Select a file' }}</span>
         <template v-if="selected">
           <div class="flex items-center rounded overflow-hidden" style="border: 1px solid var(--border-subtle);">
             <button class="px-2 py-0.5" :style="{ background: mode === 'rendered' ? 'var(--accent-muted)' : 'transparent' }" @click="mode = 'rendered'">Rendered</button>
             <button class="px-2 py-0.5" :style="{ background: mode === 'raw' ? 'var(--accent-muted)' : 'transparent' }" @click="mode = 'raw'">Raw</button>
           </div>
-          <input v-model="search" class="field-input text-[11px] py-0.5 w-40" placeholder="Search in file" aria-label="Search in file" />
+          <input v-model="search" class="field-input t-small py-0.5 w-40" placeholder="Search in file" aria-label="Search in file" />
           <label class="flex items-center gap-1 text-label"><input v-model="wrap" type="checkbox" /> wrap</label>
           <button class="text-label underline" @click="copy">{{ copied ? 'Copied' : 'Copy' }}</button>
           <a :href="`/api/runs/${runId}/artifacts/${selected.split('/').map(encodeURIComponent).join('/')}`" target="_blank" rel="noopener" class="underline text-label">Open raw</a>
         </template>
       </div>
 
-      <div class="flex-1 min-h-0 overflow-auto p-3 text-[12px]">
+      <div class="flex-1 min-h-0 overflow-auto p-3 t-small">
         <p v-if="!selected" class="text-label">Pick a file on the left. Markdown renders, JSON reads as a document, test results are summarised, code is highlighted.</p>
         <p v-else-if="loading" class="text-label">Loading…</p>
 
         <!-- raw, with line numbers and search -->
-        <div v-else-if="showRaw" class="font-mono text-[11px] leading-5">
+        <div v-else-if="showRaw" class="font-mono t-small leading-5">
           <div v-for="l in rawLines" :key="l.n" class="flex gap-3">
             <span class="shrink-0 w-10 text-right select-none tabular-nums" style="color: var(--text-disabled);">{{ l.n }}</span>
             <span :class="wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'" class="min-w-0">{{ l.text }}</span>
@@ -188,26 +222,29 @@ defineExpose({ refresh })
         <!-- a screenshot is looked at, not read -->
         <div v-else-if="kind === 'image'" class="p-2">
           <a :href="fileUrl(selected!)" target="_blank" rel="noopener">
-            <img :src="fileUrl(selected!)" :alt="selected!" class="max-w-full h-auto rounded" style="border: 1px solid var(--border-subtle);">
+            <!-- alt="" because the caption below names the file: a screenshot's
+                 alt text was its own path, read out in full by a screen reader
+                 and then repeated verbatim by the caption underneath it. -->
+            <img :src="fileUrl(selected!)" alt="" class="max-w-full h-auto rounded" style="border: 1px solid var(--border-subtle);">
           </a>
-          <p class="text-[11px] text-label mt-2">{{ selected }} — click to open full size</p>
+          <p class="t-small text-label mt-2">{{ selected }} — click to open full size</p>
         </div>
 
         <!-- markdown -->
-        <div v-else-if="kind === 'markdown'" class="prose prose-sm max-w-none text-[13px] leading-relaxed break-words evidence-prose" v-html="rendered" />
+        <div v-else-if="kind === 'markdown'" class="prose prose-sm max-w-none t-ui leading-relaxed break-words evidence-prose" v-html="rendered" />
 
         <!-- json as a document -->
         <div v-else-if="kind === 'json'" class="space-y-1.5">
           <div v-for="r in jsonRows" :key="r.path" class="grid gap-3" style="grid-template-columns: 14rem minmax(0, 1fr);">
-            <span class="font-mono text-[11px] truncate" style="color: var(--text-tertiary);" :title="r.path">{{ r.path || '(root)' }}</span>
-            <div v-if="jsonRendered[r.path]" class="prose prose-sm max-w-none text-[12px] leading-relaxed break-words evidence-prose min-w-0 rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);" v-html="jsonRendered[r.path]" />
+            <span class="font-mono t-small truncate" style="color: var(--text-tertiary);" :title="r.path">{{ r.path || '(root)' }}</span>
+            <div v-if="jsonRendered[r.path]" class="prose prose-sm max-w-none t-small leading-relaxed break-words evidence-prose min-w-0 rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);" v-html="jsonRendered[r.path]" />
             <span v-else class="whitespace-pre-wrap break-words min-w-0" :style="{ color: 'var(--text-primary)', fontFamily: r.long ? 'var(--font-sans)' : 'var(--font-mono)' }">{{ r.value }}</span>
           </div>
         </div>
 
         <!-- junit summary then the xml -->
         <div v-else-if="kind === 'xml' && junit" class="space-y-3">
-          <div class="flex flex-wrap gap-4 text-[12px]">
+          <div class="flex flex-wrap gap-4 t-small">
             <span><b>{{ junit.total.tests }}</b> tests</span>
             <span :style="{ color: junit.total.failures ? 'var(--error)' : 'var(--success)' }"><b>{{ junit.total.failures }}</b> failures</span>
             <span :style="{ color: junit.total.errors ? 'var(--error)' : undefined }"><b>{{ junit.total.errors }}</b> errors</span>
@@ -215,20 +252,20 @@ defineExpose({ refresh })
             <span class="text-label font-mono truncate" :title="junit.suites.join(', ')">{{ junit.suites.join(', ') }}</span>
           </div>
           <div v-if="junit.failed.length" class="space-y-1">
-            <div v-for="f in junit.failed" :key="f.name" class="rounded p-2 text-[11px]" style="background: var(--surface-base); border-left: 3px solid var(--error);">
+            <div v-for="f in junit.failed" :key="f.name" class="rounded p-2 t-small" style="background: var(--surface-base); border-left: 3px solid var(--error);">
               <div class="font-mono" style="color: var(--text-primary);">{{ f.name }}</div>
               <div class="whitespace-pre-wrap break-words" style="color: var(--text-secondary);">{{ f.message }}</div>
             </div>
           </div>
-          <p v-else class="text-[11px]" style="color: var(--success);">Every case passed.</p>
-          <div class="evidence-code text-[11px]" v-html="rendered" />
+          <p v-else class="t-small" style="color: var(--success);">Every case passed.</p>
+          <div class="evidence-code t-small" v-html="rendered" />
         </div>
 
         <!-- log lines -->
         <LogLines v-else-if="kind === 'log'" :lines="logLines" :filter="search" />
 
         <!-- highlighted code -->
-        <div v-else class="evidence-code text-[11px]" :class="wrap ? 'evidence-wrap' : ''" v-html="rendered" />
+        <div v-else class="evidence-code t-small" :class="wrap ? 'evidence-wrap' : ''" v-html="rendered" />
       </div>
     </div>
   </div>

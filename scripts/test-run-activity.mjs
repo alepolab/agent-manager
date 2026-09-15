@@ -35,10 +35,16 @@ const run = (status, steps, currentStepIds = []) => ({ status, steps, currentSte
   assert.equal(currentStep(r)?.stepId, 'c')
 }
 
-// `skipped` is progress - the run passed it. A failed step is not.
+// Every step that is FINISHED counts, however it finished.
+//
+// `failed` used to be excluded, on the reasoning that a failure is not progress.
+// That is true and it made the count disagree with the run panel's, which counts
+// settled steps — so one run reported two different numbers beside two progress
+// bars. The bar already colours each step by its own outcome: it says how they
+// went, and this says how many are done.
 {
   const r = run('running', [step('a', 'completed'), step('b', 'skipped'), step('c', 'failed'), step('d', 'running')])
-  assert.equal(stepsDone(r), 2, 'completed and skipped count; failed does not')
+  assert.equal(stepsDone(r), 3, 'completed, skipped and failed are all finished; only the running step is not')
 }
 
 // Never-measured is null, not zero: a fabricated heartbeat is worse than none.

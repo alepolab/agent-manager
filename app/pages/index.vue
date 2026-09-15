@@ -28,10 +28,17 @@ const toast = useToast()
 const runs = ref<WorkflowRun[]>([])
 const escalated = ref<{ key: string, watchId: string, lastError?: string, updatedAt: number }[]>([])
 const loaded = ref(false)
+/** Why the queue is empty, when it is empty because something broke. */
+const loadError = ref<string | null>(null)
 
 async function refresh() {
   const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs')])
-  if (r.status === 'fulfilled') runs.value = r.value
+  // A rejected fetch used to leave the previous list in place and say nothing,
+  // so "Nothing waiting on you" was shown for both an all-clear and an API that
+  // was down. On the one screen whose job is to say what needs a person, those
+  // two readings could not be further apart.
+  if (r.status === 'fulfilled') { runs.value = r.value; loadError.value = null }
+  else loadError.value = (r.reason as any)?.data?.message || (r.reason as any)?.message || 'Could not load runs'
   try {
     const watches = await $fetch<{ id: string }[]>('/api/watches')
     const states = await Promise.all(watches.map(w => $fetch<Record<string, { key: string, watchId: string, disposition: string, lastError?: string, updatedAt: number }>>(`/api/watches/${w.id}/state`).catch(() => ({}))))
@@ -206,6 +213,12 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
           <button v-if="dismissable.length" class="t-small text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} settled</button>
         </div>
         <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
+        <div v-else-if="loadError" class="rounded-lg px-3 py-2 flex items-center gap-3 t-small" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
+          <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
+          <span style="color: var(--error);">Could not load runs, so this queue may be incomplete.</span>
+          <span class="text-label truncate">{{ loadError }}</span>
+          <button class="ml-auto underline focus-ring shrink-0" style="color: var(--error);" @click="refresh">Retry</button>
+        </div>
         <p v-else-if="!attention.length && !escalated.length" class="t-ui text-label">Nothing waiting on you.</p>
         <div v-else class="space-y-1">
           <!-- Same four columns on every row, run or escalation, including the
