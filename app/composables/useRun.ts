@@ -36,6 +36,8 @@ export function useRun(id: string) {
     respond: (reply: string) => act('respond')({ reply }),
     sendNote: (text: string) => $fetch<{ delivered?: string[], queued?: string }>(`/api/runs/${id}/note`, { method: 'POST', body: { text } }),
     stop: () => act('stop')(),
+    /** Refuse at a gate. The note is required — see the route's doc comment. */
+    reject: (note: string) => act('reject')({ note: note.trim() }),
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
   }
 }

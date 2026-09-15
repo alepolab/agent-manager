@@ -101,4 +101,35 @@ for (const role of ROLES) {
 }
 
 rmSync(root, { recursive: true, force: true })
+// ── a gate has two answers, and both belong to the same role ────────────────
+// A reviewer could approve and nothing else: `stop`, `restart` and `note` are
+// all `runEngine`, which developer and QA do not hold, so refusing meant asking
+// an operator to press Stop. A gate whose only affordance is yes is not a gate.
+//
+// Asserted against the route source because the handler imports Nuxt globals
+// and cannot be imported into a plain node test. That makes this a weaker check
+// than the capability tests above — it catches the route being widened to
+// runEngine or losing its required reason, not the runtime behaviour.
+{
+  const { readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const src = readFileSync(join(import.meta.dirname, '..', 'server/api/runs/[id]/reject.post.ts'), 'utf8')
+
+  assert.match(src, /requireCapability\(event, 'answerGate'\)/,
+    'reject must sit on answerGate — the same capability as approve, or the roles that own the gate cannot use it')
+  assert.doesNotMatch(src, /requireCapability\(event, 'runEngine'\)/,
+    'and must not be gated on runEngine, which developer and qa do not hold')
+  assert.match(src, /statusCode: 400/,
+    'a refusal without a reason is refused: the reason is the point of the gate')
+  assert.match(src, /statusCode: 409/,
+    'and a run that is not waiting on a decision has nothing to reject')
+  assert.match(src, /run\.error = /,
+    'the reason is recorded, or a rejected run reads exactly like a crashed one')
+
+  // The capability table decides who that reaches; assert it here too so the
+  // two halves cannot drift apart.
+  for (const role of ['developer', 'qa']) assert.equal(can(role, 'answerGate'), true, `${role} must be able to answer a gate both ways`)
+  assert.equal(can('manager', 'answerGate'), false, 'a manager reads; deciding is not theirs')
+}
+
 console.log('roles: a reviewer decides, an operator drives, and a broken file locks nobody out')

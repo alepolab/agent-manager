@@ -3,7 +3,7 @@ import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
-const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string] }>()
+const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string] }>()
 
 /**
  * What this person may do here. A reviewer holds `answerGate` and not
@@ -36,8 +36,9 @@ const notePlaceholder = computed(() => ({
   restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
 }[noteMode.value]))
 const sent = ref<string | null>(null)
-function send(kind: 'respond' | 'note' | 'continue') {
+function send(kind: 'respond' | 'note' | 'continue' | 'reject') {
   const text = note.value.trim()
+  if (kind === 'reject') { emit('reject', text); note.value = ''; return }
   if (kind === 'respond') emit('respond', text)
   else if (kind === 'note') { emit('note', text); sent.value = text }
   else emit('continue', text || undefined)
@@ -292,6 +293,15 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <UButton v-if="mayAnswer && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
       <UButton v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'" @click="send('continue')" />
       <UButton v-else-if="mayAnswer && run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
+      <!-- The counterpart of Approve, on the same capability: a reviewer who
+           cannot refuse is not gating anything. Disabled until a reason is
+           typed, because the reason is the point. -->
+      <UButton
+        v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget'"
+        size="xs" variant="soft" color="error" icon="i-lucide-undo-2" label="Send back"
+        :disabled="!note.trim()" :title="note.trim() ? 'Stop the run and record why' : 'Say why first'"
+        @click="send('reject')"
+      />
       <UButton v-if="mayDrive && noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
       <UButton v-if="mayDrive && run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
       <UButton v-if="mayDrive && (run.status === 'running' || run.status === 'paused')" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
