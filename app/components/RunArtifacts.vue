@@ -152,9 +152,9 @@ async function copy() {
  */
 function shortName(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1)
-  const MAX = 30
+  const MAX = 24
   if (name.length <= MAX) return name
-  const tail = Math.min(14, Math.floor(name.length / 2))
+  const tail = Math.min(13, Math.floor(name.length / 2))
   return `${name.slice(0, MAX - tail - 1)}…${name.slice(-tail)}`
 }
 
