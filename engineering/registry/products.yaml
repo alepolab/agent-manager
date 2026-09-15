@@ -91,6 +91,13 @@ products:
       rest-services: alepolab/rest-services_lbss
       rest-util: alepolab/rest-util_lbss
       sasktel-customizations: alepolab/sasktel-customizations
+      # Customer customization repos. Each customer has its own <CUSTOMER>_CRM.properties
+      # in ase_lbss: the generic module list plus this one repo, and gradle applies
+      # it as an overlay (-Pcustomer=<NAME>). Clone only the customer the ticket
+      # names. STC is not here: its build swaps core modules for _stc forks on
+      # release/stc, which is a different product, not another entry in this map.
+      eswatini-customizations: alepolab/eswatini-customizations
+      owncore-customizations: alepolab/owncore-customizations
       subscriber-activity: alepolab/subscriber-activity_lbss
       subscriber-management-web: alepolab/subscriber-management-web_lbss
       subscriber-management: alepolab/subscriber-management_lbss

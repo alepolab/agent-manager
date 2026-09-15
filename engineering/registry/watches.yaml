@@ -16,7 +16,7 @@ watches:
   # tickets arrive with the root cause and evidence that make triage worth
   # running at all.
   - id: csup-bugs
-    jql: 'project = CSUP AND status = "QualityGate Passed"'
+    jql: 'project = CSUP AND status NOT IN ("New","In Progress","DEV DONE",Closed,ACCEPTED,Released,"Waiting for GTAC")'
     work_types: [bug]
     reporter_group: gtac
     dispatch_state: Agent
