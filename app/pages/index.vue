@@ -267,7 +267,9 @@ const queueEmpty = computed(() => ({
   operator: 'No open gates, and nothing failing.',
 }[role.value ?? 'operator'] ?? 'Nothing waiting on you.'))
 const pageTitle = computed(() => (role.value === 'qa' ? 'Verification queue' : 'Your runs'))
-const minedTitle = computed(() => (role.value === 'qa' ? 'Runs you have decided on' : 'Your runs'))
+// Not "Your runs" — that is the page's own title, and a section repeating its
+// page's heading says the section has no subject of its own.
+const minedTitle = computed(() => (role.value === 'qa' ? 'Runs you have decided on' : 'Recent'))
 const minedEmpty = computed(() => (role.value === 'qa'
   ? 'You have not decided on a run yet. Your approvals and send-backs appear here.'
   : 'You have not started a run yet. Paste a ticket above to start one.'))
