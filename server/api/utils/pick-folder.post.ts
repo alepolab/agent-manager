@@ -1,9 +1,13 @@
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
+import { requireCapability } from '../../utils/session'
 
 const execAsync = promisify(exec)
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
+  // `configure`: this route mutates the instance, and carried no authorisation check —
+  // the auth middleware proves WHO the caller is, never WHAT they may do.
+  await requireCapability(event, 'configure')
   // Only meaningful when the browser and the server share a desktop.
   if (process.env.LOCAL_DESKTOP !== '1') throw createError({ statusCode: 404, message: 'Not available on a shared server' })
   const platform = process.platform

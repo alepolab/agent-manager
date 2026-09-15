@@ -1,8 +1,12 @@
 import { mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { getClaudeDir, resolveClaudePath } from '../utils/claudeDir'
+import { requireCapability } from '../utils/session'
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
+  // `configure`: this route mutates the instance, and carried no authorisation check —
+  // the auth middleware proves WHO the caller is, never WHAT they may do.
+  await requireCapability(event, 'configure')
   const claudeDir = getClaudeDir()
 
   if (existsSync(claudeDir)) {
