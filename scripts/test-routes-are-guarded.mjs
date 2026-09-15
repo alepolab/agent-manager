@@ -31,6 +31,19 @@ const API = 'server/api'
 const MUTATING = /\.(post|put|delete|patch)\.ts$/
 
 /**
+ * A GET can be as dangerous as a POST when it takes a filesystem path.
+ *
+ * This test shipped matching mutating methods only, and `GET /api/files` walked
+ * straight through it: it accepted any absolute path and returned the contents
+ * to any signed-in user, which meant the sealed credential store and the secret
+ * that decrypts it. "Handler takes a filesystem path" is as good a trigger for
+ * requiring authorisation as "handler mutates", and the rule was simply scoped
+ * too narrowly.
+ */
+const PATH_READING = /\.get\.ts$/
+const TAKES_A_PATH = /query\.path|query\.projectDir|getRouterParam\(event, 'path'\)/
+
+/**
  * Routes that legitimately carry no capability check, each with the reason it
  * does not need one. Every entry is either unauthenticated by design, acts only
  * on the caller's own account, or enforces something stricter itself.
@@ -48,14 +61,25 @@ async function walk(dir) {
   const out = []
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...await walk(path))
-    else if (MUTATING.test(entry.name)) out.push(path)
+    if (entry.isDirectory()) { out.push(...await walk(path)); continue }
+    if (MUTATING.test(entry.name)) { out.push(path); continue }
+    // A GET in scope only when its body actually takes a path from the caller.
+    // Scoping by method alone is what let `GET /api/files` through.
+    if (PATH_READING.test(entry.name) && TAKES_A_PATH.test(readFileSync(path, 'utf8'))) out.push(path)
   }
   return out
 }
 
 const files = await walk(API)
-assert.ok(files.length > 30, `expected to find the API's mutating routes, found ${files.length}`)
+assert.ok(files.length > 30, `expected to find the API's mutating and path-reading routes, found ${files.length}`)
+
+// The two routes that prompted widening the rule must stay in scope: if either
+// stops matching TAKES_A_PATH because its body was refactored, this test would
+// quietly stop watching them.
+for (const key of ['files.get.ts', 'directories.get.ts']) {
+  assert.ok(files.some(f => relative(API, f).split(/[\\/]/).join('/') === key),
+    `${key} reads a caller-supplied path and must remain in this test's scope`)
+}
 
 const unguarded = []
 for (const file of files) {
