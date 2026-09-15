@@ -10,7 +10,12 @@ const runs = ref<WorkflowRun[]>([])
 const loaded = ref(false)
 const loadError = ref<string | null>(null)
 const busy = ref<string | null>(null)
-const { me } = useUser()
+// `can`, not just `me`: this page rendered Restart, Stop, Clone and Delete to
+// every role. Three of them 403 for a developer or QA, which teaches people to
+// click and see what happens — and the fourth, Delete, did NOT 403, because its
+// route checked identity and never capability. A manager could destroy a run and
+// its evidence bundle from here.
+const { me, can } = useUser()
 const mine = computed({
   get: () => route.query.mine === '1',
   set: v => router.replace({ query: { ...route.query, mine: v ? '1' : undefined } }),
@@ -77,8 +82,11 @@ const restartPoint = (r: WorkflowRun) =>
   r.steps.find(s => s.status === 'failed')?.stepId
   ?? r.currentStepIds[0]
   ?? r.steps.find(s => s.status !== 'completed')?.stepId
-const canRestart = (r: WorkflowRun) => ['failed', 'stopped', 'interrupted'].includes(r.status) && !!restartPoint(r)
-const canStop = (r: WorkflowRun) => r.status === 'running' || r.status === 'paused'
+// Each of these is "may this run take the action" AND "may this person take it".
+// Folding the capability in here rather than at each button keeps the two
+// buttons and the bulk control from drifting apart later.
+const canRestart = (r: WorkflowRun) => can('runEngine') && ['failed', 'stopped', 'interrupted'].includes(r.status) && !!restartPoint(r)
+const canStop = (r: WorkflowRun) => can('runEngine') && (r.status === 'running' || r.status === 'paused')
 
 // Stop is irreversible for the step in flight: ask once, inline, then forget.
 const confirmingStop = ref<string | null>(null)
@@ -107,7 +115,9 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<strin
   }
 }
 
-const canDelete = (r: WorkflowRun) => !['running', 'paused'].includes(r.status)
+// Deleting a run takes its evidence directory with it — the one irreversible act
+// in this console, and the one that was open to everyone.
+const canDelete = (r: WorkflowRun) => can('runEngine') && !['running', 'paused'].includes(r.status)
 
 // Delete removes the run and its evidence for good: ask once inline, like Stop.
 const confirmingDelete = ref<string | null>(null)
@@ -132,7 +142,7 @@ async function del(r: WorkflowRun) {
 }
 
 // Bulk delete of every failed run currently shown. One confirm, then one request each.
-const failedShown = computed(() => shown.value.filter(r => r.status === 'failed'))
+const failedShown = computed(() => (can('runEngine') ? shown.value.filter(r => r.status === 'failed') : []))
 const confirmingBulk = ref(false)
 let bulkTimer: ReturnType<typeof setTimeout> | null = null
 const bulkDeleting = ref(false)
@@ -251,7 +261,10 @@ async function deleteFailed() {
                 <div class="flex gap-1 justify-end">
                   <UButton size="xs" variant="ghost" label="Open" :to="`/runs/${r.id}`" />
                   <UButton v-if="canRestart(r)" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Restart" :loading="busy === r.id" @click="act(r, 'restart', { stepId: restartPoint(r) })" />
-                  <UButton size="xs" variant="ghost" icon="i-lucide-copy" label="Clone" :to="`/workflows/${r.workflowSlug}?clone=${r.id}`" />
+                  <!-- Clone lands in the workflow builder, which has no role
+                       gating of its own: for a manager that meant Run, Save and
+                       Delete workflow, reached from a read-only page. -->
+                  <UButton v-if="can('startRun')" size="xs" variant="ghost" icon="i-lucide-copy" label="Clone" :to="`/workflows/${r.workflowSlug}?clone=${r.id}`" />
                   <UButton
                     v-if="canStop(r)"
                     size="xs" :variant="confirmingStop === r.id ? 'solid' : 'ghost'" :color="confirmingStop === r.id ? 'error' : 'neutral'"
