@@ -4,7 +4,7 @@ import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RU
 import { needsJustification, oversightReason } from '~~/shared/utils/oversight'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
-const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string] }>()
+const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string], rework: [stepId: string, note: string] }>()
 
 /**
  * What this person may do here. A reviewer holds `answerGate` and not
@@ -42,8 +42,9 @@ const notePlaceholder = computed(() => ({
   restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
 }[noteMode.value]))
 const sent = ref<string | null>(null)
-function send(kind: 'respond' | 'note' | 'continue' | 'reject') {
+function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'rework') {
   const text = note.value.trim()
+  if (kind === 'rework') { emit('rework', reworkTarget.value, text); note.value = ''; reworkTarget.value = ''; return }
   if (kind === 'reject') { emit('reject', text); note.value = ''; return }
   if (kind === 'respond') emit('respond', text)
   else if (kind === 'note') { emit('note', text); sent.value = text }
@@ -53,6 +54,24 @@ function send(kind: 'respond' | 'note' | 'continue' | 'reject') {
 
 /** Optional correction handed to whichever step is restarted next. */
 const note = ref('')
+
+/**
+ * Where a send-back goes. The reviewer picks; the run never guesses.
+ *
+ * A gate used to offer exactly two answers — approve, or end the run — while the
+ * runner could always hand work back to a named step with an instruction. The
+ * reason given for not exposing that was that the target could not be inferred
+ * ("Push + PR" has three predecessors), which is true and beside the point: the
+ * person deciding knows which step was wrong.
+ *
+ * Candidates are the steps that have already run. A pending step has produced
+ * nothing to correct, and the gated step itself is what Approve is for.
+ */
+const reworkTarget = ref('')
+const reworkCandidates = computed(() =>
+  (props.run?.steps ?? []).filter(s => stepSettled(s) && s.stepId !== props.run?.question?.stepId))
+const reworksLeft = computed(() => 2 - (props.run?.reworks ?? 0))
+watch(() => props.run?.id, () => { reworkTarget.value = '' })
 
 /** Evidence: the run's artifact files, listed on demand and opened one at a time. */
 const artifacts = ref<{ name: string, size: number }[] | null>(null)
@@ -99,6 +118,22 @@ const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | null = null
 onMounted(() => { clock = setInterval(() => { now.value = Date.now() }, 1000) })
 onUnmounted(() => { if (clock) clearInterval(clock) })
+
+/**
+ * How long this gate has been waiting on a person, ticking with the clock above.
+ *
+ * `question.askedAt` has always been on the record and was rendered nowhere, so
+ * a gate that had been open for three hours looked exactly like one raised a
+ * moment ago — to the reviewer, and to anyone wondering why a run had not moved.
+ */
+const waitingLabel = computed(() => {
+  const asked = props.run?.question?.askedAt
+  if (!asked) return 'for a decision'
+  const secs = Math.max(0, Math.round((now.value - asked) / 1000))
+  if (secs < 60) return `${secs}s`
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`
+})
 
 const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
   if (!s.startedAt) return ''
@@ -207,6 +242,27 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <p v-if="run.blastRadius" class="text-[11px] mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
       </p>
+      <!-- How long this has been waiting on a person. The figure existed on the
+           record (question.askedAt) and was rendered nowhere, so neither the
+           reviewer nor anyone watching could see a gate going stale. -->
+      <p class="text-[11px] text-label">
+        Waiting {{ waitingLabel }}<template v-if="(run.reworks ?? 0) > 0"> · sent back {{ run.reworks }} of 2 times already</template>
+      </p>
+    </div>
+
+    <!-- What was decided at this run's earlier gates. A four-gate runbook used
+         to arrive at its last gate with no record of who approved the first
+         three or why: approval notes lived in memory and died with the process. -->
+    <div v-if="run.decisions?.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <div class="font-medium" style="color: var(--text-primary);">Earlier decisions on this run</div>
+      <div v-for="d in run.decisions" :key="d.at" class="flex gap-2">
+        <span
+          class="font-mono uppercase shrink-0"
+          :style="{ color: d.verdict === 'approved' ? STATUS_COLOR.completed : d.verdict === 'rejected' ? STATUS_COLOR.failed : STATUS_COLOR.paused }"
+        >{{ d.verdict }}</span>
+        <span class="shrink-0">{{ d.label }}</span>
+        <span class="text-label truncate">{{ d.by }}<template v-if="d.note">: {{ d.note }}</template></span>
+      </div>
     </div>
     <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
     <textarea
@@ -312,10 +368,28 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <!-- The counterpart of Approve, on the same capability: a reviewer who
            cannot refuse is not gating anything. Disabled until a reason is
            typed, because the reason is the point. -->
+      <!-- The reviewer's third answer, and the one that was missing: hand the
+           work back to a named earlier step with the instruction it works from.
+           The runner has always been able to do this; only an agent could ask
+           for it. "Reject run" beside it ends the run — they were previously the
+           same button, labelled as this one and behaving as that one. -->
+      <template v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget' && reworkCandidates.length && reworksLeft > 0">
+        <select v-model="reworkTarget" class="field-input text-[12px] w-44" aria-label="Step to send this back to">
+          <option value="">Send back to…</option>
+          <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}</option>
+        </select>
+        <UButton
+          size="xs" variant="soft" color="warning" icon="i-lucide-corner-up-left"
+          :label="`Send back (${reworksLeft} left)`"
+          :disabled="!reworkTarget || !note.trim()"
+          :title="!reworkTarget ? 'Choose the step it goes back to' : !note.trim() ? 'Say what needs to change' : 'That step runs again with your instruction'"
+          @click="send('rework')"
+        />
+      </template>
       <UButton
         v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget'"
-        size="xs" variant="soft" color="error" icon="i-lucide-undo-2" label="Send back"
-        :disabled="!note.trim()" :title="note.trim() ? 'Stop the run and record why' : 'Say why first'"
+        size="xs" variant="ghost" color="error" icon="i-lucide-circle-x" label="Reject run"
+        :disabled="!note.trim()" :title="note.trim() ? 'End the run and record why' : 'Say why first'"
         @click="send('reject')"
       />
       <UButton v-if="mayDrive && noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
