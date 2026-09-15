@@ -9,6 +9,7 @@ import { resolveTools, resolveMaxTurns, resolveMaxDurationMs } from './agentTool
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
+import { envForUser } from './users.ts'
 import type { AgentFrontmatter } from '~/types'
 
 /**
@@ -33,9 +34,22 @@ import type { AgentFrontmatter } from '~/types'
  * from this shell answers for the wrong process, and that is exactly how a run
  * finished its fix and then halted at `git commit`.
  */
-export async function agentEnvFor(_startedBy?: string): Promise<Record<string, string>> {
+export async function agentEnvFor(startedBy?: string): Promise<Record<string, string>> {
   return {
     ...process.env as Record<string, string>,
+    // The commit identity — the starter's, or the bot as the floor. It used to
+    // be the caller's job alone: callAgent spreads envForUser over this, so an
+    // agent always had it, and preflight — which calls this and nothing else —
+    // never did. Preflight then asked `git var GIT_COMMITTER_IDENT` in an
+    // environment deliberately missing the identity the agents would run with,
+    // and hard-failed every run on any host without a global gitconfig. Every
+    // CI runner is such a host, and so is a fresh container.
+    //
+    // Unconditional, and not guarded on `startedBy` being set: an anonymous run
+    // still commits, which is why envForUser answers undefined with the bot
+    // identity rather than nothing. Guarding here would have reproduced the
+    // original bug for exactly the runs that have no developer attached.
+    ...await envForUser(startedBy),
     // A bot identity for git and gh, when one is configured, so agent pushes
     // and PRs are not attributed to whoever runs the server.
     ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
