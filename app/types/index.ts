@@ -124,7 +124,15 @@ export interface Skill {
   githubRepo?: string
   pluginName?: string
   mcpServer?: { name: string; scope: string }
+  /** Agents that DECLARE this skill: its full body is inlined into their prompt. */
   agents?: { name: string; slug: string }[]
+  /**
+   * Agents that read this skill from disk at run time without declaring it —
+   * the language catalogue ($SDLC_SKILLS_DIR) and the compound-engineering
+   * steps ($CE_SKILLS_DIR). Separate from `agents` because declaring these
+   * instead would add ~80,000 tokens to every agent's prompt on every step.
+   */
+  readBy?: { name: string; slug: string }[]
 }
 
 export interface AgentSkill {
