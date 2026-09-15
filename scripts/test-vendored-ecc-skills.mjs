@@ -110,5 +110,54 @@ check('the reasons for dropping are written down',
   /Not taken, and why/.test(vendored) && /rebase-merge/.test(vendored),
   'the next person to look at ECC will re-evaluate the same four skills unless the reasoning survives')
 
+// ── the optional ce menu: same drift, one plugin over ─────────────────────
+//
+// CE_SKILL_MENU rows name compound-engineering skills a step MAY read. They
+// fail the quiet way by construction: the menu is explicitly optional, so a
+// row pointing at a skill that is not there is skipped in silence and the step
+// simply works without it. Exactly the drift the catalogue above guards, in a
+// tree this repo does not own - the plugin is fetched at image build time,
+// pinned by sha, and upstream is free to rename a skill at any release.
+{
+  const rows = [...templates.matchAll(/\['(ce-[a-z-]+)', '/g)].map(m => m[1])
+  const unique = [...new Set(rows)]
+  check('the menu names at least one skill',
+    unique.length > 0, 'CE_SKILL_MENU exists but no agent passes it a row')
+
+  check('the menu is optional, and says so',
+    /never halt, and never ask/.test(templates),
+    'an OPTIONAL skill that is missing must not end a run; the mandatory one (CE_SKILL_RULES) still halts, and the prompts must not blur the two')
+
+  // Per PROMPT, not globally: ce-commit-push-pr is mandatory for sdlc-ce-ship
+  // and a fair optional offer to sdlc-evidence-and-pr, which is a different
+  // step in a different runbook. What must never happen is one agent being
+  // told a skill is its method AND offered the same file as optional - two
+  // rules for one file, and the agent picks.
+  for (const m of templates.matchAll(/id: '(sdlc-[a-z0-9-]+)'/g)) {
+    const i = m.index
+    const j = templates.indexOf("id: 'sdlc-", i + 10)
+    const prompt = templates.slice(i, j > 0 ? j : undefined)
+    const mandated = [...prompt.matchAll(/CE_SKILL_RULES\('(ce-[a-z-]+)'/g)].map(x => x[1])
+    const offered = [...prompt.matchAll(/\['(ce-[a-z-]+)', '/g)].map(x => x[1])
+    const both = offered.filter(o => mandated.includes(o))
+    check(`${m[1]}: no skill is both mandated and offered`,
+      both.length === 0,
+      `${both.join(', ')} appears as this step's method AND in its optional menu - the prompt gives two different rules for the same file`)
+  }
+
+  // Names are checked against the real tree only where it exists: vendor/ is
+  // populated by the Dockerfile, so a checkout legitimately has none.
+  const ceDir = join(root, 'vendor', 'compound-engineering', 'skills')
+  if (existsSync(ceDir)) {
+    for (const r of unique) {
+      check(`${r} is a real skill in the pinned plugin`,
+        existsSync(join(ceDir, r, 'SKILL.md')),
+        'the row would be skipped in silence and the step would run without the method it was offered')
+    }
+  } else {
+    console.log(`  skip vendor/compound-engineering absent (fetched at image build); ${unique.length} menu rows unverified against disk`)
+  }
+}
+
 console.log(failures === 0 ? '\nvendored ECC skills: all checks passed' : `\nvendored ECC skills: ${failures} failed`)
 process.exit(failures === 0 ? 0 : 1)

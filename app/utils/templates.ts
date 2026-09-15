@@ -132,6 +132,45 @@ Write what you found to \`prior-art.md\` in the run artifacts directory either
 way, including "none found, searched: commits, branches, PRs, comments". A
 later step, or the next run on this ticket, reads it instead of searching again.`
 
+/**
+ * Compound-engineering skills a step MAY read, as opposed to the one it must.
+ *
+ * `CE_SKILL_RULES` binds a ce step to a single skill as its method and halts
+ * when it is missing. These are the other way round: available, matched to a
+ * condition, and skipped without comment when absent. The difference matters
+ * more than it looks - a step that halts because an OPTIONAL skill is not on
+ * disk fails a run for nothing, and the plugin is fetched at image build time,
+ * so "not there" is a normal state on a checkout.
+ *
+ * Read from disk, never declared in frontmatter, for the reason the language
+ * catalogue exists: buildAgentSystemPrompt inlines the full body of every
+ * declared skill into every prompt on every step, and the ce skills run to
+ * ~240,000 bytes between the four the runbooks already use. A table row costs
+ * about twenty tokens; the skill's body is read only by the step that turns
+ * out to need it.
+ *
+ * Nothing here replaces a skill an agent already declares. These are additions.
+ */
+const CE_SKILL_MENU = (rows: [string, string][]) => `## Compound-engineering skills available to you
+
+These are on disk at \`$CE_SKILLS_DIR/<name>/SKILL.md\` (its \`references/\`
+directory sits beside it). When a row's condition holds, read that skill first
+(\`cat "$CE_SKILLS_DIR/<name>/SKILL.md"\`) and follow it for that part of your
+work. The four adjustments in "## The compound-engineering skill you follow"
+apply to these too: nobody is at the keyboard, no subagents or Skill tool,
+artifacts go to the run artifacts directory, and your git mandate is this
+prompt's.
+
+| Skill | Read it when |
+|---|---|
+${rows.map(([skill, when]) => `| \`${skill}\` | ${when} |`).join('\n')}
+
+These are optional, and they do not replace the skills your frontmatter already
+declares. If \`CE_SKILLS_DIR\` is empty or a file is not there, carry on with
+your own method and say so in one line - never halt, and never ask. That is the
+opposite of the skill your step is *told* to follow, where a missing file is a
+halt.`
+
 const SDLC_LANGUAGE_SKILLS = `## Language-matched skills
 
 The stack this run touches is named in the context packet and the product
@@ -845,6 +884,8 @@ Merge a \`stack\` key into \`meta.json\` in the run artifacts directory named at
 - Config resolution here is **env first, config file second**, and \`\${VAR:-}\` in a compose file *defines* the variable as an empty string rather than leaving it unset. If you are seeding or checking a value the product treats as mandatory, confirm what the container's actual environment holds — empty, unset, and absent are three different states here and behave differently.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-worktree', 'you are creating or attaching a git worktree for the run branch']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -1031,6 +1072,8 @@ Then merge a \`fix\` key into \`meta.json\` in that same directory. \`fix\` is a
 \`files_changed\` and \`lines_changed\` are counts — get them from \`git diff --stat\` or equivalent, not from memory of what you touched. A \`model\` field was once recorded as fact by a runner that had never actually selected a model; the same failure mode is writing a plausible-looking number into \`fix\` without having run the command that would make it true. Absent-and-rejected beats present-and-wrong: if you cannot honestly compute a value here — a merge order you are not certain of, a commit sha you have not verified exists — leave it out and let the bundle validator reject it, rather than writing something that merely looks right.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-debug', 'the cause is not yet located: a failing test you cannot explain, or behaviour that is wrong without an obvious line']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -1341,6 +1384,8 @@ If there is no browser surface to trace, say so plainly and write nothing. The b
 A Playwright run can exit 0 with nothing meaningful behind it — no tests collected, every test skipped, a \`trace.zip\` that exists but is empty. Confirm the counts (tests run, passed, failed) before you report a result, and confirm the trace file is actually populated before you name it in your report — an exit code alone is no more evidence than "the stack is up" is evidence with no request behind it.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-test-browser', 'you are choosing which pages the diff affects and driving a real browser over them']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -1607,6 +1652,8 @@ run behind a fix, the URL of each reply.
 - Commit anything under \`.agent/\` except \`plan.md\`, or any run artifact.
 - Merge the PR, approve it, or dismiss a review. A person merges.
 - Read or print a secrets file; the secrets guard denies it and the attempt is logged.
+
+${CE_SKILL_MENU([['ce-babysit-pr', 'you are watching an open PR across several visits: checks, reviews, and what to do between them'], ['ce-resolve-pr-feedback', 'you are addressing review comments a person or a bot already left']])}
 
 ${SDLC_STANDING_RULES}`,
   },
@@ -1908,6 +1955,8 @@ If it exits non-zero, the fields it names as missing are the finding. Report the
 
 Every field you assemble here inherits the rule behind the PR-link placeholder above: a value that looks plausible but was never actually verified is worse than a missing one, because a missing field fails loudly at validation and a wrong one does not fail at all. If a prior step left something unresolved, implausible, or unverifiable in \`meta.json\`, that is a finding for your report — flag it — not something to smooth over so the bundle validates cleanly.
 
+${CE_SKILL_MENU([['ce-commit-push-pr', 'you are writing the commit messages and the pull request body']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -2079,6 +2128,8 @@ The scope, the count by severity, what you fixed, what remains. End with the lin
 then the listing of the artifacts directory. A review with an unfixed P1 never says PASS; it ends with the rework line above.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-simplify-code', 'the diff works but carries duplication, dead flexibility or an abstraction with one caller']])}
+
 ${SDLC_STANDING_RULES}
 
 ${SDLC_STOPPING}`,
@@ -2264,6 +2315,8 @@ End with one of
 then the listing of the artifacts directory. A FAIL caused by this change ends instead with \`PIPELINE-REWORK: Implement Fix — <case id>: expected <x>, observed <y>, see browser/<file>\`, one line per case. A BLOCKED case because the stack is not serving is \`PIPELINE-REWORK: Update Stack — <what you saw>\`; a BLOCKED case because of missing seed data is \`PIPELINE-REWORK: Stand Up Stack — <what is missing>\`.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-test-browser', 'a manual case needs a browser walked through it and the evidence captured']])}
+
 ${SDLC_STANDING_RULES}
 
 ${SDLC_STOPPING}`,
@@ -2318,6 +2371,7 @@ The PR URL, its base and head, and the commit count. End with the line
     PR: <url>
 
 then the listing of the artifacts directory.
+
 
 ${SDLC_STANDING_RULES}
 
