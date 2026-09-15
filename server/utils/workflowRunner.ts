@@ -2,7 +2,7 @@ import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf, gateSatisfied, markSkippedByCondition, planDispatch,
-  planListDispatch, missingArtifacts,
+  planListDispatch, missingArtifacts, stackSkipAllowed,
   type WorkflowGraph, type RunState, type TriggerWorkflowConfig, type DispatchTarget,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
@@ -1029,6 +1029,34 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))
+
+    // Whether a stack is needed is intake's call, recorded in meta.json, not
+    // the provisioner's: see stackSkipAllowed. A refused skip goes back to the
+    // same session to stand the stack up, as a missing file does below.
+    if (skip && step.agentSlug === 'sdlc-stack-provisioner') {
+      const meta = await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8').then(JSON.parse).catch(() => null)
+      const gate = stackSkipAllowed(meta)
+      if (!gate.allowed) {
+        const why = `Stack skip refused: ${gate.reason}.`
+        logLine(l, run, rec, why)
+        log.warn('stack skip refused', { runId: run.id, stepId: id, reason: gate.reason })
+        delete rec.skipReason
+        if (canRevisit(l.graph, l.state, id)) {
+          Object.assign(rec, { status: 'completed', error: why })
+          try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+          const session = resumableSession(rec)
+          if (session) l.resumeFrom[id] = session
+          l.retryFeedback[id] = `${why} Keep the checkout you have, stand the stack up and prove it healthy, then write stack-report.md and merge stack into meta.json.`
+          l.state.status[id] = 'completed'
+          armNode(l.state, id)
+          return true
+        }
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', error: `${why} The step has no visits left to stand it up.` })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+    }
 
     // Checked before the monitor, so a step that left out a file is sent back
     // for that exact file instead of paying for a model to notice. A skip is

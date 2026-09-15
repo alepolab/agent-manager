@@ -467,6 +467,18 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.ok(!/git clone git@github\.com/.test(prov.body),
     'an SSH clone URL cannot work in the container and must not be suggested')
 
+  // Whether a stack is needed is intake's call, and the runner refuses a
+  // provisioner skip meta.json does not permit (stackSkipAllowed). An agent
+  // that is not told both keys exist cannot write or honour them.
+  const intake = AGENT_TEMPLATES.find(t => t.id === 'sdlc-ticket-intake')
+  for (const key of ['stack_required', 'stack_reason']) {
+    assert.ok(intake.body.includes(`\`${key}\``), `intake must be told to write ${key} into meta.json`)
+    assert.ok(prov.body.includes(`\`${key}\``), `the provisioner must be told to read ${key}`)
+  }
+  assert.ok(/`schema`, `protocol` or `money`/.test(intake.body) && /`schema`, `protocol` or\s+`money`/.test(prov.body),
+    'both must know which blast radii the runner always verifies on a stack')
+  assert.ok(prov.body.includes('`stack: null`'), 'a skipped provisioner must record stack: null for the bundle')
+
   // A compose-only ticket with no UI reached the browser step, which correctly
   // had nothing to capture. Its output was the ls -la of the artifacts
   // directory and nothing else, so the monitor read a step named "Browser

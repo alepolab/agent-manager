@@ -25,6 +25,7 @@ import {
   MAX_CONCURRENCY,
   ancestorsOf,
   gateSatisfied,
+  stackSkipAllowed,
   markSkippedByCondition,
   markFailed,
   planDispatch,
@@ -358,6 +359,34 @@ assert.equal(joinInputs([]), '')
   assert.equal(gateSatisfied('{').verdict, 'error')
   assert.equal(gateSatisfied('[]').count, 0)
   assert.equal(gateSatisfied('[1,2,3]').count, 3)
+}
+
+// ── stackSkipAllowed: only an explicit false, outside the forced radii ─────
+// The dimension that varies is what intake left in meta.json. Only one shape
+// permits a skip; everything else - including every way of leaving it out -
+// must refuse, or a forgotten key becomes permission.
+{
+  const cases = [
+    // meta,                                                             allowed, reason fragment
+    [{ stack_required: false, blast_radius: 'ui_parsing' }, true, /stack_required: false/],
+    [{ stack_required: false, blast_radius: 'docs', stack_reason: 'compose render only' }, true, /compose render only/],
+    [{ stack_required: false, blast_radius: 'deployment' }, true, /stack_required: false/],
+    [{ stack_required: true, blast_radius: 'ui_parsing', stack_reason: 'needs URM' }, false, /true \(needs URM\)/],
+    [{ blast_radius: 'ui_parsing' }, false, /no stack_required/],
+    [{ stack_required: 'false', blast_radius: 'docs' }, false, /no stack_required/],
+    [{ stack_required: 0, blast_radius: 'docs' }, false, /no stack_required/],
+    [{ stack_required: false, blast_radius: 'schema' }, false, /schema/],
+    [{ stack_required: false, blast_radius: 'protocol' }, false, /protocol/],
+    [{ stack_required: false, blast_radius: 'money' }, false, /money/],
+    [{}, false, /no stack_required/],
+    [null, false, /no stack_required/],
+    [[], false, /no stack_required/],
+  ]
+  for (const [meta, allowed, reason] of cases) {
+    const got = stackSkipAllowed(meta)
+    assert.equal(got.allowed, allowed, `stackSkipAllowed(${JSON.stringify(meta)}) should be ${allowed}`)
+    assert.match(got.reason, reason, `stackSkipAllowed(${JSON.stringify(meta)}) reason: ${got.reason}`)
+  }
 }
 
 // ── markSkippedByCondition clears `armed`, or the resolution loop hangs ────

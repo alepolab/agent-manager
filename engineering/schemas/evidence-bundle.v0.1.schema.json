@@ -110,7 +110,11 @@
       "description": "Full semver (MAJOR.MINOR.PATCH, optional -prerelease/+build), matching the \"version\" field of the installed plugin's .claude-plugin/plugin.json. A placeholder such as \"unknown\", \"n/a\", or \"TBD\" is not a version and must not validate \u2014 if the plugin.json lookup fails, the run must halt rather than write a placeholder here."
     },
     "stack": {
-      "type": "object",
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The stack the change was verified on, or null when intake recorded stack_required: false and provisioning stood nothing up.",
       "required": [
         "profile",
         "topology"
@@ -407,6 +411,30 @@
         "required": [
           "adversarial"
         ]
+      }
+    },
+    {
+      "description": "Schema, protocol and money changes must have been verified on a running stack.",
+      "if": {
+        "properties": {
+          "blast_radius": {
+            "enum": [
+              "schema",
+              "protocol",
+              "money"
+            ]
+          }
+        },
+        "required": [
+          "blast_radius"
+        ]
+      },
+      "then": {
+        "properties": {
+          "stack": {
+            "type": "object"
+          }
+        }
       }
     },
     {

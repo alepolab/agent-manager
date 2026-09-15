@@ -380,6 +380,32 @@ export function parseSkip(text: string | undefined | null): string | null {
   return last ? last[1]!.trim() : null
 }
 
+/** Blast radii a unit test cannot clear: a migration, a wire protocol, a charge. */
+export const STACK_REQUIRED_BLAST_RADII = ['schema', 'protocol', 'money']
+
+/**
+ * Whether the provisioning step may declare PIPELINE-SKIP, judged from the
+ * meta.json intake wrote.
+ *
+ * Left to the provisioner alone, the same kind of ticket stood a stack up on
+ * one run and skipped it on the next, and a skip on a wide-impact change ships
+ * a PR whose only proof is a unit test. So intake records `stack_required`
+ * with its reason, and the runner holds the provisioner to it. Fails closed: a
+ * missing or non-boolean value is not permission, and the forced blast radii
+ * overrule intake entirely. I/O-free like gateSatisfied: the caller reads the
+ * file and passes the parsed object, or null.
+ */
+export function stackSkipAllowed(meta: unknown): { allowed: boolean, reason: string } {
+  const m = meta && typeof meta === 'object' ? meta as Record<string, unknown> : {}
+  const because = typeof m.stack_reason === 'string' && m.stack_reason.trim() ? ` (${m.stack_reason.trim()})` : ''
+  if (typeof m.blast_radius === 'string' && STACK_REQUIRED_BLAST_RADII.includes(m.blast_radius)) {
+    return { allowed: false, reason: `blast_radius is ${m.blast_radius}, which is always verified on a running stack` }
+  }
+  if (m.stack_required === false) return { allowed: true, reason: `intake recorded stack_required: false${because}` }
+  if (m.stack_required === true) return { allowed: false, reason: `intake recorded stack_required: true${because}` }
+  return { allowed: false, reason: 'meta.json has no stack_required: false from intake' }
+}
+
 export type GateResult = {
   verdict: 'run' | 'skip' | 'error'
   /** Reads as the predicate of a sentence about the file: "<name> <detail>." */

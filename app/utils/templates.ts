@@ -436,13 +436,18 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\`, \`stack_required\` and \`stack_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
 - \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch from it — a production bug is a hotfix from main, a QA bug a hotfix from ci-release, everything else starts from develop — and no code step runs before this file says which.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
+
+Two more keys decide whether the provisioning step stands a stack up, and the runner holds it to your answer:
+
+- \`stack_required\` — \`true\` or \`false\`, a JSON boolean. \`false\` only when the ticket itself shows the change is proven without a running product: logic a unit or component test reaches (a parser, a calculation, a validation rule), a change proven by rendering compose statically, docs, build or CI files. Anything the ticket leaves unclear is \`true\`. A \`blast_radius\` of \`schema\`, \`protocol\` or \`money\` is always \`true\` — the runner refuses a skip for those whatever you write.
+- \`stack_reason\` — one sentence naming what proves the change: "reproducible by a unit test of the date parser", "compose render only", "needs the migration applied to MariaDB". Not "seems simple".
 
 Do **not** write \`plugin_version\`, \`identity\`, \`model\`, \`watch\` or \`cost\`. Those are runner-owned provenance: the server process writes them and re-asserts them over anything an agent puts there, because they are facts about the run rather than about the ticket. Three real runs halted here trying to find the installed plugin — the working directory is the target repository, so a search of \`~/.claude\` could never succeed no matter how good the pattern. If you find one of these keys already present in \`meta.json\`, leave it exactly as it is.
 
@@ -504,6 +509,20 @@ Leaving later steps without a repository is not.
 
 Report the checkout path and the output of \`git remote -v\` and
 \`git rev-parse HEAD\` for each repository, whether or not you stood anything up.
+
+## Whether to stand a stack up is already decided
+
+Read \`stack_required\`, \`stack_reason\` and \`blast_radius\` from \`meta.json\` before
+anything else. Intake made that call from the ticket; you carry it out.
+
+- \`stack_required: false\` — check out, confirm the reason holds against the code
+  you now have (quote what you ran), and end with \`PIPELINE-SKIP:\` quoting the
+  reason. If the checkout shows the reason is wrong — the "unit-testable" parser
+  is only reachable through a running service — stand the stack up and say which
+  fact overruled intake.
+- \`stack_required: true\`, missing, or a \`blast_radius\` of \`schema\`, \`protocol\` or
+  \`money\` — stand the stack up. The runner refuses a skip in these cases and
+  sends you back to do it, so a skip costs a visit and changes nothing.
 
 ## Conventions in this estate
 
@@ -768,6 +787,8 @@ Merge a \`stack\` key into \`meta.json\` in the run artifacts directory named at
 - \`profile\` (string, required) — the compose profile you brought up (e.g. \`ocs\`).
 - \`topology\` (string, required) — the shape you stood up (e.g. \`single\`, \`two-node\`).
 - \`liquibase_tag\` (string, or \`null\` if no Liquibase migration applied) — optional, but always include the key, even as \`null\`.
+
+When you skipped, merge \`stack: null\` instead — the key present and null, so the bundle says no stack was stood up rather than looking like a forgotten field.
 
 \`meta.json\` already exists — read it, merge \`stack\` into the object, and write the whole object back. Never overwrite it.
 
