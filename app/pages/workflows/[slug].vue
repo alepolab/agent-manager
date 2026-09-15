@@ -16,6 +16,22 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
+// This page had no role awareness at all. It is reachable by URL, and Clone on
+// the runs page used to land every role here — so a manager, whose role is
+// "Reads progress across runs. Changes nothing", was shown Save and Delete
+// workflow. The routes behind them already refuse it; the page did not.
+const { can } = useUser()
+/**
+ * Hiding a button is a courtesy to the person; it is not a control on the edit.
+ *
+ * Every mutation on this canvas funnels through the five handlers below, and
+ * three of them need no button at all: clicking an edge deletes it, dragging a
+ * node moves it, dropping an agent adds a step. Guarding the markup alone would
+ * leave all three reachable. The server refuses the Save that would persist any
+ * of it, so the damage was never permanent — but a canvas that silently discards
+ * your edits on reload is a worse answer than one that does not accept them.
+ */
+const readOnly = computed(() => !can('configure'))
 const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote, reject, rework } = useWorkflowRun(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
 
@@ -225,7 +241,7 @@ function materializeEdges() {
 }
 
 function onConnect({ source, target }: { source: string, target: string }) {
-  if (isRunning.value || !source || !target || source.startsWith('monitor:') || target.startsWith('monitor:')) return
+  if (readOnly.value || isRunning.value || !source || !target || source.startsWith('monitor:') || target.startsWith('monitor:')) return
   materializeEdges()
   workflowSteps.value = workflowSteps.value.map((s) => {
     if (s.id !== source) return s
@@ -235,7 +251,7 @@ function onConnect({ source, target }: { source: string, target: string }) {
 }
 
 function onEdgeClick({ edge }: { edge: { id: string, source: string, target: string } }) {
-  if (isRunning.value || edge.id.startsWith('m-')) return
+  if (readOnly.value || isRunning.value || edge.id.startsWith('m-')) return
   materializeEdges()
   workflowSteps.value = workflowSteps.value.map(s =>
     s.id === edge.source ? { ...s, next: (s.next ?? []).filter(id => id !== edge.target) } : s,
@@ -243,7 +259,7 @@ function onEdgeClick({ edge }: { edge: { id: string, source: string, target: str
 }
 
 function onNodeDragStop({ node }: { node: { id: string, position: { x: number, y: number } } }) {
-  if (node.id.startsWith('monitor:')) return
+  if (readOnly.value || node.id.startsWith('monitor:')) return
   workflowSteps.value = workflowSteps.value.map(s =>
     s.id === node.id ? { ...s, position: { x: Math.round(node.position.x), y: Math.round(node.position.y) } } : s,
   )
@@ -251,7 +267,7 @@ function onNodeDragStop({ node }: { node: { id: string, position: { x: number, y
 
 function addStep(agentSlug: string, position?: { x: number, y: number }) {
   const agent = agentBySlug(agentSlug)
-  if (!agent || isRunning.value) return
+  if (!agent || readOnly.value || isRunning.value) return
   // Once edges are explicit, a new node starts unconnected rather than silently
   // inheriting the array-order fallback.
   const explicit = workflowSteps.value.some(s => s.next !== undefined)
@@ -274,7 +290,7 @@ function onDrop(event: DragEvent) {
 function onDragOver(event: DragEvent) { event.preventDefault() }
 
 function removeStep(stepId: string) {
-  if (isRunning.value) return
+  if (readOnly.value || isRunning.value) return
   workflowSteps.value = workflowSteps.value
     .filter(s => s.id !== stepId)
     .map(s => (s.next ? { ...s, next: s.next.filter(id => id !== stepId) } : s))
@@ -400,8 +416,11 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         </button>
       </div>
 
-      <!-- Mobile: Add Agent button -->
+      <!-- Mobile: Add Agent button. `configure` like Save, because a step added
+           by someone who cannot save is a step that quietly disappears on
+           reload — a worse outcome than not offering it. -->
       <UButton
+        v-if="can('configure')"
         class="md:hidden"
         label="Add Agent"
         icon="i-lucide-plus"
@@ -410,8 +429,12 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         @click="() => { showMobileAgentPicker = true }"
       />
 
+      <!-- Each of these maps to a route that already refuses the wrong role:
+           Stop needs `runEngine`, Run needs `startRun`, Save and Delete need
+           `configure`. They rendered for everyone regardless, so the only way to
+           learn you could not use one was to press it and read the 403. -->
       <UButton
-        v-if="isRunning || isPaused"
+        v-if="(isRunning || isPaused) && can('runEngine')"
         label="Stop"
         icon="i-lucide-square"
         size="sm"
@@ -420,15 +443,21 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         @click="stop"
       />
       <UButton
-        v-else
+        v-else-if="!isRunning && !isPaused && can('startRun')"
         label="Run"
         icon="i-lucide-play"
         size="sm"
         :disabled="!canRun"
         @click="() => { showRunModal = true }"
       />
-      <UButton label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
-      <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
+      <UButton v-if="can('configure')" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
+      <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
+      <!-- Said out loud rather than left as an absence: a page with its controls
+           quietly removed is indistinguishable from a broken one, and the
+           pipeline definition is worth reading before answering a gate on it. -->
+      <span v-if="!can('configure')" class="text-[11px] text-label whitespace-nowrap">
+        Read-only — changing a workflow is an operator's job.
+      </span>
     </div>
 
     <!-- Description -->
@@ -463,6 +492,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     <div class="flex-1 flex min-h-0">
       <!-- Left palette (hidden on mobile) -->
       <div
+        v-if="can('configure')"
         class="hidden md:flex flex-col w-[200px] shrink-0 overflow-hidden"
         style="border-right: 1px solid var(--border-subtle); background: var(--surface-raised);"
       >
@@ -525,8 +555,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             :edges="edges"
             :min-zoom="0.3"
             :max-zoom="2"
-            :nodes-connectable="!isRunning"
-            :nodes-draggable="!isRunning"
+            :nodes-connectable="!isRunning && can('configure')"
+            :nodes-draggable="!isRunning && can('configure')"
             @drop="onDrop"
             @dragover="onDragOver"
             @connect="onConnect"
@@ -536,6 +566,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             <template #node-workflow="nodeProps">
               <WorkflowNode
                 :data="nodeProps.data"
+                :editable="!readOnly"
                 @remove="removeStep(nodeProps.id)"
                 @settings="settingsStepId = nodeProps.id"
               />

@@ -5,6 +5,10 @@ import { planTemplateResolution } from '~/utils/workflowInstantiation'
 
 const { workflows, loading, error, create, fetchAll } = useWorkflows()
 const { agents, create: createAgent } = useAgents()
+// Creating a workflow is `configure`, which only an operator holds. The three
+// create affordances on this page were offered to every role and each ended in
+// a 403 from POST /api/workflows.
+const { can } = useUser()
 const router = useRouter()
 const toast = useToast()
 const searchQuery = ref('')
@@ -79,7 +83,7 @@ async function createBlank() {
         <span class="text-[12px] text-meta">{{ workflows.length }}</span>
       </template>
       <template #right>
-        <UButton label="New Workflow" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
+        <UButton v-if="can('configure')" label="New Workflow" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
@@ -145,8 +149,14 @@ async function createBlank() {
           </p>
         </div>
 
-        <h4 class="text-section-label">Templates</h4>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <!-- Each card creates a workflow, so the whole grid is `configure`.
+             Offering a reviewer a template they cannot instantiate is the same
+             dead control as the New Workflow button above it. -->
+        <p v-if="!can('configure')" class="text-[13px] text-label">
+          No workflows on this instance yet. An operator sets them up.
+        </p>
+        <h4 v-if="can('configure')" class="text-section-label">Templates</h4>
+        <div v-if="can('configure')" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <button
             v-for="template in workflowTemplates"
             :key="template.id"
@@ -179,7 +189,7 @@ async function createBlank() {
         </div>
 
         <div class="text-center">
-          <UButton label="Or create from scratch" variant="ghost" size="sm" @click="() => { showCreateModal = true }" />
+          <UButton v-if="can('configure')" label="Or create from scratch" variant="ghost" size="sm" @click="() => { showCreateModal = true }" />
         </div>
       </div>
     </div>
