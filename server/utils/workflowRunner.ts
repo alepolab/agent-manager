@@ -7,6 +7,7 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } from '../../shared/utils/runClock.ts'
+import type { Role } from '../../shared/types/role.ts'
 import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
@@ -1072,11 +1073,16 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     && oversightFor(run.blastRadius) !== 'auto')
   if (gate) {
     const label = stepOf(l, gate)?.label ?? gate
+    // Whose decision this is, from the step that declares it. A gate with no
+    // `gateRole` stays everyone's, which is the old behaviour and the honest
+    // default for a workflow that never said.
+    const gateRole = (stepOf(l, gate) as { gateRole?: Role } | undefined)?.gateRole
     run.question = {
       stepId: gate,
-      text: `Approve "${label}" to run it. ${oversightReason(run.blastRadius)}`,
+      text: `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}`,
       kind: 'approval',
       askedAt: Date.now(),
+      ...(gateRole ? { role: gateRole } : {}),
     }
     run.status = 'paused'
     run.currentStepIds = []

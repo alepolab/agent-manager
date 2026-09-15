@@ -2,6 +2,7 @@ import { stopRun } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
+import { requireGateRole } from '../../../utils/gateRole'
 
 /**
  * Refuse at a gate.
@@ -38,6 +39,8 @@ export default defineEventHandler(async (event) => {
   if (before.status !== 'paused' || !before.question) {
     throw createError({ statusCode: 409, message: `This run is ${before.status}, not waiting on a decision; there is nothing to reject.` })
   }
+  // Ending a run is as much this gate's decision as approving it.
+  await requireGateRole(event, before)
 
   const user = await currentUser(event)
   const step = before.steps.find(s => s.stepId === before.question!.stepId)

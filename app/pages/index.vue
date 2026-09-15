@@ -52,8 +52,23 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
 const hasContent = computed(() => agents.value.length > 0 || commands.value.length > 0 || skills.value.length > 0)
 
+/**
+ * Is this run's open gate mine to answer?
+ *
+ * The queue used to show every paused run to everyone, so "different team
+ * members oversee" was one undifferentiated list and nobody could tell which
+ * decisions were theirs. A gate that declares no role stays everyone's, and an
+ * operator sees all of them as the backstop.
+ */
+const mineToAnswer = (r: WorkflowRun) => {
+  const want = r.question?.role
+  return !want || !role.value || role.value === 'operator' || role.value === want
+}
 const attention = computed(() => runs.value
   .filter(r => !r.dismissed && (['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
+  // Only gates are laned. A failed or interrupted run is not addressed to
+  // anyone, and hiding it would leave it for nobody.
+  .filter(r => r.status !== 'paused' || mineToAnswer(r))
   // Most recently active first, for the same reason as `mine` below: a
   // restarted run is as recent as its last attempt, not as its first.
   .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a)))
