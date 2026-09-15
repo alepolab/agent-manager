@@ -1,3 +1,4 @@
+import { requireCapability } from '../../../utils/session'
 import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,6 +22,7 @@ async function readJson<T>(path: string): Promise<T | null> {
 }
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const { pluginId, skill, frontmatter, body } = await readBody<{
     pluginId: string
     skill: string

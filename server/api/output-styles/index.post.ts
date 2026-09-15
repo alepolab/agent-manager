@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { serializeFrontmatter } from '../../utils/frontmatter'
@@ -5,6 +6,7 @@ import { getClaudeDir } from '../../utils/claudeDir'
 import { resolveHome } from '../../utils/path'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody(event)
   const { id, name, description, keepCodingInstructions, content, scope, workingDir, oldId } = body
 

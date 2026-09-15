@@ -7,7 +7,18 @@ import { runLastActivityAt } from '~~/shared/utils/runClock'
  * Home answers "what needs me" first, then "what did I run", then "how is
  * the team set up", and offers one primary action: start a run from a ticket.
  */
-const { me } = useUser()
+const { me, can, role, viewingAs, viewAs } = useUser()
+const ROLE_BLURB: Record<string, string> = {
+  developer: 'You decide at the gates on your runs.',
+  qa: 'You verify evidence and answer the verification gate.',
+  manager: 'You are reading progress. Nothing here changes a run.',
+  operator: 'You run the pipeline.',
+}
+const switching = ref(false)
+async function lookAs(next: string | null) {
+  switching.value = true
+  try { await viewAs(next as any) } finally { switching.value = false }
+}
 const { agents, fetchAll: fetchAgents } = useAgents()
 const { commands, fetchAll: fetchCommands } = useCommands()
 const { skills, fetchAll: fetchSkills } = useSkills()
@@ -130,7 +141,23 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
       <WelcomeOnboarding v-if="loaded && !hasContent" @created="(agent) => navigateTo(`/agents/${agent.slug}`)" />
 
       <!-- Primary action -->
-      <form class="rounded-xl p-4 flex flex-wrap items-end gap-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
+      <!-- Who you are here, said out loud. A console that has quietly hidden
+           half its controls is indistinguishable from a broken one, and an
+           operator looking as someone else needs the way back. -->
+      <div v-if="role" class="flex flex-wrap items-center gap-2 text-[12px] mb-4">
+        <span class="font-mono uppercase text-[11px] px-2 py-0.5 rounded" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">{{ role }}</span>
+        <span class="text-label">{{ ROLE_BLURB[role] }}</span>
+        <template v-if="viewingAs">
+          <span class="text-label">Viewing as {{ role }}, not your own role.</span>
+          <button class="underline focus-ring" :disabled="switching" @click="lookAs(null)">Back to operator</button>
+        </template>
+        <template v-else-if="can('configure')">
+          <span class="text-label">View as</span>
+          <button v-for="r in ['developer', 'qa', 'manager']" :key="r" class="underline focus-ring" :disabled="switching" @click="lookAs(r)">{{ r }}</button>
+        </template>
+      </div>
+
+      <form v-if="can('startRun')" class="rounded-xl p-4 flex flex-wrap items-end gap-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
         <div class="flex-1 min-w-[16rem]">
           <label class="field-label" for="ticket">Start a run from a ticket</label>
           <input id="ticket" v-model="ticket" class="field-input w-full" placeholder="SCN-402, or paste the ticket text" :disabled="!runbook" />

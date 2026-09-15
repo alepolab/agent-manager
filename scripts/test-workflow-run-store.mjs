@@ -187,4 +187,36 @@ rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
   rmSync(runsBase, { recursive: true, force: true })
 }
 
+// ── a gate outlives the process that raised it ───────────────────────────────
+// A run paused on a question is not work in flight, so a dead owner does not
+// make it `interrupted`. It did once, and the effect was that restarting the
+// container turned a developer's pending approval into a state only an
+// operator can clear.
+{
+  const run = await store.createRun({
+    workflowSlug: 'gated', workflowName: 'Gated', autoRun: false, initialPrompt: 'x',
+    watch: 'direct-invocation',
+    steps: [{ stepId: 'a', label: 'A', agentSlug: 'agent-a' }, { stepId: 'b', label: 'B', agentSlug: 'agent-b' }],
+  })
+  await store.saveRun({
+    ...run,
+    status: 'paused',
+    question: { stepId: 'b', kind: 'approval', text: 'Approve "B" to run it', askedAt: Date.now() },
+    steps: run.steps.map(s => s.stepId === 'a' ? { ...s, status: 'completed' } : s),
+    // Owned by a process that is gone: another boot, and a pid nothing answers on.
+    bootId: 'a-previous-boot', pid: 0x7fffffff,
+  })
+  const read = await store.getRun(run.id)
+  assert.equal(read.status, 'paused', 'a run waiting on a person stays paused when its owner dies')
+  assert.equal(read.question?.kind, 'approval', 'and the question it is waiting on survives')
+
+  // The contrast: a run with a step genuinely mid-flight IS interrupted.
+  await store.saveRun({
+    ...read, status: 'running', question: undefined,
+    steps: read.steps.map(s => s.stepId === 'b' ? { ...s, status: 'running' } : s),
+    bootId: 'a-previous-boot', pid: 0x7fffffff,
+  })
+  assert.equal((await store.getRun(run.id)).status, 'interrupted', 'work left mid-step is still interrupted')
+}
+
 console.log('workflowRunStore: all assertions passed')

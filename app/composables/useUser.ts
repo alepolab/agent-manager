@@ -1,7 +1,14 @@
+import type { Capabilities, Role } from '~~/shared/types/role'
+
 export interface Me {
   login: string
   name?: string
   avatar?: string
+  /** The role this session acts with — the real one, or the one an operator is viewing as. */
+  role: Role
+  /** What they actually hold. Differs from `role` only while viewing as someone else. */
+  realRole: Role
+  can: Capabilities
   authDisabled: boolean
   profile: { login: string, jiraEmail?: string, hasJiraToken: boolean, hasGithubToken: boolean, updatedAt: number }
 }
@@ -31,5 +38,21 @@ export function useUser() {
     await navigateTo('/login')
   }
 
-  return { me, checked, load, signOut }
+  /**
+   * What this session may do. Defaults to false while `me` is still loading,
+   * so a control is never shown and then taken away — a button that appears
+   * for half a second and vanishes reads as a bug, and one that appears and
+   * then 403s reads as a worse one.
+   */
+  const can = (capability: keyof Capabilities) => me.value?.can?.[capability] === true
+  const role = computed<Role | null>(() => me.value?.role ?? null)
+  const viewingAs = computed(() => !!me.value && me.value.role !== me.value.realRole)
+
+  /** Look at the app as a lesser role, or stop (`null`). Operators only; the server refuses the rest. */
+  async function viewAs(next: Role | null) {
+    await $fetch('/api/view-as', { method: 'POST', body: { role: next } })
+    await load()
+  }
+
+  return { me, checked, load, signOut, can, role, viewingAs, viewAs }
 }

@@ -1,8 +1,10 @@
+import { requireCapability } from '../utils/session'
 import { writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudePath, getClaudeDir } from '../utils/claudeDir'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody(event)
 
   if (!body || typeof body !== 'object' || Array.isArray(body)) {

@@ -9,6 +9,9 @@ import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 const route = useRoute()
 const id = route.params.id as string
 const { run, logs, error, load, continueRun, stop, restart, respond, sendNote } = useRun(id)
+// The builder and Clone are pipeline controls; a reviewer opening the run they
+// hold a gate on has no use for either, and the API refuses them anyway.
+const { can } = useUser()
 async function onNote(text: string) {
   try {
     const r = await sendNote(text)
@@ -37,8 +40,8 @@ async function onRestart(stepId: string, note?: string) {
         </p>
       </template>
       <template #right>
-        <UButton :to="`/workflows/${run?.workflowSlug ?? ''}?run=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-git-branch" label="Open in builder" :disabled="!run" />
-        <UButton :to="`/workflows/${run?.workflowSlug ?? ''}?clone=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :disabled="!run" />
+        <UButton v-if="can('configure')" :to="`/workflows/${run?.workflowSlug ?? ''}?run=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-git-branch" label="Open in builder" :disabled="!run" />
+        <UButton v-if="can('runEngine')" :to="`/workflows/${run?.workflowSlug ?? ''}?clone=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :disabled="!run" />
       </template>
     </PageHeader>
     <div v-if="error" class="px-6 py-4 text-[12px]" style="color: var(--error);">{{ error }}</div>

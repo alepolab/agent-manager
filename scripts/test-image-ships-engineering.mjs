@@ -37,6 +37,7 @@ const SHIPPED = [
   ['scripts', 'the evidence step is instructed to run engineering/scripts/assemble-bundle.mjs'],
   ['schemas', 'assemble-bundle.mjs validates against schemas/evidence-bundle.v0.1.schema.json and halts without it'],
   ['recipes', 'registry.ts resolves <registry>/../../recipes/<key>.md; absent, every product silently has no recipe'],
+  ['hooks', 'agentHooks.ts falls back to /app/engineering/hooks, and in a container that is the ONLY path that resolves: the staged installed_plugins.json records the host\'s installPath. Absent, preflight fails every run on "the guardrail hooks are on neither"'],
 ]
 
 for (const [dir, why] of SHIPPED) {
@@ -58,7 +59,6 @@ assert.ok(schemas.some(f => f.startsWith('evidence-bundle.') && f.endsWith('.sch
 // to prevent.
 const NOT_SHIPPED = new Set([
   'docs',       // written for people reading the repo, not for the running app
-  'hooks',      // installed into CLAUDE_DIR by the plugin, never read from /app
   'templates',  // authoring aids for the plugin itself
   '.claude-plugin', // the marketplace/plugin manifest, read by `claude plugin install`, not by this app
 ])

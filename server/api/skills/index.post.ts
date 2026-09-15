@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -7,6 +8,7 @@ import { serializeFrontmatter } from '../../utils/frontmatter'
 import type { SkillPayload } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('skills'); invalidate('relationships')
   const payload = await readBody<SkillPayload>(event)
   const slug = payload.frontmatter.name

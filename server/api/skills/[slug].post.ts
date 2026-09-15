@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -7,6 +8,7 @@ import { getPreloadingAgents, getMcpServerForSkill } from '../../utils/skillRela
 import type { SkillFrontmatter } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('skills'); invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const body = await readBody<{ filePath: string }>(event)

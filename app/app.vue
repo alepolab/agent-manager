@@ -45,7 +45,7 @@ onMounted(async () => {
 })
 
 const { settings, load: loadSettings } = useSettings()
-const { me, signOut } = useUser()
+const { me, signOut, can, role, viewingAs, viewAs } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
 const labs = computed(() => settings.value?.agentManager?.labs === true)
 const navTopAll = [
@@ -62,7 +62,25 @@ const navTopAll = [
   { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
 ]
 
-const navTop = computed(() => navTopAll.filter(l => labs.value || l.to !== '/output-styles'))
+/**
+ * What each role has any business opening. Everything absent here is still
+ * reachable by URL for an operator and refused by the API for everyone else —
+ * this list decides what a person is OFFERED, which is the actual complaint
+ * about the old sidebar: it showed a reviewer the whole engine.
+ */
+const NAV_BY_ROLE: Record<string, string[]> = {
+  developer: ['/', '/runs', '/agents', '/skills', '/commands'],
+  qa: ['/', '/runs'],
+  manager: ['/', '/runs'],
+}
+
+const navTop = computed(() => {
+  const allowed = role.value ? NAV_BY_ROLE[role.value] : undefined
+  return navTopAll
+    .filter(l => labs.value || l.to !== '/output-styles')
+    // No role entry means operator: the full sidebar, exactly as before.
+    .filter(l => !allowed || allowed.includes(l.to))
+})
 
 /** Reload everything the sidebar counts after onboarding finishes.
  *  Written as a named handler rather than inline: a template expression
@@ -77,17 +95,25 @@ async function onOnboardingComplete() {
   ])
 }
 
-const navMid = [
+const navMidAll = [
   { key: 'artifacts', label: 'Artifacts', icon: 'i-lucide-folder-root', to: '/project-artifacts' },
   { key: 'cli', label: 'CLI', icon: 'i-lucide-terminal-square', to: '/cli' },
 ]
+// The CLI is a Claude Code session against the working directory — the most
+// powerful thing in the app, and nothing a reviewer's job needs. Artifacts are
+// evidence, so they stay for everyone.
+const navMid = computed(() => navMidAll.filter(l => l.key !== 'cli' || can('configure')))
 
 const navBottomAll = [
   { label: 'Explore', icon: 'i-lucide-compass', to: '/explore' },
   { label: 'Graph', icon: 'i-lucide-workflow', to: '/graph' },
   { label: 'Settings', icon: 'i-lucide-settings', to: '/settings' },
 ]
-const navBottom = computed(() => navBottomAll.filter(l => labs.value || !['/explore', '/graph'].includes(l.to)))
+// Settings is configuration, so it goes with the rest of it: only an operator
+// is offered it, and /api/settings refuses the write regardless.
+const navBottom = computed(() => navBottomAll
+  .filter(l => labs.value || !['/explore', '/graph'].includes(l.to))
+  .filter(l => l.to !== '/settings' || can('configure')))
 
 function isActive(to: string) {
   if (to === '/') return route.path === '/'

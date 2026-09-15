@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { unlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -5,6 +6,7 @@ import { resolveClaudePath } from '../../utils/claudeDir'
 import { slugToPath } from '../../utils/slugUtils'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const { directory, filename } = slugToPath(slug)

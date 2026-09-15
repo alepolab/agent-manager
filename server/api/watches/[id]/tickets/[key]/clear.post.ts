@@ -1,3 +1,4 @@
+import { requireCapability } from '../../../../../utils/session'
 import { getWatch } from '../../../../../utils/watchConfig.ts'
 import { clearEscalation } from '../../../../../utils/watchStateStore.ts'
 
@@ -8,6 +9,7 @@ import { clearEscalation } from '../../../../../utils/watchStateStore.ts'
  * eligible for a fresh attempt on the next cycle.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const id = getRouterParam(event, 'id')!
   const key = getRouterParam(event, 'key')!
   const watch = await getWatch(id)

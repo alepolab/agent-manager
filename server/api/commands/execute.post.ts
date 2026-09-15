@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
@@ -128,6 +129,7 @@ Custom commands are loaded from:
 }
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody(event)
   const { commandName, commandPath, args = [], context = {} } = body
 
