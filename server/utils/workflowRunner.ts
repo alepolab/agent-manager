@@ -31,6 +31,7 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, transcriptPath } from './claudeDir.ts'
+import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable,
@@ -1047,11 +1048,20 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return run
   }
 
-  // A step marked for approval waits for a person before it starts, run-to-completion or not.
-  const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id))
+  // A step marked for approval is a point where a gate MAY fire; the run's own
+  // blast radius decides whether it does. A docs or ui_parsing change flows
+  // straight through the same runbook that stops hard on a money one, so
+  // nobody learns to click approve without reading. See shared/utils/oversight.
+  const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id)
+    && oversightFor(run.blastRadius) !== 'auto')
   if (gate) {
     const label = stepOf(l, gate)?.label ?? gate
-    run.question = { stepId: gate, text: `Approve "${label}" to run it`, kind: 'approval', askedAt: Date.now() }
+    run.question = {
+      stepId: gate,
+      text: `Approve "${label}" to run it. ${oversightReason(run.blastRadius)}`,
+      kind: 'approval',
+      askedAt: Date.now(),
+    }
     run.status = 'paused'
     run.currentStepIds = []
     run.nextStepIds = wave
@@ -1200,7 +1210,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * have pushed it. Idempotent: a run that already has its branch is left alone.
  */
 /** Intake's classification from meta.json, once it has written one. */
-async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string } | null> {
+async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string } | null> {
   try {
     const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
     return meta && typeof meta === 'object' ? { work_type: meta.work_type, origin: meta.origin } : null
@@ -1258,6 +1268,7 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // there, and the clone stays on whatever branch the developer left it on.
   run.projectDir = worktrees[0] ?? checkout
   run.workType = run.workType ?? classified?.work_type
+  run.blastRadius = run.blastRadius ?? classified?.blast_radius
   run.origin = run.origin ?? classified?.origin
   run.baseBranch = base
   // The branch starts at the base now, so the fix facts diff against it.
@@ -1408,6 +1419,9 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
 }
 
 /** Continue a paused run. A note travels to the approved step, or to whichever step starts next. */
+/** Approving an owner-gated run without saying why. The route answers 400. */
+export class ApprovalNeedsReason extends Error {}
+
 export async function continueRun(runId: string, note?: string): Promise<WorkflowRun | null> {
   let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds
@@ -1447,6 +1461,16 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
     return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.')
   }
   if (run.question?.kind === 'approval') {
+    // An owner-gated change is approved with a reason or not at all. Writing one
+    // sentence is the cheapest defence against a gate decaying into a reflex:
+    // it cannot be satisfied without having read something. Reject already
+    // demanded a reason; approve did not, which had it backwards — saying yes to
+    // a money change is the answer that needs the justification.
+    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius) && !note?.trim()) {
+      l.running = false
+      throw new ApprovalNeedsReason(
+        `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
+    }
     if (run.question.reason === 'budget') extendBudget(run)
     else l.approved.add(run.question.stepId)
     if (note?.trim() && run.question.stepId) l.notes[run.question.stepId] = note.trim()

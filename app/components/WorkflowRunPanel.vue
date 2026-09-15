@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
+import { needsJustification, oversightReason } from '~~/shared/utils/oversight'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
 const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string] }>()
@@ -15,6 +16,11 @@ const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: str
 const { can } = useUser()
 const mayDrive = computed(() => can('runEngine'))
 const mayAnswer = computed(() => can('answerGate'))
+/** An owner-gated run cannot be approved in silence — the same rule the server
+ *  enforces, applied here so the reviewer learns it from the button rather than
+ *  from a 400 after they have already clicked. */
+const mustJustify = computed(() => needsJustification(props.run?.blastRadius))
+const canApprove = computed(() => !mustJustify.value || !!note.value.trim())
 
 /** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
 const anyRunning = computed(() => props.run?.steps.some(s => s.status === 'running') ?? false)
@@ -198,6 +204,9 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     <div v-if="run.question" class="rounded-lg p-3 text-[12px] space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
       <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
       <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
+      <p v-if="run.blastRadius" class="text-[11px] mt-1 text-label">
+        Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
+      </p>
     </div>
     <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
     <textarea
@@ -291,7 +300,14 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
 
     <div class="flex gap-2">
       <UButton v-if="mayAnswer && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
-      <UButton v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'" size="xs" icon="i-lucide-check" :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'" @click="send('continue')" />
+      <UButton
+        v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'"
+        size="xs" icon="i-lucide-check"
+        :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'"
+        :disabled="run.question.reason !== 'budget' && !canApprove"
+        :title="run.question.reason !== 'budget' && !canApprove ? 'Say why this is right before approving' : ''"
+        @click="send('continue')"
+      />
       <UButton v-else-if="mayAnswer && run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
       <!-- The counterpart of Approve, on the same capability: a reviewer who
            cannot refuse is not gating anything. Disabled until a reason is

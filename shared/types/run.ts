@@ -124,6 +124,16 @@ export interface WorkflowRun {
   /** Intake's classification, read from meta.json once written: the kind of work and where the defect was found. */
   workType?: string
   origin?: string
+  /**
+   * How far a mistake here reaches, from intake's own classification: one of
+   * `docs`, `ui_parsing`, `schema`, `deployment`, `protocol`, `money`.
+   *
+   * Read from the same meta.json as the two above, which has always carried it
+   * — the reader simply dropped it, so the run record had no risk tier and
+   * every gate fired identically whether the change was a typo or the tax
+   * base. shared/utils/oversight.ts turns this into whether a gate stops.
+   */
+  blastRadius?: string
   /** The branch the run branch was cut from and the pull request targets (see server/utils/branchPolicy.ts). */
   baseBranch?: string
   /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
