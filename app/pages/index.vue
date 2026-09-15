@@ -40,6 +40,8 @@ onMounted(() => {
   timer = setInterval(() => { if (runs.value.some(r => isLiveStatus(r.status))) refresh() }, 10_000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })
+// The live poll above stops once nothing is running; this picks up runs a watch or schedule starts.
+useAutoRefresh(refresh)
 
 const hasContent = computed(() => agents.value.length > 0 || commands.value.length > 0 || skills.value.length > 0)
 

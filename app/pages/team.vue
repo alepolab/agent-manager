@@ -85,6 +85,15 @@ async function apply(only?: string[]) {
   } finally { syncing.value = null }
 }
 onMounted(() => { refresh(); loadCheckouts() })
+// Not refresh(): its loading flag spins the "Check again" button on every tick. Waits while an apply or park is
+// in flight, since both write status or checkouts from their own response.
+useAutoRefresh(async () => {
+  if (syncing.value || stashing.value) return
+  await Promise.all([
+    $fetch<TeamStatus>('/api/team/status').then((s) => { status.value = s; error.value = null }),
+    loadCheckouts(),
+  ])
+})
 const color = (s: State) => s === 'ok' ? 'var(--success)' : s === 'missing' ? 'var(--error)' : 'var(--warning)'
 const byState = (items: Item[]) => [...items].sort((a, b) => Number(a.state === 'ok') - Number(b.state === 'ok'))
 const sourceLabel = (s: Source) => s === 'plugin' ? 'from the installed plugin' : s === 'shipped' ? 'from the copy shipped in the app' : s === 'other' ? 'from an override path' : 'no source found'

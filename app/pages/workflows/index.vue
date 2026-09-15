@@ -107,6 +107,11 @@ async function loadGroups() {
   groupRows.value = groups.value.filter(g => !g.implicit).map(g => ({ ...g }))
 }
 onMounted(loadGroups)
+// loadGroups resets the editable rows, so it waits while the groups editor is open.
+useAutoRefresh(() => Promise.all([
+  fetchSchedules({ silent: true }),
+  showGroups.value ? null : loadGroups(),
+]))
 
 function slugifyGroupId(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')

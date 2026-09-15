@@ -20,13 +20,29 @@ const savingSkill = ref(false)
 const showUninstallConfirm = ref(false)
 const uninstalling = ref(false)
 
+function applyPlugin(detail: PluginDetail) {
+  plugin.value = detail
+  for (const skill of detail.skillDetails) {
+    skillFrontmatters.value[skill.slug] = { ...skill.frontmatter }
+    skillBodies.value[skill.slug] = skill.body ?? ''
+  }
+}
+
+// Closing an editor keeps its edits, so an open editor is not the only unsaved state to protect.
+const hasSkillEdits = () => !!plugin.value?.skillDetails.some(s =>
+  (skillBodies.value[s.slug] ?? '') !== (s.body ?? '')
+  || JSON.stringify(skillFrontmatters.value[s.slug] ?? s.frontmatter) !== JSON.stringify(s.frontmatter))
+
+useAutoRefresh(async () => {
+  if (!plugin.value || editingSkill.value || savingSkill.value || uninstalling.value || hasSkillEdits()) return
+  const latest = await fetchOne(id)
+  if (editingSkill.value || savingSkill.value || hasSkillEdits()) return
+  if (JSON.stringify(latest) !== JSON.stringify(plugin.value)) applyPlugin(latest)
+})
+
 onMounted(async () => {
   try {
-    plugin.value = await fetchOne(id)
-    for (const skill of plugin.value.skillDetails) {
-      skillFrontmatters.value[skill.slug] = { ...skill.frontmatter }
-      skillBodies.value[skill.slug] = skill.body ?? ''
-    }
+    applyPlugin(await fetchOne(id))
   } catch {
     toast.add({ title: 'Plugin not found', color: 'error' })
     router.push('/plugins')

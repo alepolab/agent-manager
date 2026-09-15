@@ -44,15 +44,17 @@ export function useSchedules() {
   const error = useState<string | null>('schedulesError', () => null)
   const firing = useState<Record<string, boolean>>('schedulesFiring', () => ({}))
 
-  async function fetchAll() {
-    loading.value = true
-    error.value = null
+  async function fetchAll({ silent = false } = {}) {
+    if (!silent) {
+      loading.value = true
+      error.value = null
+    }
     try {
       schedules.value = await $fetch<ScheduleRow[]>('/api/schedules')
     } catch (e: any) {
-      error.value = e?.data?.message || e?.message || 'Failed to load schedules'
+      if (!silent) error.value = e?.data?.message || e?.message || 'Failed to load schedules'
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 

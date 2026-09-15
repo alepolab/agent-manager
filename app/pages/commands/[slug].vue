@@ -44,17 +44,41 @@ function restoreDraft() {
   }
 }
 
+function applyCommand(item: Command) {
+  command.value = item
+  frontmatter.value = { ...item.frontmatter }
+  body.value = item.body
+  allowedToolsStr.value = toolsToText(item.frontmatter['allowed-tools'])
+  // Without it the first save skips the server's changed-on-disk check.
+  lastModified.value = (item as any).lastModified ?? null
+}
+
 onMounted(async () => {
   try {
-    command.value = await fetchOne(slug)
-    frontmatter.value = { ...command.value.frontmatter }
-    body.value = command.value.body
-    allowedToolsStr.value = toolsToText(command.value.frontmatter['allowed-tools'])
+    applyCommand(await fetchOne(slug))
   } catch {
     toast.add({ title: 'Command not found', color: 'error' })
     router.push('/commands')
   }
 })
+
+const { pending: externalPending, ...external } = useExternalChange({
+  fetch: () => fetchOne(slug),
+  baseline: () => command.value && { frontmatter: command.value.frontmatter, body: command.value.body },
+  content: (item: Command) => ({ frontmatter: item.frontmatter, body: item.body }),
+  isDirty: () => isDirty.value,
+  apply: applyCommand,
+  paused: () => !command.value || saving.value,
+})
+function reloadExternal() {
+  external.reload()
+  clearDraft()
+}
+function keepMine() {
+  // Adopting their timestamp is what lets the next save overwrite instead of failing with 409.
+  const theirs = external.keepMine()
+  if (theirs) lastModified.value = (theirs as any).lastModified ?? null
+}
 
 async function save() {
   if (!frontmatter.value.name.trim()) {
@@ -220,6 +244,7 @@ useUnsavedChanges(isDirty)
             <button class="text-[12px] px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
           </div>
         </ClientOnly>
+        <ExternalChangeBanner v-if="externalPending" @reload="reloadExternal" @keep="keepMine" />
 
         <!-- Configuration -->
         <div class="rounded-xl p-5 space-y-4 bg-card">

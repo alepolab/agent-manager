@@ -4,7 +4,7 @@ import { useClaudeCodeHistory } from '~/composables/useClaudeCodeHistory'
 import { convertToDisplayMessages } from '~/utils/chatMessageConverter'
 import { convertClaudeCodeMessages } from '~/utils/claudeCodeMessageConverter'
 import type { DisplayChatMessage, PermissionMode } from '~/types'
-import { MODEL_OPTIONS_CHAT, DEFAULT_MODEL } from '~/utils/models'
+import { MODEL_OPTIONS_CHAT, DEFAULT_MODEL, getModelContextWindow } from '~/utils/models'
 
 const props = defineProps<{
   executionOptions: {
@@ -322,6 +322,13 @@ watch(() => history.selectedSession.value, (newSession) => {
     selectedModel.value = newSession.model
   }
 }, { immediate: true, deep: true })
+
+// The context panel should follow the picker immediately rather than waiting
+// for the next turn's usage report. A full id from a history session isn't in
+// the frontend table; that path carries its own window with the token counts.
+watch(selectedModel, (model) => {
+  contextMonitor.setContextWindow(getModelContextWindow(model))
+})
 
 // Effort level selector
 type EffortLevel = 'low' | 'medium' | 'high' | 'max'
@@ -693,9 +700,9 @@ async function handleClaudeCodeSessionSelected(payload: { projectName: string; s
   ])
 
   if (historyResult?.tokenUsage) {
-    contextMonitor.updateTokenUsage(historyResult.tokenUsage)
+    contextMonitor.updateTokenUsage(historyResult.tokenUsage, historyResult.tokenUsage.contextWindow)
   } else {
-    contextMonitor.resetMetrics()
+    contextMonitor.resetMetrics(getModelContextWindow(selectedModel.value))
   }
 
   // Scroll to bottom first — waits for layout to settle and makes messages visible
@@ -716,7 +723,7 @@ function handleSelectionCleared() {
   currentSessionSummary.value = ''
   currentProjectDisplayName.value = ''
   isContinuingHistory.value = false
-  contextMonitor.resetMetrics()
+  contextMonitor.resetMetrics(getModelContextWindow(selectedModel.value))
   if (route.path !== '/cli') {
     navigateTo('/cli', { replace: false })
   }
@@ -736,7 +743,7 @@ function handleNewChat(payload?: { workingDir?: string; projectDisplayName?: str
   isContinuingHistory.value = false
   // Clear the current session so the user can start fresh
   sessionStore.setActiveSession(null)
-  contextMonitor.resetMetrics()
+  contextMonitor.resetMetrics(getModelContextWindow(selectedModel.value))
   
   // Clear history selection
   history.selectedSession.value = null
@@ -1121,6 +1128,12 @@ async function executeSlashCommand(rawInput: string): Promise<boolean> {
           projectPath: localWorkingDir.value,
           model: selectedModel.value,
           sessionId: currentSessionId.value,
+          // /cost has no usage of its own to read; without this it can only
+          // report zeroes against a guessed window.
+          tokenUsage: {
+            used: contextMonitor.metrics.value.contextWindow.used,
+            total: contextMonitor.metrics.value.contextWindow.total,
+          },
         },
       },
     })

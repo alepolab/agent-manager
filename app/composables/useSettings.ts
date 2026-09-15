@@ -5,17 +5,23 @@ export function useSettings() {
   const loading = useState('settingsLoading', () => false)
   const error = useState<string | null>('settingsError', () => null)
 
-  async function load() {
-    loading.value = true
-    error.value = null
+  async function load({ silent = false } = {}) {
+    if (!silent) {
+      loading.value = true
+      error.value = null
+    }
     try {
-      settings.value = await $fetch<Settings>('/api/settings')
+      const next = await $fetch<Settings>('/api/settings')
+      // Watchers on `settings` rewrite form inputs, so an unchanged background load must not reassign it.
+      if (silent && JSON.stringify(next) === JSON.stringify(settings.value)) return
+      settings.value = next
     } catch (e: unknown) {
+      if (silent) return
       const msg = e instanceof Error ? e.message : 'Failed to load settings'
       error.value = msg
       console.error('[useSettings] load:', msg)
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 

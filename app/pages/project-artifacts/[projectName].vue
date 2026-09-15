@@ -10,7 +10,8 @@ interface ProjectArtifactsResponse {
   skills: Skill[]
 }
 
-const { data, pending, error } = useFetch<ProjectArtifactsResponse>(`/api/project-artifacts/${encodeURIComponent(projectName)}/local`)
+const { data, pending, error, refresh } = useFetch<ProjectArtifactsResponse>(`/api/project-artifacts/${encodeURIComponent(projectName)}/local`)
+useAutoRefresh(refresh)
 
 useHead({
   title: computed(() => data.value ? `${data.value.project.displayName} Artifacts | Agent Manager` : 'Project Artifacts')
@@ -38,7 +39,7 @@ useHead({
     </PageHeader>
 
     <div class="flex-1 overflow-y-auto custom-scrollbar p-6">
-      <div v-if="pending" class="flex items-center justify-center py-20">
+      <div v-if="pending && !data" class="flex items-center justify-center py-20">
         <UIcon name="i-lucide-loader-2" class="size-8 animate-spin" style="color: var(--accent);" />
       </div>
 

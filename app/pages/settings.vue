@@ -70,12 +70,19 @@ function channelTarget(c: PublicChannel): string {
   return c.host ?? 'stored'
 }
 
-async function loadChannels() {
+/** The relay as last loaded or saved, so a background refresh can tell whether the form holds edits. */
+let loadedSmtp = JSON.stringify(smtp.value)
+const smtpEdited = () => !!smtpPassword.value || JSON.stringify(smtp.value) !== loadedSmtp
+
+async function loadChannels({ keepSmtpEdits = false } = {}) {
   try {
     channels.value = (await $fetch<{ channels: PublicChannel[] }>('/api/channels')).channels
     channelsError.value = ''
     const s = (await $fetch<{ smtp: PublicSmtp | null }>('/api/smtp')).smtp
-    if (s) smtp.value = s
+    if (s && !(keepSmtpEdits && smtpEdited())) {
+      smtp.value = s
+      loadedSmtp = JSON.stringify(s)
+    }
   } catch (e: unknown) {
     channelsError.value = e instanceof Error ? e.message : 'Could not load channels'
   }
@@ -88,6 +95,7 @@ async function saveSmtpSettings() {
       method: 'PUT',
       body: { ...smtp.value, password: smtpPassword.value },
     })
+    loadedSmtp = JSON.stringify(smtp.value)
     smtpPassword.value = ''
     toast.add({ title: 'SMTP relay saved', color: 'success' })
   } catch (e: unknown) {
@@ -139,7 +147,7 @@ async function testChannel(name: string) {
   }
 }
 
-onMounted(loadChannels)
+onMounted(() => loadChannels())
 
 const viewMode = ref<'structured' | 'raw'>('structured')
 const showRemoveConfirm = ref(false)
@@ -156,6 +164,20 @@ onMounted(async () => {
     fetchGithubImports('agents')
   ])
 })
+
+// Assigning `settings` rewrites the raw JSON editor and the status-line inputs (see the watchers below),
+// so a background load waits while either holds input that has not been saved.
+const rawJsonEdited = () => !!settings.value && rawJson.value !== JSON.stringify(settings.value, null, 2)
+const statusLineEdited = () => statusLineType.value !== (settings.value?.statusLine?.type || '')
+  || statusLineCommand.value !== (settings.value?.statusLine?.command || '')
+useAutoRefresh(() => Promise.all([
+  saving.value || rawJsonEdited() || statusLineEdited() ? null : load({ silent: true }),
+  loadChannels({ keepSmtpEdits: true }),
+]))
+useAutoRefresh(() => Promise.all([
+  fetchGithubImports('skills', { silent: true }),
+  fetchGithubImports('agents', { silent: true }),
+]), { interval: 0 })
 
 async function onUpdateImport(owner: string, repo: string, type: 'skills' | 'agents') {
   try {

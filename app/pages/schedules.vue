@@ -20,6 +20,8 @@ const editing = ref<ScheduleRow | null>(null)
 onMounted(async () => {
   await Promise.all([fetchAll(), fetchWorkflows()])
 })
+// `editing` points at a row of the list; replacing the list under an open modal would detach it.
+useAutoRefresh(() => showModal.value || fetchAll({ silent: true }))
 
 function workflowName(slug: string): string {
   return workflows.value.find(w => w.slug === slug)?.name || slug

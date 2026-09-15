@@ -17,7 +17,7 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
-const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote } = useWorkflowRun(slug)
+const { run, runs, logs, attach, refresh: refreshRun, start, continueRun, stop, restart, respond, sendNote } = useWorkflowRun(slug)
 // The PAGE fetches, not the panel: the tab's own label carries the count, so it
 // is needed before the panel mounts.
 const { fetchAll: fetchSchedules, forWorkflow } = useSchedules()
@@ -132,19 +132,22 @@ const editingDescription = ref(false)
 const settingsStepId = ref<string | null>(null)
 useHead({ title: computed(() => `${name.value || 'Workflow'} | Agent Manager`) })
 
+function applyWorkflow(data: Workflow) {
+  workflow.value = data
+  lastModified.value = (data as any).lastModified ?? null
+  workflowSteps.value = [...data.steps]
+  workflowParameters.value = [...(data.parameters ?? [])]
+  savedParameters.value = [...(data.parameters ?? [])]
+  name.value = data.name
+  description.value = data.description
+  group.value = data.group ?? ''
+  notifyChannel.value = data.notifyChannel ?? ''
+}
+
 // Load workflow
 onMounted(async () => {
   try {
-    const data = await fetchOne(slug)
-    workflow.value = data
-    lastModified.value = (data as any).lastModified ?? null
-    workflowSteps.value = [...data.steps]
-    workflowParameters.value = [...(data.parameters ?? [])]
-    savedParameters.value = [...(data.parameters ?? [])]
-    name.value = data.name
-    description.value = data.description
-    group.value = data.group ?? ''
-    notifyChannel.value = data.notifyChannel ?? ''
+    applyWorkflow(await fetchOne(slug))
     groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => [])
   } catch {
     toast.add({ title: 'Workflow not found', color: 'error' })
@@ -162,6 +165,27 @@ onMounted(async () => {
 
 const parametersDirty = computed(() =>
   JSON.stringify(workflowParameters.value.filter(p => p.name.trim())) !== JSON.stringify(savedParameters.value))
+
+const workflowContent = (w: Workflow) => ({
+  name: w.name, description: w.description, steps: w.steps,
+  parameters: w.parameters ?? [], group: w.group ?? '', notifyChannel: w.notifyChannel ?? '',
+})
+// isDirty leaves out inputs, group and channel; a background reload must not drop edits to those either.
+const { pending: externalPending, ...external } = useExternalChange({
+  fetch: () => fetchOne(slug),
+  baseline: () => workflow.value && workflowContent(workflow.value),
+  content: workflowContent,
+  isDirty: () => isDirty.value || parametersDirty.value
+    || group.value !== (workflow.value?.group ?? '') || notifyChannel.value !== (workflow.value?.notifyChannel ?? ''),
+  apply: applyWorkflow,
+  paused: () => !workflow.value || saving.value,
+})
+function keepMine() {
+  // Adopting their timestamp is what lets the next save overwrite instead of failing with 409.
+  const theirs = external.keepMine()
+  if (theirs) lastModified.value = (theirs as any).lastModified ?? null
+}
+useAutoRefresh(() => Promise.all([refreshRun(), fetchSchedules({ silent: true })]))
 
 const graph = computed(() => buildGraph(workflowSteps.value))
 const stepById = (id: string) => workflowSteps.value.find(s => s.id === id)
@@ -755,6 +779,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         />
       </button>
     </div>
+
+    <ExternalChangeBanner v-if="externalPending" class="mx-4 my-2" @reload="external.reload" @keep="keepMine" />
 
     <!-- Body: palette + canvas.
          v-show, not v-if: VueFlow fits the view on init, so a remount would

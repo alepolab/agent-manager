@@ -59,6 +59,8 @@ onUnmounted(() => {
   if (timer) clearInterval(timer)
   if (clock) clearInterval(clock)
 })
+// The 5s poll stops once nothing is live; this picks up runs a watch, schedule or another tab starts.
+useAutoRefresh(refresh)
 
 // Runs that can still change, newest first: the "what is happening now" list.
 // Deliberately NOT filtered by the table's filters — those exist to search

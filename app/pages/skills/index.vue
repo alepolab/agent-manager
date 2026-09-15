@@ -20,6 +20,8 @@ const filteredSkills = computed(() => {
 onMounted(() => {
   fetchSkills({ workingDir: workingDir.value })
 })
+// app.vue refreshes skills on focus; the poll runs only here because the list is large.
+useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: true }), { interval: 60_000, focus: false })
 </script>
 
 <template>

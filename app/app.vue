@@ -44,6 +44,15 @@ onMounted(async () => {
   void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers()])
 })
 
+// The shared lists live here, so pages that only read them don't refetch them too.
+// Skills are several MB: refreshed on focus here, and polled only while /skills is open.
+const canRefresh = () => initialized.value && claudeDirExists.value && !isLogin.value
+useAutoRefresh(() => canRefresh() && Promise.all([
+  fetchAgents({}, { silent: true }), fetchCommands({}, { silent: true }), fetchPlugins({ silent: true }),
+  fetchWorkflows({}, { silent: true }), fetchServers({ silent: true }),
+]))
+useAutoRefresh(() => canRefresh() && fetchSkills({}, { silent: true }), { interval: 0 })
+
 const { settings, load: loadSettings } = useSettings()
 const { me, signOut } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.

@@ -9,7 +9,8 @@ import { isLiveStatus } from '~~/shared/types/run'
  */
 const route = useRoute()
 const id = route.params.id as string
-const { run, logs, error, load, continueRun, stop, restart, respond, sendNote } = useRun(id)
+const { run, logs, error, load, refresh, continueRun, stop, restart, respond, sendNote } = useRun(id)
+useAutoRefresh(refresh)
 async function onNote(text: string) {
   try {
     const r = await sendNote(text)

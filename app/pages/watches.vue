@@ -67,6 +67,13 @@ const form = reactive({
   autoRun: false,
 })
 
+// Waits during pause-all: that loop saves each watch it read, and must not be handed rows mid-way.
+useAutoRefresh(async () => {
+  if (pausingAll.value) return
+  await fetchAll({ silent: true })
+  await Promise.all(watches.value.map(w => fetchState(w.id).catch(() => {})))
+})
+
 onMounted(async () => {
   await Promise.all([fetchAll(), fetchWorkflows()])
   // Counts and "escalated tickets first" need every watch's state up front,

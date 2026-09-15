@@ -59,18 +59,20 @@ export function useClaudeCodeHistory() {
   /**
    * Fetch all Claude Code projects
    */
-  async function fetchProjects() {
-    isLoadingProjects.value = true
+  async function fetchProjects({ silent = false } = {}) {
+    if (!silent) isLoadingProjects.value = true
     try {
       const response = await $fetch<ClaudeCodeProject[]>('/api/projects')
       projects.value = response
       return response
     } catch (error) {
+      // A failed background refresh keeps the list it already has.
+      if (silent) return projects.value
       console.error('Failed to fetch Claude Code projects:', error)
       projects.value = []
       return []
     } finally {
-      isLoadingProjects.value = false
+      if (!silent) isLoadingProjects.value = false
     }
   }
 
@@ -125,8 +127,8 @@ export function useClaudeCodeHistory() {
   /**
    * Fetch sessions for a specific project
    */
-  async function fetchSessions(projectName: string, limit = 20, offset = 0) {
-    isLoadingSessions.value = true
+  async function fetchSessions(projectName: string, limit = 20, offset = 0, { silent = false } = {}) {
+    if (!silent) isLoadingSessions.value = true
     try {
       const response = await $fetch<{
         sessions: ClaudeCodeSession[]
@@ -147,13 +149,14 @@ export function useClaudeCodeHistory() {
       sessionsTotal.value = response.total
       return response.sessions
     } catch (error) {
+      if (silent) return sessions.value
       console.error('Failed to fetch sessions:', error)
       if (offset === 0) {
         sessions.value = []
       }
       return []
     } finally {
-      isLoadingSessions.value = false
+      if (!silent) isLoadingSessions.value = false
     }
   }
 
@@ -241,6 +244,7 @@ export function useClaudeCodeHistory() {
           output: number
           cacheCreation: number
           cacheRead: number
+          contextWindow: number
         }
       }>(`/api/v2/claude-code/projects/${encodeURIComponent(projectName)}/sessions/${encodeURIComponent(sessionId)}/messages`, {
         query

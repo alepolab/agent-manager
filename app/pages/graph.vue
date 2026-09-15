@@ -32,6 +32,11 @@ onMounted(async () => {
     loading.value = false
   }
 })
+useAutoRefresh(async () => {
+  const next = await $fetch<Relationship[]>('/api/relationships', { query: { workingDir: workingDir.value } })
+  // Reassigning identical edges would rebuild the layout under the user's pan and drags.
+  if (JSON.stringify(next) !== JSON.stringify(relationships.value)) relationships.value = next
+})
 
 // --- Layout constants ---
 const NODE_WIDTH = 220

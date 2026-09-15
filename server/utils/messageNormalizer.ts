@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { DEFAULT_CONTEXT_WINDOW } from './models.ts'
 import type { NormalizedMessage } from '~/types'
 
 /**
@@ -155,7 +156,9 @@ export function normalizeSDKMessage(
       let totalCacheRead = 0
       let totalCacheCreation = 0
       let totalCost = sdkMessage.total_cost_usd || 0
-      let contextWindow = 200_000
+      // Seeded at 0, not at the default: a non-zero seed would act as a floor
+      // and a genuinely smaller window could never be reported.
+      let contextWindow = 0
 
       if (sdkMessage.modelUsage && typeof sdkMessage.modelUsage === 'object') {
         for (const modelUsage of Object.values(sdkMessage.modelUsage) as any[]) {
@@ -163,7 +166,10 @@ export function normalizeSDKMessage(
           totalOutput += modelUsage.outputTokens || 0
           totalCacheRead += modelUsage.cacheReadInputTokens || 0
           totalCacheCreation += modelUsage.cacheCreationInputTokens || 0
-          if (modelUsage.contextWindow) {
+          // Take the largest, not the last: a turn that used a subagent on a
+          // smaller model would otherwise report the subagent's window as the
+          // session's.
+          if (modelUsage.contextWindow > contextWindow) {
             contextWindow = modelUsage.contextWindow
           }
         }
@@ -191,7 +197,7 @@ export function normalizeSDKMessage(
             output: totalOutput,
             cacheRead: totalCacheRead,
             cacheCreation: totalCacheCreation,
-            contextWindow,
+            contextWindow: contextWindow || DEFAULT_CONTEXT_WINDOW,
             totalCost,
           },
         },

@@ -8,19 +8,21 @@
  * Source: https://www.anthropic.com/pricing
  */
 
-export const MODEL_IDS = ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] as const
+// 'claude-fable-5' has no alias pointing at it, but it is the second most
+// common model in the local transcripts (3,308 entries against 122 for
+// claude-fable-5-1, 2026-09-10), so a session on it needs a row to resolve to.
+export const MODEL_IDS = ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] as const
 export type ModelId = (typeof MODEL_IDS)[number]
 
 /**
  * Map from the short "tier" alias (used in agent frontmatter) to the full API
  * model id.
  *
- * Verified by live `query()` calls against the installed
- * @anthropic-ai/claude-agent-sdk (0.2.81) on 2026-09-03, reading the
- * `system`/`init` message's `model` field for each alias:
- *   fable  -> claude-fable-5-1   (2026-09-07, `claude -p --model fable --output-format json` modelUsage)
- *   sonnet -> claude-sonnet-4-6
- *   opus   -> claude-opus-4-6
+ * Verified 2026-09-10 with agent SDK 0.3.263, reading the `modelUsage` key of
+ * `claude -p --model <alias> --output-format json`:
+ *   fable  -> claude-fable-5-1
+ *   opus   -> claude-opus-5
+ *   sonnet -> claude-sonnet-5
  *   haiku  -> claude-haiku-4-5-20251001
  *
  * These full ids move whenever a new model snapshot is released, without
@@ -33,7 +35,6 @@ export type ModelId = (typeof MODEL_IDS)[number]
  */
 export const MODEL_ALIAS: Record<string, ModelId> = {
   fable: 'claude-fable-5-1',
-  // Observed 2026-09-07 with agent SDK 0.3.263: the aliases moved to the Claude 5 ids.
   opus: 'claude-opus-5',
   sonnet: 'claude-sonnet-5',
   haiku: 'claude-haiku-4-5-20251001',
@@ -81,24 +82,37 @@ export interface ServerModelMeta {
   pricing?: ModelPricing
 }
 
+/**
+ * Context windows measured 2026-09-10 with agent SDK 0.3.263, reading
+ * `modelUsage[<key>].contextWindow` from
+ * `claude -p --model <alias> --output-format json`: fable/opus/sonnet all
+ * report 1,000,000 and haiku 200,000. The 4-6 ids and claude-fable-5 carry
+ * Anthropic's published 1M figure - no alias reaches them, so they cannot be
+ * measured the same way. The SDK's `context-1m-2025-08-07` beta is
+ * deliberately unused: the plain aliases already report 1M without it.
+ */
 export const SERVER_MODEL_META: Record<ModelId, ServerModelMeta> = {
   // Pricing deliberately absent: not published where this table can cite it.
   'claude-fable-5-1': {
     id: 'claude-fable-5-1',
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
+  },
+  'claude-fable-5': {
+    id: 'claude-fable-5',
+    contextWindow: 1_000_000,
   },
   // No list price cited here for the Claude 5 ids either; steps on them are
   // costed from the SDK's own figure (usage.usd), never from a guessed table.
-  'claude-opus-5': { id: 'claude-opus-5', contextWindow: 200_000 },
-  'claude-sonnet-5': { id: 'claude-sonnet-5', contextWindow: 200_000 },
+  'claude-opus-5': { id: 'claude-opus-5', contextWindow: 1_000_000 },
+  'claude-sonnet-5': { id: 'claude-sonnet-5', contextWindow: 1_000_000 },
   'claude-opus-4-6': {
     id: 'claude-opus-4-6',
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
     pricing: { input: 15.0, output: 75.0, cached: 1.5 },
   },
   'claude-sonnet-4-6': {
     id: 'claude-sonnet-4-6',
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
     pricing: { input: 3.0, output: 15.0, cached: 0.3 },
   },
   'claude-haiku-4-5-20251001': {
@@ -111,7 +125,12 @@ export const SERVER_MODEL_META: Record<ModelId, ServerModelMeta> = {
 /** Fallback pricing when model is unknown */
 export const DEFAULT_PRICING: ModelPricing = SERVER_MODEL_META['claude-sonnet-4-6'].pricing!
 
-/** Default context window when model is unknown */
+/**
+ * Default context window when model is unknown. Deliberately the smallest
+ * window we ship rather than the largest: understating it overstates usage,
+ * which shows up as an early-filling bar, where overstating it would hide an
+ * imminent compaction until it happened.
+ */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 
 /**
@@ -120,10 +139,15 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000
  */
 export function resolveModelMeta(model: string | undefined): ServerModelMeta | undefined {
   if (!model) return undefined
+  // A `[1m]` suffix selects the long-context variant of the same model, so it
+  // resolves to the same row. Such strings reach here for real: the SDK's init
+  // message reports "claude-opus-5[1m]" whenever ~/.claude/settings.json asks
+  // for "opus[1m]", and agentCaller records that string verbatim.
+  const base = model.endsWith('[1m]') ? model.slice(0, -4) : model
   // Try full id first
-  if (SERVER_MODEL_META[model as ModelId]) return SERVER_MODEL_META[model as ModelId]
+  if (SERVER_MODEL_META[base as ModelId]) return SERVER_MODEL_META[base as ModelId]
   // Try alias
-  const aliased = MODEL_ALIAS[model]
+  const aliased = MODEL_ALIAS[base]
   if (aliased) return SERVER_MODEL_META[aliased]
   return undefined
 }

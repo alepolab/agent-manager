@@ -18,27 +18,34 @@ export function useMCP() {
   const { workingDir } = useWorkingDir()
   const toast = useToast()
 
-  async function fetchServers() {
-    loading.value = true
-    error.value = null
+  async function fetchServers({ silent = false } = {}) {
+    if (!silent) {
+      loading.value = true
+      error.value = null
+    }
     try {
       const data = await $fetch<any[]>('/api/mcp', {
         query: { workingDir: workingDir.value }
       })
       // Map existing configs to include transport if missing
-      servers.value = data.map(s => {
+      const next = data.map(s => {
         const transport = s.transport || s.type
         return { ...s, transport }
       })
+      // An unchanged background refresh must not hand consumers new objects: /graph rebuilds its layout from them.
+      if (silent && JSON.stringify(next) === JSON.stringify(servers.value)) return
+      servers.value = next
     } catch (err: any) {
+      // A background refresh must not raise a toast every tick while the server is down.
+      if (silent) return
       error.value = err.message || 'Failed to fetch MCP servers'
       toast.add({ title: 'Failed to load servers', description: error.value ?? undefined, color: 'error' })
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 
-  async function fetchServer(name: string, scope: 'global' | 'project') {
+  async function fetchServer(name: string, scope: 'global' | 'project', { silent = false } = {}) {
     try {
       const data = await $fetch<any>(`/api/mcp/${encodeURIComponent(name)}`, {
         query: { scope, workingDir: workingDir.value }
@@ -49,7 +56,7 @@ export function useMCP() {
         transport
       } as McpServer
     } catch (err: any) {
-      toast.add({ title: 'Failed to fetch server', description: err.message, color: 'error' })
+      if (!silent) toast.add({ title: 'Failed to fetch server', description: err.message, color: 'error' })
       throw err
     }
   }
