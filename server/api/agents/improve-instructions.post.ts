@@ -1,4 +1,5 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
+import { requireCapability } from '../../utils/session'
 
 interface ImproveRequest {
   name: string
@@ -19,6 +20,9 @@ interface ImproveResponse {
 }
 
 export default defineEventHandler(async (event): Promise<ImproveResponse> => {
+  // `configure`: this route mutates the instance, and carried no authorisation check —
+  // the auth middleware proves WHO the caller is, never WHAT they may do.
+  await requireCapability(event, 'configure')
   const body = await readBody<ImproveRequest>(event)
 
   if (!body.name) {

@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { ChatSession } from '~/types'
+import { requireCapability } from '../../../utils/session'
 
 export default defineEventHandler(async (event) => {
+  // `configure`: this route mutates the instance, and carried no authorisation check —
+  // the auth middleware proves WHO the caller is, never WHAT they may do.
+  await requireCapability(event, 'configure')
   const body = await readBody(event)
   const { agentSlug, workingDir } = body
 
