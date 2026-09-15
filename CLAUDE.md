@@ -186,9 +186,9 @@ they exist only to register route params.
 - `useSessionStore.ts` - session-keyed message store; switching session moves a pointer rather than clearing
 - `useContextMonitor.ts` - token and cost tracking
 
-`useWebSocketChat.ts` and `useChatSessions.ts` are the previous generation of
-the same two jobs. Nothing imports them. Treat them as dead until deleted; do
-not extend them.
+The previous generation of the same two jobs — `useWebSocketChat.ts` and
+`useChatSessions.ts` — has been deleted, along with `useAgentHistory.ts` and
+`useVersionHistory.ts`. Nothing imported any of them.
 
 **Backend**:
 - `server/api/v2/chat/ws.ts` - the WebSocket the chat connects to
@@ -316,12 +316,15 @@ All TypeScript types are centralized in `app/types/index.ts`. Key types:
 - `ChatSession`, `ChatSessionSummary`, `ChatWebSocketMessage`, `ChatWebSocketEvent` -
   Session and WebSocket types, still used by the session REST routes
 
-`CliSession`, `FileChange` and `CliWebSocketEvent` are left over from the
-removed terminal — PTY sessions and its chokidar file watcher. Nothing on the
-server produces any of them now. `CliSession` is referenced nowhere outside this
-file; `FileChange` and `CliWebSocketEvent` are still imported by
-`useContextMonitor.ts`, which no longer receives either. Do not build anything
-new on them.
+`CliSession` and `CliWebSocketEvent` were left over from the removed terminal —
+PTY sessions and its chokidar file watcher — and have been deleted along with
+the only function that consumed the latter.
+
+`FileChange` stays, and is worth being precise about: it is the element type of
+`ContextMetrics.files`, which the chat's context monitor still carries. Nothing
+on the server produces the events that once filled those arrays, so they are
+always empty — but the type is load-bearing for a live one, and deleting it
+would not compile. Do not build anything new on that shape.
 
 ## Model Registry Design
 

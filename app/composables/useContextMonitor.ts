@@ -1,4 +1,4 @@
-import type { ContextMetrics, FileChange, ToolCall, TokenUsage, CliWebSocketEvent } from '~/types'
+import type { ContextMetrics, ToolCall, TokenUsage } from '~/types'
 
 export function useContextMonitor() {
   // Initialize empty metrics
@@ -73,64 +73,12 @@ export function useContextMonitor() {
     }
   }
 
-  /**
-   * Handle WebSocket events to update metrics
-   */
-  function handleWebSocketEvent(event: CliWebSocketEvent) {
-    if (!isMonitoring.value) return
-
-    switch (event.type) {
-      case 'context_update':
-        // Full context update from server
-        metrics.value = event.metrics
-        break
-
-      case 'token_update':
-        // Partial token update
-        if (event.tokens.input !== undefined) {
-          metrics.value.tokens.input += event.tokens.input
-        }
-        if (event.tokens.output !== undefined) {
-          metrics.value.tokens.output += event.tokens.output
-        }
-        if (event.tokens.cached !== undefined) {
-          metrics.value.tokens.cached += event.tokens.cached
-        }
-        break
-
-      case 'file_change':
-        // File system change
-        const change = event.change
-        switch (change.type) {
-          case 'created':
-            metrics.value.files.created.push(change)
-            break
-          case 'modified':
-            metrics.value.files.modified.push(change)
-            break
-          case 'deleted':
-            metrics.value.files.deleted.push(change)
-            break
-        }
-        break
-
-      case 'tool_call':
-        // Tool execution
-        metrics.value.tools.push(event.tool)
-        break
-    }
-  }
-
-  /**
-   * Get total file changes count
-   */
-  const totalFileChanges = computed(() => {
-    return (
-      metrics.value.files.created.length +
-      metrics.value.files.modified.length +
-      metrics.value.files.deleted.length
-    )
-  })
+  // `handleWebSocketEvent` lived here and was the ONLY writer of
+  // `metrics.files` — and nothing ever called it. It took `CliWebSocketEvent`,
+  // a shape the server stopped producing when the terminal was removed, so the
+  // file arrays it filled have been empty ever since, and the two computeds
+  // over them (`totalFileChanges`, `recentFileChanges`) could only ever answer
+  // 0 and []. `updateTokenUsage` is the live path for the numbers that matter.
 
   /**
    * Get total tool calls count
@@ -189,15 +137,6 @@ export function useContextMonitor() {
   /**
    * Get most recent file changes (last 10)
    */
-  const recentFileChanges = computed(() => {
-    const allChanges = [
-      ...metrics.value.files.created,
-      ...metrics.value.files.modified,
-      ...metrics.value.files.deleted,
-    ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-
-    return allChanges.slice(0, 10)
-  })
 
   /**
    * Get recent tool calls (last 20)
@@ -260,7 +199,6 @@ export function useContextMonitor() {
   return {
     metrics,
     isMonitoring,
-    totalFileChanges,
     totalToolCalls,
     successfulToolCalls,
     failedToolCalls,
@@ -268,13 +206,11 @@ export function useContextMonitor() {
     contextUsageText,
     costText,
     contextUsageColor,
-    recentFileChanges,
     recentToolCalls,
     toolStats,
     startMonitoring,
     stopMonitoring,
     resetMetrics,
     updateTokenUsage,
-    handleWebSocketEvent,
   }
 }
