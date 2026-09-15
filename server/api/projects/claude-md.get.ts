@@ -2,8 +2,15 @@ import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveHome } from '../../utils/path'
+import { requireCapability } from '../../utils/session'
 
 export default defineEventHandler(async (event) => {
+  // `configure`, matching claude-md.put.ts beside it. The write was guarded and
+  // the read was not, which is the asymmetry worth naming: this returns the
+  // contents of a file under a path the caller chooses, so it leaks exactly what
+  // the guarded route protects. Its only caller is the CLI chat interface, which
+  // is already `configure`-gated in the UI.
+  await requireCapability(event, 'configure')
   const query = getQuery(event)
   const path = query.path as string
 
