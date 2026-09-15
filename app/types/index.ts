@@ -270,6 +270,13 @@ export interface WorkflowStep {
    */
   testsUnlocked?: boolean
   /**
+   * Run artifacts this step must leave behind, as filenames relative to the
+   * run's artifacts directory. Checked by the runner before the monitor runs:
+   * a missing or empty file sends the step back naming the file, or fails it
+   * when no visits remain. A step that skips itself is exempt.
+   */
+  produces?: string[]
+  /**
    * Conditional routing: the step runs only when the named run artifact holds
    * something. Absent means it always runs.
    *

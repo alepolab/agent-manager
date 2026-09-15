@@ -412,6 +412,24 @@ export function entriesOf(parsed: unknown): unknown[] | null {
 }
 
 /**
+ * What is missing from a step's declared `produces`, one sentence per file;
+ * empty when every file is there.
+ *
+ * The monitor is a model reading the step's own account of itself, and a
+ * monitor that crashes or answers unreadably votes CONTINUE, so "the step never
+ * wrote oracle-before.xml" could pass on to a verifier that has nothing to
+ * compare against. Whether a file exists is not a judgement. I/O-free like
+ * gateSatisfied: the caller passes each file's text, or null when unreadable.
+ */
+export function missingArtifacts(produces: string[], contents: Record<string, string | null>): string[] {
+  return produces.flatMap((name) => {
+    const raw = contents[name]
+    if (raw === null || raw === undefined) return [`${name} was not written`]
+    return raw.trim() ? [] : [`${name} is empty`]
+  })
+}
+
+/**
  * Whether a step's `runWhen` artifact holds something worth running for.
  *
  * Takes the file's text rather than its path so the whole decision - every

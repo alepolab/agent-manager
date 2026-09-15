@@ -2,7 +2,7 @@ import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf, gateSatisfied, markSkippedByCondition, planDispatch,
-  planListDispatch,
+  planListDispatch, missingArtifacts,
   type WorkflowGraph, type RunState, type TriggerWorkflowConfig, type DispatchTarget,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
@@ -95,7 +95,7 @@ interface WorkflowLike {
   group?: string
   /** See Workflow.notifyChannel - where this workflow's run transitions are announced. */
   notifyChannel?: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
 }
 
 export interface StartRunOpts {
@@ -1029,6 +1029,39 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))
+
+    // Checked before the monitor, so a step that left out a file is sent back
+    // for that exact file instead of paying for a model to notice. A skip is
+    // exempt: a step with nothing to do has nothing to write.
+    if (!skip && step.produces?.length) {
+      const contents: Record<string, string | null> = {}
+      for (const name of step.produces) {
+        const path = resolveRunArtifact(run.id, name)
+        contents[name] = path ? await readFile(path, 'utf8').catch(() => null) : null
+      }
+      const missing = missingArtifacts(step.produces, contents)
+      if (missing.length) {
+        const why = `Output check: ${missing.join('; ')}.`
+        logLine(l, run, rec, why)
+        log.warn('step output check failed', { runId: run.id, stepId: id, agentSlug: step.agentSlug, missing })
+        if (canRevisit(l.graph, l.state, id)) {
+          Object.assign(rec, { error: why })
+          try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+          // The work is usually done and only the file is missing, so carry on
+          // in the same session rather than paying to redo it.
+          const session = resumableSession(rec)
+          if (session) l.resumeFrom[id] = session
+          l.retryFeedback[id] = `${why} Write each missing file into the run artifacts directory from the work you have already done - do not start over - then end with the directory listing.`
+          l.state.status[id] = 'completed'
+          armNode(l.state, id)
+          return true
+        }
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', error: `${why} The step has no visits left to write it.` })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+    }
 
     if (step.monitorSlug) {
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id))

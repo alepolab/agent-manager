@@ -21,6 +21,8 @@ export interface WorkflowTemplateStep {
   jira?: { transition?: string, comment?: boolean, attach?: boolean }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
+  /** See WorkflowStep.produces. */
+  produces?: string[]
   /** See WorkflowStep.runWhen. */
   runWhen?: { artifact: string }
   /** See WorkflowStep.triggerWorkflow. Slugs here name real workflows on the
@@ -115,6 +117,7 @@ export function materializeTemplateSteps(
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     if (step.jira !== undefined) materialized.jira = step.jira
     if (step.testsUnlocked) materialized.testsUnlocked = true
+    if (step.produces?.length) materialized.produces = step.produces
     if (step.runWhen !== undefined) materialized.runWhen = step.runWhen
     if (step.triggerWorkflow !== undefined) materialized.triggerWorkflow = step.triggerWorkflow
     if (step.notify !== undefined) materialized.notify = step.notify
@@ -168,23 +171,23 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // Runner-executed, no model: the ticket moves to In Progress the moment the
       // run starts, so nobody else picks it up while an agent is on it.
       { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack',
+      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', produces: ['intent.md', 'context-packet.json'], next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', produces: ['stack-report.md'],
         next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', produces: ['oracle-before.xml'], next: ['sdlc-fix-implementer'], monitorSlug: 'sdlc-step-monitor' },
       // Verification and browser evidence are independent of each other - one wave.
       { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression',
+      { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression', produces: ['oracle-after.xml', 'regression.xml'],
         next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       // Security review runs beside verification and tracing; the PR waits on all three.
-      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', produces: ['security-review.md'], next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
       // The one step with an outward effect: it pushes and opens the pull request. It waits for a person.
-      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR',
+      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR', produces: ['summary.md', 'bundle.json'],
         next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
       // Closes the loop the PR opens: reviewer checklist answered, checks watched, blockers
       // from the automated review fixed and pushed. Loops on RETRY until mergeable.
-      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review',
+      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', produces: ['pr-follow-up.md'],
         next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       // `next` names a template id, and a repeated id resolves to its LAST step, which
       // is this one: the review step, not the In Progress step at the top.
@@ -198,26 +201,26 @@ export const workflowTemplates: WorkflowTemplate[] = [
     icon: 'i-lucide-workflow',
     steps: [
       { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', produces: ['intent.md', 'context-packet.json'], next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
       // The runner makes the run's worktree beside the clone as soon as this step has cloned it; every step after works there.
-      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', next: ['sdlc-ce-plan'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', produces: ['stack-report.md'], next: ['sdlc-ce-plan'], monitorSlug: 'sdlc-step-monitor' },
       // ce-plan: the implementation plan and the QA plan (automated and manual cases) the run is judged by.
-      { agentTemplateId: 'sdlc-ce-plan', label: 'Plan', next: ['sdlc-ce-work'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ce-plan', label: 'Plan', produces: ['plan.md', 'qa-plan.md'], next: ['sdlc-ce-work'], monitorSlug: 'sdlc-step-monitor' },
       // Labelled as in Runbook A on purpose: the security review and the QA steps send work back to "Implement Fix".
       // ce-work writes each test before the code that passes it, in one step, so the
       // test lock that guards Runbook A's separate fix step would stop it after the
       // first source edit; a real run asked the operator for the unlock and stalled.
-      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], monitorSlug: 'sdlc-step-monitor', testsUnlocked: true },
-      { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', produces: ['implementation.md'], next: ['sdlc-ce-review'], monitorSlug: 'sdlc-step-monitor', testsUnlocked: true },
+      { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', produces: ['review.md'], next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
       // Rebuilds the image from the worktree and redeploys in place, alone, before anything tests it.
-      { agentTemplateId: 'sdlc-stack-update', label: 'Update Stack', next: ['sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-stack-update', label: 'Update Stack', produces: ['deploy-report.md'], next: ['sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
       // QA is the gate: both halves and the security review run against the rebuilt stack in one wave, and a FAIL sends the run back to Implement Fix.
-      { agentTemplateId: 'sdlc-qa-automated', label: 'Automated QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-qa-manual', label: 'Manual QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-qa-automated', label: 'Automated QA', produces: ['qa-automated.md'], next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-qa-manual', label: 'Manual QA', produces: ['qa-manual.md'], next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', produces: ['security-review.md'], next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
       // The one step with an outward effect: pushes the branch and opens the PR quoting the QA, review and security reports.
-      { agentTemplateId: 'sdlc-ce-ship', label: 'Push + PR', next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ce-ship', label: 'Push + PR', produces: ['pr.md', 'summary.md'], next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', produces: ['pr-follow-up.md'], next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, monitorSlug: 'sdlc-step-monitor' },
     ],
   },

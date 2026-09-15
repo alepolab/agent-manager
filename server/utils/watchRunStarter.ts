@@ -17,6 +17,7 @@ import { readFile } from 'node:fs/promises'
 import { resolveClaudePath } from './claudeDir.ts'
 import { findActiveRun } from './workflowRunStore.ts'
 import { startOrQueue } from './workflowRunner.ts'
+import { fenceTicketBody } from './jiraTicketSource.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
 
 interface WorkflowFile {
@@ -42,7 +43,7 @@ async function loadWorkflow(slug: string): Promise<WorkflowFile | null> {
 }
 
 function promptFor(ticket: TicketRef): string {
-  return `${ticket.key}: ${ticket.summary}\n\n${ticket.description}`
+  return `${ticket.key}: ${ticket.summary}\n\n${ticket.description?.trim() ? fenceTicketBody(ticket.description) : ''}`
 }
 
 /**
