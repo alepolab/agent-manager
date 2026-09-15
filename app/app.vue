@@ -14,6 +14,24 @@ const initialized = ref(false)
 const isLogin = computed(() => route.path === '/login')
 const showSearch = ref(false)
 const sidebarCollapsed = useState('sidebar-collapsed', () => false)
+/**
+ * The sidebar was 200px wide at every width, and its collapse control was
+ * `hidden md:flex` — so on a phone it took half the screen with no way to
+ * dismiss it. The app ships exactly one @media rule in 1,400 lines of CSS
+ * (prefers-reduced-motion), which is the whole story of its responsive design.
+ *
+ * This nudges the default closed when the viewport goes narrow and then leaves
+ * the person in control. Forcing it instead would make the toggle inert on a
+ * phone — a control that is visible and does nothing, which is worse than the
+ * hidden one it replaced.
+ */
+onMounted(() => {
+  const mq = window.matchMedia('(max-width: 767px)')
+  const sync = () => { if (mq.matches) sidebarCollapsed.value = true }
+  sync()
+  mq.addEventListener('change', sync)
+  onUnmounted(() => mq.removeEventListener('change', sync))
+})
 const { isPanelOpen: chatOpen } = useChat()
 const colorMode = useColorMode()
 
@@ -168,10 +186,10 @@ function badgeFor(to: string) {
               <UIcon name="i-lucide-bot" class="size-3.5" style="color: var(--accent);" />
             </div>
             <div class="flex-1 flex flex-col min-w-0">
-              <span class="text-[12px] font-semibold tracking-tight group-hover/brand:text-accent transition-colors" style="color: var(--text-primary); font-family: var(--font-display);">
+              <span class="t-small font-semibold tracking-tight group-hover/brand:text-accent transition-colors" style="color: var(--text-primary); font-family: var(--font-display);">
                 Agent Manager
               </span>
-              <span class="text-[9px] font-mono tracking-wider uppercase" style="color: var(--text-disabled);">
+              <span class="t-small font-mono tracking-wider uppercase" style="color: var(--text-disabled);">
                 Claude Code
               </span>
             </div>
@@ -183,7 +201,7 @@ function badgeFor(to: string) {
           </div>
           <!-- Collapse toggle -->
           <button
-            class="hidden md:flex size-7 items-center justify-center rounded-lg transition-all duration-150 focus-ring press-scale shrink-0"
+            class="flex size-7 items-center justify-center rounded-lg transition-all duration-150 focus-ring press-scale shrink-0"
             style="color: var(--text-tertiary);"
             :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
             @mouseenter="($event.currentTarget as HTMLElement).style.background = 'var(--surface-hover)'"
@@ -207,8 +225,8 @@ function badgeFor(to: string) {
           >
             <UIcon name="i-lucide-search" class="size-3.5" />
             <template v-if="!sidebarCollapsed">
-              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
-              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
+              <span class="t-small flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
+              <kbd class="t-small font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
             </template>
           </button>
         </div>
@@ -220,7 +238,7 @@ function badgeFor(to: string) {
             v-for="link in navTop"
             :key="link.to"
             :to="link.to"
-            class="nav-item group flex items-center rounded-lg text-[13px] transition-all duration-150 relative focus-ring"
+            class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
               sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               { 'nav-item--active': isActive(link.to) }
@@ -243,7 +261,7 @@ function badgeFor(to: string) {
               <span class="flex-1" style="font-family: var(--font-sans);">{{ link.label }}</span>
               <span
                 v-if="badgeFor(link.to)"
-                class="font-mono text-[10px] tabular-nums transition-colors duration-150"
+                class="font-mono t-small tabular-nums transition-colors duration-150"
                 :style="{ color: isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
               >
                 {{ badgeFor(link.to) }}
@@ -259,7 +277,7 @@ function badgeFor(to: string) {
             v-for="link in navMid"
             :key="link.key"
             :to="link.to"
-            class="nav-item group flex items-center rounded-lg text-[13px] transition-all duration-150 relative focus-ring"
+            class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
               sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               { 'nav-item--active': isActive(link.to) }
@@ -290,7 +308,7 @@ function badgeFor(to: string) {
             v-for="link in navBottom"
             :key="link.to"
             :to="link.to"
-            class="nav-item group flex items-center rounded-lg text-[13px] transition-all duration-150 relative focus-ring"
+            class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
               sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               { 'nav-item--active': isActive(link.to) }
@@ -336,8 +354,8 @@ function badgeFor(to: string) {
               />
             </div>
             <template v-if="!sidebarCollapsed">
-              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Claude</span>
-              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘J</kbd>
+              <span class="t-small flex-1 text-left" style="font-family: var(--font-sans);">Claude</span>
+              <kbd class="t-small font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘J</kbd>
             </template>
           </button>
         </div>
@@ -354,8 +372,8 @@ function badgeFor(to: string) {
             >
               <img v-if="me.avatar" :src="me.avatar" alt="" class="size-5 rounded-full" />
               <UIcon v-else name="i-lucide-user" class="size-4" />
-              <span v-if="!sidebarCollapsed" class="text-[12px] truncate flex-1 text-left" style="font-family: var(--font-sans);">{{ me.name || me.login }}</span>
-              <button v-if="!sidebarCollapsed && !me.authDisabled" class="text-[10px] underline" @click.prevent="signOut">Sign out</button>
+              <span v-if="!sidebarCollapsed" class="t-small truncate flex-1 text-left" style="font-family: var(--font-sans);">{{ me.name || me.login }}</span>
+              <button v-if="!sidebarCollapsed && !me.authDisabled" class="t-small underline" @click.prevent="signOut">Sign out</button>
             </NuxtLink>
           </div>
         </ClientOnly>
@@ -371,7 +389,7 @@ function badgeFor(to: string) {
               @click="toggleTheme"
             >
               <UIcon :name="colorMode.value === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon'" class="size-4" />
-              <span v-if="!sidebarCollapsed" class="text-[12px]" style="font-family: var(--font-sans);">
+              <span v-if="!sidebarCollapsed" class="t-small" style="font-family: var(--font-sans);">
                 {{ colorMode.value === 'dark' ? 'Light mode' : 'Dark mode' }}
               </span>
             </button>

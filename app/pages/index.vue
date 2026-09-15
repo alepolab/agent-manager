@@ -152,15 +152,15 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
 <template>
   <div>
     <PageHeader title="Dashboard" />
-    <div class="px-6 py-4 space-y-6">
+    <div class="page space-y-6">
       <WelcomeOnboarding v-if="loaded && !hasContent" @created="(agent) => navigateTo(`/agents/${agent.slug}`)" />
 
       <!-- Primary action -->
       <!-- Who you are here, said out loud. A console that has quietly hidden
            half its controls is indistinguishable from a broken one, and an
            operator looking as someone else needs the way back. -->
-      <div v-if="role" class="flex flex-wrap items-center gap-2 text-[12px] mb-4">
-        <span class="font-mono uppercase text-[11px] px-2 py-0.5 rounded" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">{{ role }}</span>
+      <div v-if="role" class="flex flex-wrap items-center gap-2 t-small mb-4">
+        <span class="font-mono uppercase t-small px-2 py-0.5 rounded" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">{{ role }}</span>
         <span class="text-label">{{ ROLE_BLURB[role] }}</span>
         <template v-if="viewingAs">
           <span class="text-label">Viewing as {{ role }}, not your own role.</span>
@@ -203,18 +203,22 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
       <section>
         <div class="flex items-center gap-3 mb-2">
           <h2 class="text-section-label">Needs attention <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
-          <button v-if="dismissable.length" class="text-[11px] text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} settled</button>
+          <button v-if="dismissable.length" class="t-small text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} settled</button>
         </div>
         <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
-        <p v-else-if="!attention.length && !escalated.length" class="text-[13px] text-label">Nothing waiting on you.</p>
+        <p v-else-if="!attention.length && !escalated.length" class="t-ui text-label">Nothing waiting on you.</p>
         <div v-else class="space-y-1">
           <!-- Same four columns on every row, run or escalation, including the
                dismiss slot: it is absent on a paused run, and reserving its
                width is what keeps that row's fields level with the others. -->
-          <div v-for="r in attention" :key="r.id" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <div v-for="r in attention" :key="r.id" class="flex items-center gap-3 rounded-lg px-3 py-2 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <NuxtLink :to="`/runs/${r.id}`" class="flex-1 min-w-0 grid grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 focus-ring">
-              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
-              <span class="font-medium truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
+              <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <!-- The subject leads. Status, reason and timestamp all sat at the
+                   same size as this, so the row had no focal point and the eye
+                   had nowhere to land: in a queue, what the work IS outweighs
+                   every attribute of it. -->
+              <span class="t-head truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
               <span class="text-label truncate" :title="why(r)">{{ why(r) }}</span>
               <span class="text-label text-right truncate" :title="`Started ${new Date(r.startedAt).toLocaleString()}`">{{ r.startedBy || '' }} · {{ ago(runLastActivityAt(r)) }}</span>
             </NuxtLink>
@@ -222,9 +226,9 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
               <button v-if="r.status !== 'paused'" class="p-1.5 rounded focus-ring text-label" :title="`Dismiss ${r.status} run from this list`" :aria-label="`Dismiss run`" :disabled="dismissing" @click="dismiss([r.id])"><UIcon name="i-lucide-x" class="size-3.5" /></button>
             </span>
           </div>
-          <div v-for="t in escalated" :key="t.watchId + t.key" class="flex items-center gap-3 rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <div v-for="t in escalated" :key="t.watchId + t.key" class="flex items-center gap-3 rounded-lg px-3 py-2 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <NuxtLink to="/watches" class="flex-1 min-w-0 grid grid-cols-[5rem_minmax(0,1fr)_minmax(0,1fr)_10rem] items-center gap-3 focus-ring">
-              <span class="font-mono uppercase text-[11px] truncate" style="color: var(--error);">escalated</span>
+              <span class="font-mono t-label truncate" style="color: var(--error);">escalated</span>
               <span class="font-medium truncate" style="color: var(--text-primary);">{{ t.key }}</span>
               <span class="text-label truncate" :title="t.lastError || ''">{{ t.lastError || 'attempts exhausted; clear the escalation on the watch to retry' }}</span>
               <span class="text-label text-right truncate">{{ t.watchId }} · {{ ago(t.updatedAt) }}</span>
@@ -238,17 +242,17 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
         <!-- My runs -->
         <section class="md:col-span-2">
           <h2 class="text-section-label mb-2">My recent runs</h2>
-          <p v-if="loaded && !mine.length" class="text-[13px] text-label">No runs started by you yet.</p>
+          <p v-if="loaded && !mine.length" class="t-ui text-label">No runs started by you yet.</p>
           <!-- Grid, not flex: the progress bar used to sit wherever the title
                ended, so it landed in a different place on every row. Fixed
                columns line the four fields up down the list. -->
           <div v-else class="space-y-1">
             <NuxtLink
               v-for="r in mine" :key="r.id" :to="`/runs/${r.id}`"
-              class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 text-[12px] focus-ring"
+              class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 t-small focus-ring"
               style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
             >
-              <span class="font-mono uppercase text-[11px] truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
+              <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ r.status }}</span>
               <span class="truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
               <RunProgressBar :steps="r.steps" />
               <span
@@ -265,7 +269,7 @@ const ago = (ms: number) => { const m = Math.round((Date.now() - ms) / 60000); r
              high of its neighbour. -->
         <section>
           <h2 class="text-section-label mb-2">Setup</h2>
-          <div class="rounded-lg px-3 py-2 text-[12px]" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <div class="rounded-lg px-3 py-2 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1">
               <NuxtLink to="/agents" class="flex justify-between focus-ring"><span class="text-label">Agents</span><span>{{ agents.length }}</span></NuxtLink>
               <NuxtLink to="/commands" class="flex justify-between focus-ring"><span class="text-label">Commands</span><span>{{ commands.length }}</span></NuxtLink>

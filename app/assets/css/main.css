@@ -228,6 +228,97 @@ body {
 }
 
 /* ============================================
+   Type Scale — six sizes, and only six
+
+   The app carries 1,023 arbitrary `text-[Npx]` declarations across fourteen
+   distinct sizes, three of which (11/12/13px) do about three quarters of the
+   work. That is not a hierarchy: a failing run's status, a ticket headline and
+   a timestamp all sit within one pixel of each other, so nothing leads and the
+   eye has nowhere to land first.
+
+   These are SIZE ONLY. Colour stays in .text-label / .text-meta / .text-body
+   above, which are already used in hundreds of places — keeping the two
+   orthogonal means a size change never silently restyles a colour, and the
+   prefix keeps `.t-small` from colliding with the existing `.text-meta`.
+   ============================================ */
+
+.t-title {
+  font-size: 22px;
+  line-height: 1.18;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* The one thing that matters in a card: a ticket headline, a gate's question. */
+.t-head {
+  font-size: 17px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Prose: descriptions, agent output, anything read in sentences. */
+.t-body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* The default. Table cells, list rows, controls, nav. */
+.t-ui {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Secondary attributes: timestamps, counts, the second line of a row. */
+.t-small {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+/* Section labels, column heads, status pills. Nothing else. */
+.t-label {
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Figures that line up in a column stop jittering as they tick. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================
+   One page-width rule
+
+   Gutters disagreed across the app (px-6 py-4 in nineteen pages, px-6 py-5 in
+   three, px-8 py-6 in one) and only two pages had any max width at all, so the
+   eight-column runs table stretched to whatever monitor it was opened on.
+   Set once, here, so it cannot drift again.
+   ============================================ */
+
+.page {
+  max-width: 1280px;
+  margin-inline: auto;
+  padding-inline: 24px;
+  /* padding-block, never a `padding` shorthand: the shorthand would zero the
+     side gutters this rule exists to guarantee. */
+  padding-block: 20px;
+}
+
+/* Evidence needs width: the run detail's two panes get more room than prose. */
+.page--wide {
+  max-width: 1600px;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding-inline: 16px;
+  }
+}
+
+/* ============================================
    Graph Canvas
    ============================================ */
 

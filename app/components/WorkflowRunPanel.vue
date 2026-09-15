@@ -209,33 +209,33 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
            affordance to return. -->
       <button
         v-if="runs.length > 1"
-        class="text-[11px] text-label hover:underline shrink-0"
+        class="t-small text-label hover:underline shrink-0"
         data-testid="run-back-to-history"
         @click="emit('close')"
       >
         &larr; All runs ({{ runs.length }})
       </button>
-      <NuxtLink v-if="!fullPage" :to="`/runs/${run.id}`" class="text-[11px] text-label hover:underline shrink-0 focus-ring" title="Steps, live output and every evidence file, full screen">Full page &nearr;</NuxtLink>
-      <span class="text-[11px] font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">
+      <NuxtLink v-if="!fullPage" :to="`/runs/${run.id}`" class="t-small text-label hover:underline shrink-0 focus-ring" title="Steps, live output and every evidence file, full screen">Full page &nearr;</NuxtLink>
+      <span class="t-small font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">
         {{ run.status }}
       </span>
-      <span class="text-[12px] text-label">{{ run.workflowName }}</span>
-      <span class="text-[11px] text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">
+      <span class="t-small text-label">{{ run.workflowName }}</span>
+      <span class="t-small text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">
         {{ progress.done }} / {{ progress.total }}
       </span>
-      <span class="text-[11px] text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(run, now) }}</span>
+      <span class="t-small text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(run, now) }}</span>
     </div>
 
     <!-- One segment per step, coloured by that step's status. See `progress`. -->
     <RunProgressBar :steps="run.steps" :aria-label="`${progress.done} of ${progress.total} steps settled`" />
 
-    <p v-if="run.status === 'interrupted'" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">
+    <p v-if="run.status === 'interrupted'" class="t-small" :style="{ color: STATUS_COLOR.failed }">
       The process that was running this is gone. Its steps are frozen where they stopped.
     </p>
 
     <!-- What the runner checked before any agent ran. Only the checks that need
          a person: an all-clear is the silent, expected case. -->
-    <div v-if="preflightNotable.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <div v-if="preflightNotable.length" class="rounded-lg p-2 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
       <div class="font-medium" style="color: var(--text-primary);">Preflight</div>
       <div v-for="c in preflightNotable" :key="c.name" class="flex gap-2">
         <span class="font-mono shrink-0" :style="{ color: c.level === 'fail' ? STATUS_COLOR.failed : 'var(--warning)' }">{{ c.name }}</span>
@@ -243,30 +243,34 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </div>
     </div>
 
-    <div v-if="intake?.open_questions?.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <div v-if="intake?.open_questions?.length" class="rounded-lg p-2 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
       <div class="font-medium" style="color: var(--text-primary);">Intake left {{ intake.open_questions.length }} question(s) open</div>
       <ol class="list-decimal ml-4 space-y-0.5"><li v-for="q in intake.open_questions" :key="q">{{ q }}</li></ol>
       <p class="text-label">Answer in the note below and restart the step that needs the answer.</p>
     </div>
-    <div v-if="prLinks.length" class="flex flex-wrap gap-3 text-[11px]">
+    <div v-if="prLinks.length" class="flex flex-wrap gap-3 t-small">
       <a v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener" class="underline" style="color: var(--accent);">Pull request: {{ u.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}</a>
     </div>
-    <div v-if="run.question" class="rounded-lg p-3 text-[12px] space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
-      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
-      <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
-      <p v-if="run.blastRadius" class="text-[11px] mt-1 text-label">
+    <div v-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
+      <!-- The eyebrow is the label; the question is the thing to read. These were
+           the same size, inside a box built exactly like the two informational
+           boxes above it — which is how the console's whole reason to exist came
+           to look like a footnote. -->
+      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <p class="t-head whitespace-pre-wrap" style="color: var(--text-primary);">{{ run.question.text }}</p>
+      <p v-if="run.blastRadius" class="t-small mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
       </p>
       <!-- How long this has been waiting on a person. The figure existed on the
            record (question.askedAt) and was rendered nowhere, so neither the
            reviewer nor anyone watching could see a gate going stale. -->
-      <p class="text-[11px] text-label">
+      <p class="t-small text-label">
         Waiting {{ waitingLabel }}<template v-if="(run.reworks ?? 0) > 0"> · sent back {{ run.reworks }} of 2 times already</template>
       </p>
       <!-- Whose decision this is. Said out loud when it is not yours, because a
            panel with the controls quietly removed is indistinguishable from a
            broken one. -->
-      <p v-if="gateOwner" class="text-[11px]" :style="{ color: mineToAnswer ? 'var(--text-tertiary)' : 'var(--warning)' }">
+      <p v-if="gateOwner" class="t-small" :style="{ color: mineToAnswer ? 'var(--text-tertiary)' : 'var(--warning)' }">
         <template v-if="mineToAnswer">This gate is <span class="font-mono">{{ gateOwner }}</span>'s decision — yours to answer.</template>
         <template v-else>This gate is <span class="font-mono">{{ gateOwner }}</span>'s decision, not yours. You are {{ role }}.</template>
       </p>
@@ -283,7 +287,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     <!-- What was decided at this run's earlier gates. A four-gate runbook used
          to arrive at its last gate with no record of who approved the first
          three or why: approval notes lived in memory and died with the process. -->
-    <div v-if="run.decisions?.length" class="rounded-lg p-2 text-[11px] space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <div v-if="run.decisions?.length" class="rounded-lg p-2 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
       <div class="font-medium" style="color: var(--text-primary);">Earlier decisions on this run</div>
       <div v-for="d in run.decisions" :key="d.at" class="flex gap-2">
         <span
@@ -294,44 +298,55 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
         <span class="text-label truncate">{{ d.by }}<template v-if="d.note">: {{ d.note }}</template></span>
       </div>
     </div>
-    <p v-if="sent && run.status === 'running'" class="text-[11px] text-label">Queued for the next step: "{{ sent }}"</p>
+    <p v-if="sent && run.status === 'running'" class="t-small text-label">Queued for the next step: "{{ sent }}"</p>
     <textarea
       v-if="(mayDrive && (settledRun || run.status === 'running')) || (mayAnswer && run.status === 'paused')"
       v-model="note"
       rows="2"
-      class="field-input w-full resize-none text-[12px]"
+      class="field-input w-full resize-none t-small"
       :placeholder="notePlaceholder"
       :aria-label="notePlaceholder"
       @keydown.meta.enter="noteMode === 'reply' ? send('respond') : noteMode === 'steer' ? send('note') : noteMode === 'continue' ? send('continue') : undefined"
     />
-    <p v-if="mayDrive && settledRun && run.steps.some(s => s.sessionId)" class="text-[11px] text-label">
+    <p v-if="mayDrive && settledRun && run.steps.some(s => s.sessionId)" class="t-small text-label">
       Questions or feedback for a step's agent go to its chat: expand the step and choose Ask this agent, or use the speech bubble on its row. The conversation continues with everything the agent saw. A note typed here goes to the step you restart.
     </p>
     <!-- Tokens against the budget cap. The cost figure that used to lead this
          row was removed on request; the totals still come from
          server/utils/costReport.ts, which is the only place that aggregates
          per-step usage, and the cap is what the run pauses against. -->
-    <div v-if="cost" class="flex items-center gap-2 text-[11px]" data-testid="run-usage-summary">
+    <div v-if="cost" class="flex items-center gap-2 t-small" data-testid="run-usage-summary">
       <span class="text-label">{{ (cost.totals.input_tokens + cost.totals.output_tokens).toLocaleString() }} tokens</span>
       <span v-if="run.budget" class="text-label" :title="`Cap ${run.budget.maxTokens.toLocaleString()} tokens, ${run.budget.maxMinutes} min. Set in Settings; the run pauses and asks when it is reached.`">of {{ run.budget.maxTokens.toLocaleString() }}</span>
     </div>
-    <p v-else-if="costError" class="text-[11px] text-label">Usage unavailable.</p>
+    <p v-else-if="costError" class="t-small text-label">Usage unavailable.</p>
 
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">
-      <div v-for="step in run.steps" :key="step.stepId" class="text-[12px]">
+      <div v-for="step in run.steps" :key="step.stepId" class="t-small">
         <div class="flex items-center gap-1">
           <button
             class="flex-1 min-w-0 flex items-center gap-2 text-left py-1"
             :aria-expanded="expanded === step.stepId"
             @click="expanded = expanded === step.stepId ? null : step.stepId"
           >
-            <span class="w-2 h-2 rounded-full shrink-0" :style="{ background: STATUS_COLOR[step.status] }" />
+            <!-- A step's status was carried by hue and nothing else: this dot was
+                 the only thing separating a completed step from a failed one, so
+                 the row said nothing to a screen reader and nothing to anyone who
+                 does not separate red from green. The colour stays; it is no
+                 longer the only channel. -->
+            <span
+              class="w-2 h-2 rounded-full shrink-0"
+              :style="{ background: STATUS_COLOR[step.status] }"
+              role="img"
+              :aria-label="step.status"
+              :title="step.status"
+            />
             <span class="font-medium">{{ step.label }}</span>
-            <span class="text-label font-mono text-[10px]">{{ step.agentSlug }}</span>
-            <span v-if="step.visits > 1" class="text-[10px] text-label">×{{ step.visits }}</span>
-            <span v-if="step.monitorVerdict" class="text-[10px] font-mono">{{ step.monitorVerdict }}</span>
-            <span class="ml-auto text-[10px] text-label">{{ elapsed(step) }}</span>
+            <span class="text-label font-mono t-small">{{ step.agentSlug }}</span>
+            <span v-if="step.visits > 1" class="t-small text-label">×{{ step.visits }}</span>
+            <span v-if="step.monitorVerdict" class="t-small font-mono">{{ step.monitorVerdict }}</span>
+            <span class="ml-auto t-small text-label">{{ elapsed(step) }}</span>
           </button>
           <!-- Visible on the row itself: an action nobody has to discover by
                expanding. Not for a reviewer: it opens the agent's live Claude
@@ -350,7 +365,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             @click="emit('restart', step.stepId, note)"
           />
         </div>
-        <div v-if="step.status === 'running' && latest(step.stepId) && expanded !== step.stepId" class="pl-4 text-[10px] font-mono truncate text-label" :title="latest(step.stepId)">{{ latest(step.stepId) }}</div>
+        <div v-if="step.status === 'running' && latest(step.stepId) && expanded !== step.stepId" class="pl-4 t-small font-mono truncate text-label" :title="latest(step.stepId)">{{ latest(step.stepId) }}</div>
         <div v-if="expanded === step.stepId" class="pl-4 pb-2 space-y-1">
           <!-- Questions and feedback for a finished step go to the agent itself: its
                Claude Code session continues on /cli with everything it saw. -->
@@ -359,24 +374,24 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             size="xs" variant="soft" icon="i-lucide-message-circle" label="Ask this agent"
             :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
           />
-          <p v-if="step.error" class="text-[11px]" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
+          <p v-if="step.error" class="t-small" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
           <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
-            <div class="text-[10px] text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
+            <div class="t-small text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
             <div :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="max-h-72 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);"><LogLines :lines="liveFor(step.stepId)" /></div>
           </div>
-          <pre v-if="step.output" class="text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
-          <p v-else-if="!liveFor(step.stepId).length" class="text-[11px] text-label">No output yet.</p>
+          <pre v-if="step.output" class="t-small whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
+          <p v-else-if="!liveFor(step.stepId).length" class="t-small text-label">No output yet.</p>
         </div>
       </div>
     </div>
 
     <div class="space-y-1">
-      <button class="text-[11px] text-label underline" @click="artifacts ? (artifacts = null) : loadArtifacts()">
+      <button class="t-small text-label underline" @click="artifacts ? (artifacts = null) : loadArtifacts()">
         {{ artifacts ? 'Hide evidence files' : 'Show evidence files' }}
       </button>
       <div v-if="artifacts" class="space-y-0.5">
-        <p v-if="!artifacts.length" class="text-[11px] text-label">No files yet.</p>
-        <div v-for="f in artifacts" :key="f.name" class="text-[11px]">
+        <p v-if="!artifacts.length" class="t-small text-label">No files yet.</p>
+        <div v-for="f in artifacts" :key="f.name" class="t-small">
           <button class="font-mono underline" :aria-expanded="openFile === f.name" @click="showFile(f.name)">{{ f.name }}</button>
           <span class="text-label ml-1">{{ f.size < 1024 ? f.size + ' B' : Math.round(f.size / 1024) + ' KB' }}</span>
           <pre v-if="openFile === f.name" class="whitespace-pre-wrap max-h-72 overflow-auto mt-1 p-2 rounded" style="background: var(--surface-raised);">{{ fileText }}</pre>
@@ -404,7 +419,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
            for it. "Reject run" beside it ends the run — they were previously the
            same button, labelled as this one and behaving as that one. -->
       <template v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget' && reworkCandidates.length && reworksLeft > 0">
-        <select v-model="reworkTarget" class="field-input text-[12px] w-44" aria-label="Step to send this back to">
+        <select v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to">
           <option value="">Send back to…</option>
           <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}</option>
         </select>
@@ -426,22 +441,22 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <UButton v-if="mayDrive && run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
       <UButton v-if="mayDrive && (run.status === 'running' || run.status === 'paused')" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
       <UButton v-if="mayDrive && settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
-      <p v-if="!mayAnswer && run.status === 'paused'" class="text-[11px] text-label self-center">This run is waiting on a decision from a developer.</p>
+      <p v-if="!mayAnswer && run.status === 'paused'" class="t-small text-label self-center">This run is waiting on a decision from a developer.</p>
     </div>
   </div>
 
   <div v-else-if="runs.length" class="space-y-1">
     <div class="flex items-center gap-2">
-      <p class="text-[11px] text-label">Previous runs</p>
-      <NuxtLink to="/runs" class="ml-auto text-[11px] text-label hover:underline">All run history &rarr;</NuxtLink>
+      <p class="t-small text-label">Previous runs</p>
+      <NuxtLink to="/runs" class="ml-auto t-small text-label hover:underline">All run history &rarr;</NuxtLink>
     </div>
-    <button v-for="r in runs.slice(0, 10)" :key="r.id" class="w-full flex items-center gap-2 text-[12px] py-1 text-left" @click="emit('attach', r.id)">
+    <button v-for="r in runs.slice(0, 10)" :key="r.id" class="w-full flex items-center gap-2 t-small py-1 text-left" @click="emit('attach', r.id)">
       <span class="w-2 h-2 rounded-full" :style="{ background: STATUS_COLOR[r.status] }" />
       <span>{{ new Date(r.startedAt).toLocaleString() }}</span>
-      <span class="text-[10px] text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(r, now) }}</span>
-      <span class="ml-auto text-[10px] font-mono text-label">{{ r.status }}</span>
+      <span class="t-small text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(r, now) }}</span>
+      <span class="ml-auto t-small font-mono text-label">{{ r.status }}</span>
     </button>
-    <p v-if="runs.length > 10" class="text-[11px] text-label pt-1">
+    <p v-if="runs.length > 10" class="t-small text-label pt-1">
       Showing 10 of {{ runs.length }}. <NuxtLink to="/runs" class="hover:underline">See all</NuxtLink>.
     </p>
   </div>
