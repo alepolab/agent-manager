@@ -117,22 +117,22 @@ if (import.meta.client) {
           <UIcon name="i-lucide-search" class="size-4 shrink-0 text-meta" />
           <input
             v-model="query"
-            class="flex-1 bg-transparent text-[13px] outline-none"
+            class="flex-1 bg-transparent t-ui outline-none"
             placeholder="Search agents, commands, skills, plugins..."
             autofocus
             @keydown="onKeydown"
           />
-          <kbd class="text-[10px] font-mono px-1.5 py-0.5 rounded badge badge-subtle">ESC</kbd>
+          <kbd class="t-small font-mono px-1.5 py-0.5 rounded badge badge-subtle">ESC</kbd>
         </div>
 
         <!-- Results -->
         <div class="flex-1 overflow-auto py-1">
           <div v-if="query && !results.length" class="flex flex-col items-center justify-center py-8">
-            <p class="text-[13px] text-label">No results found</p>
+            <p class="t-ui text-label">No results found</p>
           </div>
 
           <div v-if="!query" class="flex flex-col items-center justify-center py-8">
-            <p class="text-[12px] text-meta">Type to search across all items</p>
+            <p class="t-small text-meta">Type to search across all items</p>
           </div>
 
           <button
@@ -152,23 +152,23 @@ if (import.meta.client) {
             />
             <UIcon v-else :name="result.icon" class="size-4 shrink-0 text-meta" />
 
-            <span class="font-mono text-[13px] font-medium w-40 shrink-0 truncate">
+            <span class="font-mono t-ui font-medium w-40 shrink-0 truncate">
               {{ result.label }}
             </span>
 
             <span
               v-if="result.model"
-              class="text-[10px] font-mono font-medium px-1 py-px rounded-full shrink-0"
+              class="t-small font-mono font-medium px-1 py-px rounded-full shrink-0"
               :class="[getModelBadgeClasses(result.model).bg, getModelBadgeClasses(result.model).text]"
             >
               {{ result.model }}
             </span>
 
-            <span class="flex-1 text-[12px] truncate text-label">
+            <span class="flex-1 t-small truncate text-label">
               {{ result.sublabel }}
             </span>
 
-            <span class="text-[10px] font-mono shrink-0 text-meta">
+            <span class="t-small font-mono shrink-0 text-meta">
               {{ result.type }}
             </span>
           </button>

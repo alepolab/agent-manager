@@ -1405,8 +1405,8 @@ function handleClosePreview() {
         <template v-if="!activeConfigPanel">
           <div class="shrink-0 border-b h-14 flex items-center gap-3 px-4" style="border-color: var(--border-subtle); background: var(--surface-base);">
             <UIcon name="i-lucide-settings-2" class="size-4" style="color: var(--accent);" />
-            <h3 class="text-[14px] font-semibold" style="color: var(--text-primary);">Project Settings</h3>
-            <span class="text-[11px] font-mono" style="color: var(--text-tertiary);">
+            <h3 class="t-body font-semibold" style="color: var(--text-primary);">Project Settings</h3>
+            <span class="t-small font-mono" style="color: var(--text-tertiary);">
               {{ currentProjectDisplayName || selectedProjectPath }}
             </span>
           </div>
@@ -1415,8 +1415,8 @@ function handleClosePreview() {
               <div class="size-16 mx-auto mb-5 rounded-2xl flex items-center justify-center" style="background: var(--surface-raised);">
                 <UIcon name="i-lucide-settings-2" class="size-8" style="color: var(--text-tertiary);" />
               </div>
-              <h2 class="text-[17px] font-semibold mb-2" style="color: var(--text-primary);">Project Settings</h2>
-              <p class="text-[13px] leading-relaxed" style="color: var(--text-secondary);">
+              <h2 class="t-head font-semibold mb-2" style="color: var(--text-primary);">Project Settings</h2>
+              <p class="t-ui leading-relaxed" style="color: var(--text-secondary);">
                 Choose a setting from the sidebar to configure this project.
               </p>
             </div>
@@ -1439,10 +1439,10 @@ function handleClosePreview() {
             class="size-4"
             style="color: var(--accent);"
           />
-          <h3 class="text-[14px] font-semibold" style="color: var(--text-primary);">
+          <h3 class="t-body font-semibold" style="color: var(--text-primary);">
             {{ activeConfigPanel === 'claude-md' ? 'CLAUDE.md' : 'Output Style' }}
           </h3>
-          <span class="text-[11px] font-mono" style="color: var(--text-tertiary);">
+          <span class="t-small font-mono" style="color: var(--text-tertiary);">
             {{ currentProjectDisplayName || selectedProjectPath }}
           </span>
         </div>
@@ -1457,11 +1457,11 @@ function handleClosePreview() {
           <!-- InstructionEditor fills the panel -->
           <template v-else>
             <div class="shrink-0 flex items-center justify-between px-4 py-2 border-b" style="border-color: var(--border-subtle);">
-              <p class="text-[12px]" style="color: var(--text-secondary);">
+              <p class="t-small" style="color: var(--text-secondary);">
                 Project instructions that Claude Code reads automatically.
               </p>
               <button
-                class="px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all flex items-center gap-2"
+                class="px-4 py-1.5 rounded-lg t-small font-semibold transition-all flex items-center gap-2"
                 :style="{ background: 'var(--accent)', color: 'white', opacity: isSavingClaudeMd ? 0.7 : 1 }"
                 :disabled="isSavingClaudeMd"
                 @click="saveClaudeMd"
@@ -1485,11 +1485,11 @@ function handleClosePreview() {
         <div v-else-if="activeConfigPanel === 'output-style'" class="flex-1 overflow-y-auto">
           <div class="max-w-3xl mx-auto px-6 py-8 space-y-6">
             <div class="flex items-center justify-between">
-              <p class="text-[12px]" style="color: var(--text-secondary);">
-                Default output style for new sessions in this project. Saved to <code class="text-[11px] px-1 py-0.5 rounded" style="background: var(--surface-raised);">.claude/settings.local.json</code>
+              <p class="t-small" style="color: var(--text-secondary);">
+                Default output style for new sessions in this project. Saved to <code class="t-small px-1 py-0.5 rounded" style="background: var(--surface-raised);">.claude/settings.local.json</code>
               </p>
               <button
-                class="px-4 py-2 rounded-xl text-[12px] font-semibold transition-all flex items-center gap-2"
+                class="px-4 py-2 rounded-xl t-small font-semibold transition-all flex items-center gap-2"
                 :style="{ background: 'var(--accent)', color: 'white', opacity: isSavingConfigSettings ? 0.7 : 1 }"
                 :disabled="isSavingConfigSettings"
                 @click="saveOutputStyleSetting"
@@ -1516,10 +1516,10 @@ function handleClosePreview() {
                 </div>
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="text-[13px] font-semibold" style="color: var(--text-primary);">{{ style.name }}</span>
+                    <span class="t-ui font-semibold" style="color: var(--text-primary);">{{ style.name }}</span>
                     <UIcon v-if="selectedOutputStyleId2 === style.id" name="i-lucide-check" class="size-4" style="color: var(--accent);" />
                   </div>
-                  <p class="text-[12px] mt-0.5" style="color: var(--text-secondary);">{{ style.description }}</p>
+                  <p class="t-small mt-0.5" style="color: var(--text-secondary);">{{ style.description }}</p>
                 </div>
               </button>
             </div>
@@ -1542,7 +1542,7 @@ function handleClosePreview() {
           <template v-if="viewMode === 'history'">
             <div class="grid min-w-0 py-0.5 flex-1">
               <!-- Session Name -->
-              <div class="text-[13px] font-medium leading-tight text-ellipsis overflow-hidden whitespace-nowrap" style="color: var(--text-primary);">
+              <div class="t-ui font-medium leading-tight text-ellipsis overflow-hidden whitespace-nowrap" style="color: var(--text-primary);">
                 <span v-if="isLoadingHistoryWithDelay && !isLoadingMore" class="animate-pulse opacity-50">Loading session...</span>
                 <span v-else>{{ currentSessionSummary || 'Session' }}</span>
               </div>
@@ -1550,7 +1550,7 @@ function handleClosePreview() {
               <NuxtLink
                 v-if="currentProjectDisplayName || (isLoadingHistoryWithDelay && !isLoadingMore)"
                 :to="urlProjectName ? `/cli/project/${encodeURIComponent(urlProjectName)}` : '/project-artifacts'"
-                class="text-[9px] md:text-[10px] font-mono leading-tight mt-0.5 text-ellipsis overflow-hidden whitespace-nowrap hover:text-accent transition-colors"
+                class="t-small md:t-small font-mono leading-tight mt-0.5 text-ellipsis overflow-hidden whitespace-nowrap hover:text-accent transition-colors"
                 style="color: var(--text-tertiary);"
                 @click="urlSessionId = null; viewMode = 'live'"
               >
@@ -1566,7 +1566,7 @@ function handleClosePreview() {
               <!-- Connection Status -->
               <div
                 v-if="isConnected"
-                class="flex items-center gap-2 px-2 py-1 rounded text-[11px] font-medium"
+                class="flex items-center gap-2 px-2 py-1 rounded t-small font-medium"
                 style="background: rgba(13, 188, 121, 0.1); color: #0dbc79;"
               >
                 <div class="size-1.5 rounded-full animate-pulse" style="background: #0dbc79;" />
@@ -1574,7 +1574,7 @@ function handleClosePreview() {
               </div>
               <div
                 v-else
-                class="flex items-center gap-2 px-2 py-1 rounded text-[11px] font-medium"
+                class="flex items-center gap-2 px-2 py-1 rounded t-small font-medium"
                 style="background: var(--surface-raised); color: var(--text-disabled);"
               >
                 <div class="size-1.5 rounded-full" style="background: var(--text-disabled);" />
@@ -1584,7 +1584,7 @@ function handleClosePreview() {
               <!-- Streaming indicator -->
               <div
                 v-if="isStreaming"
-                class="flex items-center gap-2 px-2 py-1 rounded text-[11px] font-medium"
+                class="flex items-center gap-2 px-2 py-1 rounded t-small font-medium"
                 style="background: rgba(229, 169, 62, 0.1); color: var(--accent);"
               >
                 <UIcon name="i-lucide-loader-2" class="size-3 animate-spin" />
@@ -1595,7 +1595,7 @@ function handleClosePreview() {
               <NuxtLink
                 v-if="localWorkingDir"
                 :to="urlProjectName ? `/cli/project/${encodeURIComponent(urlProjectName)}` : '/project-artifacts'"
-                class="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium min-w-0 hover-bg transition-all"
+                class="flex items-center gap-1.5 px-2 py-1 rounded t-small font-medium min-w-0 hover-bg transition-all"
                 style="background: var(--surface-raised); color: var(--text-secondary);"
                 :title="localWorkingDir"
               >
@@ -1639,7 +1639,7 @@ function handleClosePreview() {
           </div>
 
           <!-- Session ID (only in live mode) -->
-          <span v-if="viewMode === 'live' && currentSessionId" class="hidden md:inline text-[10px] font-mono opacity-50" style="color: var(--text-tertiary);">
+          <span v-if="viewMode === 'live' && currentSessionId" class="hidden md:inline t-small font-mono opacity-50" style="color: var(--text-tertiary);">
             {{ currentSessionId.slice(0, 8) }}
           </span>
         </div>
@@ -1659,13 +1659,13 @@ function handleClosePreview() {
         <div v-if="isCreatingSession" class="absolute inset-0 flex items-center justify-center z-10" :style="{ background: 'var(--surface-base)' }">
           <div class="text-center">
             <UIcon name="i-lucide-loader-2" class="size-8 animate-spin mb-3" style="color: var(--accent);" />
-            <p class="text-[13px]" style="color: var(--text-secondary);">Creating new chat...</p>
+            <p class="t-ui" style="color: var(--text-secondary);">Creating new chat...</p>
           </div>
         </div>
         <div v-else-if="viewMode === 'history' && isLoadingHistoryWithDelay && !isLoadingMore" class="absolute inset-0 flex items-center justify-center z-10" :style="{ background: 'var(--surface-base)' }">
           <div class="text-center">
             <UIcon name="i-lucide-loader-2" class="size-8 animate-spin mb-3" style="color: var(--text-secondary);" />
-            <p class="text-[13px]" style="color: var(--text-secondary);">Loading history...</p>
+            <p class="t-ui" style="color: var(--text-secondary);">Loading history...</p>
           </div>
         </div>
 
@@ -1686,10 +1686,10 @@ function handleClosePreview() {
                 <div class="size-20 mx-auto mb-6 rounded-3xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(229, 169, 62, 0.1) 0%, rgba(229, 169, 62, 0.05) 100%); border: 1px solid rgba(229, 169, 62, 0.1);">
                   <UIcon :name="urlProjectName ? 'i-lucide-folder-root' : 'i-lucide-terminal'" class="size-10" style="color: var(--accent);" />
                 </div>
-                <h2 class="text-[20px] font-semibold mb-3" style="color: var(--text-primary); font-family: var(--font-sans);">
+                <h2 class="t-head font-semibold mb-3" style="color: var(--text-primary); font-family: var(--font-sans);">
                   {{ urlProjectName ? currentProjectDisplayName : 'Claude Code CLI' }}
                 </h2>
-                <p class="text-[14px] leading-relaxed mb-8" style="color: var(--text-secondary);">
+                <p class="t-body leading-relaxed mb-8" style="color: var(--text-secondary);">
                   {{ urlProjectName ? 'Select a session from this folder or start a new conversation below.' : 'Select an existing session from the history or start a new conversation to begin.' }}
                 </p>
                 <div class="flex flex-col gap-3">
@@ -1701,7 +1701,7 @@ function handleClosePreview() {
                     <UIcon name="i-lucide-plus" class="size-4" />
                     Start a New Chat {{ urlProjectName ? 'in Folder' : '' }}
                   </button>
-                  <p v-if="!urlProjectName" class="text-[11px]" style="color: var(--text-tertiary);">
+                  <p v-if="!urlProjectName" class="t-small" style="color: var(--text-tertiary);">
                     Browse your project history in the left sidebar
                   </p>
                 </div>
@@ -1714,10 +1714,10 @@ function handleClosePreview() {
                 <div class="size-16 mx-auto mb-4 rounded-full flex items-center justify-center" style="background: var(--surface-raised);">
                   <UIcon :name="viewMode === 'history' ? 'i-lucide-history' : 'i-lucide-message-circle'" class="size-8" style="color: var(--text-secondary);" />
                 </div>
-                <h2 class="text-[16px] font-semibold mb-2" style="color: var(--text-primary);">
+                <h2 class="t-body font-semibold mb-2" style="color: var(--text-primary);">
                   {{ viewMode === 'history' ? 'No Messages Found' : 'Start a Conversation' }}
                 </h2>
-                <p class="text-[13px]" style="color: var(--text-secondary);">
+                <p class="t-ui" style="color: var(--text-secondary);">
                   {{ viewMode === 'history' ? 'This session has no displayable messages.' : 'Ask Claude anything. Your message will create a new session automatically.' }}
                 </p>
               </div>
@@ -1731,7 +1731,7 @@ function handleClosePreview() {
                 class="flex items-center justify-center py-4"
               >
                 <UIcon name="i-lucide-loader-2" class="size-4 animate-spin mr-2" style="color: var(--text-secondary);" />
-                <span class="text-[12px]" style="color: var(--text-secondary);">Loading older messages...</span>
+                <span class="t-small" style="color: var(--text-secondary);">Loading older messages...</span>
               </div>
 
               <!-- Scroll to top hint when more messages available -->
@@ -1739,7 +1739,7 @@ function handleClosePreview() {
                 v-else-if="viewMode === 'history' && claudeCodeMessagesHasMore && !isLoadingMore"
                 class="flex items-center justify-center py-2"
               >
-                <span class="text-[11px]" style="color: var(--text-tertiary);">
+                <span class="t-small" style="color: var(--text-tertiary);">
                   ↑ Scroll up for older messages
                 </span>
               </div>
@@ -1873,7 +1873,7 @@ function handleClosePreview() {
                 </svg>
                 <!-- Percentage Text -->
                 <div class="absolute inset-0 flex items-center justify-center">
-                  <span class="text-[8px] font-bold" style="color: var(--text-secondary);">
+                  <span class="t-small font-bold" style="color: var(--text-secondary);">
                     {{ Math.round(contextMonitor.metrics.value.contextWindow.percentage) }}%
                   </span>
                 </div>
@@ -1944,7 +1944,7 @@ function handleClosePreview() {
           <div class="shrink-0 h-14 border-b flex items-center justify-between" style="border-color: var(--border-subtle);">
             <div class="flex h-full items-stretch overflow-x-auto no-scrollbar">
               <button 
-                class="px-4 flex items-center gap-2 border-b-2 transition-all text-[13px] font-semibold whitespace-nowrap"
+                class="px-4 flex items-center gap-2 border-b-2 transition-all t-ui font-semibold whitespace-nowrap"
                 :style="{ 
                   borderColor: activeRightTab === 'context' ? 'var(--accent)' : 'transparent',
                   color: activeRightTab === 'context' ? 'var(--text-primary)' : 'var(--text-tertiary)',
@@ -1956,7 +1956,7 @@ function handleClosePreview() {
                 <span>Context</span>
               </button>
               <button 
-                class="px-4 flex items-center gap-2 border-b-2 transition-all text-[13px] font-semibold whitespace-nowrap"
+                class="px-4 flex items-center gap-2 border-b-2 transition-all t-ui font-semibold whitespace-nowrap"
                 :style="{ 
                   borderColor: activeRightTab === 'explorer' ? 'var(--accent)' : 'transparent',
                   color: activeRightTab === 'explorer' ? 'var(--text-primary)' : 'var(--text-tertiary)',
@@ -1968,7 +1968,7 @@ function handleClosePreview() {
                 <span>Explorer</span>
               </button>
               <button 
-                class="px-4 flex items-center gap-2 border-b-2 transition-all text-[13px] font-semibold whitespace-nowrap"
+                class="px-4 flex items-center gap-2 border-b-2 transition-all t-ui font-semibold whitespace-nowrap"
                 :style="{ 
                   borderColor: activeRightTab === 'git' ? 'var(--accent)' : 'transparent',
                   color: activeRightTab === 'git' ? 'var(--text-primary)' : 'var(--text-tertiary)',
@@ -1980,7 +1980,7 @@ function handleClosePreview() {
                 <span>Git</span>
               </button>
               <div 
-                class="flex items-center gap-1 border-b-2 transition-all text-[13px] font-semibold whitespace-nowrap"
+                class="flex items-center gap-1 border-b-2 transition-all t-ui font-semibold whitespace-nowrap"
                 :style="{ 
                   borderColor: activeRightTab === 'preview' ? 'var(--accent)' : 'transparent',
                   background: activeRightTab === 'preview' ? 'var(--surface-raised)' : 'transparent',

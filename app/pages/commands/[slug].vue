@@ -147,7 +147,7 @@ useUnsavedChanges(isDirty)
       <template #trailing>
         <span
           v-if="command"
-          class="font-mono text-[10px] font-medium px-1.5 py-px rounded-full badge badge-subtle"
+          class="font-mono t-small font-medium px-1.5 py-px rounded-full badge badge-subtle"
         >
           {{ command.directory }}
         </span>
@@ -213,11 +213,11 @@ useUnsavedChanges(isDirty)
             style="background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.12);"
           >
             <UIcon name="i-lucide-archive-restore" class="size-4 shrink-0" style="color: var(--info, #3b82f6);" />
-            <span class="text-[12px] flex-1" style="color: var(--text-secondary);">
+            <span class="t-small flex-1" style="color: var(--text-secondary);">
               You have an unsaved draft from {{ draftAge }}.
             </span>
-            <button class="text-[12px] font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
-            <button class="text-[12px] px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
+            <button class="t-small font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
+            <button class="t-small px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
           </div>
         </ClientOnly>
 
@@ -262,11 +262,11 @@ useUnsavedChanges(isDirty)
 
         <!-- File location (collapsed) -->
         <details class="group">
-          <summary class="text-[10px] cursor-pointer list-none flex items-center gap-1.5 text-meta hover:text-label transition-colors">
+          <summary class="t-small cursor-pointer list-none flex items-center gap-1.5 text-meta hover:text-label transition-colors">
             <UIcon name="i-lucide-file" class="size-3" />
             Show file location
           </summary>
-          <div class="mt-2 font-mono text-[10px] pl-4.5 text-meta break-all select-all py-1.5 px-2 rounded bg-card border border-subtle">
+          <div class="mt-2 font-mono t-small pl-4.5 text-meta break-all select-all py-1.5 px-2 rounded bg-card border border-subtle">
             {{ command.filePath }}
           </div>
         </details>
@@ -282,7 +282,7 @@ useUnsavedChanges(isDirty)
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Delete Command</h3>
-          <p class="text-[13px] text-body">
+          <p class="t-ui text-body">
             Permanently delete <strong>/{{ command?.frontmatter.name }}</strong>? This action cannot be undone.
           </p>
           <div class="flex justify-end gap-2">

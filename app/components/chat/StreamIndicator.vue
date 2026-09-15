@@ -9,7 +9,7 @@ defineProps<{
     <div class="chat-wave">
       <span /><span /><span /><span /><span />
     </div>
-    <span class="text-[11px] font-mono" style="color: var(--text-disabled);">
+    <span class="t-small font-mono" style="color: var(--text-disabled);">
       {{ statusText }}
     </span>
   </div>

@@ -44,14 +44,14 @@ async function testJira() {
       <div v-if="me" class="flex items-center gap-3">
         <img v-if="me.avatar" :src="me.avatar" alt="" class="size-10 rounded-full" />
         <div>
-          <div class="text-[14px] font-medium" style="color: var(--text-primary);">{{ me.name || me.login }}</div>
-          <div class="text-[12px] text-label">@{{ me.login }} · GitHub token {{ me.profile.hasGithubToken ? 'stored' : (me.authDisabled ? 'not needed in local mode' : 'missing, sign in again') }}</div>
+          <div class="t-body font-medium" style="color: var(--text-primary);">{{ me.name || me.login }}</div>
+          <div class="t-small text-label">@{{ me.login }} · GitHub token {{ me.profile.hasGithubToken ? 'stored' : (me.authDisabled ? 'not needed in local mode' : 'missing, sign in again') }}</div>
         </div>
       </div>
 
       <div class="rounded-xl p-4 space-y-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-        <div class="text-[13px] font-medium" style="color: var(--text-primary);">Jira</div>
-        <p class="text-[12px] text-label">
+        <div class="t-ui font-medium" style="color: var(--text-primary);">Jira</div>
+        <p class="t-small text-label">
           Runs you start read tickets and post their outcome as you. The token is stored encrypted on the server and never shown again.
           Create one at id.atlassian.com under Security, API tokens.
         </p>
@@ -60,13 +60,13 @@ async function testJira() {
           <input v-model="jiraEmail" class="field-input w-full" placeholder="you@alepo.com" autocomplete="email" />
         </div>
         <div class="field-group">
-          <label class="field-label">API token <span class="text-[10px] font-normal ml-1" style="color: var(--text-disabled);">{{ me?.profile.hasJiraToken ? 'stored; paste a new one to replace it' : 'not stored' }}</span></label>
+          <label class="field-label">API token <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">{{ me?.profile.hasJiraToken ? 'stored; paste a new one to replace it' : 'not stored' }}</span></label>
           <input v-model="jiraToken" type="password" class="field-input w-full" placeholder="paste to set or replace" autocomplete="off" />
         </div>
         <div class="flex items-center gap-2">
           <UButton label="Save" size="sm" :loading="saving" @click="save" />
           <UButton label="Test connection" size="sm" variant="soft" :loading="testing" :disabled="!me?.profile.hasJiraToken" @click="testJira" />
-          <span v-if="testResult" class="text-[12px]" :style="{ color: testResult.ok ? 'var(--success)' : 'var(--error)' }">{{ testResult.message }}</span>
+          <span v-if="testResult" class="t-small" :style="{ color: testResult.ok ? 'var(--success)' : 'var(--error)' }">{{ testResult.message }}</span>
         </div>
       </div>
     </div>

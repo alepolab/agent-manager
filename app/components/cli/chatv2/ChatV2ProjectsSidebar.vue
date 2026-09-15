@@ -397,14 +397,14 @@ function confirmDelete() {
 
         <div class="flex-1 min-w-0 flex flex-col justify-center">
           <h3
-            class="text-[13px] font-semibold break-words leading-tight transition-colors"
+            class="t-ui font-semibold break-words leading-tight transition-colors"
             :class="viewMode === 'sessions' ? 'cursor-pointer hover:text-accent' : ''"
             style="color: var(--text-primary);"
             @click="viewMode === 'sessions' ? goBackToProjects() : null"
           >
             {{ viewMode === 'projects' ? 'Claude Code History' : selectedProject?.displayName || 'Sessions' }}
           </h3>
-          <p v-if="viewMode === 'sessions' && selectedProject" class="text-[10px] truncate leading-tight mt-0.5" style="color: var(--text-tertiary);">
+          <p v-if="viewMode === 'sessions' && selectedProject" class="t-small truncate leading-tight mt-0.5" style="color: var(--text-tertiary);">
             {{ selectedProject.path }}
           </p>
         </div>
@@ -443,7 +443,7 @@ function confirmDelete() {
       <div v-if="sessionsSubView !== 'config'" class="shrink-0 p-2 border-b" style="border-color: var(--border-subtle);">
         <div v-if="!isChoosingFolder" class="flex items-center gap-1.5">
           <button
-            class="flex-1 px-3 py-2 rounded-lg text-[12px] font-medium hover-bg transition-all flex items-center justify-center gap-2"
+            class="flex-1 px-3 py-2 rounded-lg t-small font-medium hover-bg transition-all flex items-center justify-center gap-2"
             style="background: var(--accent); color: white;"
             @click="handleNewChat"
           >
@@ -471,7 +471,7 @@ function confirmDelete() {
             <input
               ref="folderInputRef"
               v-model="folderInput"
-              class="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-[12px] outline-none"
+              class="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg t-small outline-none"
               style="background: var(--surface-raised); border: 1px solid var(--accent); color: var(--text-primary);"
               placeholder="Enter folder path..."
               @keyup.enter="confirmFolder"
@@ -480,14 +480,14 @@ function confirmDelete() {
           </div>
           <div class="flex items-center gap-2">
             <button
-              class="flex-1 py-1 rounded text-[11px] font-medium transition-all"
+              class="flex-1 py-1 rounded t-small font-medium transition-all"
               style="background: var(--accent); color: white;"
               @click="confirmFolder"
             >
               Start
             </button>
             <button
-              class="flex-1 py-1 rounded text-[11px] font-medium transition-all"
+              class="flex-1 py-1 rounded t-small font-medium transition-all"
               style="background: var(--surface-raised); color: var(--text-secondary);"
               @click="cancelFolderSelection"
             >
@@ -522,7 +522,7 @@ function confirmDelete() {
                 <input
                   ref="projectEditInputRef"
                   v-model="projectEditInput"
-                  class="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[12px] font-medium outline-none"
+                  class="flex-1 min-w-0 px-1.5 py-0.5 rounded t-small font-medium outline-none"
                   style="background: var(--surface-raised); border: 1px solid var(--accent); color: var(--text-primary);"
                   @keyup.enter="saveProjectEdit"
                   @keyup.escape="cancelProjectEdit"
@@ -546,7 +546,7 @@ function confirmDelete() {
 
             <!-- Normal project title -->
             <template v-else>
-              <span class="text-[12px] font-medium break-words flex-1 min-w-0" style="color: var(--text-primary);">
+              <span class="t-small font-medium break-words flex-1 min-w-0" style="color: var(--text-primary);">
                 {{ project.displayName }}
               </span>
               
@@ -577,13 +577,13 @@ function confirmDelete() {
           <!-- Directory path -->
           <div
             v-if="project.path"
-            class="text-[10px] font-mono truncate mb-1 pl-5.5"
+            class="t-small font-mono truncate mb-1 pl-5.5"
             style="color: var(--text-tertiary);"
             :title="project.path"
           >
             {{ project.path }}
           </div>
-          <div class="flex items-center gap-2 text-[10px] pl-5.5" style="color: var(--text-tertiary);">
+          <div class="flex items-center gap-2 t-small pl-5.5" style="color: var(--text-tertiary);">
             <span>{{ project.sessionCount }} sessions</span>
             <span v-if="project.lastActivity">{{ formatRelativeTime(project.lastActivity) }}</span>
           </div>
@@ -592,8 +592,8 @@ function confirmDelete() {
         <!-- Empty state -->
         <div v-if="projects.length === 0 && !isLoadingProjects" class="text-center py-8">
           <UIcon name="i-lucide-folder-x" class="size-10 mx-auto mb-3" style="color: var(--text-disabled);" />
-          <p class="text-[12px]" style="color: var(--text-secondary);">No Claude Code projects found</p>
-          <p class="text-[10px] mt-1" style="color: var(--text-tertiary);">
+          <p class="t-small" style="color: var(--text-secondary);">No Claude Code projects found</p>
+          <p class="t-small mt-1" style="color: var(--text-tertiary);">
             Projects appear after using Claude Code CLI
           </p>
         </div>
@@ -636,7 +636,7 @@ function confirmDelete() {
                       <input
                         ref="editInputRef"
                         v-model="editingInput"
-                        class="flex-1 min-w-0 px-1.5 py-0.5 rounded text-[12px] font-medium outline-none"
+                        class="flex-1 min-w-0 px-1.5 py-0.5 rounded t-small font-medium outline-none"
                         style="background: var(--surface-raised); border: 1px solid var(--accent); color: var(--text-primary);"
                         @keyup.enter="saveEdit"
                         @keyup.escape="cancelEdit"
@@ -661,12 +661,12 @@ function confirmDelete() {
                   <!-- Normal title display -->
                   <div
                     v-else
-                    class="text-[12px] font-medium truncate mb-1"
+                    class="t-small font-medium truncate mb-1"
                     style="color: var(--text-primary);"
                   >
                     <span class="truncate">{{ session.summary || 'Session' }}</span>
                   </div>
-                  <div class="flex flex-wrap items-center gap-2 text-[10px]" style="color: var(--text-tertiary);">
+                  <div class="flex flex-wrap items-center gap-2 t-small" style="color: var(--text-tertiary);">
                     <span>{{ session.messageCount }} messages</span>
                     <span>{{ formatRelativeTime(session.lastActivity) }}</span>
                   </div>
@@ -707,7 +707,7 @@ function confirmDelete() {
                 </div>
               </div>
               <div v-if="session.isGrouped" class="mt-1">
-                <span class="text-[9px] px-1.5 py-0.5 rounded" style="background: var(--accent-light); color: var(--accent);">
+                <span class="t-small px-1.5 py-0.5 rounded" style="background: var(--accent-light); color: var(--accent);">
                   {{ session.groupSize }} related sessions
                 </span>
               </div>
@@ -716,7 +716,7 @@ function confirmDelete() {
           <!-- Load more button -->
           <button
             v-if="sessionsHasMore && !isLoadingSessions"
-            class="w-full px-3 py-2 rounded-lg text-[11px] font-medium hover-bg transition-all mt-2"
+            class="w-full px-3 py-2 rounded-lg t-small font-medium hover-bg transition-all mt-2"
             style="background: var(--surface-raised); color: var(--text-secondary);"
             @click="loadMoreSessions"
           >
@@ -725,7 +725,7 @@ function confirmDelete() {
 
           <!-- Empty state -->
           <div v-if="sessions.length === 0" class="text-center py-8">
-            <p class="text-[12px]" style="color: var(--text-secondary);">No sessions in this project</p>
+            <p class="t-small" style="color: var(--text-secondary);">No sessions in this project</p>
           </div>
         </div>
 
@@ -733,7 +733,7 @@ function confirmDelete() {
         <div v-else class="p-3 space-y-1">
           <div class="stagger-item flex items-center gap-2 px-2 mb-3" :style="{ animationDelay: '0ms' }">
             <UIcon name="i-lucide-settings-2" class="size-4" style="color: var(--accent);" />
-            <h4 class="text-[12px] font-bold uppercase tracking-wider" style="color: var(--text-primary);">Project Settings</h4>
+            <h4 class="t-small font-bold uppercase tracking-wider" style="color: var(--text-primary);">Project Settings</h4>
           </div>
 
           <button
@@ -745,8 +745,8 @@ function confirmDelete() {
               <UIcon name="i-lucide-file-text" class="size-4" style="color: var(--accent);" />
             </div>
             <div class="min-w-0">
-              <div class="text-[12px] font-medium" style="color: var(--text-primary);">CLAUDE.md</div>
-              <div class="text-[10px]" style="color: var(--text-tertiary);">Project instructions for Claude</div>
+              <div class="t-small font-medium" style="color: var(--text-primary);">CLAUDE.md</div>
+              <div class="t-small" style="color: var(--text-tertiary);">Project instructions for Claude</div>
             </div>
             <UIcon name="i-lucide-chevron-right" class="size-3.5 ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" style="color: var(--text-tertiary);" />
           </button>
@@ -760,8 +760,8 @@ function confirmDelete() {
               <UIcon name="i-lucide-palette" class="size-4" style="color: var(--accent);" />
             </div>
             <div class="min-w-0">
-              <div class="text-[12px] font-medium" style="color: var(--text-primary);">Output Style</div>
-              <div class="text-[10px]" style="color: var(--text-tertiary);">{{ selectedOutputStyleName }}</div>
+              <div class="t-small font-medium" style="color: var(--text-primary);">Output Style</div>
+              <div class="t-small" style="color: var(--text-tertiary);">{{ selectedOutputStyleName }}</div>
             </div>
             <UIcon name="i-lucide-chevron-right" class="size-3.5 ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" style="color: var(--text-tertiary);" />
           </button>
@@ -804,12 +804,12 @@ function confirmDelete() {
               <div class="p-2 rounded-full bg-red-500/10">
                 <UIcon name="i-lucide-alert-triangle" class="size-5 text-red-500" />
               </div>
-              <h3 class="text-[16px] font-bold" style="color: var(--text-primary);">
+              <h3 class="t-body font-bold" style="color: var(--text-primary);">
                 Delete {{ deleteType === 'session' ? 'Session' : 'Project' }}
               </h3>
             </div>
             
-            <p class="text-[13px] leading-relaxed mb-6" style="color: var(--text-secondary);">
+            <p class="t-ui leading-relaxed mb-6" style="color: var(--text-secondary);">
               Are you sure you want to delete <span class="font-medium text-[var(--text-primary)]">"{{ truncate(deleteItemName, 60) }}"</span>? 
               <template v-if="deleteType === 'project'">
                 This will permanently delete all chat history for this folder from the UI.
@@ -821,14 +821,14 @@ function confirmDelete() {
             
             <div class="flex items-center justify-end gap-3">
               <button
-                class="px-4 py-2 rounded-xl text-[13px] font-semibold transition-all hover:bg-[var(--surface-hover)]"
+                class="px-4 py-2 rounded-xl t-ui font-semibold transition-all hover:bg-[var(--surface-hover)]"
                 style="background: var(--surface-raised); color: var(--text-secondary); border: 1px solid var(--border-subtle);"
                 @click="showDeleteModal = false"
               >
                 Cancel
               </button>
               <button
-                class="px-4 py-2 rounded-xl text-[13px] font-semibold transition-all hover:opacity-90 active:scale-95"
+                class="px-4 py-2 rounded-xl t-ui font-semibold transition-all hover:opacity-90 active:scale-95"
                 style="background: var(--error); color: white; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);"
                 @click="confirmDelete"
               >

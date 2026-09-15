@@ -39,10 +39,10 @@ function finish() {
         </div>
 
         <div class="space-y-2">
-          <h2 class="text-[24px] font-semibold tracking-tight" style="font-family: var(--font-display);">
+          <h2 class="t-title font-semibold tracking-tight" style="font-family: var(--font-display);">
             Set up Agent Manager
           </h2>
-          <p class="text-[13px] text-label leading-relaxed max-w-sm mx-auto">
+          <p class="t-ui text-label leading-relaxed max-w-sm mx-auto">
             Agent Manager needs a folder to store your agents, commands, and skills. This is the same folder Claude Code uses.
           </p>
         </div>
@@ -53,27 +53,27 @@ function finish() {
         >
           <div class="flex items-center gap-3">
             <UIcon name="i-lucide-folder" class="size-4 shrink-0 text-meta" />
-            <code class="font-mono text-[12px]" style="color: var(--text-secondary);">{{ claudeDir }}</code>
+            <code class="font-mono t-small" style="color: var(--text-secondary);">{{ claudeDir }}</code>
           </div>
           <div class="space-y-1.5 pl-7">
-            <div class="flex items-center gap-2 text-[12px] text-label">
+            <div class="flex items-center gap-2 t-small text-label">
               <UIcon name="i-lucide-cpu" class="size-3 shrink-0" style="color: var(--accent);" />
-              <span><code class="font-mono text-[11px]">agents/</code> — your AI assistants</span>
+              <span><code class="font-mono t-small">agents/</code> — your AI assistants</span>
             </div>
-            <div class="flex items-center gap-2 text-[12px] text-label">
+            <div class="flex items-center gap-2 t-small text-label">
               <UIcon name="i-lucide-terminal" class="size-3 shrink-0" style="color: var(--accent);" />
-              <span><code class="font-mono text-[11px]">commands/</code> — reusable workflows</span>
+              <span><code class="font-mono t-small">commands/</code> — reusable workflows</span>
             </div>
-            <div class="flex items-center gap-2 text-[12px] text-label">
+            <div class="flex items-center gap-2 t-small text-label">
               <UIcon name="i-lucide-sparkles" class="size-3 shrink-0" style="color: var(--accent);" />
-              <span><code class="font-mono text-[11px]">skills/</code> — specialized capabilities</span>
+              <span><code class="font-mono t-small">skills/</code> — specialized capabilities</span>
             </div>
           </div>
         </div>
 
         <div class="flex flex-col items-center gap-3">
           <UButton label="Create folder and get started" icon="i-lucide-folder-plus" size="md" @click="createDirectory" />
-          <p class="text-[11px] text-meta">
+          <p class="t-small text-meta">
             Already have a Claude Code setup? Change the path in
             <NuxtLink to="/settings" style="color: var(--accent); text-decoration: underline; text-underline-offset: 2px;">Settings</NuxtLink>.
           </p>
@@ -83,7 +83,7 @@ function finish() {
       <!-- Step 2: Creating -->
       <div v-else-if="step === 'creating'" class="flex flex-col items-center gap-4">
         <UIcon name="i-lucide-loader-2" class="size-8 animate-spin" style="color: var(--accent);" />
-        <p class="text-[13px] text-label">Setting up your workspace...</p>
+        <p class="t-ui text-label">Setting up your workspace...</p>
       </div>
 
       <!-- Step 3: Done -->
@@ -98,10 +98,10 @@ function finish() {
         </div>
 
         <div class="space-y-2">
-          <h2 class="text-[24px] font-semibold tracking-tight" style="font-family: var(--font-display);">
+          <h2 class="t-title font-semibold tracking-tight" style="font-family: var(--font-display);">
             You're all set
           </h2>
-          <p class="text-[13px] text-label leading-relaxed max-w-sm mx-auto">
+          <p class="t-ui text-label leading-relaxed max-w-sm mx-auto">
             Your workspace is ready. Start by creating your first agent from a template, or describe what you need to the Claude assistant.
           </p>
         </div>

@@ -151,16 +151,16 @@ onMounted(loadItems)
       <!-- Repo name + meta -->
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-[13px] font-semibold truncate">{{ entry.owner }}/{{ entry.repo }}</span>
+          <span class="t-ui font-semibold truncate">{{ entry.owner }}/{{ entry.repo }}</span>
           <span
             v-if="hasUpdate"
-            class="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0"
+            class="t-small font-medium px-2 py-0.5 rounded-full shrink-0"
             style="background: rgba(59,130,246,0.1); color: var(--info, #3b82f6);"
           >
             Update available
           </span>
         </div>
-        <div class="flex items-center gap-2.5 mt-0.5 text-[10px] text-meta font-mono flex-wrap">
+        <div class="flex items-center gap-2.5 mt-0.5 t-small text-meta font-mono flex-wrap">
           <span>
             <strong class="text-label">{{ entry.totalItems }}</strong> {{ type }} found
             &middot;
@@ -213,7 +213,7 @@ onMounted(loadItems)
             :href="entry.url"
             target="_blank"
             rel="noopener"
-            class="inline-flex items-center gap-1 text-[11px] text-meta hover:text-label transition-colors px-2 py-1 rounded"
+            class="inline-flex items-center gap-1 t-small text-meta hover:text-label transition-colors px-2 py-1 rounded"
           >
             <UIcon name="i-lucide-external-link" class="size-3" />
             GitHub
@@ -253,7 +253,7 @@ onMounted(loadItems)
       <!-- No items found -->
       <div
         v-else-if="!availableItems.length"
-        class="rounded-lg px-4 py-6 text-center text-[12px] text-meta"
+        class="rounded-lg px-4 py-6 text-center t-small text-meta"
         style="border: 1px dashed var(--border-subtle);"
       >
         No {{ type }} found in this repository
@@ -272,9 +272,9 @@ onMounted(loadItems)
               class="size-3 shrink-0 text-meta transition-transform duration-150"
               :class="{ 'rotate-90': !collapsedCategories.has(String(category)) }"
             />
-            <span class="text-[10px] font-mono uppercase tracking-widest text-meta shrink-0 group-hover/cat:text-label transition-colors">{{ category }}</span>
+            <span class="t-small font-mono uppercase tracking-widest text-meta shrink-0 group-hover/cat:text-label transition-colors">{{ category }}</span>
             <div class="flex-1 h-px" style="background: var(--border-subtle);" />
-            <span class="text-[10px] text-meta shrink-0">{{ items.length }}</span>
+            <span class="t-small text-meta shrink-0">{{ items.length }}</span>
           </button>
 
           <!-- Items grid -->
@@ -306,10 +306,10 @@ onMounted(loadItems)
                 <UIcon name="i-lucide-check" class="size-3" style="color: var(--accent);" />
               </div>
 
-              <div class="text-[11px] font-medium truncate pr-4" style="color: var(--text-primary);">
+              <div class="t-small font-medium truncate pr-4" style="color: var(--text-primary);">
                 {{ item.name }}
               </div>
-              <div class="text-[10px] mt-0.5 line-clamp-2 leading-relaxed" style="color: var(--text-tertiary);">
+              <div class="t-small mt-0.5 line-clamp-2 leading-relaxed" style="color: var(--text-tertiary);">
                 {{ item.description || '—' }}
               </div>
             </div>

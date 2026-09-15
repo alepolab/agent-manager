@@ -78,7 +78,7 @@ function onDirKeydown(e: KeyboardEvent) {
 <template>
   <UPopover v-model:open="showWorkingDirPopover" :ui="{ content: 'w-[280px]' }">
     <button
-      class="flex items-center gap-1 text-[10px] font-mono hover:text-accent transition-colors focus-ring min-w-0"
+      class="flex items-center gap-1 t-small font-mono hover:text-accent transition-colors focus-ring min-w-0"
       style="color: var(--text-disabled);"
       :title="workingDir || 'Set project directory'"
       @click="openWorkingDirPopover"
@@ -89,14 +89,14 @@ function onDirKeydown(e: KeyboardEvent) {
     </button>
             <template #content>
               <div class="p-3 space-y-3">
-                <div class="text-[13px] font-semibold" style="color: var(--text-primary); font-family: var(--font-sans);">Working Directory</div>
-                <p class="text-[11px] leading-relaxed" style="color: var(--text-secondary);">
+                <div class="t-ui font-semibold" style="color: var(--text-primary); font-family: var(--font-sans);">Working Directory</div>
+                <p class="t-small leading-relaxed" style="color: var(--text-secondary);">
                   Claude works in this directory for chats here and on the CLI page. Runs started from the workflow page default to it. Remembered in this browser only.
                 </p>
                 <div class="relative">
                   <input
                     v-model="workingDirInput"
-                    class="field-input text-[12px] font-mono"
+                    class="field-input t-small font-mono"
                     placeholder="/path/to/your/project"
                     autocomplete="off"
                     @input="onDirInput"
@@ -125,7 +125,7 @@ function onDirKeydown(e: KeyboardEvent) {
                         class="size-3.5 shrink-0"
                         :style="{ color: idx === selectedSuggestionIdx ? 'var(--accent)' : 'var(--text-disabled)' }"
                       />
-                      <span class="text-[11px] font-mono truncate">{{ suggestion.name }}</span>
+                      <span class="t-small font-mono truncate">{{ suggestion.name }}</span>
                       <UIcon
                         v-if="suggestion.hasChildren"
                         name="i-lucide-chevron-right"
@@ -138,7 +138,7 @@ function onDirKeydown(e: KeyboardEvent) {
                 <div class="flex items-center justify-between">
                   <button
                     v-if="workingDir"
-                    class="text-[11px] font-medium px-2 py-1 rounded hover-bg"
+                    class="t-small font-medium px-2 py-1 rounded hover-bg"
                     style="color: var(--error);"
                     @click="clearWorkingDir(); showWorkingDirPopover = false"
                   >

@@ -90,7 +90,7 @@ onUnmounted(() => {
         <div
           v-for="val in modelValue"
           :key="val"
-          class="flex items-center gap-1.5 pl-2 pr-1 py-0.5 rounded-md text-[11px] font-semibold transition-colors group/tag"
+          class="flex items-center gap-1.5 pl-2 pr-1 py-0.5 rounded-md t-small font-semibold transition-colors group/tag"
           style="background: var(--accent-muted); color: var(--accent); border: 1px solid rgba(var(--accent), 0.2);"
           @click.stop
         >
@@ -108,7 +108,7 @@ onUnmounted(() => {
       
       <span 
         v-else
-        class="flex-1 truncate text-[12px] text-label"
+        class="flex-1 truncate t-small text-label"
       >
         {{ placeholder || 'Select...' }}
       </span>
@@ -138,7 +138,7 @@ onUnmounted(() => {
           <div class="relative">
             <input
               v-model="searchQuery"
-              class="w-full bg-surface-raised border border-border-default rounded-xl py-2 pl-9 pr-4 text-[12px] focus:outline-none transition-all placeholder:text-meta"
+              class="w-full bg-surface-raised border border-border-default rounded-xl py-2 pl-9 pr-4 t-small focus:outline-none transition-all placeholder:text-meta"
               :style="searchQuery ? 'border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow);' : ''"
               :placeholder="searchPlaceholder || 'Search skills...'"
               @click.stop
@@ -185,12 +185,12 @@ onUnmounted(() => {
 
             <div class="flex-1 min-w-0">
               <div 
-                class="text-[12px] font-semibold leading-tight transition-colors" 
+                class="t-small font-semibold leading-tight transition-colors" 
                 :style="{ color: isSelected(option.value) ? 'var(--accent)' : 'var(--text-primary)' }"
               >
                 {{ option.label }}
               </div>
-              <div v-if="option.description" class="text-[11px] mt-1 leading-normal text-meta line-clamp-2">
+              <div v-if="option.description" class="t-small mt-1 leading-normal text-meta line-clamp-2">
                 {{ option.description }}
               </div>
             </div>
@@ -198,12 +198,12 @@ onUnmounted(() => {
           
           <div v-if="filteredOptions.length === 0" class="px-3 py-10 text-center flex flex-col items-center gap-2">
             <UIcon name="i-lucide-search-x" class="size-8 text-meta opacity-20" />
-            <span class="text-[12px] text-label">No skills match your search</span>
+            <span class="t-small text-label">No skills match your search</span>
           </div>
         </div>
         
         <!-- Footer / Stats -->
-        <div v-if="filteredOptions.length > 0" class="px-4 py-2 bg-surface-base border-t flex items-center justify-between text-[10px] text-meta font-mono" style="border-color: var(--border-subtle);">
+        <div v-if="filteredOptions.length > 0" class="px-4 py-2 bg-surface-base border-t flex items-center justify-between t-small text-meta font-mono" style="border-color: var(--border-subtle);">
           <span>{{ filteredOptions.length }} skills found</span>
           <span v-if="selectedCount > 0">{{ selectedCount }} selected</span>
         </div>

@@ -54,7 +54,7 @@ const folderIcon = computed(() => {
         :style="{ color: item.type === 'directory' ? 'var(--accent)' : 'var(--text-tertiary)' }"
       />
       
-      <span class="text-[12px] truncate flex-1" :style="{ color: 'var(--text-secondary)' }">
+      <span class="t-small truncate flex-1" :style="{ color: 'var(--text-secondary)' }">
         {{ item.name }}
       </span>
     </button>

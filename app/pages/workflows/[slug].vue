@@ -402,13 +402,13 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <input
           v-if="editingName"
           v-model="name"
-          class="field-input text-[14px] font-medium w-full max-w-xs"
+          class="field-input t-body font-medium w-full max-w-xs"
           @blur="editingName = false"
           @keydown.enter="editingName = false"
         />
         <button
           v-else
-          class="text-[14px] font-medium truncate text-left"
+          class="t-body font-medium truncate text-left"
           style="color: var(--text-primary);"
           @click="editingName = true"
         >
@@ -455,7 +455,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <!-- Said out loud rather than left as an absence: a page with its controls
            quietly removed is indistinguishable from a broken one, and the
            pipeline definition is worth reading before answering a gate on it. -->
-      <span v-if="!can('configure')" class="text-[11px] text-label whitespace-nowrap">
+      <span v-if="!can('configure')" class="t-small text-label whitespace-nowrap">
         Read-only — changing a workflow is an operator's job.
       </span>
     </div>
@@ -465,14 +465,14 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <input
         v-if="editingDescription"
         v-model="description"
-        class="field-input text-[12px] w-full max-w-lg"
+        class="field-input t-small w-full max-w-lg"
         placeholder="Workflow description..."
         @blur="editingDescription = false"
         @keydown.enter="editingDescription = false"
       />
       <button
         v-else
-        class="text-[12px] text-left flex-1 truncate"
+        class="t-small text-left flex-1 truncate"
         style="color: var(--text-tertiary);"
         @click="editingDescription = true"
       >
@@ -480,7 +480,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       </button>
       <span
         v-if="parallelHint"
-        class="text-[10px] shrink-0"
+        class="t-small shrink-0"
         style="color: var(--text-disabled);"
         title="Parallel branches share one project folder. Safe for agents that read and analyse; risky for two agents writing the same files."
       >
@@ -497,12 +497,12 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         style="border-right: 1px solid var(--border-subtle); background: var(--surface-raised);"
       >
         <div class="px-3 pt-3 pb-2">
-          <div class="text-[11px] font-medium mb-2" style="color: var(--text-secondary);">Your Agents</div>
+          <div class="t-small font-medium mb-2" style="color: var(--text-secondary);">Your Agents</div>
           <input
             v-model="paletteSearch"
             placeholder="Filter..."
             aria-label="Filter agents"
-            class="field-search w-full text-[11px]"
+            class="field-search w-full t-small"
           />
         </div>
         <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
@@ -519,16 +519,16 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               class="size-2 rounded-full shrink-0"
               :style="{ background: getAgentColor(agent.frontmatter.color) }"
             />
-            <span class="text-[11px] truncate" style="color: var(--text-secondary);">
+            <span class="t-small truncate" style="color: var(--text-secondary);">
               {{ agent.frontmatter.name }}
             </span>
             <UIcon name="i-lucide-grip-vertical" class="size-3 ml-auto text-meta opacity-50" />
           </button>
-          <div v-if="!filteredAgents.length" class="text-[11px] text-center py-4 text-meta">
+          <div v-if="!filteredAgents.length" class="t-small text-center py-4 text-meta">
             No agents found
           </div>
         </div>
-        <div class="px-3 py-2 text-[10px] leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-tertiary);">
+        <div class="px-3 py-2 t-small leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-tertiary);">
           Click or drag an agent to add a step. Drag a handle to link steps. Several links out of one step run in parallel; a link back to an
           earlier step loops. Click a link to delete it.
         </div>
@@ -580,10 +580,10 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
                 <Handle id="out" type="source" :position="Position.Top" />
                 <UIcon name="i-lucide-shield" class="size-3.5 shrink-0" :style="{ color: nodeProps.data.color }" />
                 <div class="min-w-0">
-                  <div class="text-[11px] font-medium truncate" style="color: var(--text-primary);">
+                  <div class="t-small font-medium truncate" style="color: var(--text-primary);">
                     {{ nodeProps.data.label }}
                   </div>
-                  <div class="text-[9px]" style="color: var(--text-disabled);">
+                  <div class="t-small" style="color: var(--text-disabled);">
                     monitoring {{ nodeProps.data.watching }} step{{ nodeProps.data.watching === 1 ? '' : 's' }}
                   </div>
                 </div>
@@ -601,7 +601,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           >
             <div class="text-center space-y-2">
               <UIcon name="i-lucide-mouse-pointer-click" class="size-8 mx-auto" style="color: var(--text-disabled);" />
-              <p class="text-[13px]" style="color: var(--text-tertiary);">
+              <p class="t-ui" style="color: var(--text-tertiary);">
                 Drag agents from the left panel onto the canvas
               </p>
             </div>
@@ -615,7 +615,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           style="background: rgba(74, 222, 128, 0.06); border-top: 1px solid rgba(74, 222, 128, 0.12);"
         >
           <UIcon name="i-lucide-check-circle" class="size-4" style="color: var(--success, #22c55e);" />
-          <span class="text-[12px] font-medium" style="color: var(--success, #22c55e);">Workflow complete</span>
+          <span class="t-small font-medium" style="color: var(--success, #22c55e);">Workflow complete</span>
         </div>
 
       </div>
@@ -743,7 +743,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
                 class="size-2 rounded-full shrink-0"
                 :style="{ background: getAgentColor(agent.frontmatter.color) }"
               />
-              <span class="text-[12px]" style="color: var(--text-secondary);">
+              <span class="t-small" style="color: var(--text-secondary);">
                 {{ agent.frontmatter.name }}
               </span>
             </button>

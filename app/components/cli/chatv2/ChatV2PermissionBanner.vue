@@ -40,17 +40,17 @@ function handleDeny() {
     <div class="flex items-center gap-3 min-w-0">
       <UIcon name="i-lucide-shield-question" class="size-5 shrink-0" style="color: var(--accent);" />
       <div class="min-w-0">
-        <div class="text-[12px] font-semibold break-words" style="color: var(--text-primary);">
+        <div class="t-small font-semibold break-words" style="color: var(--text-primary);">
           Action Required
           <span
             v-if="permissions.length > 1"
-            class="ml-2 px-1.5 py-0.5 rounded text-[10px] inline-block"
+            class="ml-2 px-1.5 py-0.5 rounded t-small inline-block"
             style="background: var(--accent); color: white;"
           >
             +{{ permissions.length - 1 }} more
           </span>
         </div>
-        <div class="text-[11px] break-words" style="color: var(--text-secondary);">
+        <div class="t-small break-words" style="color: var(--text-secondary);">
           <strong class="break-all">{{ firstPermission?.toolName }}</strong> {{ isAskUserQuestion ? 'is asking a question' : 'wants to perform an action' }}
         </div>
       </div>
@@ -58,14 +58,14 @@ function handleDeny() {
 
     <div class="flex items-center gap-2 shrink-0">
       <button
-        class="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all"
+        class="px-3 py-1.5 rounded-lg t-small font-medium transition-all"
         style="background: var(--accent); color: white;"
         @click="handleAllow"
       >
         Submit
       </button>
       <button
-        class="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all"
+        class="px-3 py-1.5 rounded-lg t-small font-medium transition-all"
         style="background: rgba(205, 49, 49, 0.1); color: #cd3131;"
         @click="handleDeny"
       >

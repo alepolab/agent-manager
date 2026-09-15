@@ -113,98 +113,98 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
       </template>
     </PageHeader>
     <div class="px-6 py-4 space-y-5 max-w-5xl">
-      <p class="text-[13px] leading-relaxed text-label">
+      <p class="t-ui leading-relaxed text-label">
         The team's agents, skills, commands, workflow, watches, registry and hooks ship in the alepo-engineering plugin and the app's templates. This page shows what on this instance differs from them, and whether the plugin's hooks are actually armed. Applying rewrites only the team-owned files; everything else in the config directory is left alone.
       </p>
 
       <div v-if="error" class="rounded-xl px-4 py-3 flex items-center gap-3" style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);">
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
-        <span class="text-[12px] flex-1" style="color: var(--error);">{{ error }}</span>
-        <NuxtLink v-if="/sign in/i.test(error)" to="/login" class="text-[12px] underline focus-ring">Sign in</NuxtLink>
+        <span class="t-small flex-1" style="color: var(--error);">{{ error }}</span>
+        <NuxtLink v-if="/sign in/i.test(error)" to="/login" class="t-small underline focus-ring">Sign in</NuxtLink>
         <UButton v-else size="xs" variant="ghost" color="neutral" label="Try again" :loading="loading" @click="refresh" />
       </div>
       <div v-else-if="loading && !status" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
       <template v-else-if="status">
-        <div :class="[card, 'grid grid-cols-2 md:grid-cols-5 gap-4 text-[12px]']" :style="cardStyle">
+        <div :class="[card, 'grid grid-cols-2 md:grid-cols-5 gap-4 t-small']" :style="cardStyle">
           <div>
             <div class="text-label">Drift</div>
             <div class="font-medium" :style="{ color: status.drifted ? 'var(--warning)' : 'var(--success)' }">{{ status.drifted ? `${status.drifted} item(s) need attention` : 'in sync' }}</div>
-            <div v-if="status.lastApplied" class="text-[11px] text-label mt-0.5" :title="new Date(status.lastApplied.at).toLocaleString()">applied by {{ status.lastApplied.by }}, {{ status.lastApplied.items }} item(s)</div>
+            <div v-if="status.lastApplied" class="t-small text-label mt-0.5" :title="new Date(status.lastApplied.at).toLocaleString()">applied by {{ status.lastApplied.by }}, {{ status.lastApplied.items }} item(s)</div>
           </div>
           <div>
             <div class="text-label">Enforcement</div>
             <div class="font-medium" :style="{ color: status.enforcement.ok ? 'var(--success)' : 'var(--error)' }" :title="enforcementTitle">{{ enforcementText }}</div>
-            <div class="text-[11px] text-label mt-0.5">{{ status.enforcement.checks.map(c => c.name).join(', ') || 'on this instance' }}</div>
+            <div class="t-small text-label mt-0.5">{{ status.enforcement.checks.map(c => c.name).join(', ') || 'on this instance' }}</div>
           </div>
           <div>
             <div class="text-label">Plugin</div>
             <div class="font-medium" style="color: var(--text-primary);">{{ status.pluginVersion ? `alepo-engineering ${status.pluginVersion}` : 'not installed' }}</div>
-            <div v-if="status.shippedVersion && status.pluginVersion && status.shippedVersion !== status.pluginVersion" class="text-[11px] mt-0.5" style="color: var(--warning);">this build ships {{ status.shippedVersion }}; reinstall the plugin</div>
-            <div v-else-if="!status.pluginVersion && status.shippedVersion" class="text-[11px] text-label mt-0.5">using the copy shipped in the app, {{ status.shippedVersion }}</div>
+            <div v-if="status.shippedVersion && status.pluginVersion && status.shippedVersion !== status.pluginVersion" class="t-small mt-0.5" style="color: var(--warning);">this build ships {{ status.shippedVersion }}; reinstall the plugin</div>
+            <div v-else-if="!status.pluginVersion && status.shippedVersion" class="t-small text-label mt-0.5">using the copy shipped in the app, {{ status.shippedVersion }}</div>
           </div>
           <div>
             <div class="text-label">Registry</div>
             <div class="font-medium" :style="{ color: status.registry.ok ? 'var(--text-primary)' : 'var(--error)' }" :title="status.registry.path ?? undefined">{{ status.registry.ok ? `${status.registry.products} products` : 'not readable' }}</div>
-            <div class="text-[11px] text-label mt-0.5">{{ sourceLabel(status.sources.registry) }}</div>
+            <div class="t-small text-label mt-0.5">{{ sourceLabel(status.sources.registry) }}</div>
           </div>
           <div>
             <div class="text-label">Workflows</div>
             <div v-for="w in status.workflows" :key="w.slug" class="font-medium" :style="{ color: color(w.state) }" :title="w.name">
               {{ w.state }} · {{ w.steps }} steps
-              <NuxtLink :to="`/workflows/${w.slug}`" class="text-[11px] text-label underline focus-ring font-normal">{{ w.name }}</NuxtLink>
+              <NuxtLink :to="`/workflows/${w.slug}`" class="t-small text-label underline focus-ring font-normal">{{ w.name }}</NuxtLink>
             </div>
           </div>
         </div>
 
-        <div v-if="status.unresolvedSkills.length" class="rounded-xl px-4 py-3 text-[12px]" style="background: rgba(217, 119, 6, 0.06); border: 1px solid rgba(217, 119, 6, 0.2);">
+        <div v-if="status.unresolvedSkills.length" class="rounded-xl px-4 py-3 t-small" style="background: rgba(217, 119, 6, 0.06); border: 1px solid rgba(217, 119, 6, 0.2);">
           <span class="font-medium" style="color: var(--warning);">{{ status.unresolvedSkills.length }} declared skill(s) do not resolve on this instance:</span>
           <span class="font-mono ml-1">{{ status.unresolvedSkills.join(', ') }}</span>.
           <span class="text-label">The agents that declare them run without those instructions, silently. Applying team standards seeds every skill the plugin ships.</span>
         </div>
 
         <div v-if="attention.length" :class="card" :style="cardStyle" data-testid="attention">
-          <h2 class="text-[12px] font-medium mb-1" style="color: var(--text-primary);">Needs attention</h2>
-          <p class="text-[11px] text-label mb-2">A drifted item was changed on this instance. Open it to keep or promote the local version, or apply the team version. A missing item is safe to add.</p>
-          <div v-for="r in attention" :key="r.key" class="py-1.5 text-[12px]" style="border-top: 1px solid var(--border-subtle);">
+          <h2 class="t-small font-medium mb-1" style="color: var(--text-primary);">Needs attention</h2>
+          <p class="t-small text-label mb-2">A drifted item was changed on this instance. Open it to keep or promote the local version, or apply the team version. A missing item is safe to add.</p>
+          <div v-for="r in attention" :key="r.key" class="py-1.5 t-small" style="border-top: 1px solid var(--border-subtle);">
             <div class="flex items-center gap-3">
-              <span class="text-[10px] uppercase tracking-wide text-label w-16">{{ r.kind }}</span>
+              <span class="t-small uppercase tracking-wide text-label w-16">{{ r.kind }}</span>
               <NuxtLink v-if="r.to" :to="r.to" class="font-mono truncate focus-ring underline" :title="`Open ${r.label}`">{{ r.label }}</NuxtLink>
               <span v-else class="font-mono truncate">{{ r.label }}</span>
               <span :style="{ color: color(r.state) }">{{ r.state }}</span>
               <UButton size="xs" variant="ghost" color="neutral" class="ml-auto" :label="r.state === 'drifted' ? 'Apply team version' : 'Add'" :loading="syncing === r.key" :disabled="!!syncing" @click="apply([r.key])" />
             </div>
             <details v-if="r.diff" class="mt-1 ml-[4.75rem]">
-              <summary class="text-[11px] text-label cursor-pointer focus-ring">What differs</summary>
-              <pre class="mt-1 p-2 rounded text-[11px] leading-snug overflow-x-auto font-mono" style="background: var(--surface-base);"><span v-for="(l, i) in r.diff.split('\n')" :key="i" class="block" :style="{ color: lineColor(l) }">{{ l }}</span></pre>
+              <summary class="t-small text-label cursor-pointer focus-ring">What differs</summary>
+              <pre class="mt-1 p-2 rounded t-small leading-snug overflow-x-auto font-mono" style="background: var(--surface-base);"><span v-for="(l, i) in r.diff.split('\n')" :key="i" class="block" :style="{ color: lineColor(l) }">{{ l }}</span></pre>
             </details>
-            <p v-else-if="r.state === 'missing'" class="text-[11px] text-label mt-0.5 ml-[4.75rem]">Not on this instance yet.</p>
+            <p v-else-if="r.state === 'missing'" class="t-small text-label mt-0.5 ml-[4.75rem]">Not on this instance yet.</p>
           </div>
         </div>
 
         <div class="grid md:grid-cols-3 gap-4">
           <div :class="card" :style="cardStyle">
-            <h2 class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Agents</h2>
-            <div v-for="a in byState(status.agents)" :key="a.id" class="flex items-center justify-between gap-2 text-[12px] py-0.5">
+            <h2 class="t-small font-medium mb-2" style="color: var(--text-primary);">Agents</h2>
+            <div v-for="a in byState(status.agents)" :key="a.id" class="flex items-center justify-between gap-2 t-small py-0.5">
               <NuxtLink v-if="a.state !== 'missing'" :to="`/agents/${a.id}`" class="font-mono truncate focus-ring" :title="a.id">{{ a.id }}</NuxtLink>
               <span v-else class="font-mono truncate" :title="a.id">{{ a.id }}</span>
               <span :style="{ color: color(a.state) }">{{ a.state }}</span>
             </div>
           </div>
           <div :class="card" :style="cardStyle">
-            <h2 class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Skills</h2>
-            <p class="text-[11px] text-label mb-2">{{ sourceLabel(status.sources.skills) }}</p>
-            <p v-if="!status.skills.length" class="text-[12px] text-label">None shipped.</p>
-            <div v-for="s in byState(status.skills)" :key="s.name" class="flex items-center justify-between gap-2 text-[12px] py-0.5">
+            <h2 class="t-small font-medium mb-0.5" style="color: var(--text-primary);">Skills</h2>
+            <p class="t-small text-label mb-2">{{ sourceLabel(status.sources.skills) }}</p>
+            <p v-if="!status.skills.length" class="t-small text-label">None shipped.</p>
+            <div v-for="s in byState(status.skills)" :key="s.name" class="flex items-center justify-between gap-2 t-small py-0.5">
               <NuxtLink v-if="s.state !== 'missing'" :to="`/skills/${s.name}`" class="font-mono truncate focus-ring" :title="s.name">{{ s.name }}</NuxtLink>
               <span v-else class="font-mono truncate" :title="s.name">{{ s.name }}</span>
               <span :style="{ color: color(s.state) }">{{ s.state }}</span>
             </div>
           </div>
           <div :class="card" :style="cardStyle">
-            <h2 class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Commands</h2>
-            <p class="text-[11px] text-label mb-2">{{ sourceLabel(status.sources.commands) }}</p>
-            <p v-if="!status.commands.length" class="text-[12px] text-label">None shipped.</p>
-            <div v-for="c in byState(status.commands)" :key="c.name" class="flex items-center justify-between gap-2 text-[12px] py-0.5">
+            <h2 class="t-small font-medium mb-0.5" style="color: var(--text-primary);">Commands</h2>
+            <p class="t-small text-label mb-2">{{ sourceLabel(status.sources.commands) }}</p>
+            <p v-if="!status.commands.length" class="t-small text-label">None shipped.</p>
+            <div v-for="c in byState(status.commands)" :key="c.name" class="flex items-center justify-between gap-2 t-small py-0.5">
               <NuxtLink v-if="c.state !== 'missing'" :to="`/commands/${c.name}`" class="font-mono truncate focus-ring" :title="c.name">/{{ c.name }}</NuxtLink>
               <span v-else class="font-mono truncate">/{{ c.name }}</span>
               <span :style="{ color: color(c.state) }">{{ c.state }}</span>
@@ -213,28 +213,28 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
         </div>
         <div class="grid md:grid-cols-2 gap-4">
           <div :class="card" :style="cardStyle">
-            <h2 class="text-[12px] font-medium mb-0.5" style="color: var(--text-primary);">Watches</h2>
-            <p class="text-[11px] text-label mb-2">{{ sourceLabel(status.sources.watches) }}</p>
-            <p v-if="!status.watches.length" class="text-[12px] text-label">None defined in the registry.</p>
-            <div v-for="w in byState(status.watches)" :key="w.id" class="flex items-center justify-between text-[12px] py-0.5">
+            <h2 class="t-small font-medium mb-0.5" style="color: var(--text-primary);">Watches</h2>
+            <p class="t-small text-label mb-2">{{ sourceLabel(status.sources.watches) }}</p>
+            <p v-if="!status.watches.length" class="t-small text-label">None defined in the registry.</p>
+            <div v-for="w in byState(status.watches)" :key="w.id" class="flex items-center justify-between t-small py-0.5">
               <NuxtLink to="/watches" class="font-mono focus-ring">{{ w.id }}</NuxtLink><span :style="{ color: color(w.state) }">{{ w.state }}</span>
             </div>
-            <p class="text-[11px] text-label mt-2">Seeded disabled. Enable one on the Watches page once its query has been checked against real tickets.</p>
+            <p class="t-small text-label mt-2">Seeded disabled. Enable one on the Watches page once its query has been checked against real tickets.</p>
           </div>
           <div :class="card" :style="cardStyle">
-            <h2 class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Products</h2>
-            <p v-if="!status.registry.items.length" class="text-[12px] text-label">Registry not readable{{ status.registry.path ? ` at ${status.registry.path}` : '' }}.</p>
-            <div v-for="p in status.registry.items" :key="p.key" class="flex items-center gap-2 text-[12px] py-0.5">
+            <h2 class="t-small font-medium mb-2" style="color: var(--text-primary);">Products</h2>
+            <p v-if="!status.registry.items.length" class="t-small text-label">Registry not readable{{ status.registry.path ? ` at ${status.registry.path}` : '' }}.</p>
+            <div v-for="p in status.registry.items" :key="p.key" class="flex items-center gap-2 t-small py-0.5">
               <span class="font-mono">{{ p.key }}</span>
               <span v-if="p.suite" class="text-label">{{ p.suite }}</span>
               <span class="text-label truncate ml-auto" :title="p.repos.join(', ')">{{ p.repos.length }} repo{{ p.repos.length === 1 ? '' : 's' }}</span>
-              <span class="text-[10px] px-1.5 py-0.5 rounded" :style="{ color: p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }" :title="p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? 'recipe' : 'no recipe' }}</span>
+              <span class="t-small px-1.5 py-0.5 rounded" :style="{ color: p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }" :title="p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? 'recipe' : 'no recipe' }}</span>
             </div>
           </div>
         </div>
       </template>
 
-      <div :class="[card, 'text-[12px]']" :style="cardStyle">
+      <div :class="[card, 't-small']" :style="cardStyle">
         <div class="font-medium mb-1" style="color: var(--text-primary);">Checkouts</div>
         <p class="text-label mb-2">Product repositories under the workspace root. A run branches from the checkout's HEAD and carries any uncommitted change with it, so park changes that are not meant to travel.</p>
         <p v-if="checkoutsError" style="color: var(--error);">{{ checkoutsError }}</p>
@@ -248,13 +248,13 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <UButton v-if="c.git && c.dirty" size="xs" variant="ghost" color="neutral" :loading="stashing === c.path" label="Park changes" @click="stash(c)" />
           </div>
           <details v-if="c.dirty" class="mt-0.5">
-            <summary class="text-[11px] text-label cursor-pointer focus-ring">Changed files</summary>
-            <ul class="font-mono text-[11px] text-label mt-0.5 ml-4 list-disc"><li v-for="f in c.dirtyFiles" :key="f">{{ f }}</li></ul>
+            <summary class="t-small text-label cursor-pointer focus-ring">Changed files</summary>
+            <ul class="font-mono t-small text-label mt-0.5 ml-4 list-disc"><li v-for="f in c.dirtyFiles" :key="f">{{ f }}</li></ul>
           </details>
         </div>
       </div>
 
-      <div v-if="status" :class="[card, 'text-[12px]']" :style="cardStyle">
+      <div v-if="status" :class="[card, 't-small']" :style="cardStyle">
         <div class="font-medium mb-2" style="color: var(--text-primary);">This instance</div>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1">
           <div><span class="text-label">Sign-in</span><div>{{ status.instance.auth === 'github' ? `GitHub, ${status.instance.githubOrg}` : 'disabled (local)' }}</div></div>
@@ -267,7 +267,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
           <div class="md:col-span-2"><span class="text-label">Runs</span><div class="font-mono truncate" :title="status.instance.runsDir">{{ status.instance.runsDir }}</div></div>
         </div>
       </div>
-      <p v-if="status" class="text-[11px] text-label flex items-center gap-2">
+      <p v-if="status" class="t-small text-label flex items-center gap-2">
         Checked {{ new Date(status.checkedAt).toLocaleTimeString() }}.
         <UButton size="xs" variant="link" color="neutral" label="Check again" :loading="loading" class="p-0" @click="refresh" />
       </p>

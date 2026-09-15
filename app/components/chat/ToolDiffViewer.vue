@@ -75,18 +75,18 @@ const badgeClasses = computed(() => {
     <!-- Header -->
     <div class="flex items-center justify-between border-b border-gray-200/60 bg-gray-50/80 px-2.5 py-1 dark:border-gray-700/50 dark:bg-gray-800/40 gap-2">
       <button
-        class="cursor-pointer break-all font-mono text-[11px] text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-left min-w-0 flex-1"
+        class="cursor-pointer break-all font-mono t-small text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-left min-w-0 flex-1"
         @click="emit('fileClick', filePath)"
       >
         {{ filePath }}
       </button>
-      <span :class="['rounded px-1.5 py-px text-[10px] font-medium flex-shrink-0', badgeClasses]">
+      <span :class="['rounded px-1.5 py-px t-small font-medium flex-shrink-0', badgeClasses]">
         {{ badge || 'Diff' }}
       </span>
     </div>
 
     <!-- Diff lines -->
-    <div class="font-mono text-[11px] leading-[18px] max-h-40 overflow-y-auto overflow-x-auto">
+    <div class="font-mono t-small leading-[18px] max-h-40 overflow-y-auto overflow-x-auto">
       <div v-for="(line, i) in diffLines" :key="i" class="flex min-w-0">
         <span
           :class="[
@@ -113,7 +113,7 @@ const badgeClasses = computed(() => {
           {{ line.content }}
         </span>
       </div>
-      <div v-if="diffLines.length === 0" class="p-2 text-meta text-[10px]">
+      <div v-if="diffLines.length === 0" class="p-2 text-meta t-small">
         No changes detected or binary file.
       </div>
     </div>

@@ -16,7 +16,7 @@ const open = ref(false)
       @click="open = !open"
     >
       <UIcon name="i-lucide-lightbulb" class="size-3.5 shrink-0" style="color: var(--accent);" />
-      <span class="text-[12px] font-medium flex-1" style="color: var(--text-secondary);">{{ title }}</span>
+      <span class="t-small font-medium flex-1" style="color: var(--text-secondary);">{{ title }}</span>
       <UIcon
         :name="open ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
         class="size-3.5"

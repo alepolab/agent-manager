@@ -96,7 +96,7 @@ function handleOpenFile(filePath: string) {
               <div v-if="msg.images && msg.images.length > 0" class="flex flex-wrap gap-2 mb-2">
                 <img v-for="(img, i) in msg.images" :key="i" :src="img" class="max-w-[160px] md:max-w-[200px] max-h-[160px] md:max-h-[200px] rounded-lg object-contain bg-white/10" />
               </div>
-              <div v-if="msg.content" class="text-[12px] md:text-[13px] whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full" :class="{ 'pb-5': msg.content }">{{ msg.content }}</div>
+              <div v-if="msg.content" class="t-small md:t-ui whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full" :class="{ 'pb-5': msg.content }">{{ msg.content }}</div>
 
               <!-- Copy button - inside bubble, bottom right, show on hover -->
               <button
@@ -115,14 +115,14 @@ function handleOpenFile(filePath: string) {
             </div>
             <!-- Single timestamp for the group -->
             <ClientOnly>
-              <div class="text-[9px] md:text-[10px] px-1" style="color: var(--text-tertiary);">
+              <div class="t-small md:t-small px-1" style="color: var(--text-tertiary);">
                 {{ new Date(group.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
               </div>
             </ClientOnly>
           </div>
           <!-- User Avatar -->
           <div
-            class="size-7 md:size-8 rounded-full shrink-0 flex items-center justify-center text-[11px] md:text-[12px] font-semibold"
+            class="size-7 md:size-8 rounded-full shrink-0 flex items-center justify-center t-small md:t-small font-semibold"
             style="background: var(--accent); color: white;"
           >
             U
@@ -145,9 +145,9 @@ function handleOpenFile(filePath: string) {
         <div class="flex-1 min-w-0 overflow-wrap-anywhere">
           <!-- Claude Header -->
           <div class="flex items-center gap-2 mb-1.5 md:mb-2">
-            <span class="text-[12px] md:text-[13px] font-semibold" style="color: var(--text-primary);">Claude</span>
+            <span class="t-small md:t-ui font-semibold" style="color: var(--text-primary);">Claude</span>
             <ClientOnly>
-              <span class="text-[9px] md:text-[10px]" style="color: var(--text-tertiary);">
+              <span class="t-small md:t-small" style="color: var(--text-tertiary);">
                 {{ new Date(group.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
               </span>
             </ClientOnly>
@@ -185,9 +185,9 @@ function handleOpenFile(filePath: string) {
 
       <div class="flex-1">
         <div class="flex items-center gap-2 mb-2">
-          <span class="text-[13px] font-semibold" style="color: var(--text-primary);">Claude</span>
+          <span class="t-ui font-semibold" style="color: var(--text-primary);">Claude</span>
         </div>
-        <div class="flex items-center gap-2 text-[13px]" style="color: var(--text-secondary);">
+        <div class="flex items-center gap-2 t-ui" style="color: var(--text-secondary);">
           <span class="thinking-dots">
             <span>●</span><span>●</span><span>●</span>
           </span>
