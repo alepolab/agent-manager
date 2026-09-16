@@ -88,7 +88,11 @@ export async function ceSkillsDir(): Promise<string> {
   try {
     const installed = JSON.parse(await readFile(resolveClaudePath('plugins', 'installed_plugins.json'), 'utf-8'))
     const entry = Object.entries<any>(installed?.plugins ?? {}).find(([k]) => k.startsWith('compound-engineering@'))?.[1]?.[0]
-    return entry?.installPath ? join(entry.installPath, 'skills') : ''
+    // Forward slashes, not join(): this is handed to agents as CE_SKILLS_DIR and
+    // interpolated into their shell commands (`cat "$CE_SKILLS_DIR/ce-plan/SKILL.md"`),
+    // never used as an fs path here. join() emits backslashes on Windows, which
+    // break every one of those commands. Same class as 76439d7.
+    return entry?.installPath ? `${entry.installPath.replace(/\\/g, '/')}/skills` : ''
   } catch { return '' }
 }
 

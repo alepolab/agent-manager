@@ -825,6 +825,12 @@ not happen.`,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 80,
+      // 90 minutes, not the 30-minute default: this step runs a containerised
+      // multi-module Gradle build three times to prove the oracle red. Measured
+      // at 8m 23s per run plus compilation, so 30 minutes could not fit it and
+      // killed three consecutive attempts. The default was calibrated on a
+      // 10.5-minute step, which is a different kind of step entirely.
+      maxDurationMs: 5400000,
       // writing-plans because the plan gate (B2) stops this step before its test
       // lands unless .agent/plan.md exists with five specific headings. Writing
       // that well is a skill this agent was expected to have and did not.
@@ -909,6 +915,9 @@ not happen.`,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 80,
+      // Builds and runs the oracle to prove it green. Ran out of the 30-minute
+      // default twice on one ticket. See sdlc-test-author's note.
+      maxDurationMs: 5400000,
       // receiving-code-review is here because this step is the one that gets sent
       // back: a monitor voting RETRY hands it a review to act on, and a real run
       // returned "the agent claims all 6 tests pass but provides zero test
@@ -1011,6 +1020,9 @@ not happen.`,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
       maxTurns: 80,
+      // Runs the same Gradle build as the test-author, plus a scoped regression
+      // and the adversarial red-green check. See sdlc-test-author's note.
+      maxDurationMs: 5400000,
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
@@ -1243,6 +1255,7 @@ not happen.`,
       // touches, so its budget matches the other tool-heavy steps rather than
       // the single-Playwright-run job it used to be. A real run hit 30 twice.
       maxTurns: 80,
+      maxDurationMs: 5400000,
       skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You capture browser evidence for the change, against the stack the provisioning step brought up: what the changed screen looks like and does now, seen through a real browser, so a reviewer verifies the change visually without standing anything up.
@@ -1323,6 +1336,7 @@ not happen.`,
       color: 'red',
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
       maxTurns: 30,
+      maxDurationMs: 5400000,
       // No `claude-security` here, though it is the obvious fit: that plugin is
       // licensed "All rights reserved", so it cannot be vendored into this repo
       // the way the MIT superpowers skills are - and a container installs no
@@ -1473,6 +1487,7 @@ shape of the answer.`,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
       maxTurns: 80,
+      maxDurationMs: 5400000,
       skills: ['receiving-code-review', 'finishing-a-development-branch'],
     },
     body: `You close the loop after the pull request opens. An open PR is not a finished
@@ -1696,6 +1711,7 @@ ${SDLC_STANDING_RULES}`,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
       maxTurns: 60,
+      maxDurationMs: 5400000,
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
