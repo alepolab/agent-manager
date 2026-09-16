@@ -1,4 +1,4 @@
-import { continueRun } from '../../../utils/workflowRunner'
+import { continueRun, RestartError } from '../../../utils/workflowRunner'
 import { getRun } from '../../../utils/workflowRunStore'
 import { appendRunAudit } from '../../../utils/runArtifacts'
 import { currentUser } from '../../../utils/session'
@@ -10,7 +10,14 @@ export default defineEventHandler(async (event) => {
   // Read first: continueRun clears the question, and the question is what says
   // whether this click approved a step or answered one.
   const before = await getRun(id)
-  const run = await continueRun(id, body?.note)
+  // Answering a spent-send-back question restarts a step, so this handler now
+  // reaches restartRun's preflight (dirty worktree, missing branch). Without the
+  // mapping that restart.post.ts already does, a refusal a person can act on
+  // arrives as an opaque 500.
+  const run = await continueRun(id, body?.note).catch((err) => {
+    if (err instanceof RestartError) throw createError({ statusCode: err.statusCode, message: err.message })
+    throw err
+  })
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
   if (before && before.status !== run.status) {
     await appendRunAudit(id, {

@@ -1332,13 +1332,90 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.match(fixInputs[1], /Sent back by "Security Review".*GenericResource\.java:198/, 'the fix step is told what to change')
   assert.equal(rw.reworks, 1)
 
-  // Two steps disagreeing forever is a failure to report, not a loop to run.
+  // Two steps disagreeing is bounded per trigger, and the bound stops to ASK
+  // rather than failing: the branch, its commits and an open PR are all still
+  // good at that point, and one more attempt is usually the right answer.
   runner.setAgentCaller(async (agentSlug) => agentSlug === 'agent-fix' ? 'fixed' : 'PIPELINE-REWORK: Implement Fix — still leaking')
   let loop = await runner.startRun({ workflow: chain, initialPrompt: 'go again', watch: 'direct-invocation', autoRun: true })
   loop = await runner.waitForSettled(loop.id, TIMEOUT)
-  assert.equal(loop.status, 'failed')
-  assert.match(loop.error, /Sent back 3 times/)
-  assert.equal(loop.reworks, 3)
+  assert.equal(loop.status, 'paused', 'the spent budget asks instead of failing')
+  assert.equal(loop.question.kind, 'approval', 'answerable by continue — a question would route to respondToRun and no-op, since no step is live')
+  assert.equal(loop.question.reason, 'rework')
+  assert.equal(loop.question.rework.target, 'f', 'and it carries the send-back it is asking about')
+  assert.match(loop.question.text, /still leaking/, 'the operator is shown why')
+  assert.equal(loop.error, undefined, 'a run waiting on a person has no error')
+  assert.equal(loop.endedAt, undefined, 'and has not ended')
+  assert.ok(!loop.steps.some(s => s.status === 'skipped'), 'later steps wait; nothing is skipped')
+  assert.equal(loop.reworksBy.verification, 3, 'the review spends the verification allowance')
+  assert.equal(loop.reworksBy.ci, undefined, 'and only that one')
+
+  // The pending send-back is on the record, not in memory: after a server
+  // restart, continuing must still re-run the step that was sent back rather
+  // than the successors the raising step already armed.
+  runner._dropLive(loop.id)
+  fixInputs.length = 0
+  runner.setAgentCaller(async (agentSlug, input) => {
+    if (agentSlug === 'agent-fix') { fixInputs.push(input); return 'fixed' }
+    return 'VERDICT: PASS'
+  })
+  loop = await runner.continueRun(loop.id, 'go ahead, the leak is handled elsewhere')
+  loop = await runner.waitForSettled(loop.id, TIMEOUT)
+  assert.equal(loop.status, 'completed', `the granted send-back re-runs the fix step: ${loop.error}`)
+  assert.match(fixInputs[0], /go ahead, the leak is handled elsewhere/, "the operator's note reaches the re-run step")
+  assert.match(fixInputs[0], /still leaking/, 'along with what sent it back')
+
+  // Budgets are per trigger, so a red check and a proven regression cannot
+  // exhaust each other: four automatic send-backs across two triggers all run.
+  {
+    const buckets = { slug: 'rework-buckets', name: 'Rework buckets', steps: [
+      { id: 'f', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['r'] },
+      { id: 'r', agentSlug: 'agent-review', label: 'Security Review', next: ['p'] },
+      { id: 'p', agentSlug: 'sdlc-pr-follow-up', label: 'PR Checks', next: [] },
+    ] }
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'rework-buckets.json'), JSON.stringify({ ...buckets, description: '', createdAt: new Date().toISOString() }))
+    let sawReview = 0
+    let sawChecks = 0
+    runner.setAgentCaller(async (agentSlug) => {
+      if (agentSlug === 'agent-fix') return 'fixed'
+      if (agentSlug === 'agent-review') { sawReview += 1; return sawReview <= 2 ? 'PIPELINE-REWORK: Implement Fix — still leaking' : 'VERDICT: PASS' }
+      sawChecks += 1
+      return sawChecks <= 2 ? 'PIPELINE-REWORK: Implement Fix — the build is red' : 'CHECKS: pass'
+    })
+    let split = await runner.startRun({ workflow: buckets, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    split = await runner.waitForSettled(split.id, TIMEOUT)
+    assert.equal(split.status, 'completed', `neither trigger spends the other's allowance: ${split.error}`)
+    assert.equal(split.reworksBy.verification, 2)
+    assert.equal(split.reworksBy.ci, 2, 'the PR-checks step draws on the ci budget')
+    assert.equal(split.reworks, 4, 'and the run total counts them all')
+  }
+
+  // Two steps in ONE wave can both send back. l.rework used to be assigned
+  // unconditionally, so whichever finished second silently erased the first and
+  // its finding was never raised again — latent until the verifier could send
+  // back at all, which is exactly the fan-out this runbook has.
+  {
+    const wave = { slug: 'rework-wave', name: 'Rework wave', steps: [
+      { id: 'f', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['r', 's'] },
+      { id: 'r', agentSlug: 'agent-review', label: 'Security Review', next: [] },
+      { id: 's', agentSlug: 'agent-verify', label: 'Verify', next: [] },
+    ] }
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'rework-wave.json'), JSON.stringify({ ...wave, description: '', createdAt: new Date().toISOString() }))
+    const seen = []
+    let sawReview = 0
+    let sawVerify = 0
+    runner.setAgentCaller(async (agentSlug, input) => {
+      if (agentSlug === 'agent-fix') { seen.push(input); return 'fixed' }
+      if (agentSlug === 'agent-review') { sawReview += 1; return sawReview === 1 ? 'PIPELINE-REWORK: Implement Fix — GenericResource.java:198 leaks the exception message' : 'VERDICT: PASS' }
+      sawVerify += 1
+      return sawVerify === 1 ? 'PIPELINE-REWORK: Implement Fix — UploadTest.java:64 fails on the 8MB row' : 'VERDICT: PASS'
+    })
+    let both = await runner.startRun({ workflow: wave, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    both = await runner.waitForSettled(both.id, TIMEOUT)
+    assert.equal(both.status, 'completed', `both send-backs are carried: ${both.error}`)
+    assert.match(seen[1], /GenericResource\.java:198/, "the second sender's finding survives")
+    assert.match(seen[1], /UploadTest\.java:64/, "and so does the first's — neither is overwritten")
+    assert.equal(both.reworksBy.verification, 1, 'one wave sending back once spends one allowance, not two')
+  }
 
   // A target that is not a step of the run fails the step, naming the steps.
   runner.setAgentCaller(async (agentSlug) => agentSlug === 'agent-fix' ? 'fixed' : 'PIPELINE-REWORK: Nowhere — nothing')

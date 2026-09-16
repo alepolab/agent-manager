@@ -563,6 +563,17 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     const made = materializeTemplateSteps(runbook, slugs)
     assert.notEqual(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and no gate flag is materialised')
     for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) assert.ok(a.body.includes('PIPELINE-ASK:'), `${a.id} must know it may ask the operator`)
+
+    // Runbook A's senders. A send-back names a step by label, so a label that is
+    // not in this runbook sends the work nowhere and fails the raising step.
+    const aLabels = new Set(runbook.steps.map(s => s.label))
+    for (const agent of ['sdlc-verifier', 'sdlc-pr-follow-up', 'sdlc-security-review']) {
+      const targets = [...AGENT_TEMPLATES.find(t => t.id === agent).body.matchAll(/PIPELINE-REWORK: ([^—\n]+?) —/g)]
+        .map(m => m[1].trim())
+        .filter(t => !t.startsWith('<')) // the standing rules' own placeholder
+      assert.ok(targets.length, `${agent} runs in Runbook A and must be able to send work back`)
+      for (const t of targets) assert.ok(aLabels.has(t), `${agent} sends work back to "${t}", which is not a step label of Runbook A`)
+    }
   }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
   assert.ok(evidence.body.includes('Which branch the pull request targets'),

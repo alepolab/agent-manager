@@ -175,7 +175,17 @@ async function transitionPost(run: WorkflowRun): Promise<(() => Promise<void>) |
  * is no longer synchronous the way a bare env-var webhook was.
  */
 export function notifyRunTransition(run: WorkflowRun): Promise<void> {
-  if (!NOTIFY_ON.includes(run.status)) return Promise.resolve()
+  if (!NOTIFY_ON.includes(run.status)) {
+    // Leaving an announced status releases the claim, so reaching that status
+    // again is announced again. Without this a run that pauses, is continued and
+    // pauses a second time says nothing the second time: `running` is not in
+    // NOTIFY_ON, so the map still reads 'paused' and the check below swallows it.
+    // That was harmless while a second pause was rare; a bounded send-back loop
+    // makes one ordinary, and a run waiting on a person in silence is the whole
+    // failure this function exists to prevent.
+    lastNotified.delete(run.id)
+    return Promise.resolve()
+  }
   if (lastNotified.get(run.id) === run.status) return Promise.resolve()
   // Claimed synchronously, before resolving the channel. Two publishes of the
   // same status can arrive in one tick, and a mark that waited for the await

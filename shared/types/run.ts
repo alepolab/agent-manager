@@ -290,6 +290,18 @@ export interface WorkflowRun {
   baseBranch?: string
   /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
   reworks?: number
+  /**
+   * Send-backs spent per trigger, which is what the bound is actually applied to.
+   *
+   * One counter for the whole run made a CI failure and a real regression compete
+   * for the same two attempts: a verifier finding and a red check, each sent back
+   * once, left nothing for the second red check and stopped the run on a person
+   * for something routine. `ci` is the PR-checks step; `verification` is the
+   * verifier and the security review, which share one allowance because both are
+   * answering the same question about the same commit. `reworks` above stays the
+   * run total, for display and for anything already reading it.
+   */
+  reworksBy?: { ci?: number, verification?: number }
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
@@ -313,8 +325,21 @@ export interface WorkflowRun {
     text: string
     kind: 'question' | 'approval'
     askedAt: number
-    /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */
-    reason?: 'budget'
+    /** An approval raised by the runner itself: the budget is spent and continuing
+     *  grants another allowance, or a step has spent its send-backs and whether to
+     *  grant one more is the developer's call. */
+    reason?: 'budget' | 'rework'
+    /**
+     * The send-back this question is about, carried so that answering can perform
+     * it.
+     *
+     * On the record rather than in the runner's live map because continueRun
+     * rehydrates a paused run from disk: a pending rework held only in memory is
+     * lost when the server restarts, and Continue would then drive the wave
+     * forward from the successors the raising step already armed - straight past
+     * the step that was supposed to run again.
+     */
+    rework?: { from: string, target: string, instruction: string }
     /**
      * The artifact whose entries the operator is deciding about, named by the
      * gated step's own `runWhen` - set only alongside status

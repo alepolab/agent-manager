@@ -493,6 +493,26 @@ const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(s
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
 
 /**
+ * Automatic send-backs allowed per trigger before the run stops and asks.
+ *
+ * Per trigger rather than per run: a red check and a proven regression are
+ * different problems with different fixes, and one spending the other's
+ * allowance means a routine second CI failure lands on a person.
+ */
+const REWORK_LIMIT = 2
+
+/**
+ * Which allowance a send-back spends, read from the step that raised it.
+ *
+ * PR follow-up is the only step that reports on CI. The verifier and the
+ * security review share one allowance because they are answering the same
+ * question about the same commit, so two send-backs from them are two attempts
+ * at one problem, not two problems.
+ */
+const reworkBucket = (agentSlug?: string): 'ci' | 'verification' =>
+  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : 'verification'
+
+/**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
  * built on subscribe() rather than polling the filesystem. Subscribes BEFORE doing
  * anything async, so a run that settles in the gap between "we decided to wait" and
@@ -996,7 +1016,22 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       }
       l.outputs[id] = output
       Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
-      l.rework = { from: id, target: target.stepId, instruction: rework.instruction }
+      // Verify, Browser Trace and Security Review run as one wave, so two steps
+      // can send the run back before that wave ends. Assigning unconditionally
+      // let whichever finished second erase the first, dropping a finding that
+      // nothing would raise again. Same target: carry both instructions, each
+      // attributed, so one pass fixes both. Different targets: keep the earlier
+      // step, because re-running from there re-runs the later target anyway.
+      const pending = l.rework
+      const indexOf = (stepId: string) => run.steps.findIndex(s => s.stepId === stepId)
+      if (!pending || indexOf(target.stepId) < indexOf(pending.target)) {
+        l.rework = { from: id, target: target.stepId, instruction: rework.instruction }
+        if (pending && pending.target !== target.stepId) l.rework.instruction += `\n\nAlso raised in the same wave, by "${stepOf(l, pending.from)?.label ?? pending.from}": ${pending.instruction}`
+      } else if (pending.target === target.stepId) {
+        pending.instruction += `\n\nAlso, from "${rec.label}": ${rework.instruction}`
+      } else {
+        pending.instruction += `\n\nAlso raised in the same wave, by "${rec.label}" against "${target.label}": ${rework.instruction}`
+      }
       logLine(l, run, rec, `sent the run back to ${target.label}: ${rework.instruction}`)
       log.info('step sent the run back', () => ({ runId: run.id, stepId: id, target: target.stepId, instruction: preview(rework.instruction) }))
       markCompleted(l.graph, l.state, id)
@@ -1920,20 +1955,37 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   }
 
   if (l.rework) {
-    // Bounded: two steps disagreeing forever is a failure to report, not a loop to run.
+    // Bounded per trigger: two steps disagreeing forever is something to hand to
+    // a person, not a loop to keep running.
     const w = l.rework
     l.rework = undefined
+    const raiser = stepOf(l, w.from)
+    const from = raiser?.label ?? w.from
+    const bucket = reworkBucket(raiser?.agentSlug)
     run.reworks = (run.reworks ?? 0) + 1
-    const from = stepOf(l, w.from)?.label ?? w.from
-    if (run.reworks > 2) {
-      for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
-      run.status = 'failed'
-      run.error = `Sent back ${run.reworks} times and still not accepted; the last instruction from "${from}": ${w.instruction}`
-      run.endedAt = Date.now()
+    const by = (run.reworksBy ??= {})
+    const spent = by[bucket] = (by[bucket] ?? 0) + 1
+    if (spent > REWORK_LIMIT) {
+      // Paused and asked, not failed. The branch, its commits and an open PR are
+      // all still good, and one more attempt is usually the right answer - so
+      // throwing the run away here costs far more than asking does. Deliberately
+      // no skipped steps, no run.error and no endedAt: each alone reads as a
+      // finished run downstream, and restartRun needs those pending steps left
+      // pending to reset them. Same shape as the budget gate above.
+      const targetLabel = stepOf(l, w.target)?.label ?? w.target
+      run.status = 'paused'
+      run.question = {
+        stepId: w.target,
+        kind: 'approval',
+        reason: 'rework',
+        askedAt: Date.now(),
+        text: `"${from}" has sent this run back to "${targetLabel}" ${spent} times and still does not accept the result. Its latest instruction: ${w.instruction}\n\nContinue to send it back once more, or stop the run here.`,
+        rework: { from: w.from, target: w.target, instruction: w.instruction },
+      }
       run.currentStepIds = []
-      run.nextStepIds = []
+      run.nextStepIds = [w.target]
       l.running = false
-      log.warn('run reworked too often', { runId: run.id, reworks: run.reworks, from: w.from, target: w.target })
+      log.warn('run reworked too often; asking the operator', { runId: run.id, bucket, spent, from: w.from, target: w.target })
       await publish(run)
       return run
     }
@@ -1941,8 +1993,8 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.nextStepIds = [w.target]
     l.running = false
     await publish(run)
-    log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, reworks: run.reworks })
-    return restartRun(run.id, w.target, `Sent back by "${from}" (rework ${run.reworks} of 2): ${w.instruction}`, run.startedBy, { fromRunner: true })
+    log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, bucket, spent })
+    return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${REWORK_LIMIT}): ${w.instruction}`, run.startedBy, { fromRunner: true })
   }
 
   if (l.waiting) {
@@ -2484,6 +2536,25 @@ export async function continueRun(
     return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.')
   }
   if (run.question?.kind === 'approval') {
+    if (run.question.reason === 'rework' && run.question.rework) {
+      // The operator granted one more send-back. restartRun rebuilds the live
+      // state from disk and drives the run itself, so this releases the guard
+      // claimed above and returns instead of falling through to the wave loop -
+      // which would resume from the successors the raising step already armed,
+      // stepping straight over the step that was just agreed to re-run. The
+      // question is persisted as cleared first, because restartRun re-reads the
+      // record and would otherwise publish the answered question back.
+      const w = run.question.rework
+      const from = stepOf(l, w.from)?.label ?? w.from
+      run.question = undefined
+      await saveRun(run)
+      l.running = false
+      // The bucket counter is deliberately not reset: if this attempt is sent
+      // back again, the operator is asked again rather than silently given
+      // another two.
+      const added = note?.trim() ? ` The operator added: ${note.trim()}` : ''
+      return restartRun(run.id, w.target, `Sent back by "${from}", granted by the operator after the automatic attempts were spent.${added} ${w.instruction}`, run.startedBy, { fromRunner: true })
+    }
     if (run.question.reason === 'budget') extendBudget(run)
     // Withholding the approval is what lets a review that approved nothing take
     // effect. l.approved waives runWhen (see resolveConditions), so granting it

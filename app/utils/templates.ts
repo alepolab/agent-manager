@@ -61,7 +61,7 @@ These hold at every step in this pipeline, not just this one:
 
       PIPELINE-REWORK: <that step's label> — <exactly what to change, with file:line>
 
-  The runner re-runs that step with your instruction as its note and everything after it again, at most twice per run; a third disagreement fails the run with both positions on record. Halt only when no step of this run can fix what you found.
+  The runner re-runs that step with your instruction as its note, and everything after it again. Two send-backs happen automatically; a third stops the run and asks the developer, with both positions on record, rather than throwing away a branch, its commits and an open PR. The count is per kind of problem rather than per step: a red CI check and a proven regression each have their own two, so one cannot spend the other's. Halt only when no step of this run can fix what you found.
 
 - **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
 
@@ -1200,6 +1200,22 @@ Skipping is legitimate here and often correct. It is legitimate only when you
 A skip with a measured reason is a pass, and the monitor will treat it as one.
 A skip because the work looked hard is not, and "seems fine" is not a finding.
 
+## When a failure is this change's fault
+
+A test that fails *because of this change* is not a finding to hand downstream — it is work for the step that can fix it. End with one line per defect:
+
+    PIPELINE-REWORK: Implement Fix — <file:line>, <the test that fails>, expected <x>, got <y>
+
+Before you write that line, establish that the failure is actually new. "Pre-existing" is a claim, and an unproven one sends a run back for something the branch never caused:
+
+1. \`git merge-base HEAD origin/<base>\` for the commit this branch left.
+2. Check that commit out in a throwaway worktree — \`git worktree add\`, never a reset of the run's own checkout.
+3. Run the same test command there, and quote **both** results, base and branch, in your report.
+
+A test that fails at the base too is pre-existing: report it and do not send it back. A test you believe is simply wrong is also a finding rather than a send-back — the test file is locked for the implementer exactly as it is for you, so asking them to change it asks for something they cannot do.
+
+Send back only what the implementer can act on: the fix's own code. Then stop. The runner re-runs that step and everything after it, so there is nothing further for you this visit.
+
 ## Report
 
 State, for each of the three runs above: the command, the exit code, the counts, and the verbatim output of anything that failed. End with a one-line verdict: does this change pass, and is anything now failing that was not failing before. If \`blast_radius\` required adversarial verification, report what you did for that too. Then state, in one line, whether the fixed build was deployed and proved healthy — or, if you skipped the deploy, which of the three reasons above applied and what you measured to establish it.
@@ -1533,13 +1549,42 @@ that established it, and the commit if one was needed.
 \`timeout 1500 gh pr checks <n> --watch --fail-fast\`, then \`gh pr checks <n>\`
 for the table. For each failed check: \`gh run list --branch <branch> --limit 5
 --json databaseId,name,conclusion\` and \`gh run view <id> --log-failed | tail -150\`.
-Find the root cause — a test the fix broke, a lint rule, a build step — and
-reproduce it locally with the product's verified test command before changing
-anything. A failing check is never fixed by disabling it, skipping the test, or
-editing the oracle. Fix, run the command again, commit, push, watch again.
 
-At most three fix-and-push cycles per visit. If a check still fails after that,
-end with \`PIPELINE-ASK: <the exact failure, and the two things you tried>\`.
+**Classify every red check before you change anything**, in this order, quoting
+the log line that establishes the class you picked:
+
+- **environmental** — the check never reached this branch's code at all. The
+  runner could not pull an image, reach a registry, or get disk:
+  \`pull access denied\`, \`unauthorized\`, \`manifest unknown\`,
+  \`ContainerFetchException\`, \`no space left on device\`, a runner that died
+  before the build step. Run \`b2470236\` is the real case — both of PR #784's red
+  checks were \`pull access denied\`, for \`ase-crm-mariadb\` and \`minio/minio\`, and
+  nothing in the branch could have changed either one.
+- **pre-existing** — the same check fails at the base. Prove it rather than
+  assuming it: \`git merge-base HEAD origin/<base>\`, and the check's own history
+  on the base branch (\`gh run list --branch <base> --workflow <name> --limit 5\`).
+- **caused by this change** — what is left once the two above are excluded *with
+  evidence*.
+
+Only the third class is yours to fix. Find the root cause — a test the fix
+broke, a lint rule, a build step — and reproduce it locally with the product's
+verified test command before changing anything. A failing check is never fixed
+by disabling it, skipping the test, or editing the oracle. Fix, run the command
+again, commit, push, watch again.
+
+An environmental failure is **recorded and never sent back**, and never counts
+against your cycles. It says nothing about the code, and re-running the fix step
+cannot change it: name the checks, quote the marker, and let the run go on.
+
+At most three fix-and-push cycles per visit. If a check caused by this change is
+still red after those, and what it needs belongs in the implementation rather
+than here, end with
+
+    PIPELINE-REWORK: Implement Fix — <check name>, <the failing test or build step>, <file:line>, expected <x>, got <y>
+
+and stop. If instead what blocks you is something no step of this run can fix —
+an access you do not have, a decision only a person can make — end with
+\`PIPELINE-ASK: <the exact failure, and the two things you tried>\`.
 A check still pending when the watch times out is reported as pending, not as a
 failure.
 
@@ -1569,6 +1614,8 @@ Write \`pr-follow-up.md\` into the run artifacts directory and end your output
 with the same content:
 
 CHECKS: pass | fail | pending — each check's name and conclusion
+CLASSIFIED: each red check as environmental | pre-existing | caused by this change, with the log line that proves it
+SENT BACK: the PIPELINE-REWORK line you raised, or "none" and why none was needed
 REVIEW: <n> findings — <b> blockers fixed, <m> minor fixed, <k> answered, <w> disputed
 CHECKLIST: <x> of <y> items resolved, and what the unresolved ones need
 COMMITS: each sha and subject this step pushed, or "none"
@@ -1886,6 +1933,19 @@ merge.
 \`meta.json\`'s \`fix.repos[].commits\` names the commit the fix-implementer made; that is the change you ship. Do not compare it against other local branches or earlier runs' commits, and do not investigate history — a previous run spent its whole budget on that and never opened the PR. Two untracked files the run produced in the checkout must be committed on your branch together with the fix, or the PR ships a fix without its oracle: the test file named in \`plan.md\`, and \`.agent/plan.md\` itself. Nothing else the run produced belongs in the commit — see "The evidence does not go in the repository" above.
 
 ## Open the PR
+
+**This step can run twice.** When a later step sends the run back to Implement
+Fix, everything after it runs again — including you — and by then the branch
+already has a PR. \`gh pr create\` fails on a branch that has one, and a second PR
+for the same branch is worse than that error. So check first:
+
+    gh pr list --head <branch> --state open --json number,url
+
+With a number in hand, update instead of creating: \`gh pr edit <n> --body-file
+<file>\` with the rebuilt bundle, then one comment saying what changed since the
+last push — which finding sent the run back, what the new commits do, and which
+evidence was re-run. Report that same URL. The PR keeps its number, its review
+history and its checks, which is the point of not opening a new one.
 
 - Branch name: \`fix/<TICKET-KEY>\` — take the key from the context packet. If there is no key, use a short descriptive slug prefixed \`fix/\`.
 - Commit subject: \`<TICKET-KEY>: <what this lands>\` (no space before the colon). No attribution trailers.
