@@ -178,7 +178,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
         next: ['backend-engineer', 'frontend-engineer'],
         contextMode: 'ancestors',
       },
-      // IMPL, in parallel. Disjoint by layer so two agents never edit one file.
+      // IMPL, in parallel, and genuinely concurrent: each step works in its own
+      // lane worktree on its own branch, both merged into the run branch when
+      // the wave settles. Split by layer so the lanes do not merge-conflict either.
       {
         agentTemplateId: 'backend-engineer',
         label: 'Implement Backend',
@@ -215,6 +217,137 @@ export const workflowTemplates: WorkflowTemplate[] = [
         // and this step being last today is an accident of ordering, not intent.
         next: [],
         contextMode: 'ancestors',
+      },
+    ],
+  },
+  {
+    id: 'oma-csup-to-pr',
+    name: 'CSUP: support ticket to pull request',
+    description: 'A customer-support ticket taken to an opened pull request, with the plan, verification and ship decisions owned by three different people.',
+    icon: 'i-lucide-life-buoy',
+    // Every gate this engine has, used for what it is for:
+    //
+    //   approval + gateRole  three HUMAN gates, one per persona (below).
+    //   monitorSlug          an automated reviewer on each writing step, voting
+    //                        CONTINUE / RETRY / ABORT on that step's output.
+    //   maxVisits            how many times a step may be re-entered by a RETRY
+    //                        vote or a rework before the run gives up.
+    //   contextMode          'ancestors' for the steps that judge, so a reviewer
+    //                        sees the plan and the failing test, not just the
+    //                        step before it.
+    //   testsUnlocked        exactly one step owns the tests.
+    //   jira                 runner-executed transitions and the outcome comment.
+    //
+    // The three gates are deliberately THREE ROLES, not one: a developer
+    // authorises the plan they are about to implement, QA alone accepts the
+    // verification, and a manager alone authorises shipping. `gateRole` is
+    // enforced server-side (requireGateRole), so this is a rule rather than a
+    // convention - one person cannot answer all three.
+    //
+    // Whether a gate actually stops is NOT decided here. `approval` marks a
+    // point where a gate MAY fire; shared/utils/oversight.ts decides from the
+    // blast radius intake records - docs/ui_parsing flow through, schema and
+    // deployment stop, protocol and money refuse an approval with no written
+    // reason. That is why step 1 exists: with no radius on the record every
+    // gate stops blindly, which is how CSUP-7516 - a money-path change to tax
+    // arithmetic - was approved in a single click.
+    //
+    // CSUP is a cross-product support queue: its tickets land in Billing,
+    // Selfcare, CRM, OCS and WSO2 alike, and engineering/registry/products.yaml
+    // has no `projects: [CSUP]` entry for that reason. The product therefore
+    // comes from the run (a productKey chosen at start, or resolution from the
+    // ticket text), never from this template.
+    //
+    // Every concurrent step gets its OWN git worktree, cut from the run branch
+    // and merged back when the wave settles (openLanes/closeLanes in
+    // workflowRunner.ts), so a fan-out of writers no longer races on one index.
+    // The two implementation steps below are still serial, for a different and
+    // unchanged reason: the client change is written against the contract the
+    // backend step just settled, so running them together would leave the
+    // frontend guessing at it.
+    steps: [
+      // 1. Runner moves the ticket to In Progress, and the agent records the
+      // classification everything downstream reads: work_type and origin pick
+      // the base branch (baseBranchFor), blast_radius sets how hard each gate
+      // below bites.
+      {
+        agentTemplateId: 'pm-planner',
+        label: 'Intake & Classification',
+        next: ['research-explorer', 'debug-investigator'],
+        jira: { transition: 'In Progress' },
+      },
+      // 2-3. COLLECT, in parallel. One writer in the wave: research reads, and
+      // only the reproduction step writes - and what it writes is the test.
+      {
+        agentTemplateId: 'research-explorer',
+        label: 'Prior Art & Customer Impact',
+        next: ['architecture-reviewer'],
+      },
+      {
+        agentTemplateId: 'debug-investigator',
+        label: 'Reproduce & Failing Test',
+        next: ['architecture-reviewer'],
+        // The only step that may write tests. Every step after it is under the
+        // plugin's test lock, so the agent that writes the fix cannot relax the
+        // test that judges it.
+        testsUnlocked: true,
+      },
+      // 4. GATE 1 of 3 - the plan. Joins both collect lanes and reads their
+      // evidence. The DEVELOPER answers: it is their scope and their next step.
+      {
+        agentTemplateId: 'architecture-reviewer',
+        label: 'Plan Review',
+        next: ['backend-engineer'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'developer',
+      },
+      // 5-6. IMPL, serialized on a real dependency rather than on git: the
+      // client change follows the contract the fix settles. Each carries an
+      // automated reviewer that can vote it back for another visit.
+      {
+        agentTemplateId: 'backend-engineer',
+        label: 'Implement Fix',
+        next: ['frontend-engineer'],
+        monitorSlug: 'refactor-engineer',
+        maxVisits: 3,
+      },
+      {
+        agentTemplateId: 'frontend-engineer',
+        label: 'Implement Client Change',
+        next: ['qa-reviewer', 'db-engineer'],
+        monitorSlug: 'refactor-engineer',
+        maxVisits: 3,
+      },
+      // 7-8. VERIFY, in parallel, each in its own lane worktree. Gate 2 of 3
+      // sits on the QA lane: QA alone accepts the verification of someone
+      // else's change.
+      {
+        agentTemplateId: 'qa-reviewer',
+        label: 'Verify, Security & Regression',
+        next: ['docs-curator'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'qa',
+      },
+      {
+        agentTemplateId: 'db-engineer',
+        label: 'Data & Migration Review',
+        next: ['docs-curator'],
+        contextMode: 'ancestors',
+      },
+      // 9. GATE 3 of 3 - shipping. Joins both review lanes. A MANAGER answers:
+      // opening the pull request is the release decision, and neither the
+      // author nor the verifier owns it. The runner then moves the ticket and
+      // posts the outcome comment with the evidence attached.
+      {
+        agentTemplateId: 'docs-curator',
+        label: 'Evidence, Docs & Pull Request',
+        next: [],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'manager',
+        jira: { transition: 'Dev Done', comment: true, attach: true },
       },
     ],
   },

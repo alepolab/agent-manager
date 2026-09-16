@@ -482,9 +482,9 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         v-if="parallelHint"
         class="t-small shrink-0"
         style="color: var(--text-disabled);"
-        title="Parallel branches share one project folder. Safe for agents that read and analyse; risky for two agents writing the same files."
+        title="Each parallel branch works in its own git worktree, on its own branch cut from the run branch, merged back into it when the wave finishes. Two agents can write at once; a branch that conflicts with the run branch is reported rather than merged."
       >
-        <UIcon name="i-lucide-git-branch" class="size-3 -mt-px" /> parallel branches share one folder
+        <UIcon name="i-lucide-git-branch" class="size-3 -mt-px" /> parallel branches get their own worktree
       </span>
     </div>
 

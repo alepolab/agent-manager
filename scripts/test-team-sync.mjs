@@ -35,12 +35,18 @@ assert.ok(s.skills.length >= 50 && s.skills.every(k => k.state === 'missing'),
   `a fresh directory misses every team skill; got ${s.skills.length}`)
 assert.ok(s.skills.some(k => k.name === 'oma-qa'), 'the oh-my-agent skills are the team skills')
 assert.ok(s.skills.some(k => k.name === 'ultrawork'), 'and its workflows are projected as skills')
-// One workflow now: "Plan, Build, Review" (app/utils/workflowTemplates.ts),
-// whose steps name the seeded oh-my-agent agents directly — runbookSteps builds
-// an identity map, so agentTemplateId IS the agent slug.
-assert.equal(s.workflows.length, 1, 'the instance ships one workflow over the oh-my-agent agents')
-assert.equal(s.workflows[0].slug, 'oma-plan-build-review')
-assert.equal(s.workflows[0].steps, 3, 'plan -> implement -> review')
+// Two workflows now (app/utils/workflowTemplates.ts), whose steps name the
+// seeded oh-my-agent agents directly — runbookSteps builds an identity map, so
+// agentTemplateId IS the agent slug. Asserted by slug rather than by position:
+// the order of the template array is not a contract.
+assert.equal(s.workflows.length, 2, 'the instance ships its workflows over the oh-my-agent agents')
+const bySlug = Object.fromEntries(s.workflows.map(w => [w.slug, w]))
+assert.deepEqual(Object.keys(bySlug).sort(), ['oma-csup-to-pr', 'oma-plan-build-review'])
+// Two parallel waves joined twice: research + reproduce -> plan -> review ->
+// backend + frontend -> verify -> refine -> docs.
+assert.equal(bySlug['oma-plan-build-review'].steps, 9, 'the parallel work graph keeps all nine steps')
+// A support ticket to a pull request, gated by three different roles.
+assert.equal(bySlug['oma-csup-to-pr'].steps, 9, 'the CSUP graph keeps all nine steps')
 assert.equal(s.registry.ok, true); assert.equal(s.registry.products, 1)
 assert.ok(s.drifted > 8)
 
