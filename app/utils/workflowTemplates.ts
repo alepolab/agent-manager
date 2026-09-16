@@ -124,28 +124,97 @@ export function materializeTemplateSteps(
 export const workflowTemplates: WorkflowTemplate[] = [
   {
     id: 'oma-plan-build-review',
-    name: 'Plan, Build, Review',
-    description: 'Decompose the request, implement it, then have it reviewed by an agent that did not write it.',
+    name: 'Work: Parallel Plan, Build, Verify',
+    description: 'Investigate and reproduce in parallel, plan from both, implement backend and frontend in parallel, then verify, refine and document.',
     icon: 'i-lucide-git-branch',
     // `agentTemplateId` IS the agent slug here: runbookSteps() builds an
     // identity map (teamSync.ts:207-211), so these resolve directly against the
     // oh-my-agent agents this instance seeds from .agents/agents — no entry in
     // `agentTemplates` is needed, which is why an empty catalogue does not stop
     // this materialising.
+    //
+    // The shape is oh-my-agent's /work phases with /orchestrate's fan-out:
+    // COLLECT (2 lanes) -> PLAN -> IMPL (2 lanes) -> VERIFY -> REFINE -> SHIP.
+    // Two waves run in parallel and two steps are joins; `markCompleted` arms a
+    // forward target only once EVERY forward predecessor completed
+    // (shared/utils/workflowGraph.ts), so each join really waits for its lanes.
+    //
+    // One agent per step, deliberately: `next` names a step by its
+    // `agentTemplateId`, so the same agent twice makes every edge pointing at it
+    // ambiguous (materializeTemplateSteps: "the last step wins").
     steps: [
-      { agentTemplateId: 'pm-planner', label: 'Plan' },
-      { agentTemplateId: 'backend-engineer', label: 'Implement' },
+      // COLLECT. Both are entry nodes - no forward predecessors - so the engine
+      // starts them together rather than in array order.
+      {
+        agentTemplateId: 'research-explorer',
+        label: 'Research & Prior Art',
+        next: ['pm-planner'],
+      },
+      {
+        agentTemplateId: 'debug-investigator',
+        label: 'Reproduce & Failing Test',
+        next: ['pm-planner'],
+        // This step owns the tests, and only this step: it writes the failing
+        // regression test that proves the defect, and the test-lock guardrail
+        // then freezes tests for every step after it. Unlocking the implementer
+        // lanes instead would let the agent that writes the fix also relax the
+        // test that judges it.
+        testsUnlocked: true,
+      },
+      // PLAN. A join over both collect lanes, and it needs their evidence, not
+      // just the immediately preceding output.
+      {
+        agentTemplateId: 'pm-planner',
+        label: 'Plan',
+        next: ['architecture-reviewer'],
+        contextMode: 'ancestors',
+      },
+      // Reviews the plan before any code is written, and fans out to the
+      // implementation lanes. No approval: the run is meant to reach QA without
+      // a babysitter, and a plan nobody implemented yet is cheap to redo.
+      {
+        agentTemplateId: 'architecture-reviewer',
+        label: 'Plan Review',
+        next: ['backend-engineer', 'frontend-engineer'],
+        contextMode: 'ancestors',
+      },
+      // IMPL, in parallel. Disjoint by layer so two agents never edit one file.
+      {
+        agentTemplateId: 'backend-engineer',
+        label: 'Implement Backend',
+        next: ['qa-reviewer'],
+      },
+      {
+        agentTemplateId: 'frontend-engineer',
+        label: 'Implement Frontend',
+        next: ['qa-reviewer'],
+      },
+      // VERIFY. The join over both lanes, and the one human gate: QA owns it, so
+      // a developer cannot accept their own verification. `ancestors` because a
+      // review that cannot see the plan and the failing test cannot tell whether
+      // the change met either.
       {
         agentTemplateId: 'qa-reviewer',
-        label: 'Review',
-        // The reviewer is a different agent from the implementer, and it sees
-        // the whole chain rather than only the step before it — a review that
-        // cannot see the plan cannot tell whether the change met it.
+        label: 'Verify',
+        next: ['refactor-engineer'],
         contextMode: 'ancestors',
-        // The one human gate: QA owns it, so a developer cannot accept their
-        // own verification.
         approval: true,
         gateRole: 'qa',
+      },
+      // REFINE, then SHIP. Both run after verification passes, never before: a
+      // refactor judged by nothing is how a green suite turns red.
+      {
+        agentTemplateId: 'refactor-engineer',
+        label: 'Refine',
+        next: ['docs-curator'],
+      },
+      {
+        agentTemplateId: 'docs-curator',
+        label: 'Docs & Handoff',
+        // Explicitly terminal: an absent `next` would fall back to array order,
+        // and this step being last today is an accident of ordering, not intent.
+        next: [],
+        contextMode: 'ancestors',
       },
     ],
   },
