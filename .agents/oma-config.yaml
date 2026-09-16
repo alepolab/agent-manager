@@ -1,0 +1,29 @@
+# Migrated by oma migration 008 — model_preset single-file config
+mcp:
+  devtools_browsers:
+    - aside
+vendors:
+  - claude
+  - codex
+  - copilot
+  - cursor
+  - grok
+  - qwen
+  - zcode
+providers:
+  web: native
+  code_intelligence: serena
+  semantic_memory: agentmemory
+model_preset: antigravity
+
+# ── Local override ───────────────────────────────────────────────────────────
+# oh-my-agent ships scm.co_author enabled with its OWN identity and
+# enforce_hook: true (see oma-config.cue). That would put
+# "Co-Authored-By: First Fluke <our.first.fluke@gmail.com>" on this repo's
+# commits. Their own conventional-commits.md says never to reuse an example
+# identity; the shipped default does exactly that. Off, explicitly.
+# This file is the one file `oma update` preserves byte for byte.
+scm:
+  co_author:
+    enabled: false
+    enforce_hook: false
