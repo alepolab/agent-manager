@@ -60,26 +60,10 @@ COPY --from=build --chown=bun:bun /app/.output .output
 # the build stage; put it where the bundled SDK looks.
 COPY --from=build --chown=bun:bun /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64 .output/server/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64
 
-# Bake in a curated Claude config so the image is self-contained: plugins,
-# skills, agents and settings travel with it, and a fresh host needs no
-# ~/.claude of its own.
-#
-# The payload is produced by scripts/stage-claude-config.sh, which stages an
-# allowlist and then refuses to proceed if anything credential-shaped or any
-# session transcript made it in. Never COPY ~/.claude directly — it holds OAuth
-# tokens and every transcript this machine has produced.
-#
-# docker-compose mounts a NAMED volume over this path. Docker seeds a new named
-# volume from the image's contents on first creation, so these files become the
-# starting state and anything the app writes afterwards persists in the volume.
-# A bind mount would instead hide all of this.
-# The product's own skills. teamSync seeds a team instance from the INSTALLED
-# alepo-engineering plugin when there is one and falls back to these when there
-# is not - the normal case in a container. Without them a fresh team instance
-# boots "9 agents, 0 skills": every agent declares skills that cannot resolve,
-# and because buildAgentSystemPrompt swallows a per-skill failure by design,
-# each agent silently runs without the instructions it was supposed to have.
-COPY --chown=bun:bun engineering/skills ./engineering/skills
+# Skills are NOT copied: this instance seeds its whole estate from the
+# oh-my-agent SSOT in .agents/ (see server/utils/teamSync.ts), which ships with
+# the application source. engineering/ still provides commands, registry,
+# schemas, hooks, recipes and scripts.
 
 # And its commands, for the same reason one level down. teamSync falls back to
 # these when no plugin is installed. Without this COPY the fallback finds
@@ -161,6 +145,17 @@ RUN set -eu; \
     rm -rf /tmp/ce; \
     test -f /app/vendor/compound-engineering/skills/ce-plan/SKILL.md; \
     chown -R bun:bun /app/vendor
+
+# The oh-my-agent SSOT. teamSync seeds this instance's whole estate from here
+# at boot — agents from .agents/agents, skills from .agents/skills, and each
+# .agents/workflows/*.md projected as a skill (oma's own `link` contract).
+#
+# It needs its own COPY because the `COPY . .` above is in the BUILD stage:
+# the runtime stage takes only /app/.output plus the engineering/ directories
+# named above. Without this line the container resolves
+# join(process.cwd(), '.agents') to nothing and boots "0 agents, 0 skills" —
+# the same silent-empty failure engineering/skills had before it was shipped.
+COPY --chown=bun:bun .agents ./.agents
 
 COPY --chown=bun:bun docker/claude-config /root/.claude
 

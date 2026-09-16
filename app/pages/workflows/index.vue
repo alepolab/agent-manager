@@ -40,7 +40,11 @@ async function useWorkflowTemplate(templateId: string) {
     const plan = planTemplateResolution(template, agentTemplates, agents.value)
     const agentSlugByTemplateId: Record<string, string> = { ...plan.resolved }
     for (const id of plan.toCreate) {
-      const agentTemplate = agentTemplates.find(t => t.id === id)!
+      // No non-null assertion: the template catalogue is empty on this instance
+      // (oh-my-agent estate only), so `find` legitimately returns undefined and
+      // asserting it away is a runtime throw rather than a type convenience.
+      const agentTemplate = agentTemplates.find(t => t.id === id)
+      if (!agentTemplate) continue
       const agent = await createAgent({ frontmatter: { ...agentTemplate.frontmatter }, body: agentTemplate.body })
       agentSlugByTemplateId[id] = agent.slug
     }

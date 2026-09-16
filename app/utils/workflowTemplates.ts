@@ -122,136 +122,22 @@ export function materializeTemplateSteps(
 }
 
 /** The runbooks the team ships: template id -> the file name each is seeded as under the config dir's workflows/. Shared by the server's team sync and scripts/sync-agents.mjs. */
-export const RUNBOOK_FILES: Record<string, string> = {
-  'runbook-a-jira-to-diff': 'runbook-a-ticket-to-evidence-backed-pr',
-  'runbook-c-ce-ticket-to-pr': 'runbook-c-ce-ticket-to-qa-proven-pr',
-}
+/**
+ * Empty, on purpose — this instance ships the oh-my-agent estate only.
+ *
+ * Runbook A and C were seeded from here as JSON step graphs whose every step
+ * named an `agentTemplateId` in `app/utils/templates.ts`. Those agents are
+ * gone, so the runbooks went with them; a template naming an agent that cannot
+ * resolve seeds a workflow whose steps are unrunnable.
+ *
+ * The types and `materializeTemplateSteps` above stay: `teamSync`,
+ * `workflowInstantiation.ts`, `scripts/sync-agents.mjs` and the workflow
+ * builder are all typed against them.
+ *
+ * oh-my-agent's own 22 workflows are markdown, not step graphs, and this app's
+ * loader reads `*.json` only — so they are carried as skills instead, exactly
+ * as `oma link` projects them into a Claude runtime.
+ */
+export const RUNBOOK_FILES: Record<string, string> = {}
 
-export const workflowTemplates: WorkflowTemplate[] = [
-  {
-    id: 'code-review-pipeline',
-    name: 'Code Review Pipeline',
-    description: 'Review code changes then update documentation.',
-    icon: 'i-lucide-scan-eye',
-    steps: [
-      { agentTemplateId: 'code-reviewer', label: 'Review Code' },
-      { agentTemplateId: 'documentation-writer', label: 'Update Docs' },
-    ],
-  },
-  {
-    id: 'content-creation',
-    name: 'Content Creation',
-    description: 'Research a topic then write about it.',
-    icon: 'i-lucide-pen-line',
-    steps: [
-      { agentTemplateId: 'research-assistant', label: 'Research' },
-      { agentTemplateId: 'writing-assistant', label: 'Write' },
-    ],
-  },
-  {
-    id: 'email-workflow',
-    name: 'Email Workflow',
-    description: 'Draft content then format as a professional email.',
-    icon: 'i-lucide-mail',
-    steps: [
-      { agentTemplateId: 'writing-assistant', label: 'Draft Content' },
-      { agentTemplateId: 'email-drafter', label: 'Format Email' },
-    ],
-  },
-  {
-    id: 'runbook-a-jira-to-diff',
-    name: 'Runbook A — Ticket to Evidence-Backed PR',
-    description: 'Paste a support ticket: stands up the stack, writes a failing parameterised test, fixes the cause, verifies, and opens a PR carrying the evidence bundle.',
-    icon: 'i-lucide-git-pull-request-arrow',
-    steps: [
-      // Runner-executed, no model: the ticket moves to In Progress the moment the
-      // run starts, so nobody else picks it up while an agent is on it.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack',
-        next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'], monitorSlug: 'sdlc-step-monitor' },
-      // Verification and browser evidence are independent of each other - one wave.
-      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression',
-        next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      // Security review runs beside verification and tracing; the PR waits on all three.
-      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      // The one step with an outward effect: it pushes and opens the pull request, and
-      // it waits for a person. The gate at the diff on the bug path - GTAC has already
-      // gated these on reproducibility, so one human decision at the diff is the whole
-      // human workflow for a C-sub up to the PR; the Jira write below is the other.
-      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR',
-        next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-      // Closes the loop the PR opens: reviewer checklist answered, checks watched, blockers
-      // from the automated review fixed and pushed. Loops on RETRY until mergeable.
-      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review',
-        next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
-      // `next` names a template id, and a repeated id resolves to its LAST step, which
-      // is this one: the review step, not the In Progress step at the top.
-      // The second gate on the bug path: the one step that writes to a customer's
-      // ticket, and it waits for a person. Moving an issue to Dev Done, commenting on it and attaching the
-      // evidence is the pipeline ASSERTING the work is finished, to an audience
-      // of reporters, watchers and whoever is on support that week. A human
-      // qualifies that claim before it is made. Starting the run is what
-      // justifies the In Progress transition above; nothing justifies Dev Done
-      // except someone having looked.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-    ],
-  },
-  {
-    id: 'runbook-c-ce-ticket-to-pr',
-    name: 'Runbook C — ce Ticket to QA-Proven PR',
-    description: 'Paste a ticket: stands up the stack, plans the change and its QA cases, implements and reviews the way the compound-engineering skills do, rebuilds the stack from the fix, runs automated and manual QA against it, and opens the PR carrying all of it.',
-    icon: 'i-lucide-workflow',
-    steps: [
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
-      // The runner makes the run's worktree beside the clone as soon as this step has cloned it; every step after works there.
-      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', next: ['sdlc-ce-plan'], monitorSlug: 'sdlc-step-monitor' },
-      // ce-plan: the implementation plan and the QA plan (automated and manual cases) the run is judged by.
-      { agentTemplateId: 'sdlc-ce-plan', label: 'Plan', next: ['sdlc-ce-work'], monitorSlug: 'sdlc-step-monitor' },
-      // Labelled as in Runbook A on purpose: the security review and the QA steps send work back to "Implement Fix".
-      // ce-work writes each test before the code that passes it, in one step, so the
-      // test lock that guards Runbook A's separate fix step would stop it after the
-      // first source edit; a real run asked the operator for the unlock and stalled.
-      // Gate 1 of 4 on the feature path: a person approves the plan before an agent
-      // spends an hour building from it.
-      // Continues the planner's session. It is the same agent's work: the plan
-      // it just wrote, the files it just read, the repository it just learned.
-      // Across the recorded runs this pair and its Runbook A equivalent were
-      // over half of every run's cost, each half rebuilding what the other had
-      // just finished learning.
-      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], approval: true, gateRole: 'developer', continuesSession: true, monitorSlug: 'sdlc-step-monitor', testsUnlocked: true },
-      { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
-      // Gate 2 of 4: the diff. Rebuilding the stack is the first step that acts on the
-      // change, so approval here is the last moment a person sees it before it runs.
-      // Rebuilds the image from the worktree and redeploys in place, alone, before anything tests it.
-      { agentTemplateId: 'sdlc-stack-update', label: 'Update Stack', next: ['sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review'], approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-      // QA is the gate: both halves and the security review run against the rebuilt stack in one wave, and a FAIL sends the run back to Implement Fix.
-      { agentTemplateId: 'sdlc-qa-automated', label: 'Automated QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-qa-manual', label: 'Manual QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      // Gate 3 of 4: verification. QA answers this one - the automated and manual QA
-      // reports and the security review are all in before anything is pushed.
-      // The one step with an outward effect: pushes the branch and opens the PR quoting the QA, review and security reports.
-      // QA's gate, per the comment above: the automated and manual QA reports and
-      // the security review are all in before anything is pushed, so the person
-      // who owns verification is the person who accepts it.
-      { agentTemplateId: 'sdlc-ce-ship', label: 'Push + PR', next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', approval: true, gateRole: 'qa', monitorSlug: 'sdlc-step-monitor' },
-      // Continues the ship step's session: same branch, same PR, same GitHub
-      // context, minutes later. Answering a reviewer on a PR you just opened is
-      // not a new problem.
-      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', next: ['sdlc-jira-tracker'], contextMode: 'ancestors', continuesSession: true, maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
-      // Gate 4 of 4: the one step that writes to a customer's ticket, and it waits
-      // for a person. Moving an issue to Dev Done, commenting on it and attaching
-      // the evidence is the pipeline ASSERTING the work is finished, to an
-      // audience of reporters, watchers and whoever is on support that week. A
-      // human qualifies that claim before it is made. Starting the run is what
-      // justifies the In Progress transition above; nothing justifies Dev Done
-      // except someone having looked.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-    ],
-  },
-]
+export const workflowTemplates: WorkflowTemplate[] = []

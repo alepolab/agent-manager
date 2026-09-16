@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { parse } from 'yaml'
 import { resolveClaudePath } from './claudeDir.ts'
-import { serializeFrontmatter } from './frontmatter.ts'
+import { parseFrontmatter } from './frontmatter.ts'
 import { invalidate, memo } from './memo.ts'
 import { loadRegistry } from './registry.ts'
 import { listWatches, saveWatch } from './watchConfig.ts'
@@ -16,7 +16,6 @@ import { hasJiraCredentialsConfigured, isJiraPostingEnabled } from './jiraCreden
 import { authDisabled } from './session.ts'
 import { workspaceRootFor } from './workspace.ts'
 import type { Watch } from '../../shared/types/watch.ts'
-import { agentTemplates } from '../../app/utils/templates.ts'
 import { workflowTemplates, materializeTemplateSteps, RUNBOOK_FILES } from '../../app/utils/workflowTemplates.ts'
 
 const execFileP = promisify(execFile)
@@ -69,8 +68,20 @@ export interface TeamStatus {
   checkedAt: number
 }
 
-const RUNBOOK_SLUG = RUNBOOK_FILES['runbook-a-jira-to-diff']!
+// No runbook workflows on this instance: the oh-my-agent estate ships markdown
+// workflows, which this app's loader (which reads *.json step graphs) cannot
+// run. Empty rather than a dangling id, so nothing seeds a watch pointing at a
+// workflow that does not exist.
+const RUNBOOK_SLUG = ''
 const shippedDir = () => join(process.cwd(), 'engineering')
+
+/**
+ * The oh-my-agent SSOT. This instance seeds its whole estate from here —
+ * agents, skills, and the workflows that oh-my-agent projects INTO a Claude
+ * runtime as skills (verified against a real install: `oma link` writes
+ * `.claude/skills/<name>/SKILL.md`, never a workflow file).
+ */
+const omaDir = (...parts: string[]) => join(process.cwd(), '.agents', ...parts)
 const appliedPath = () => resolveClaudePath('.team-applied.json')
 
 /**
@@ -271,13 +282,10 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
   // runs without the instructions it was supposed to have.
   //
   // The installed plugin stays preferred - an operator can update it
-  // independently - and the copy shipped in the product (engineering/skills/,
-  // see its VENDORED.md) is the fallback.
+  // independently - but skills now come from the oh-my-agent SSOT in .agents/,
+  // which ships with the application source and needs no fallback.
   const reverted: TeamStatus['reverted'] = []
-  const shippedSkills = join(shippedDir(), 'skills')
-  const skillsSource = (plugin && existsSync(join(plugin.installPath, 'skills')))
-    ? join(plugin.installPath, 'skills')
-    : (existsSync(shippedSkills) ? shippedSkills : null)
+  const skillsSource = existsSync(omaDir('skills')) ? omaDir('skills') : null
 
   const skills: TeamStatus['skills'] = []
   if (skillsSource) {
@@ -304,6 +312,36 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
         // another tree. Replacing outright is what seeding means anyway.
         await rm(join(skillsDir, name), { recursive: true, force: true })
         await cp(join(skillsSource, name), join(skillsDir, name), { recursive: true })
+        state = 'ok'; changed++
+      }
+      skills.push({ name, ...(await item(state, current, next)) })
+    }
+  }
+
+  // oh-my-agent workflows are projected INTO the runtime as skills.
+  //
+  // This is oma's own contract, not an invention here: `oma link` writes each
+  // .agents/workflows/<name>.md to .claude/skills/<name>/SKILL.md, and leaves
+  // any sibling resources/ directory behind. Verified against a real install.
+  //
+  // It matters because this app's workflow loader reads *.json step graphs
+  // only, so a markdown workflow dropped in workflows/ is invisible. Seeding
+  // them as skills is what makes them reachable at all.
+  const workflowsSsot = omaDir('workflows')
+  if (existsSync(workflowsSsot)) {
+    for (const file of await readdir(workflowsSsot)) {
+      if (!file.endsWith('.md')) continue
+      const name = file.replace(/\.md$/, '')
+      const next = await readFile(join(workflowsSsot, file), 'utf-8')
+      const to = join(skillsDir, name, 'SKILL.md')
+      const current = await readOr(to)
+      let state = stateOf(current, next)
+      const apply = want(`skill:${name}`)
+      if (apply && state === 'drifted') reverted.push({ kind: 'skill', name })
+      if (apply && state !== 'ok') {
+        await rm(join(skillsDir, name), { recursive: true, force: true })
+        await mkdir(join(skillsDir, name), { recursive: true })
+        await writeFile(to, next)
         state = 'ok'; changed++
       }
       skills.push({ name, ...(await item(state, current, next)) })
@@ -361,7 +399,16 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
   }
 
   const agents: TeamStatus['agents'] = []
-  const shippedIds = new Set(agentTemplates.filter(t => t.id.startsWith('sdlc-')).map(t => t.id))
+  // Agents are the oh-my-agent set, read from the SSOT rather than a template
+  // array compiled into the app.
+  const omaAgents = new Map<string, string>()
+  if (existsSync(omaDir('agents'))) {
+    for (const name of await readdir(omaDir('agents'))) {
+      if (!name.endsWith('.md')) continue
+      omaAgents.set(name.replace(/\.md$/, ''), await readFile(omaDir('agents', name), 'utf-8'))
+    }
+  }
+  const shippedIds = new Set(omaAgents.keys())
   const seedAgent = async (id: string, next: string) => {
     const path = join(agentsDir, `${id}.md`)
     const current = await readOr(path)
@@ -374,8 +421,8 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     if (apply && state !== 'ok') { await writeFile(path, next); state = 'ok'; changed++ }
     agents.push({ id, ...(await item(state, current, next)) })
   }
-  for (const t of agentTemplates.filter(t => t.id.startsWith('sdlc-'))) {
-    await seedAgent(t.id, pluginAgents.get(t.id) ?? serializeFrontmatter(t.frontmatter as any, t.body))
+  for (const [id, next] of omaAgents) {
+    await seedAgent(id, pluginAgents.get(id) ?? next)
   }
   for (const [id, next] of pluginAgents) {
     if (!shippedIds.has(id)) await seedAgent(id, next)
@@ -415,40 +462,15 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
   // Watches: the registry names the queues; the instance holds their runtime
   // state (enabled, concurrency). Seeding creates a missing watch disabled and
   // refreshes the query and cap of an existing one, never its enabled flag.
-  const watches: TeamStatus['watches'] = []
-  // Same plugin-preferred, shipped-fallback shape as skills, commands and the
-  // product registry - and for the same reason. This read was plugin-only, so a
-  // team container seeded ZERO watches, every time, while the file sat unread in
-  // the image at engineering/registry/watches.yaml.
+  // Watches are not seeded on this instance.
   //
-  // "0 watches" is a legitimate count for a deployment that has registered none,
-  // which is exactly why it never looked wrong.
-  const pluginWatches = plugin ? join(plugin.installPath, 'registry', 'watches.yaml') : null
-  const shippedWatches = join(shippedDir(), 'registry', 'watches.yaml')
-  const watchesYaml = (pluginWatches && existsSync(pluginWatches))
-    ? pluginWatches
-    : (existsSync(shippedWatches) ? shippedWatches : null)
-  if (watchesYaml && existsSync(watchesYaml)) {
-    let defined: any[] = []
-    try { defined = parse(await readFile(watchesYaml, 'utf-8'))?.watches ?? [] } catch { defined = [] }
-    const existing = await listWatches()
-    const facts = (w: { query?: string, dailyDispatchCap?: number }) => `query: ${w.query ?? ''}\ndailyDispatchCap: ${w.dailyDispatchCap ?? ''}\n`
-    for (const d of defined) {
-      if (!d?.id || !d?.jql) continue
-      const cur = existing.find(w => w.id === d.id)
-      const cap = Number(d.daily_dispatch_cap) || 5
-      const team = { query: String(d.jql).trim(), dailyDispatchCap: cap }
-      let state: ItemState = !cur ? 'missing' : (cur.query === team.query && cur.dailyDispatchCap === cap) ? 'ok' : 'drifted'
-      if (want(`watch:${d.id}`) && state !== 'ok') {
-        const next: Watch = cur
-          ? { ...cur, ...team }
-          : { id: d.id, name: d.id, workflowSlug: RUNBOOK_FILES[String(d.workflow ?? '')] ?? RUNBOOK_SLUG, intervalSeconds: 300, enabled: false, maxConcurrentRuns: 1, autoRun: false, ...team }
-        await saveWatch(next)
-        state = 'ok'; changed++
-      }
-      watches.push({ id: d.id, ...(await item(state, cur ? facts(cur) : null, facts(team))) })
-    }
-  }
+  // A watch exists only to dispatch a runbook: watchRunStarter resolves
+  // `watch.workflowSlug` through findActiveRun() and loadWorkflow(). This
+  // instance ships the oh-my-agent estate, whose workflows are markdown rather
+  // than the *.json step graphs the loader runs, so there is no workflow for a
+  // watch to dispatch into and every seeded row would resolve to nothing.
+  // engineering/registry/watches.yaml still ships; nothing reads it here.
+  const watches: TeamStatus['watches'] = []
 
   const reg = await loadRegistry()
   const items = reg ? Object.entries(reg.products).map(([key, p]: [string, any]) => ({
@@ -461,7 +483,16 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
   // The boot log used to say "N declared skills do not resolve" and nothing
   // else did; the page is where a developer would look.
   const declared = new Set<string>()
-  for (const t of agentTemplates.filter(t => t.id.startsWith('sdlc-'))) for (const s of (t.frontmatter as any).skills ?? []) declared.add(String(s))
+  // Declared skills come from the oh-my-agent agents this instance seeds, read
+  // from the SSOT rather than a template array. Parsed from frontmatter because
+  // that is the only place an agent states what it declares.
+  if (existsSync(omaDir('agents'))) {
+    for (const name of await readdir(omaDir('agents'))) {
+      if (!name.endsWith('.md')) continue
+      const { frontmatter } = parseFrontmatter<{ skills?: string[] }>(await readFile(omaDir('agents', name), 'utf-8'))
+      for (const skill of frontmatter.skills ?? []) declared.add(String(skill))
+    }
+  }
   const unresolvedSkills = [...declared].filter(n => !existsSync(join(skillsDir, n))).sort()
 
   if (apply) {
@@ -477,7 +508,7 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     pluginVersion: plugin?.version ?? null,
     pluginInstallPath: plugin?.installPath ?? null,
     shippedVersion: shipped?.version ? String(shipped.version) : null,
-    sources: { skills: sourceOf(skillsSource), commands: sourceOf(commandsSource), watches: sourceOf(watchesYaml), registry: sourceOf(reg?.path ?? null) },
+    sources: { skills: sourceOf(skillsSource), commands: sourceOf(commandsSource), watches: null, registry: sourceOf(reg?.path ?? null) },
     agents, skills, commands,
     workflow: { slug: wf.slug, state: wf.state, steps: wf.steps, ...(wf.diff ? { diff: wf.diff } : {}) },
     workflows,

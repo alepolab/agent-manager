@@ -46,7 +46,9 @@ const readRecord = dir => JSON.parse(readFileSync(join(dir, 'plugins', 'installe
 
   // The page's own read path: install record -> manifest -> skills/.
   assert.ok(existsSync(join(entry.installPath, '.claude-plugin', 'plugin.json')), 'the detail route finds the manifest')
-  assert.ok(existsSync(join(entry.installPath, 'skills')), 'the page lists the plugin skills from here')
+  // engineering/ no longer ships skills — the estate comes from the
+  // oh-my-agent SSOT in .agents/ — so the plugin is recorded and listed, but
+  // carries no skills of its own. The record, scope and manifest still matter.
   console.log('  ok   a fresh instance records the shipped plugin, enabled')
 
   // The compound-engineering plugin, in the image at vendor/, is the one an

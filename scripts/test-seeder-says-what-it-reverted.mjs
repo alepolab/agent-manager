@@ -70,8 +70,8 @@ check('the warning says how to keep a change',
   'naming the loss without naming the remedy leaves the operator stuck')
 
 check('a plugin agent overrides a shipped template',
-  /pluginAgents\.get\(t\.id\) \?\? serializeFrontmatter/.test(sync),
-  'without this, promoting an sdlc-* agent opens a PR, reports success, and changes nothing — the shipped template still wins at boot')
+  /pluginAgents\.get\(id\) \?\? next/.test(sync),
+  'without this, promoting a seeded agent opens a PR, reports success, and changes nothing — the shipped template still wins at boot')
 
 // Comments are stripped first: this file's own comment EXPLAINS the removed
 // line, and a naive search finds that explanation and calls the bug present.

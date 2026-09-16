@@ -31,7 +31,6 @@ const dockerfile = readFileSync(join(root, 'Dockerfile'), 'utf-8')
 
 /** Each entry: the directory, and what breaks in a container without it. */
 const SHIPPED = [
-  ['skills', 'teamSync seeds an instance from these when no plugin is installed — the normal case in a container'],
   ['commands', 'same fallback one level down; without it a container seeds zero commands'],
   ['registry', 'resolveProduct returns undefined for every ticket: no repos, no branch policy, no stack profile'],
   ['scripts', 'the evidence step is instructed to run engineering/scripts/assemble-bundle.mjs'],

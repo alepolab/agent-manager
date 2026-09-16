@@ -216,11 +216,10 @@ async function onRemoveMarketplace(name: string) {
   }
 }
 
-const agentCategories: Record<string, string[]> = {
-  Development: ["code-reviewer", "debug-helper", "documentation-writer"],
-  Writing: ["writing-assistant", "email-drafter", "social-media-writer"],
-  Productivity: ["project-planner", "meeting-summarizer", "research-assistant"],
-};
+// The template gallery is empty on this instance (oh-my-agent estate only, see
+// app/utils/templates.ts), so there is nothing left to categorise. Kept as an
+// empty map rather than deleted because agentCategoryFor() below still reads it.
+const agentCategories: Record<string, string[]> = {};
 
 function agentCategoryFor(id: string): string {
   for (const [cat, ids] of Object.entries(agentCategories)) {
