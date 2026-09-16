@@ -191,6 +191,69 @@ try {
   // Nothing is left registered once the run is done.
   assert.equal((await git(settled.projectDir, ['worktree', 'list'])).split('\n').length, 2, 'no lane outlives its wave')
 
+  // ── A retried step, whose lane merged and was removed with its wave ─────
+  //
+  // A RETRY verdict re-arms the node AFTER its wave has settled, so by the time
+  // the step runs again its lane is merged and gone and the next wave holds only
+  // it. The second visit therefore works in the run worktree - which already
+  // carries the first attempt's commits - and that is the behaviour to pin: the
+  // work must survive the lane it was made in.
+  {
+    const retryFan = {
+      slug: 'lanes-retry', name: 'Lanes Retry',
+      steps: [
+        { id: 'r-plan', agentSlug: 'r-planner', label: 'Plan', next: ['r-back', 'r-front'] },
+        { id: 'r-back', agentSlug: 'r-backend', label: 'Implement Backend', next: ['r-done'], monitorSlug: 'r-monitor', maxVisits: 3 },
+        { id: 'r-front', agentSlug: 'r-frontend', label: 'Implement Frontend', next: ['r-done'] },
+        { id: 'r-done', agentSlug: 'r-verifier', label: 'Verify', next: [] },
+      ],
+    }
+    const project2 = join(root, 'project2')
+    await execFileP('git', ['init', '-q', project2])
+    await git(project2, ['config', 'user.email', 'test@example.com'])
+    await git(project2, ['config', 'user.name', 'Test'])
+    writeFileSync(join(project2, 'app.txt'), 'start\n')
+    await git(project2, ['add', '-A'])
+    await git(project2, ['commit', '-qm', 'initial'])
+
+    const visits = []
+    let monitorCalls = 0
+    runner.setAgentCaller(async (agentSlug, _input, dir) => {
+      if (agentSlug === 'r-monitor') {
+        monitorCalls += 1
+        return monitorCalls === 1 ? 'Not yet.\nVERDICT: RETRY' : 'Good.\nVERDICT: CONTINUE'
+      }
+      if (agentSlug === 'r-backend') {
+        visits.push(dir)
+        const file = `backend-visit-${visits.length}.txt`
+        writeFileSync(join(dir, file), 'work\n')
+        await git(dir, ['config', 'user.email', 'test@example.com'])
+        await git(dir, ['config', 'user.name', 'Test'])
+        await git(dir, ['add', '-A'])
+        await git(dir, ['commit', '-qm', file])
+      }
+      return `OUTPUT-OF-${agentSlug}`
+    })
+
+    const done = await runner.waitForSettled(
+      (await runner.startRun({
+        workflow: retryFan, initialPrompt: 'CSUP-2 retry me', watch: 'direct-invocation',
+        autoRun: true, projectDir: project2,
+      })).id, 60000)
+
+    assert.equal(done.status, 'completed', `the retried run completed (was ${done.status}: ${done.error ?? 'no error'})`)
+    assert.equal(visits.length, 2, 'the monitor sent the step back exactly once')
+    // First visit in a lane (it shared the wave with the frontend step), second
+    // in the run worktree (it had that wave to itself).
+    assert.notEqual(visits[0], done.projectDir, 'the first visit ran in a lane')
+    assert.equal(visits[1], done.projectDir, 'the retry ran in the run worktree, its lane having merged with the wave')
+    // Both attempts' commits are on the run branch: the lane did not take the
+    // first attempt's work with it when it was removed.
+    assert.ok(existsSync(join(done.projectDir, 'backend-visit-1.txt')), "the first attempt's commit survived its lane")
+    assert.ok(existsSync(join(done.projectDir, 'backend-visit-2.txt')), "the retry's commit is on the run branch")
+    assert.equal((await git(done.projectDir, ['worktree', 'list'])).split('\n').length, 2, 'no lane outlives the retried wave')
+  }
+
   console.log('wave lanes: ok')
 } finally {
   rmSync(root, { recursive: true, force: true })
