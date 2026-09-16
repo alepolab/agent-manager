@@ -9,7 +9,7 @@
  *   node scripts/test-preflight.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -145,6 +145,29 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   const r = await runPreflight(run({ ticketKey: 'X-1' }), [{ agentSlug: 'sdlc-jira-tracker', label: 'Jira', jira: { transition: 'In Progress' } }], exploding)
   assert.equal(of(r, 'jira: In Progress').level, 'fail')
   assert.match(of(r, 'jira: In Progress').detail, /the check itself failed: jira is down/)
+}
+
+// ── 8. the docker probe must not depend on the CLI exiting ─────────────────
+// `docker info` on Docker Desktop for Windows prints the server version and
+// then never exits, holding open the stdout pipe execFile handed it. execFile
+// waits for a close that never comes, the 15s timeout kills it, and guard turns
+// that into a fail — so the run is refused against a daemon that had already
+// answered. Three runs died exactly there, before any agent started. Measured:
+// `info` killed at ~15.2-15.5s (twice with stdout still empty), `version`
+// clean-exited in 2.1-3.4s; neither DOCKER_CLI_HINTS=false nor shell:true
+// changed it.
+//
+// Pinned by reading the source rather than by running a fake docker: execFile
+// cannot launch a .cmd shim on Windows without a shell, so a shim-based test
+// would have to skip on the one platform where this bug appears.
+{
+  const src = readFileSync(new URL('../server/utils/preflight.ts', import.meta.url), 'utf8')
+  const probe = /execFileP\('docker', \[([^\]]*)\]/.exec(src)
+  assert.ok(probe, 'preflight still probes docker for reachability')
+  assert.match(probe[1], /'version'/, 'the daemon probe must use `docker version`, which exits')
+  assert.doesNotMatch(probe[1], /'info'/, '`docker info` answers and then hangs; its exit is not something to wait on')
+  assert.match(src, /\{\{\.Server\.Version\}\}/,
+    'and must ask for .Server.Version — a round trip to the daemon, so it still proves reachability rather than just that a CLI exists')
 }
 
 rmSync(root, { recursive: true, force: true })

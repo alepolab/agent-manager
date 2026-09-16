@@ -135,7 +135,16 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
   if (!needsStack) add('docker', 'skip', 'this workflow stands no stack up')
   else {
     await guard('docker', async () => {
-      const v = await execFileP('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 15_000 })
+      // `docker version`, not `docker info`: on Docker Desktop for Windows the
+      // CLI answers `info` correctly and then never exits, holding open the
+      // stdout pipe execFile handed it. execFile waits for a close that never
+      // comes, the 15s timeout kills it, and guard turns that into a fail - so
+      // a run is refused against a daemon that had already answered. Measured
+      // here: three `info` calls killed at ~15.2-15.5s (twice with stdout still
+      // empty), three `version` calls clean-exited in 2.1-3.4s. Neither
+      // DOCKER_CLI_HINTS=false nor shell:true changed it. `.Server.Version` is
+      // a round trip to the daemon, so it proves the same reachability.
+      const v = await execFileP('docker', ['version', '--format', '{{.Server.Version}}'], { timeout: 15_000 })
         .then(r => r.stdout.trim(), (e) => { throw new Error(`docker is unreachable: ${String(e.message ?? e).slice(0, 120)}`) })
       const net = await execFileP('docker', ['network', 'inspect', 'alepo-shared'], { timeout: 15_000 }).then(() => true, () => false)
       return net
