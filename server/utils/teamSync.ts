@@ -16,7 +16,7 @@ import { hasJiraCredentialsConfigured, isJiraPostingEnabled } from './jiraCreden
 import { authDisabled } from './session.ts'
 import { workspaceRootFor } from './workspace.ts'
 import type { Watch } from '../../shared/types/watch.ts'
-import { workflowTemplates, materializeTemplateSteps, RUNBOOK_FILES } from '../../app/utils/workflowTemplates.ts'
+import { workflowTemplates, materializeTemplateSteps } from '../../app/utils/workflowTemplates.ts'
 
 const execFileP = promisify(execFile)
 
@@ -112,25 +112,15 @@ export async function pluginInstall(): Promise<{ version: string, installPath: s
 /**
  * The plugins this image carries, and where each one lives in it.
  *
- * `compound-engineering` is not under engineering/ - it is a third party's,
- * fetched at build time to /app/vendor - but both are the same thing from a
- * reader's point of view: a plugin whose files are on this instance, updated
- * by rebuilding the image.
+ * Only the shipped alepo-engineering plugin now. A third-party plugin was
+ * fetched to /app/vendor for Runbook C's steps; that runbook and the agents
+ * that ran it are gone, so nothing reads those skills.
  */
 const shippedPlugins = (): { id: string, path: string, version: () => Promise<string> }[] => [
   {
     id: PLUGIN_ID,
     path: shippedDir(),
     version: async () => String((await readJsonOr<{ version?: string }>(join(shippedDir(), '.claude-plugin', 'plugin.json')))?.version ?? ''),
-  },
-  {
-    // `ceSkillsDir` already reads this record and falls back to the same
-    // directory, so recording it changes where nothing resolves from - only
-    // whether the page can see it.
-    id: 'compound-engineering@compound-engineering',
-    path: join(process.cwd(), 'vendor', 'compound-engineering'),
-    // Upstream ships a VERSION file - "3.26.2 <sha>" - not a plugin.json.
-    version: async () => (await readOr(join(process.cwd(), 'vendor', 'compound-engineering', 'VERSION')))?.trim().split(/\s+/)[0] ?? '',
   },
 ]
 
@@ -429,7 +419,12 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
   }
 
   const workflows: TeamStatus['workflows'] = []
-  for (const [templateId, slug] of Object.entries(RUNBOOK_FILES)) {
+  // Every shipped workflow is an app-defined template, seeded as
+  // `<template id>.json` under the config dir's workflows/. There is no
+  // separate id -> file-name map: the two were always equal, and the map being
+  // empty is what stopped the templates seeding at all.
+  for (const { id: templateId } of workflowTemplates) {
+    const slug = templateId
     const wfPath = join(workflowsDir, `${slug}.json`)
     const existingRaw = await readOr(wfPath)
     // A file that does not parse is drift, not a crash: it is exactly what Apply is for.

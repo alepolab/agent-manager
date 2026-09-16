@@ -64,3 +64,6 @@ AGENTS.md
 .agent/
 .agents/plan.md
 .agents/source-edited
+
+# Agent orchestration journals (dag runs, child sessions)
+.omo/

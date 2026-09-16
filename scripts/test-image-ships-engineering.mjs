@@ -53,19 +53,9 @@ const schemas = readdirSync(join(root, 'engineering', 'schemas'))
 assert.ok(schemas.some(f => f.startsWith('evidence-bundle.') && f.endsWith('.schema.json')),
   `engineering/schemas holds the evidence-bundle schema; found: ${schemas.join(', ') || '(empty)'}`)
 
-// The compound-engineering skills are not under engineering/ — they are a
-// third party's, fetched at build time — but the same rule applies: Runbook C's
-// Plan step halts without them, and a real run did, twice, because the plugin
-// was installed on the operator's host while the app read a config volume that
-// had never seen it. ceSkillsDir falls back to /app/vendor/compound-engineering,
-// so the Dockerfile must put them there, at a pinned commit, not a branch.
-{
-  const fetch = dockerfile.match(/ARG CE_PLUGIN_REV=([0-9a-f]{40})\n/)
-  assert.ok(fetch, 'the Dockerfile pins the compound-engineering plugin to a full commit sha (ARG CE_PLUGIN_REV)')
-  assert.ok(dockerfile.includes('compound-engineering-plugin.git'), 'and fetches it from the EveryInc repository')
-  assert.ok(dockerfile.includes('/app/vendor/compound-engineering/skills/ce-plan/SKILL.md'),
-    'and proves ce-plan landed where ceSkillsDir looks before the layer is accepted')
-}
+// The compound-engineering fetch was removed with Runbook C: nothing reads
+// those skills now, so the Dockerfile no longer pins or fetches them.
+
 
 // Anything new under engineering/ is a deliberate choice, not an oversight: a
 // directory the app reads must be added above, one it does not must be named

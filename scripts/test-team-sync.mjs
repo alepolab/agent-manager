@@ -35,7 +35,12 @@ assert.ok(s.skills.length >= 50 && s.skills.every(k => k.state === 'missing'),
   `a fresh directory misses every team skill; got ${s.skills.length}`)
 assert.ok(s.skills.some(k => k.name === 'oma-qa'), 'the oh-my-agent skills are the team skills')
 assert.ok(s.skills.some(k => k.name === 'ultrawork'), 'and its workflows are projected as skills')
-assert.equal(s.workflows.length, 0, 'no *.json runbook workflows on an oh-my-agent-only instance')
+// One workflow now: "Plan, Build, Review" (app/utils/workflowTemplates.ts),
+// whose steps name the seeded oh-my-agent agents directly — runbookSteps builds
+// an identity map, so agentTemplateId IS the agent slug.
+assert.equal(s.workflows.length, 1, 'the instance ships one workflow over the oh-my-agent agents')
+assert.equal(s.workflows[0].slug, 'oma-plan-build-review')
+assert.equal(s.workflows[0].steps, 3, 'plan -> implement -> review')
 assert.equal(s.registry.ok, true); assert.equal(s.registry.products, 1)
 assert.ok(s.drifted > 8)
 

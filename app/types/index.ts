@@ -130,8 +130,8 @@ export interface Skill {
   agents?: { name: string; slug: string }[]
   /**
    * Agents that read this skill from disk at run time without declaring it —
-   * the language catalogue ($SDLC_SKILLS_DIR) and the compound-engineering
-   * steps ($CE_SKILLS_DIR). Separate from `agents` because declaring these
+   * the language catalogue ($SDLC_SKILLS_DIR), read by name at run time
+   * rather than declared. Separate from `agents` because declaring these
    * instead would add ~80,000 tokens to every agent's prompt on every step.
    */
   readBy?: { name: string; slug: string }[]

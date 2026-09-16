@@ -121,23 +121,32 @@ export function materializeTemplateSteps(
   })
 }
 
-/** The runbooks the team ships: template id -> the file name each is seeded as under the config dir's workflows/. Shared by the server's team sync and scripts/sync-agents.mjs. */
-/**
- * Empty, on purpose — this instance ships the oh-my-agent estate only.
- *
- * Runbook A and C were seeded from here as JSON step graphs whose every step
- * named an `agentTemplateId` in `app/utils/templates.ts`. Those agents are
- * gone, so the runbooks went with them; a template naming an agent that cannot
- * resolve seeds a workflow whose steps are unrunnable.
- *
- * The types and `materializeTemplateSteps` above stay: `teamSync`,
- * `workflowInstantiation.ts`, `scripts/sync-agents.mjs` and the workflow
- * builder are all typed against them.
- *
- * oh-my-agent's own 22 workflows are markdown, not step graphs, and this app's
- * loader reads `*.json` only — so they are carried as skills instead, exactly
- * as `oma link` projects them into a Claude runtime.
- */
-export const RUNBOOK_FILES: Record<string, string> = {}
-
-export const workflowTemplates: WorkflowTemplate[] = []
+export const workflowTemplates: WorkflowTemplate[] = [
+  {
+    id: 'oma-plan-build-review',
+    name: 'Plan, Build, Review',
+    description: 'Decompose the request, implement it, then have it reviewed by an agent that did not write it.',
+    icon: 'i-lucide-git-branch',
+    // `agentTemplateId` IS the agent slug here: runbookSteps() builds an
+    // identity map (teamSync.ts:207-211), so these resolve directly against the
+    // oh-my-agent agents this instance seeds from .agents/agents — no entry in
+    // `agentTemplates` is needed, which is why an empty catalogue does not stop
+    // this materialising.
+    steps: [
+      { agentTemplateId: 'pm-planner', label: 'Plan' },
+      { agentTemplateId: 'backend-engineer', label: 'Implement' },
+      {
+        agentTemplateId: 'qa-reviewer',
+        label: 'Review',
+        // The reviewer is a different agent from the implementer, and it sees
+        // the whole chain rather than only the step before it — a review that
+        // cannot see the plan cannot tell whether the change met it.
+        contextMode: 'ancestors',
+        // The one human gate: QA owns it, so a developer cannot accept their
+        // own verification.
+        approval: true,
+        gateRole: 'qa',
+      },
+    ],
+  },
+]

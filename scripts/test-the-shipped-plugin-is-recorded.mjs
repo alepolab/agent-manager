@@ -51,25 +51,10 @@ const readRecord = dir => JSON.parse(readFileSync(join(dir, 'plugins', 'installe
   // carries no skills of its own. The record, scope and manifest still matter.
   console.log('  ok   a fresh instance records the shipped plugin, enabled')
 
-  // The compound-engineering plugin, in the image at vendor/, is the one an
-  // operator actually went looking for and could not find. It is recorded only
-  // where it is present: a checkout that has not run the Dockerfile's fetch
-  // has no vendor/ directory, and inventing an install for it would be the
-  // same fiction this test exists to prevent.
-  const ce = JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'plugins', 'installed_plugins.json'), 'utf8'))
-    .plugins['compound-engineering@compound-engineering']?.[0]
-  if (existsSync(join(process.cwd(), 'vendor', 'compound-engineering'))) {
-    assert.ok(ce, 'the compound-engineering plugin is recorded when the image carries it')
-    assert.equal(ce.scope, 'shipped')
-    assert.match(ce.version, /^\d+\.\d+\.\d+$/, 'version comes from upstream VERSION, first token only')
-    // ceSkillsDir reads this same record and joins 'skills' onto it.
-    assert.ok(existsSync(join(ce.installPath, 'skills', 'ce-plan', 'SKILL.md')),
-      'the recorded path is the one ceSkillsDir resolves CE_SKILLS_DIR from')
-    console.log('  ok   compound-engineering recorded too, where ceSkillsDir looks')
-  } else {
-    assert.equal(ce, undefined, 'nothing is recorded for a plugin this checkout does not carry')
-    console.log('  ok   no vendor/compound-engineering here; correctly not recorded')
-  }
+  // The compound-engineering registration was removed with Runbook C: the
+  // Dockerfile no longer fetches those skills to vendor/, shippedPlugins() no
+  // longer records them, and ceSkillsDir() is gone. Only alepo-engineering is
+  // shipped now, and the assertions above cover it.
 }
 
 // A real install already there: left alone, both times.
