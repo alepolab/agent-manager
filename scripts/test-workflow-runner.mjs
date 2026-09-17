@@ -1372,6 +1372,35 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(settled.steps.at(-1).output, ship.output, 'the recorded output is the one the run carries')
 }
 
+// \u2500\u2500 the pull request is opened BEFORE the Jira comment \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n// The comment reports the pull request URLs the run produced, so posting it
+// first is a comment about work that has not happened. Asserted on the order of
+// the two halves in the step's recorded output, because that is the same order
+// the runner performed them in.
+{
+  delete process.env.JIRA_POST_ENABLED
+  runner.setAgentCaller(async (agentSlug) => `did ${agentSlug} work`)
+  const both = {
+    slug: 'pr-then-jira', name: 'PR then Jira',
+    steps: [
+      { id: 'ship', agentSlug: 'agent-ship', label: 'Evidence, Docs & Pull Request', next: [], pr: true, jira: { transition: 'Dev Done', comment: true, after: true } },
+    ],
+  }
+  const settled = await runner.waitForSettled(
+    (await runner.startRun({ workflow: both, initialPrompt: 'CSUP-1 ship it', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(settled.status, 'completed', `the run completed (was ${settled.status}: ${settled.error ?? 'no error'})`)
+  const out = settled.steps[0].output
+  // No checkout here, so the PR half reports honestly that it has nothing to
+  // push - which is exactly what it must do rather than inventing a URL.
+  const prAt = Math.max(out.indexOf('pull request'), out.indexOf('Pull request'))
+  const jiraAt = out.indexOf('Dev Done')
+  assert.ok(prAt >= 0, `the pr half ran and said something; output was:\n${out}`)
+  assert.ok(jiraAt >= 0, 'the jira half ran too')
+  assert.ok(prAt < jiraAt, 'the pull request half must be recorded before the Jira half, or the comment cannot carry the URL')
+  assert.ok(!out.includes('example.invalid'), 'and never the placeholder URL')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')
