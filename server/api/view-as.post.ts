@@ -20,7 +20,11 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<{ role?: Role | null }>(event)
   const role = body?.role ?? null
   if (role !== null && (!(ROLES as string[]).includes(role) || role === 'operator')) {
-    throw createError({ statusCode: 400, message: 'role must be developer, qa, manager, or null to stop' })
+    // Named from ROLES rather than spelled out: a role added to the type used to
+    // leave this message describing the old set, which is how a 400 ends up
+    // lying about what it would have accepted.
+    const offered = ROLES.filter(r => r !== 'operator').join(', ')
+    throw createError({ statusCode: 400, message: `role must be one of ${offered}, or null to stop` })
   }
   const session = await authSession(event)
   await session.update(d => ({ ...d, viewAs: role ?? undefined }))

@@ -240,9 +240,21 @@ export const workflowTemplates: WorkflowTemplate[] = [
     //
     // The three gates are deliberately THREE ROLES, not one: a developer
     // authorises the plan they are about to implement, QA alone accepts the
-    // verification, and a manager alone authorises shipping. `gateRole` is
-    // enforced server-side (requireGateRole), so this is a rule rather than a
-    // convention - one person cannot answer all three.
+    // verification, and the release itself belongs to neither of them.
+    // `gateRole` is enforced server-side (requireGateRole), so this is a rule
+    // rather than a convention - one person cannot answer all three.
+    //
+    // The ship gate names `operator`, not `manager`, and the reason is worth
+    // recording: this template first said `manager`, which reads correctly and
+    // cannot work. A manager holds `answerGate: false` by design ("reads
+    // progress across runs, changes nothing"), and `continue.post.ts` checks
+    // that capability BEFORE gate ownership - so the one gate the template
+    // called theirs returned a 403 that did not even name them as its owner.
+    // Naming the operator makes the refusal truthful and keeps the separation
+    // that matters: the author does not ship, and neither does the verifier.
+    // Giving `manager` the capability instead would widen a role the role
+    // model and its tests define as read-only, and would also hand it the
+    // queue-clearing that rides on the same capability.
     //
     // Whether a gate actually stops is NOT decided here. `approval` marks a
     // point where a gate MAY fire; shared/utils/oversight.ts decides from the
@@ -346,7 +358,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
         next: [],
         contextMode: 'ancestors',
         approval: true,
-        gateRole: 'manager',
+        gateRole: 'operator',
         jira: { transition: 'Dev Done', comment: true, attach: true },
       },
     ],

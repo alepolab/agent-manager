@@ -20,17 +20,24 @@ import { join } from 'node:path'
 const root = mkdtempSync(join(tmpdir(), 'roles-'))
 process.env.CLAUDE_DIR = root
 
-const { can, capabilitiesFor, DEFAULT_ROLE, ROLES } = await import('../shared/types/role.ts')
+const { can, capabilitiesFor, DEFAULT_ROLE, ROLES, ROLE_LABEL, rolesWith } = await import('../shared/types/role.ts')
 const { listRoles, roleFor, setRole, effectiveRole } = await import('../server/utils/roles.ts')
 
 // ── 1. the capability table says what each role is for ───────────────────────
 {
   // A reviewer decides; they do not drive. This pair is the whole point.
-  for (const role of ['developer', 'qa']) {
+  for (const role of ['developer', 'qa', 'architect', 'designer']) {
     assert.equal(can(role, 'answerGate'), true, `${role} must be able to answer a gate`)
     assert.equal(can(role, 'runEngine'), false, `${role} must not be able to drive the run`)
     assert.equal(can(role, 'configure'), false, `${role} must not be able to configure the pipeline`)
   }
+  // An architect starts work; a designer accepts what a run produced. The
+  // difference between the two new rows is `startRun` and nothing else.
+  assert.equal(can('architect', 'startRun'), true, 'an architect starts spikes and contract-first work')
+  assert.equal(can('designer', 'startRun'), false, 'a designer accepts output rather than owning a scope that produces runs')
+  // `configure` covers `roles.json`, so granting it to a reviewer is promotion
+  // to operator by another name. Only the operator holds it.
+  assert.deepEqual(rolesWith('configure'), ['operator'], 'exactly one role configures the pipeline')
   // A manager reads. Every write is somebody else's.
   const manager = capabilitiesFor('manager')
   assert.deepEqual(
@@ -98,6 +105,9 @@ const { listRoles, roleFor, setRole, effectiveRole } = await import('../server/u
 // operator defaults — which is the failure mode this whole file is about.
 for (const role of ROLES) {
   assert.ok(capabilitiesFor(role), `${role} has no capabilities row`)
+  // A role with no label reaches the Team page and the role picker as a blank
+  // line, which reads as a broken instance rather than as a missing string.
+  assert.ok(ROLE_LABEL[role]?.trim(), `${role} has no ROLE_LABEL`)
 }
 
 rmSync(root, { recursive: true, force: true })
@@ -132,4 +142,29 @@ rmSync(root, { recursive: true, force: true })
   assert.equal(can('manager', 'answerGate'), false, 'a manager reads; deciding is not theirs')
 }
 
-console.log('roles: a reviewer decides, an operator drives, and a broken file locks nobody out')
+// ── a template must not hand a gate to a role that cannot answer one ────────
+// The failure this catches shipped for real: the CSUP template declared its
+// ship gate `gateRole: 'manager'` while `manager` holds `answerGate: false`,
+// and `continue.post.ts` checks the capability before ownership — so the gate
+// the template called theirs was answerable by nobody but an operator, and the
+// 403 did not name the manager as its owner. Both files read correctly alone;
+// only together are they wrong, which is exactly what a test has to hold.
+{
+  const { workflowTemplates } = await import('../app/utils/workflowTemplates.ts')
+  let checked = 0
+  for (const template of workflowTemplates) {
+    for (const step of template.steps) {
+      if (!step.gateRole) continue
+      checked++
+      assert.ok(ROLES.includes(step.gateRole), `${template.name}/${step.label}: gateRole '${step.gateRole}' is not a role`)
+      assert.equal(
+        can(step.gateRole, 'answerGate'),
+        true,
+        `${template.name}/${step.label}: the gate belongs to '${step.gateRole}', who cannot answer a gate — continue.post.ts checks the capability before ownership, so this gate is answerable only by an operator and its 403 names the wrong owner`,
+      )
+    }
+  }
+  assert.ok(checked >= 3, `expected the shipped templates to declare gates; found ${checked}`)
+}
+
+console.log('roles: a reviewer decides, an operator drives, and a broken file locks nobody out') 
