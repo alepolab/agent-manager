@@ -77,6 +77,23 @@ export function rolesWith(capability: keyof Capabilities): Role[] {
   return ROLES.filter(r => capabilitiesFor(r)[capability])
 }
 
+/**
+ * The short label for a role, where a column is too narrow for the word:
+ * the VIEW-AS picker, a step's owner chip, a builder node.
+ *
+ * Here rather than in `app.vue` because three surfaces now render it, and two
+ * of them would otherwise invent their own abbreviations \u2014 which is how the
+ * same role ends up reading `Mgr` in one place and `Manager` in another.
+ */
+export const SHORT_ROLE: Record<Role, string> = {
+  operator: 'OPS',
+  developer: 'DEV',
+  qa: 'QA',
+  architect: 'ARCH',
+  designer: 'DESIGN',
+  manager: 'MGR',
+}
+
 /** The one-line description of each role, for the Team page and the role picker. */
 export const ROLE_LABEL: Record<Role, string> = {
   developer: 'Decides at the diff gate on runs; cannot drive the pipeline.',

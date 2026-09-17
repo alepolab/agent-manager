@@ -13,6 +13,16 @@ export interface RunStep {
   label: string
   /** The agent behind this step. The operator's real question is "which agent, and how is it doing". */
   agentSlug: string
+  /**
+   * Whose work this step is, copied from the workflow at run creation \u2014 the way
+   * `gateRole` is copied onto `run.question.role` when a gate fires.
+   *
+   * Copied rather than looked up so the run page renders a chip without
+   * loading the workflow, and so a later template edit cannot rewrite a
+   * finished run's history. Absent on every run recorded before the field
+   * existed; those render no owner rather than a guessed one.
+   */
+  ownerRole?: Role
   status: RunStepStatus
   input: string
   output: string

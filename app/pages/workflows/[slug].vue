@@ -158,6 +158,8 @@ const nodes = computed(() => {
       data: {
         label: step.label,
         agentSlug: step.agentSlug,
+        ownerRole: step.ownerRole,
+        gateRole: step.gateRole,
         agentColor: agent?.frontmatter.color,
         agentModel: agent?.frontmatter.model,
         monitorLabel: agentBySlug(step.monitorSlug)?.frontmatter.name ?? step.monitorSlug,

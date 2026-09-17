@@ -2,6 +2,7 @@
 import { Handle, Position } from '@vue-flow/core'
 import { getAgentColor } from '~/utils/colors'
 import { getModelLabel } from '~/utils/models'
+import { SHORT_ROLE, ROLE_LABEL, type Role } from '~~/shared/types/role'
 
 const props = defineProps<{
   data: {
@@ -15,6 +16,12 @@ const props = defineProps<{
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
+    /** Whose work this step is. Rendered as a chip; it decides nothing. */
+    ownerRole?: Role
+    /** Whose decision this step's gate is, when it has one. A fact about the
+     *  gate, shown under that name - never relabelled as the owner, which is a
+     *  different question and often a different person. */
+    gateRole?: Role
   }
   /** Whether this node may be changed. False for anyone without `configure`,
    *  who can read the pipeline but not edit it. Defaults true so the existing
@@ -86,7 +93,17 @@ const verdictColor: Record<string, string> = {
       </div>
       <div class="t-small font-medium truncate" style="color: var(--text-primary);">{{ data.label }}</div>
       <div class="flex items-center justify-between">
-        <span class="t-small" style="color: var(--text-tertiary);">{{ modelLabel }}</span>
+        <span class="t-small truncate" style="color: var(--text-tertiary);">{{ modelLabel }}</span>
+        <!-- Owner, and the gate owner when it is someone else. Two facts under
+             their own names: the template's comments said three gates belong to
+             three different people and the canvas showed none of it. -->
+        <span
+          v-if="data.ownerRole"
+          data-testid="step-owner"
+          class="t-label shrink-0 rounded px-1 ml-auto"
+          style="background: var(--surface-inset); color: var(--text-secondary);"
+          :title="`${ROLE_LABEL[data.ownerRole]}${data.gateRole && data.gateRole !== data.ownerRole ? ` Gate answered by ${data.gateRole}.` : ''}`"
+        >{{ SHORT_ROLE[data.ownerRole] }}</span>
         <span v-if="data.maxVisits" class="t-small font-mono" style="color: var(--text-disabled);" title="Max visits per run">
           ≤{{ data.maxVisits }}
         </span>

@@ -18,6 +18,8 @@ export interface WorkflowTemplateStep {
   approval?: boolean
   /** See WorkflowStep.gateRole. */
   gateRole?: Role
+  /** See WorkflowStep.ownerRole. Whose work the step is; grants nothing. */
+  ownerRole?: Role
   /** See WorkflowStep.continuesSession. */
   continuesSession?: boolean
   /** See WorkflowStep.contextMode. */
@@ -87,6 +89,12 @@ export function materializeTemplateSteps(
       // sets it: a step that declares whose gate it is should not silently lose
       // that when someone later toggles `approval` back on.
       ...(step.gateRole ? { gateRole: step.gateRole } : {}),
+      // Carried for the same reason gateRole is: a step that declares whose
+      // work it is must not lose that on the way to the workflow the runner
+      // reads. A field missing from this whitelist is dropped in silence -
+      // which is how `jira.after` once worked in the template and was absent
+      // from the seeded JSON.
+      ...(step.ownerRole ? { ownerRole: step.ownerRole } : {}),
     }
     if (step.next) {
       const resolved = step.next
@@ -319,6 +327,11 @@ export const workflowTemplates: WorkflowTemplate[] = [
         contextMode: 'ancestors',
         approval: true,
         gateRole: 'developer',
+        // Owner and gate differ here on purpose, and this step is the reason
+        // ownership cannot be derived: the work is the architect's review, the
+        // decision is the developer's because it is their plan and their next
+        // step. Deriving an owner from either field would contradict the other.
+        ownerRole: 'architect',
       },
       // 5-6. IMPL, serialized on a real dependency rather than on git: the
       // client change follows the contract the fix settles. Each carries an
@@ -326,6 +339,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'backend-engineer',
         label: 'Implement Fix',
+        ownerRole: 'developer',
         next: ['frontend-engineer'],
         monitorSlug: 'refactor-engineer',
         maxVisits: 3,
@@ -333,6 +347,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'frontend-engineer',
         label: 'Implement Client Change',
+        // The user-facing half of the fix. Owned by design, gated by nobody:
+        // owning a step is not deciding at one.
+        ownerRole: 'designer',
         next: ['qa-reviewer', 'db-engineer'],
         monitorSlug: 'refactor-engineer',
         maxVisits: 3,
@@ -343,6 +360,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'qa-reviewer',
         label: 'Verify, Security & Regression',
+        ownerRole: 'qa',
         next: ['docs-curator'],
         contextMode: 'ancestors',
         approval: true,
@@ -351,6 +369,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'db-engineer',
         label: 'Data & Migration Review',
+        // Schema and migration cost lands on other teams and on future runs,
+        // which is the architect's business even though no gate fires here yet.
+        ownerRole: 'architect',
         next: ['docs-curator'],
         contextMode: 'ancestors',
       },
@@ -361,6 +382,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'docs-curator',
         label: 'Evidence, Docs & Pull Request',
+        ownerRole: 'operator',
         next: [],
         contextMode: 'ancestors',
         approval: true,

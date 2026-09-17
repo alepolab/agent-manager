@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ROLES, type Role } from '~~/shared/types/role'
+import { ROLES, SHORT_ROLE, type Role } from '~~/shared/types/role'
 
 const route = useRoute()
 const { claudeDir, exists: claudeDirExists, load: loadConfig } = useClaudeDir()
@@ -45,14 +45,10 @@ const colorMode = useColorMode()
  * the type appeared everywhere except the one control built to inspect it.
  * `operator` leads because it is the way back to yourself.
  */
-const SHORT_ROLE: Record<Role, string> = {
-  operator: 'You',
-  developer: 'Dev',
-  qa: 'QA',
-  architect: 'Arch',
-  designer: 'Design',
-  manager: 'Mgr',
-}
+// Labels come from shared/types/role.ts now, so a step's owner chip and this
+// picker cannot drift apart. `operator` is the one exception: in every other
+// surface it is the OPS role, and here it is the way back to being yourself.
+const pickerLabel = (r: Role) => (r === 'operator' ? 'You' : SHORT_ROLE[r])
 const viewAsRoles = computed<Role[]>(() => ['operator', ...ROLES.filter(r => r !== 'operator')])
 
 /** Switching to your own role clears the impersonation rather than setting one. */
@@ -439,7 +435,7 @@ function badgeFor(to: string) {
               :aria-pressed="role === r"
               :disabled="switchingRole"
               @click="switchRole(r)"
-            >{{ SHORT_ROLE[r] }}</button>
+            >{{ pickerLabel(r) }}</button>
           </div>
         </div>
 

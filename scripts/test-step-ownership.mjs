@@ -1,0 +1,104 @@
+/**
+ * Whose work a step IS, as data.
+ *
+ * A step already says which agent runs it (`agentSlug`) and whose decision its
+ * gate is (`gateRole`, enforced by server/utils/gateRole.ts). Neither answers
+ * the question a person asks when they open a run: which of these steps is
+ * MINE. The end user said it plainly — "each role or persona has work, like
+ * some steps will be defined by different roles" — and the console had no field
+ * to render.
+ *
+ * `ownerRole` is that field, and this file pins the two properties that make it
+ * safe. First, it survives the trip from template to workflow to run record,
+ * because a chip that appears in the builder and vanishes on the run page is
+ * worse than no chip. Second, it grants NOTHING: authority stays with
+ * `can()` (shared/types/role.ts) and `requireGateRole` (server/utils/gateRole.ts),
+ * and the ownership axis must never be read where a refusal is decided.
+ *
+ * Deriving the owner instead was considered and rejected on evidence: the CSUP
+ * template's "Plan Review" step runs `architecture-reviewer` while its gate
+ * belongs to `developer`, so agent and gate disagree on the first real step,
+ * and most steps map to no role at all. A derived owner would be a guess
+ * wearing a fact's shape.
+ *
+ *   node scripts/test-step-ownership.mjs
+ */
+import assert from 'node:assert/strict'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+
+const repoRoot = join(import.meta.dirname, '..')
+
+const { ROLES } = await import('../shared/types/role.ts')
+const { workflowTemplates, materializeTemplateSteps } = await import('../app/utils/workflowTemplates.ts')
+
+// ── 1. a declared owner is a real role, in every shipped template ───────────
+// A typo'd role would render as an empty chip rather than failing loudly, so it
+// is caught here instead of on screen.
+{
+  let declared = 0
+  for (const template of workflowTemplates) {
+    for (const step of template.steps) {
+      if (!step.ownerRole) continue
+      declared++
+      assert.ok(
+        ROLES.includes(step.ownerRole),
+        `${template.name}/${step.label}: ownerRole '${step.ownerRole}' is not a role`,
+      )
+    }
+  }
+  assert.ok(declared >= 3, `expected the shipped templates to declare step owners; found ${declared}`)
+}
+
+// ── 2. ownership survives materialisation ──────────────────────────────────
+// `materializeTemplateSteps` copies a whitelist of fields (id, agentSlug, label,
+// approval, gateRole, …). A field absent from that list is silently dropped, and
+// the workflow JSON the runner actually reads would carry no owner at all — the
+// exact failure mode that left `jira.after` working in the template and missing
+// from the seeded workflow.
+{
+  const csup = workflowTemplates.find(t => t.steps.some(s => s.ownerRole))
+  assert.ok(csup, 'no template declares an owner to materialise')
+  const steps = materializeTemplateSteps(csup, {})
+  const owned = steps.filter(s => s.ownerRole)
+  const declared = csup.steps.filter(s => s.ownerRole)
+  assert.equal(
+    owned.length,
+    declared.length,
+    `materialiseTemplateSteps dropped ownerRole: ${declared.length} declared, ${owned.length} survived`,
+  )
+  // And it lands on the SAME steps, not merely the same count.
+  for (const [i, step] of csup.steps.entries()) {
+    if (step.ownerRole) assert.equal(steps[i].ownerRole, step.ownerRole, `${step.label}: owner changed in materialisation`)
+  }
+}
+
+// ── 3. ownership is not authority ───────────────────────────────────────────
+// Asserted against the source, the way scripts/test-roles.mjs asserts over route
+// files: the capability table and the gate guard must not learn about ownership.
+// This is a weaker check than a runtime one and it is the one that fails at the
+// exact line someone adds the leak.
+{
+  const roleSrc = readFileSync(join(repoRoot, 'shared/types/role.ts'), 'utf8')
+  assert.doesNotMatch(roleSrc, /ownerRole/, 'the capability table must not read step ownership')
+
+  const gateSrc = readFileSync(join(repoRoot, 'server/utils/gateRole.ts'), 'utf8')
+  assert.doesNotMatch(gateSrc, /ownerRole/, 'the gate guard decides on run.question.role alone')
+
+  // No mutating API route may consult it either. The runner may (it copies the
+  // field onto the run record); nothing that returns 403 may.
+  const apiRoot = join(repoRoot, 'server/api')
+  const offenders = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry)
+      if (statSync(full).isDirectory()) { walk(full); continue }
+      if (!entry.endsWith('.ts')) continue
+      if (readFileSync(full, 'utf8').includes('ownerRole')) offenders.push(full.slice(repoRoot.length + 1))
+    }
+  }
+  walk(apiRoot)
+  assert.deepEqual(offenders, [], `ownership must stay presentational; these routes read it: ${offenders.join(', ')}`)
+}
+
+console.log('step ownership: declared as data, carried to the run, and it decides nothing')

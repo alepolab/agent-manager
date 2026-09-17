@@ -270,6 +270,20 @@ export interface WorkflowStep {
    * backstop for a role nobody on this instance holds.
    */
   gateRole?: Role
+  /**
+   * Whose WORK this step is \u2014 a different question from whose decision its
+   * gate is (`gateRole`) and from what the reader may do (`can()`).
+   *
+   * It grants nothing and is read only to render. A person opening a run asks
+   * "which of these steps is mine", and the console had no field to answer
+   * with: a step said which agent ran it and, on three of nine, whose gate it
+   * carried. Deriving the owner from those two was rejected on evidence \u2014 the
+   * CSUP template's "Plan Review" runs `architecture-reviewer` while its gate
+   * belongs to `developer`, so the two disagree on the first real step, and
+   * most steps map to no role at all. A derived owner would be a guess wearing
+   * a fact's shape.
+   */
+  ownerRole?: Role
   /** Canvas position, persisted so branches and loops keep their layout. */
   position?: { x: number, y: number }
   /**

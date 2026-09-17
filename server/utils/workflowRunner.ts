@@ -83,7 +83,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -1505,7 +1505,10 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     ticketKey,
     projectDir,
     baseCommit,
-    steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
+    // `ownerRole` is snapshotted with the rest: the run page must render whose
+    // work a step is without loading the workflow, and a template edited after
+    // this run started must not rewrite what this run's history says.
+    steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug, ...(s.ownerRole ? { ownerRole: s.ownerRole } : {}) })),
   })
   await ensureRunCheckout(run)
   // Before the gate below, not after: a run that fails preflight is precisely
