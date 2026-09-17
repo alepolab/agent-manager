@@ -5,7 +5,8 @@ import { artifactContentType, runArtifactsDir } from '../../../../utils/runArtif
 /** 512 KB is plenty for any report or xunit file; a bigger file is truncated with a marker. */
 const MAX_BYTES = 512 * 1024
 
-/** Screenshots run to a few hundred KB and a full-page one can pass a megabyte. */
+/** Screenshots run to a few hundred KB, a full-page one can pass a megabyte, and a
+ *  Playwright trace or video for one screen lands around 3 MB. */
 const MAX_BINARY_BYTES = 8 * 1024 * 1024
 
 /** One artifact file. Text is returned as text; an image as itself. The path must stay inside the run's artifacts directory. */
@@ -22,7 +23,7 @@ export default defineEventHandler(async (event) => {
   const type = artifactContentType(name)
   if (type) {
     if (size > MAX_BINARY_BYTES) {
-      throw createError({ statusCode: 413, message: `That artifact is ${Math.round(size / 1024 / 1024)} MB; the console serves images up to ${MAX_BINARY_BYTES / 1024 / 1024} MB.` })
+      throw createError({ statusCode: 413, message: `That artifact is ${Math.round(size / 1024 / 1024)} MB; the console serves binary artifacts up to ${MAX_BINARY_BYTES / 1024 / 1024} MB.` })
     }
     setHeader(event, 'content-type', type)
     // Truncating an image produces a broken one rather than a shorter one, so

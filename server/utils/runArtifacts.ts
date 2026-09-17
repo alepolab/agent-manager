@@ -577,5 +577,12 @@ export function artifactContentType(name: string): string | undefined {
     svg: 'image/svg+xml',
     pdf: 'application/pdf',
     zip: 'application/zip',
+    // Playwright records video alongside the trace, and a run that fixes a UI
+    // defect writes the before/after pair as .webm. Absent from this map, the
+    // route fell through to its text branch and decoded the video as UTF-8:
+    // 405 KB of binary came back as 732 KB of replacement characters, so the
+    // one artifact that shows the defect moving was the one nobody could open.
+    webm: 'video/webm',
+    mp4: 'video/mp4',
   } as Record<string, string>)[(name.split('.').pop() ?? '').toLowerCase()]
 }
