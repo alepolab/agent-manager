@@ -305,6 +305,19 @@ export interface WorkflowStep {
    */
   jira?: { transition?: string, comment?: boolean, attach?: boolean, after?: boolean }
   /**
+   * After this step's agent succeeds, the RUNNER pushes the run's branch and
+   * opens a pull request into the run's base branch, for every repository in
+   * the checkout that is on that branch - then records each URL in
+   * `meta.fix.repos[].pr`.
+   *
+   * It is the runner's job because it was nobody's: a run committed a CRM gate
+   * and its documentation, this step reported success, and no pull request
+   * existed - the step's agent curates docs, and no agent in the estate opens
+   * a PR. Ordered before the Jira work so the outcome comment can carry a URL
+   * that exists.
+   */
+  pr?: boolean
+  /**
    * This step writes tests and code together, so the plugin's test lock (armed the
    * moment source is edited) must not block it: the runner writes the unlock file
    * into the run's checkout before the step starts, with the reason recorded.

@@ -20,6 +20,8 @@ export interface WorkflowTemplateStep {
   gateRole?: Role
   /** See WorkflowStep.ownerRole. Whose work the step is; grants nothing. */
   ownerRole?: Role
+  /** See WorkflowStep.pr. The runner pushes the branch and opens the PR. */
+  pr?: boolean
   /** See WorkflowStep.continuesSession. */
   continuesSession?: boolean
   /** See WorkflowStep.contextMode. */
@@ -123,6 +125,7 @@ export function materializeTemplateSteps(
     if (step.maxVisits !== undefined) materialized.maxVisits = step.maxVisits
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     if (step.jira !== undefined) materialized.jira = step.jira
+    if (step.pr) materialized.pr = true
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.continuesSession) materialized.continuesSession = true
     return materialized
@@ -294,13 +297,21 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'pm-planner',
         label: 'Intake & Classification',
         next: ['research-explorer', 'debug-investigator'],
-        // `after`, or this step is only the Jira transition: the runner performs
-        // a step's Jira work INSTEAD of calling its agent unless told otherwise,
-        // so pm-planner never ran and the classification this step exists to
-        // record - work type, origin, blast radius - was never written. Every
-        // gate downstream then read "no blast radius recorded yet" and stopped
-        // for a person, which is safe and entirely unearned.
-        jira: { transition: 'In Progress', after: true },
+        // No Jira config at all any more, and both halves of that are
+        // deliberate.
+        //
+        // The transition is gone because Jira refused it on every run: moving
+        // the ticket needs the 'Administer Projects' permission this instance's
+        // account does not hold, and a step that reports a 400 every time
+        // teaches people to ignore its output.
+        //
+        // Losing the config entirely is also what makes this step DO its job.
+        // The runner performs a step's Jira work INSTEAD of calling its agent
+        // unless told `after`, so while a bare `jira` sat here pm-planner never
+        // ran, and the classification this step exists to record - work type,
+        // origin, blast radius - was never written. Every gate downstream then
+        // read "no blast radius recorded yet" and stopped for a person, which
+        // is safe and entirely unearned.
       },
       // 2-3. COLLECT, in parallel. One writer in the wave: research reads, and
       // only the reproduction step writes - and what it writes is the test.
@@ -375,10 +386,10 @@ export const workflowTemplates: WorkflowTemplate[] = [
         next: ['docs-curator'],
         contextMode: 'ancestors',
       },
-      // 9. GATE 3 of 3 - shipping. Joins both review lanes. A MANAGER answers:
-      // opening the pull request is the release decision, and neither the
-      // author nor the verifier owns it. The runner then moves the ticket and
-      // posts the outcome comment with the evidence attached.
+      // 9. GATE 3 of 3 - shipping. Joins both review lanes. Opening the pull
+      // request is the release decision, and neither the author nor the
+      // verifier owns it. The runner then opens that PR and posts the outcome
+      // comment with the evidence attached.
       {
         agentTemplateId: 'docs-curator',
         label: 'Evidence, Docs & Pull Request',
@@ -387,10 +398,17 @@ export const workflowTemplates: WorkflowTemplate[] = [
         contextMode: 'ancestors',
         approval: true,
         gateRole: 'operator',
-        // The agent opens the pull request; the Jira work follows it, so the
-        // outcome comment can carry that PR's URL and the evidence lands on the
-        // ticket beside it.
-        jira: { transition: 'Dev Done', comment: true, attach: true, after: true },
+        // The RUNNER opens the pull request (`pr`), then posts the comment and
+        // attaches the evidence (`jira.after`) - in that order, so the comment
+        // carries the URL. The agent was expected to open the PR and never did:
+        // it is a documentation curator, and no agent in the estate opens one.
+        //
+        // No `transition`: moving the ticket to Dev Done needs the 'Administer
+        // Projects' permission this instance's account does not hold, so it
+        // failed with a 400 on every run. The comment and the attachments work,
+        // and they are the parts a reporter actually reads.
+        pr: true,
+        jira: { comment: true, attach: true, after: true },
       },
     ],
   },

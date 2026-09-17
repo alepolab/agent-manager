@@ -83,7 +83,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -913,11 +913,32 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // from "it was fixed". See parseSkip for why this outcome exists.
     const skip = parseSkip(output)
 
+    // The pull request, BEFORE the Jira half below, so the outcome comment can
+    // carry a URL the runner has actually got. A step declaring `pr` gets this
+    // whether or not its agent mentioned a pull request - which is the point:
+    // the step labelled "Evidence, Docs & Pull Request" completed nine times
+    // over without opening one, because no agent in the estate opens PRs.
+    let prLines: string[] = []
+    if (step.pr && !skip) {
+      const { runPrStep } = await import('./prStep.ts')
+      const { recordPrUrls } = await import('./runArtifacts.ts')
+      try {
+        const result = await runPrStep(run)
+        prLines = result.lines
+        await recordPrUrls(run.id, result.prs)
+      } catch (err) {
+        // Never fatal: the commits are already on the branch, and a step that
+        // fails here would hide the work rather than ship it.
+        prLines = [`Pull request step failed: ${err instanceof Error ? err.message : String(err)}. The commits are on ${run.branch ?? 'the run branch'}.`]
+      }
+      for (const line of prLines) logLine(l, run, rec, line)
+    }
+
     // The Jira half of an `after` step, once the agent's half has succeeded.
     // This order is the point: the outcome comment reads the pull request URLs
     // the agent has just reported, so running Jira first would post a comment
     // about work that had not happened yet.
-    let recorded = output
+    let recorded = prLines.length ? `${output}\n\n${prLines.join('\n')}` : output
     if (step.jira?.after && !skip) {
       let jiraOut: string
       try {
@@ -932,7 +953,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         ? jiraOut.replace(/^PIPELINE-SKIP:\s*/, 'Jira: ')
         : jiraOut
       for (const line of note.split('\n')) logLine(l, run, rec, line)
-      recorded = `${output}\n\n${note}`
+      recorded = `${recorded}\n\n${note}`
     }
 
     l.outputs[id] = recorded

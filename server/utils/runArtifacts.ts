@@ -432,6 +432,43 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
  * rejected loudly instead of assembled from unreconciled, possibly
  * fabricated data.
  */
+/**
+ * Record the pull requests the runner opened into `meta.fix.repos[].pr`.
+ *
+ * That key is what the run page renders and what the ticket comment reads, and
+ * until now nothing wrote it: a run's PR URL only ever existed in an agent's
+ * prose, if at all. Written here rather than by `reconcileFix` because a PR is
+ * not a git fact about a diff \u2014 it is a fact about an action the runner took.
+ *
+ * Merges by repository name so it survives a restart that re-runs the ship
+ * step, and appends a row for a repository `computeFixFacts` never saw \u2014 which
+ * is the multi-repo case: fix facts measure `run.projectDir` alone, while a run
+ * can commit to a nested module repository as well.
+ */
+export async function recordPrUrls(runId: string, prs: { repo: string, url: string }[]): Promise<void> {
+  if (!prs.length) return
+  const path = join(runArtifactsDir(runId), 'meta.json')
+  try {
+    const meta = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>
+    const fix = (meta.fix && typeof meta.fix === 'object' && !Array.isArray(meta.fix))
+      ? meta.fix as Record<string, unknown>
+      : {}
+    const repos = Array.isArray(fix.repos) ? [...fix.repos as Array<Record<string, unknown>>] : []
+    for (const { repo, url } of prs) {
+      if (url === PLACEHOLDER_PR) continue // the placeholder is not a pull request
+      const row = repos.find(r => r && typeof r === 'object' && r.repo === repo)
+      if (row) row.pr = url
+      else repos.push({ repo, pr: url })
+    }
+    await writeFile(path, `${JSON.stringify({ ...meta, fix: { ...fix, repos } }, null, 2)}\n`)
+    log.info('pull request urls recorded in meta', { runId, count: prs.length })
+  } catch (err) {
+    // A meta.json that cannot be read is already reported by finalize; losing
+    // the URL here must not fail the step that just opened a real PR.
+    log.warn('could not record pull request urls', { runId, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 export async function markArtifactsUnusable(runId: string): Promise<void> {
   await rm(join(runArtifactsDir(runId), 'meta.json'), { force: true })
   log.error('meta.json removed after a finalize failure; the assembler will see this run as absent', { runId })
