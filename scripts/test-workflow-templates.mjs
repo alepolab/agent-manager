@@ -608,11 +608,22 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   for (const s of steps) assert.equal(s.monitorSlug, 'sdlc-step-monitor', `${s.label} is monitored`)
   const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
   const id = label => byLabel[label].id
-  assert.deepEqual(byLabel['Implement Fix'].next, [id('Code Review')], 'review before anything is deployed')
+  assert.deepEqual(byLabel['Implement Fix'].next, [id('Jira: Dev Done')], 'the board reads DEV DONE as soon as the code is written')
+  assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
+  assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Code Review')], 'review before anything is deployed')
   assert.deepEqual(byLabel['Code Review'].next, [id('Update Stack')], 'the stack is rebuilt from the reviewed fix')
-  assert.deepEqual([...byLabel['Update Stack'].next].sort(), [id('Automated QA'), id('Manual QA'), id('Security Review')].sort(),
+  assert.deepEqual(byLabel['Update Stack'].next, [id('Jira: QA In Progress')],
+    'QA In Progress is posted immediately before the wave - a step cannot fire while its siblings start')
+  assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Automated QA'), id('Manual QA'), id('Security Review')].sort(),
     'both halves of QA and the security review run against the rebuilt stack, in one wave')
   for (const l of ['Automated QA', 'Manual QA', 'Security Review']) assert.deepEqual(byLabel[l].next, [id('Push + PR')], `${l} gates the PR`)
+  assert.deepEqual(byLabel['PR Checks + Review'].next, [id('Jira: QA Done')])
+  assert.deepEqual(byLabel['Jira: QA Done'].next, [], 'the last tracker step terminates the run')
+  {
+    const trackers = steps.filter(s => s.agentSlug === 'sdlc-jira-tracker')
+    assert.equal(trackers.length, 5, 'In Progress, Dev Done, Ready for QA, QA In Progress, QA Done')
+    assert.equal(new Set(trackers.map(s => s.id)).size, 5, 'five steps sharing one agent template are still five distinct steps')
+  }
   assert.equal(byLabel['Push + PR'].contextMode, 'ancestors', 'the PR body quotes evidence from several hops upstream')
   assert.equal(byLabel['Implement Fix'].testsUnlocked, true, 'ce-work writes tests and code in one step, so the test lock is lifted for it')
   assert.equal(byLabel['Code Review'].testsUnlocked, undefined, 'and for that step only')
@@ -645,6 +656,58 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
   assert.match(body('sdlc-qa-manual'), /PIPELINE-REWORK: Implement Fix/, 'a failed manual case sends the run back to the implementer')
   assert.match(body('sdlc-ce-ship'), /git push -u origin/, 'the ship step is the one allowed to push')
+}
+
+// ── 15. Runbook A's Jira status chain, addressed by step `id`. ────────────
+//    Before `id` existed, every `next: ['sdlc-jira-tracker']` resolved to
+//    whichever tracker step was declared LAST, so four of the five would be
+//    unreachable and the run would jump straight to the terminal one.
+{
+  const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
+  const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
+  const steps = materializeTemplateSteps(runbook, slugs)
+  const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
+  const id = label => byLabel[label].id
+
+  const trackers = steps.filter(s => s.agentSlug === 'sdlc-jira-tracker')
+  assert.equal(trackers.length, 5, 'In Progress, Dev Done, Ready for QA, QA In Progress, QA Done')
+  assert.equal(new Set(trackers.map(s => s.id)).size, 5, 'five steps sharing one agent template are still five distinct steps')
+
+  assert.deepEqual(byLabel['Implement Fix'].next, [id('Jira: Dev Done')], 'the fix hands to Jira, not straight to verification')
+  assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
+  assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Jira: QA In Progress')])
+  assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
+    'QA In Progress is posted immediately before the wave - a step cannot fire while its siblings start')
+  assert.deepEqual(byLabel['PR Checks + Review'].next, [id('Jira: QA Done')])
+  assert.deepEqual(byLabel['Jira: QA Done'].next, [], 'the last tracker step terminates the run')
+
+  // Split on purpose: the outcome comment describes finished code work, so it
+  // rides Dev Done; the evidence bundle does not exist until Evidence Bundle + PR
+  // has run, so the attachments ride the last step. Neither is an oversight.
+  const jiraOf = label => runbook.steps.find(s => s.label === label).jira
+  assert.equal(jiraOf('Jira: Dev Done').comment, true)
+  assert.equal(jiraOf('Jira: Dev Done').attach, undefined, 'there is no bundle to attach yet')
+  assert.equal(jiraOf('Jira: QA Done').attach, true)
+  assert.equal(jiraOf('Jira: QA Done').comment, undefined, 'the comment was already posted at Dev Done')
+
+  // Each configured status is one server/utils/jiraSteps.ts can resolve: either a
+  // synonym-group key or a name matched on its own.
+  assert.deepEqual(runbook.steps.filter(s => s.jira?.transition).map(s => s.jira.transition),
+    ['In Progress', 'Dev Done', 'Ready for QA', 'QA In Progress', 'QA Done'])
+
+  // Adding a step must not regenerate the ids of the steps that did not change:
+  // teamSync carries the operator's canvas positions over keyed by step id, so a
+  // regenerated id loses that step's layout. It does not rescue an older run's
+  // restartability - alignStepIds refuses a step-count change outright.
+  const unchanged = s => s.label !== 'Jira: Ready for QA'
+  const saved = steps.filter(unchanged).map(s => ({ id: s.id, label: s.label }))
+  const resynced = materializeTemplateSteps(runbook, slugs, saved)
+  assert.deepEqual(resynced.filter(unchanged).map(s => s.id), steps.filter(unchanged).map(s => s.id),
+    'every step the saved workflow already had keeps its id')
+  assert.notEqual(resynced.find(s => !unchanged(s)).id, byLabel['Jira: Ready for QA'].id,
+    'and only the step it never had gets a new one')
+  const rByLabel = Object.fromEntries(resynced.map(s => [s.label, s]))
+  assert.deepEqual(rByLabel['Implement Fix'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
 }
 
 console.log('workflowTemplates: all assertions passed')

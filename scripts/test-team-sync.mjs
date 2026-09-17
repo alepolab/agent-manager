@@ -100,7 +100,12 @@ assert.ok(existsSync(join(process.env.CLAUDE_DIR, 'commands', 'triage.md')), 'pl
   assert.ok(s.registry.items.every(i => typeof i.key === 'string'), 'registry products are listed')
 }
 const wf = JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'runbook-a-ticket-to-evidence-backed-pr.json'), 'utf8'))
-assert.equal(JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'runbook-c-ce-ticket-to-qa-proven-pr.json'), 'utf8')).steps.length, 13, 'Runbook C is seeded beside Runbook A')
+// Counted from the template rather than pinned to a literal: what this asserts is
+// that Runbook C is seeded too, and a hardcoded length makes that break every time
+// anyone adds a step to the runbook.
+const { workflowTemplates: TEMPLATES } = await import('../app/utils/workflowTemplates.ts')
+assert.equal(JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'runbook-c-ce-ticket-to-qa-proven-pr.json'), 'utf8')).steps.length,
+  TEMPLATES.find(t => t.id === 'runbook-c-ce-ticket-to-pr').steps.length, 'Runbook C is seeded beside Runbook A')
 const ids = wf.steps.map(x => x.id)
 
 writeFileSync(join(process.env.CLAUDE_DIR, 'agents', 'sdlc-verifier.md'), 'edited locally')

@@ -120,7 +120,7 @@ for (const [templateId, file] of Object.entries(RUNBOOK_FILES)) {
   }
   const wfPath = join(claudeDir, 'workflows', `${file}.json`)
   const existing = existsSync(wfPath) ? JSON.parse(readFileSync(wfPath, 'utf8')) : null
-  const steps = materializeTemplateSteps(runbook, slugs, existing?.steps?.map(s => s.id))
+  const steps = materializeTemplateSteps(runbook, slugs, existing?.steps?.map(s => ({ id: s.id, label: s.label })))
   if (!dryRun) {
     writeFileSync(wfPath, JSON.stringify({
       name: runbook.name,

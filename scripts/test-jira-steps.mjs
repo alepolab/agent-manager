@@ -47,7 +47,9 @@ calls = []
 const none = await runJiraStep(run, { transition: 'In Review' }, jira)
 assert.match(none, /no transition to "In Review"/, none)
 assert.match(none, /In Progress, Done/, 'the available targets are listed')
-assert.deepEqual(calls.map(c => c[1]), ['GET'], 'nothing was posted')
+// Two reads now, not one: the transitions, then the ticket's current status, to
+// tell "no such transition" apart from "already in that status". Nothing posted.
+assert.deepEqual(calls.map(c => c[1]), ['GET', 'GET'], 'nothing was posted')
 
 // 5. The comment goes through the notifier, which posts it and records the artifact.
 calls = []
@@ -128,6 +130,37 @@ assert.ok(!calls.some(c => c[1] === 'POST'), 'nothing was posted')
 const down = await runJiraStep({ ...run, ticketCommented: undefined }, { transition: 'In Progress' }, async () => new Response('', { status: 503 }))
 assert.match(down, /HTTP 503/, down)
 assert.match(down, /not moved/)
+
+// 7. The QA statuses the runbooks now walk a ticket through, each landing on the
+//    project's own spelling. ASECRM writes three of the five in capitals, which
+//    matters only because matching is case-insensitive on both sides.
+{
+  const qaWf = { transitions: [
+    { id: '61', name: 'Ready for QA', to: { name: 'READY FOR QA' } },
+    { id: '71', name: 'Start QA', to: { name: 'QA In Progress' } },
+    { id: '81', name: 'QA Done', to: { name: 'QA DONE' } },
+  ] }
+  const jiraQa = async (url, init) => {
+    if (String(url).endsWith('/transitions') && (init?.method ?? 'GET') === 'GET') return new Response(JSON.stringify(qaWf), { status: 200 })
+    return new Response(null, { status: 204 })
+  }
+  for (const [configured, landed] of [['Ready for QA', 'READY FOR QA'], ['QA In Progress', 'QA In Progress'], ['QA Done', 'QA DONE']]) {
+    const out = await runJiraStep(run, { transition: configured }, jiraQa)
+    assert.match(out, new RegExp(`Moved CSUP-1 to "${landed}"`), `${configured} did not land: ${out}`)
+  }
+}
+
+// 8. Already in the configured status, and it is not an in-progress one. A rework
+//    loop re-entering the fix step re-runs every Jira step behind it, so this is
+//    the ordinary case on a second pass - it must not read as a failure.
+{
+  calls = []
+  const out = await runJiraStep(run, { transition: 'Dev Done' }, withStatus('DEV DONE', 'indeterminate', [
+    { id: '61', name: 'Ready for QA', to: st('READY FOR QA', 'indeterminate') },
+  ]))
+  assert.match(out, /already in "DEV DONE"/, out)
+  assert.ok(!calls.some(c => c[1] === 'POST'), 'nothing was posted')
+}
 
 delete process.env.JIRA_POST_ENABLED
 console.log('jira steps: all checks passed')

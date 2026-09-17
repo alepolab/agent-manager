@@ -121,7 +121,7 @@ async function item(state: ItemState, current: string | null, next: string): Pro
   return state === 'drifted' ? { state, diff: await diffOf(current ?? '', next) } : { state }
 }
 
-function runbookSteps(templateId: string, existingIds?: string[]) {
+function runbookSteps(templateId: string, existing?: Array<string | { id: string, label?: string }>) {
   const runbook = workflowTemplates.find(t => t.id === templateId)
   if (!runbook) return null
   const slugs: Record<string, string> = {}
@@ -129,7 +129,7 @@ function runbookSteps(templateId: string, existingIds?: string[]) {
     slugs[s.agentTemplateId] = s.agentTemplateId
     if (s.monitorSlug) slugs[s.monitorSlug] = s.monitorSlug
   }
-  return { runbook, steps: materializeTemplateSteps(runbook, slugs, existingIds) }
+  return { runbook, steps: materializeTemplateSteps(runbook, slugs, existing) }
 }
 
 /**
@@ -308,7 +308,11 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     let wfBroken = false
     if (existingRaw) { try { existing = JSON.parse(existingRaw) } catch { wfBroken = true } }
     const existingSteps: any[] = Array.isArray(existing?.steps) ? existing.steps : []
-    const built = runbookSteps(templateId, existingSteps.map((s: any) => s.id))
+    // Labels as well as ids: when the team adds a step to a runbook the counts no
+    // longer line up, and only the labels can say which saved id belongs to which
+    // step. Passing ids alone regenerates all of them - and the positions map just
+    // below is keyed by id, so every node loses the layout the operator gave it.
+    const built = runbookSteps(templateId, existingSteps.map((s: any) => ({ id: s.id, label: s.label })))
     if (!built) continue
     // A step's canvas position is the operator's layout, not a team standard:
     // it is ignored in the comparison and carried over on write, so moving a

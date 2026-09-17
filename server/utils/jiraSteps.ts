@@ -31,16 +31,22 @@ export interface JiraStepConfig {
 }
 
 /**
- * Synonyms the estate's projects use for the two states this pipeline moves a
+ * Synonyms the estate's projects use for the states this pipeline moves a
  * ticket through. A step configured for "Dev Done" still lands the transition
  * on a project that calls it "Ready for Review", "In Review" or "Resolved",
  * because the intent is the same and only the label differs per Jira workflow.
  * Ordered: the closest name is tried first. A configured name not in a group
  * is matched on its own, exactly as before.
+ *
+ * Matching is case-insensitive on both sides, which is why ASECRM's ALL-CAPS
+ * "DEV DONE", "READY FOR QA" and "QA DONE" need no entry of their own.
  */
 const STATUS_SYNONYMS: Record<string, string[]> = {
   'dev done': ['dev done', 'development done', 'ready for review', 'in review', 'code review', 'review', 'resolved', 'fixed'],
   'in progress': ['in progress', 'in development', 'in dev', 'start progress', 'doing'],
+  'ready for qa': ['ready for qa', 'ready for test', 'ready for testing', 'awaiting qa', 'ready for verification'],
+  'qa in progress': ['qa in progress', 'in qa', 'qa', 'testing', 'in testing', 'under test', 'start qa'],
+  'qa done': ['qa done', 'qa complete', 'qa completed', 'qa passed', 'tested', 'verified'],
 }
 
 /**
@@ -185,18 +191,23 @@ async function moveTicket(run: WorkflowRun, key: string, target: string, fetchIm
   const candidates = STATUS_SYNONYMS[want] ?? [want]
   let hit: Transition | undefined = matchTransition(target, transitions)
   const category = INTENT_CATEGORY[want]
-  if (!hit && category) {
-    // Already there? A ticket a developer moved to In Development by hand has
-    // no transition back to it, and needs none.
+  if (!hit) {
+    // Already there? A ticket has no transition back to the status it is already
+    // in, and needs none. This is not specific to the in-progress case any more:
+    // a rework loop re-entering the fix step re-runs every Jira step behind it,
+    // and without this each one reports a failure line for a ticket that is
+    // exactly where it is supposed to be.
     const current = await currentStatus(issueUrl, headers, fetchImpl)
-    if (current && (candidates.includes(current.name.toLowerCase()) || current.category === category)) {
-      return `${key} is already in "${current.name}", an in-progress status; left as is.`
+    if (current && (candidates.includes(current.name.toLowerCase()) || (category && current.category === category))) {
+      return `${key} is already in "${current.name}"; left as is.`
     }
-    const inCategory = transitions.filter(t => t.to?.statusCategory?.key === category)
-    const working = inCategory.filter(t => WORK_WORDS.test(t.to?.name ?? '') || WORK_WORDS.test(t.name))
-    hit = inCategory.length === 1 ? inCategory[0] : working.length === 1 ? working[0] : undefined
-    if (!hit && inCategory.length > 1) {
-      return `${key} offers no transition to "${target}" (or a known synonym) from "${current?.name ?? 'its current status'}", and ${inCategory.length} of its transitions lead to an in-progress status (${inCategory.map(t => `"${t.to?.name ?? t.name}"`).join(', ')}), none of them unambiguously the start of development; left as is. Name the one this project uses on the step's status in the workflow builder.`
+    if (category) {
+      const inCategory = transitions.filter(t => t.to?.statusCategory?.key === category)
+      const working = inCategory.filter(t => WORK_WORDS.test(t.to?.name ?? '') || WORK_WORDS.test(t.name))
+      hit = inCategory.length === 1 ? inCategory[0] : working.length === 1 ? working[0] : undefined
+      if (!hit && inCategory.length > 1) {
+        return `${key} offers no transition to "${target}" (or a known synonym) from "${current?.name ?? 'its current status'}", and ${inCategory.length} of its transitions lead to an in-progress status (${inCategory.map(t => `"${t.to?.name ?? t.name}"`).join(', ')}), none of them unambiguously the start of development; left as is. Name the one this project uses on the step's status in the workflow builder.`
+      }
     }
   }
   if (!hit) {
