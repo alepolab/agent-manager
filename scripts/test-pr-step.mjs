@@ -166,5 +166,48 @@ function fakeExec(repos, log = []) {
   }
 }
 
+// \u2500\u2500 the URL reaches meta.json, which is the only place the UI looks \u2500\u2500\u2500\u2500\u2500\u2500\u2500\n// `RunVerdictCard` renders `fix.repos[].pr` and the Jira outcome comment reads
+// it through `readReportedPrUrls`. Opening a pull request and not recording it
+// leaves both saying there is none, which is the state run 3ebe1e6e was in.
+{
+  const { recordPrUrls, runArtifactsDir } = await import('../server/utils/runArtifacts.ts')
+  const { mkdirSync, writeFileSync, readFileSync } = await import('node:fs')
+  const { join: j } = await import('node:path')
+
+  const runId = 'meta-record-run'
+  const dir = runArtifactsDir(runId)
+  mkdirSync(dir, { recursive: true })
+  // A run whose fix facts saw only the parent repository - the multi-repo case.
+  writeFileSync(j(dir, 'meta.json'), JSON.stringify({
+    identity: 'test', workflow: 'CSUP',
+    fix: { repos: [{ repo: 'alepolab/ase_lbss', commits: ['1df2cdf'] }], files_changed: 1 },
+  }, null, 2))
+
+  await recordPrUrls(runId, [
+    { repo: 'alepolab/ase_lbss', url: 'https://github.com/alepolab/ase_lbss/pull/158' },
+    { repo: 'alepolab/sasktel-customizations', url: 'https://github.com/alepolab/sasktel-customizations/pull/205' },
+    { repo: 'alepolab/never', url: PLACEHOLDER_PR },
+  ])
+
+  const meta = JSON.parse(readFileSync(j(dir, 'meta.json'), 'utf8'))
+  const repos = meta.fix.repos
+  const row = (name) => repos.find(r => r.repo === name)
+  assert.equal(row('alepolab/ase_lbss').pr, 'https://github.com/alepolab/ase_lbss/pull/158', 'the known repo gets its pr')
+  assert.deepEqual(row('alepolab/ase_lbss').commits, ['1df2cdf'], 'and keeps the facts already recorded')
+  // Asserted in two steps so removing the append fails by NAME rather than by
+  // a TypeError on an absent row.
+  assert.ok(row('alepolab/sasktel-customizations'),
+    'a repo the fix facts never saw must be APPENDED, or the multi-repo pull request is invisible')
+  assert.equal(row('alepolab/sasktel-customizations').pr, 'https://github.com/alepolab/sasktel-customizations/pull/205')
+  assert.equal(row('alepolab/never'), undefined, 'the placeholder is never recorded as a pull request')
+  assert.equal(meta.identity, 'test', 'the rest of meta.json survives')
+  assert.equal(meta.fix.files_changed, 1, 'and so do the other fix facts')
+
+  // Idempotent: a restart re-running the ship step must not duplicate rows.
+  await recordPrUrls(runId, [{ repo: 'alepolab/ase_lbss', url: 'https://github.com/alepolab/ase_lbss/pull/158' }])
+  const again = JSON.parse(readFileSync(j(dir, 'meta.json'), 'utf8'))
+  assert.equal(again.fix.repos.filter(r => r.repo === 'alepolab/ase_lbss').length, 1, 'recording twice does not duplicate a repo')
+}
+
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
-console.log('pr step: the runner opens the pull request, names every repo, and never reports one it did not open')
+console.log('pr step: the runner opens the pull request, names every repo, records it in meta, and never reports one it did not open')
