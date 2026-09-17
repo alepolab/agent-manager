@@ -84,7 +84,16 @@ The CSUP template declared its ship gate `gateRole: 'manager'` (`app/utils/workf
 
 ### 3.4 What is NOT yet wired, and why
 
-The roles exist but **own no gates yet**: adding `gateRole: 'architect'` to a migration-review step and `gateRole: 'designer'` to a client-change step would be the wiring that makes them real by the §3.2 rule. It is deliberately deferred because a live CSUP run is paused mid-flight, and editing a workflow template then reseeding it strands that run on the workflow-changed guard. Sequence: let the run settle, then wire the gates.
+The roles exist but **own no gates yet**: adding `gateRole: 'architect'` to a migration-review step and `gateRole: 'designer'` to a client-change step would be the wiring that makes them real by the §3.2 rule. That is still to do; the run that made template edits risky has since completed, so the constraint is gone (and a value-only `gateRole` edit was never the risk \u2014 the resume guard compares step ids, then step count and `agentSlug` per index, never `gateRole`; adding a STEP is what strands a run).
+
+**A defect found while answering "why was there no pull request", now fixed.** The runner performs a step's Jira work *instead of* calling its agent (`workflowRunner.ts`: `if (step.jira) { \u2026 return }`). That is right for a step that is only a transition, and silently wrong for the two shipped steps that carried both duties:
+
+- `Intake & Classification` never ran `pm-planner`, so the classification it exists to record \u2014 work type, origin, blast radius \u2014 was never written. **This is the root cause of Gap B**: not a missing agent definition, a step whose agent was skipped.
+- `Evidence, Docs & Pull Request` never ran `docs-curator`, so a run could complete with no evidence bundle, no docs and **no pull request**, its entire step output three sentences about Jira. Verified on run `d73159c0`.
+
+`JiraStepConfig.after` now opts a step into running its agent first and the Jira work once it succeeds, which is also the only order that lets the outcome comment carry a pull request the agent just opened. Both shipped steps set it, and `test-workflow-runner.mjs` pins that a transition-only step calls no agent while an `after` step calls exactly its own and records both halves in order.
+
+Whether `blast_radius` is now actually recorded depends on `pm-planner` writing those keys into `meta.json`; the step at least runs. That is the next thing to confirm on a real run.
 
 One consequence to accept when wiring the designer gate: the runner only raises a gate when `oversightFor(run.blastRadius) !== 'auto'`, and `ui_parsing` is `auto` — so a designer gate on a pure UI change never pauses. That is the same position QA already occupies, and the system's philosophy is that gates fire on risk, not on discipline. Wanting designer sign-off on every UI change is a global change to `POLICY` in `shared/utils/oversight.ts`, which also pulls QA back onto those runs. A per-step "always stop" override to route around it would reintroduce the fire-on-everything gates that module exists to kill.
 
