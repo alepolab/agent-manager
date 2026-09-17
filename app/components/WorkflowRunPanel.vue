@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
+import { SHORT_ROLE, ROLE_LABEL } from '~~/shared/types/role'
 import { needsJustification, oversightReason } from '~~/shared/utils/oversight'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
@@ -382,7 +383,15 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
 
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">
-      <div v-for="step in run.steps" :key="step.stepId" class="t-small">
+      <div
+        v-for="step in run.steps"
+        :key="step.stepId"
+        class="t-small"
+        data-testid="run-step"
+        :data-step-id="step.stepId"
+        :data-owner="step.ownerRole ?? ''"
+        :data-owner-mine="step.ownerRole && role ? String(step.ownerRole === role) : 'false'"
+      >
         <div class="flex items-center gap-1">
           <button
             class="flex-1 min-w-0 flex items-center gap-2 text-left py-1"
@@ -407,6 +416,21 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             <span class="font-medium whitespace-nowrap shrink-0">{{ step.label }}</span>
             <span class="text-label font-mono t-small truncate min-w-0">{{ step.agentSlug }}</span>
             <span v-if="step.visits > 1" class="t-small text-label" :title="`This step ran ${step.visits} times`">×{{ step.visits }}</span>
+            <!-- Whose work this step is. A chip, not a colour: status already
+                 owns five hues here and the accent owns "running", so a sixth
+                 axis of colour would make every axis harder to read. The one
+                 visual cue is "mine", and it is a border rather than a fill. -->
+            <span
+              v-if="step.ownerRole"
+              data-testid="step-owner"
+              class="t-label shrink-0 rounded px-1 py-px"
+              :style="step.ownerRole === role
+                ? { background: 'var(--surface-inset)', color: 'var(--accent-secondary)', border: '1px solid var(--accent-secondary)' }
+                : { background: 'var(--surface-inset)', color: 'var(--text-tertiary)', border: '1px solid transparent' }"
+              :title="step.ownerRole === role
+                ? `Your work: ${ROLE_LABEL[step.ownerRole]}`
+                : `${step.ownerRole}'s work. ${ROLE_LABEL[step.ownerRole]}`"
+            >{{ SHORT_ROLE[step.ownerRole] }}</span>
             <!-- The monitor's reasoning was recorded and never rendered: the row
                  showed an eight-character verdict and kept the sentence that
                  explains it to itself. -->
@@ -482,7 +506,10 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </div>
     </div>
 
-    <div class="flex gap-2">
+    <!-- Wraps, because it does not fit. At 1440px the gate's four controls plus
+         the send-back select ran past the panel and clipped "Stop" to "Sto" -
+         a button a reviewer needs is not a button they can guess at. -->
+    <div class="flex flex-wrap gap-2">
       <UButton v-if="mayAnswer && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
       <UButton
         v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'"
