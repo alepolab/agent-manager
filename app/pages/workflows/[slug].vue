@@ -303,7 +303,41 @@ const edges = computed<Edge[]>(() => {
     })),
   )
 
-  return [...flowEdges, ...monitorEdges]
+  // The fix-it loop is not a graph edge, so nothing above draws it: an agent
+  // emits PIPELINE-REWORK at run time and the runner restarts the target, which
+  // means `next` holds nothing and buildGraph has nothing to classify as a back
+  // edge. Making it a real edge is not the fix - markCompleted arms a back-edge
+  // target on EVERY completion, so the run would loop on success too, until
+  // maxVisits ran out. Drawn here the way monitorEdges are instead: derived,
+  // never stored, and inert to the editing handlers.
+  //
+  // Matched on agentSlug rather than the label "Implement Fix" because labels
+  // are editable on this canvas, and a renamed step would silently lose the
+  // edge that explains the whole mechanism.
+  const reworkSenders = new Set(['sdlc-verifier', 'sdlc-security-review', 'sdlc-pr-follow-up'])
+  const fixStep = workflowSteps.value.find(s => s.agentSlug === 'sdlc-fix-implementer')
+  const reworkEdges = fixStep
+    ? workflowSteps.value
+        .filter(s => reworkSenders.has(s.agentSlug) && s.id !== fixStep.id)
+        .map(s => ({
+          id: `r-${s.id}-${fixStep.id}`,
+          source: s.id,
+          target: fixStep.id,
+          sourceHandle: 'loop',
+          targetHandle: 'in',
+          type: 'smoothstep',
+          selectable: false,
+          // The bound is REWORK_LIMIT in server/utils/workflowRunner.ts, which a
+          // browser bundle cannot import. Duplicated here knowingly; if it moves,
+          // this label moves with it.
+          label: 'send-back ≤2 per trigger',
+          labelStyle: { fill: 'var(--warning, #e5a93e)', fontSize: '10px' },
+          style: { stroke: 'var(--warning, #e5a93e)', strokeWidth: 1.5, strokeDasharray: '4 3' },
+          markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--warning, #e5a93e)' },
+        }))
+    : []
+
+  return [...flowEdges, ...monitorEdges, ...reworkEdges]
 })
 
 /**
@@ -327,7 +361,10 @@ function onConnect({ source, target }: { source: string, target: string }) {
 }
 
 function onEdgeClick({ edge }: { edge: { id: string, source: string, target: string } }) {
-  if (isRunning.value || edge.id.startsWith('m-')) return
+  // 'r-' is a send-back edge: derived, not stored in `next`, so deleting it
+  // would filter a target that was never there and leave the user thinking they
+  // had removed something.
+  if (isRunning.value || edge.id.startsWith('m-') || edge.id.startsWith('r-')) return
   materializeEdges()
   workflowSteps.value = workflowSteps.value.map(s =>
     s.id === edge.source ? { ...s, next: (s.next ?? []).filter(id => id !== edge.target) } : s,
