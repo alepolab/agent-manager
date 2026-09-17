@@ -14,7 +14,7 @@ Verbatim, and it is the only requirement in this document with that status:
 
 > "note in workflow also each role or persona has work, like some steps will be defined by different roles"
 
-A four-question round (which screens they live in, what "easy" means, scope, what they need first when a run finishes) was sent and had not returned when this spec was written. Everything below is therefore marked either **[user]** — traceable to the two statements above — or **[specialist]** — the designer's or architect's judgment, to be confirmed or overruled when the answers land. Nothing is marked [user] on inference.
+A four-question round (which screens they live in, what "easy" means, scope, what they need first when a run finishes) was asked and **timed out unanswered**, so the two statements above are the whole of what the end user actually said. Everything below is therefore marked either **[user]** — traceable to the two statements above — or **[specialist]** — the designer's or architect's judgment. Nothing is marked [user] on inference, and the [specialist] rows stand on their own evidence rather than as confirmed needs \u2014 the backlog order in \u00a76 is the first thing to re-check with the user when they are next available.
 
 ---
 
