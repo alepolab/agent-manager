@@ -746,7 +746,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // A Jira step is the runner's own work: no model, no prompt, a REST call or
   // two, and an honest sentence about each. It settles like any other step so
   // the graph, the artifacts and the run page treat it the same.
-  if (step.jira) {
+  //
+  // `jira.after` opts out of that: the step has real agent work AND Jira work,
+  // so the agent runs first and the REST calls follow below. Without it this
+  // branch returned before the agent ran at all - which is how a step labelled
+  // "Evidence, Docs & Pull Request" completed successfully having assembled no
+  // evidence, written no docs and opened no pull request, its entire output
+  // three sentences about Jira.
+  if (step.jira && !step.jira.after) {
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
     let output: string
     try {
@@ -905,10 +912,33 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // differs, so the evidence bundle can distinguish "nothing was needed"
     // from "it was fixed". See parseSkip for why this outcome exists.
     const skip = parseSkip(output)
-    l.outputs[id] = output
+
+    // The Jira half of an `after` step, once the agent's half has succeeded.
+    // This order is the point: the outcome comment reads the pull request URLs
+    // the agent has just reported, so running Jira first would post a comment
+    // about work that had not happened yet.
+    let recorded = output
+    if (step.jira?.after && !skip) {
+      let jiraOut: string
+      try {
+        jiraOut = await runJiraStep(run, step.jira)
+      } catch (err) {
+        jiraOut = `Jira step failed: ${err instanceof Error ? err.message : String(err)}. The ticket was not changed; the run goes on.`
+      }
+      // A Jira skip - no ticket on this run - must not skip the STEP, whose
+      // agent just did the work. The sentinel is rendered as a plain sentence
+      // so parseSkip cannot see it downstream either.
+      const note = jiraOut.startsWith('PIPELINE-SKIP:')
+        ? jiraOut.replace(/^PIPELINE-SKIP:\s*/, 'Jira: ')
+        : jiraOut
+      for (const line of note.split('\n')) logLine(l, run, rec, line)
+      recorded = `${output}\n\n${note}`
+    }
+
+    l.outputs[id] = recorded
     Object.assign(rec, {
       status: skip ? 'skipped' : 'completed',
-      output, model, usage, completedAt: Date.now(),
+      output: recorded, model, usage, completedAt: Date.now(),
       ...(skip ? { skipReason: skip } : {}),
     })
     log.info(skip ? 'step skipped itself' : 'step completed', () => ({

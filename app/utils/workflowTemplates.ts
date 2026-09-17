@@ -23,7 +23,7 @@ export interface WorkflowTemplateStep {
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, after?: boolean }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
 }
@@ -286,7 +286,13 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'pm-planner',
         label: 'Intake & Classification',
         next: ['research-explorer', 'debug-investigator'],
-        jira: { transition: 'In Progress' },
+        // `after`, or this step is only the Jira transition: the runner performs
+        // a step's Jira work INSTEAD of calling its agent unless told otherwise,
+        // so pm-planner never ran and the classification this step exists to
+        // record - work type, origin, blast radius - was never written. Every
+        // gate downstream then read "no blast radius recorded yet" and stopped
+        // for a person, which is safe and entirely unearned.
+        jira: { transition: 'In Progress', after: true },
       },
       // 2-3. COLLECT, in parallel. One writer in the wave: research reads, and
       // only the reproduction step writes - and what it writes is the test.
@@ -359,7 +365,10 @@ export const workflowTemplates: WorkflowTemplate[] = [
         contextMode: 'ancestors',
         approval: true,
         gateRole: 'operator',
-        jira: { transition: 'Dev Done', comment: true, attach: true },
+        // The agent opens the pull request; the Jira work follows it, so the
+        // outcome comment can carry that PR's URL and the evidence lands on the
+        // ticket beside it.
+        jira: { transition: 'Dev Done', comment: true, attach: true, after: true },
       },
     ],
   },

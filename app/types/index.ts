@@ -280,7 +280,16 @@ export interface WorkflowStep {
    */
   contextMode?: 'predecessors' | 'ancestors'
   /** Present on a step the runner executes itself, without a model: move the ticket, post the outcome comment, or both. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean }
+  /**
+   * Jira work the RUNNER performs for this step: move the ticket, post the
+   * outcome comment, attach the evidence.
+   *
+   * By default this replaces the step's agent entirely - no model, no prompt,
+   * just the REST calls. `after: true` keeps the agent and runs the Jira work
+   * once it has succeeded, which is the only order in which the outcome
+   * comment can carry a pull request the agent opened in that same step.
+   */
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, after?: boolean }
   /**
    * This step writes tests and code together, so the plugin's test lock (armed the
    * moment source is edited) must not block it: the runner writes the unlock file

@@ -1320,6 +1320,58 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.match(lost.steps.find(s => s.stepId === 'r').error, /not a step of this run/)
 }
 
+// ── a step may carry BOTH agent work and Jira work, in that order ─────────
+//
+// The runner performs a step's Jira work INSTEAD of calling its agent, which is
+// right for a step that is only a transition and silently wrong for one that is
+// not: the shipped "Evidence, Docs & Pull Request" step completed successfully
+// having assembled no evidence and opened no pull request, because the presence
+// of `jira` returned before its agent ran. `jira.after` is the opt-out, and the
+// ORDER is the point - the outcome comment has to be able to name a pull request
+// the agent opened moments earlier.
+//
+// Posting stays disabled here, so every assertion below is about the runner and
+// nothing leaves the process.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const called = []
+  runner.setAgentCaller(async (agentSlug) => { called.push(agentSlug); return `did ${agentSlug} work` })
+
+  const withJira = {
+    slug: 'jira-order', name: 'Jira order',
+    steps: [
+      { id: 'move', agentSlug: 'agent-tracker', label: 'Move the ticket', next: ['ship'], jira: { transition: 'In Progress' } },
+      { id: 'ship', agentSlug: 'agent-ship', label: 'Evidence, Docs & Pull Request', next: [], jira: { transition: 'Dev Done', comment: true, after: true } },
+    ],
+  }
+  const settled = await runner.waitForSettled(
+    (await runner.startRun({ workflow: withJira, initialPrompt: 'CSUP-1 ship it', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(settled.status, 'completed', `the run completed (was ${settled.status}: ${settled.error ?? 'no error'})`)
+
+  // The transition-only step called no agent; the after step called exactly its own.
+  assert.deepEqual(called, ['agent-ship'], 'a jira step runs no agent, and an after step runs only its own')
+
+  const move = settled.steps.find(s => s.stepId === 'move')
+  const ship = settled.steps.find(s => s.stepId === 'ship')
+  assert.doesNotMatch(move.output, /did agent-tracker work/, 'a transition-only step is still the runner\'s own work')
+  assert.match(move.output, /In Progress/, 'and still says what it would have done')
+
+  // Both halves are on the record, the agent's first.
+  assert.match(ship.output, /did agent-ship work/, "the after step keeps its agent's output")
+  assert.match(ship.output, /Dev Done/, 'and appends the Jira work to it')
+  assert.ok(
+    ship.output.indexOf('did agent-ship work') < ship.output.indexOf('Dev Done'),
+    'the agent ran BEFORE the Jira work, or the comment could not carry what the agent produced',
+  )
+  assert.equal(ship.status, 'completed', 'the step completed')
+  assert.equal(ship.skipReason, undefined, 'and a Jira sentence never turns into a skip of the step')
+  // Downstream context and the run page read the step's output, so both halves
+  // have to be in the recorded one - not only in the log.
+  assert.equal(settled.steps.at(-1).output, ship.output, 'the recorded output is the one the run carries')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')
