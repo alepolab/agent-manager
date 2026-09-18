@@ -22,6 +22,7 @@ import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/u
 import { collectReviewComments } from './reviewComments.ts'
 import { resolveStackRecipe, StackError } from './stackRecipe.ts'
 import { stackUp, stackDown } from './stackLifecycle.ts'
+import { planDeploy, runDeploy, DeployError } from './deployStep.ts'
 import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
@@ -89,7 +90,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -701,6 +702,41 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
 }
 
 /**
+ * Drive deploy.sh for a step that declared a deploy.
+ *
+ * The gate is the step's own: only `dev` runs unattended, and any other
+ * environment needs this step to carry `approval: true` and for that gate to
+ * have been answered. `l.approved` holds exactly that - the ids whose gate a
+ * person has released - so a template that declares a prod deploy without a
+ * gate gets nothing executed and a step told why.
+ *
+ * Never throws: a deploy that cannot run is a fact the agent needs, not a
+ * reason to kill the run.
+ */
+async function runDeployForStep(
+  l: Live, run: WorkflowRun, rec: RunStep, id: string, step: { deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, approval?: boolean },
+): Promise<string> {
+  const want = step.deploy!
+  try {
+    const plan = await planDeploy({ env: want.env, step: want.step, app: want.app, limit: want.limit, check: want.check })
+    // The answered gate, from the runner's own record of what a person
+    // released. Not from the step's declaration, which is what an author
+    // intended rather than what a person decided.
+    const approved = step.approval === true && l.approved.has(id)
+    const result = await runDeploy(plan, { approved, approvedBy: approved ? (run.decisions?.at(-1)?.by ?? 'a gate answer') : undefined })
+    for (const line of result.ran) logLine(l, run, rec, line)
+    logLine(l, run, rec, result.summary)
+    return result.ok
+      ? result.summary
+      : `${result.summary} Do not run deploy.sh yourself - report what you could not verify without it.`
+  } catch (err) {
+    const why = err instanceof DeployError ? err.message : `The deploy could not be planned: ${err instanceof Error ? err.message : String(err)}`
+    logLine(l, run, rec, why)
+    return why
+  }
+}
+
+/**
  * What a money- or protocol-class run owes the evidence bundle, in the agent's
  * own input.
  *
@@ -861,6 +897,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // start it rather than an agent guessing - and the stack is taken down when
   // the run settles, in publish(), including when it fails.
   const stackNote = step.stack === 'up' ? await bringStackUp(l, run, rec) : ''
+  const deployNote = step.deploy ? await runDeployForStep(l, run, rec, id, step) : ''
 
   // Hand this step the review its own pull request collected. Written BEFORE the
   // agent starts, because an agent cannot act on evidence that appears after it
@@ -891,12 +928,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // the agent rather than only into the run log - including on a resumed visit,
   // where the header is skipped but the stack may have changed since.
   const stackContext = stackNote ? `\n\nSTACK: ${stackNote}\n` : ''
+  const deployContext = deployNote ? `\n\nDEPLOY: ${deployNote}\n` : ''
   // What this run's risk class obliges it to produce. Told while the step can
   // still do the work: finding out at finalize, or from a CI validation
   // failure, is finding out too late - a two-node rerun and a pattern search
   // cannot be done retroactively.
   const classContext = adversarialDemand(run)
-  const input = stackContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+  const input = stackContext + deployContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
     dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined) + body)

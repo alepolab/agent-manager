@@ -228,6 +228,16 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
   const materialized = materializeTemplateSteps(template, { 'pm-planner': 'pm-planner' })
   assert.equal(materialized[0].stack, 'up',
     'stack must reach the seeded workflow, or the step silently runs without the stack it asked for')
+
+  // Same for a declared deploy. Losing this field is worse than losing the
+  // others: the step runs, deploys nothing, and reports success.
+  const withDeploy = materializeTemplateSteps(
+    { id: 'synthetic-deploy', name: 'Synthetic', description: 'fixture',
+      steps: [{ agentTemplateId: 'pm-planner', label: 'Check dev', next: [], deploy: { env: 'dev', step: 'status' } }] },
+    { 'pm-planner': 'pm-planner' },
+  )
+  assert.deepEqual(withDeploy[0].deploy, { env: 'dev', step: 'status' },
+    'deploy must reach the seeded workflow, or the step reports success having deployed nothing')
 }
 
 console.log('step ownership: declared as data, carried to the run, and it decides nothing')

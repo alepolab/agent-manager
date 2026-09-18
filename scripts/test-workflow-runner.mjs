@@ -1732,6 +1732,60 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.ok(!/adversarial/i.test(docsVerify.input ?? ''), 'a docs-class run is told nothing about adversarial reports')
 }
 
+// -- a step can declare a deploy, and prod cannot slip through -------------
+// deploy.sh is the infra repo's one deployment surface. A step declaring
+// `deploy` gets it driven for them; what a step must NOT be able to do is reach
+// a carrier environment because someone wrote a template without a gate.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setDeployExec } = await import('../server/utils/deployStep.ts')
+  const infra = join(process.env.CLAUDE_DIR, 'deploy-infra')
+  mkdirSync(join(infra, 'deploy', 'ansible'), { recursive: true })
+  mkdirSync(join(infra, 'agent'), { recursive: true })
+  writeFileSync(join(infra, '.env'), 'X=1\n')
+  writeFileSync(join(infra, 'deploy', 'ansible', 'deploy.sh'), '#!/usr/bin/env bash\nVALID_ENVS="dev staging prod"\nVALID_STEPS="all setup deploy status"\n')
+  writeFileSync(join(infra, 'agent', 'stack-contract.json'), JSON.stringify({
+    contract_version: 1, products: {}, not_startable: {},
+    deploy: { entrypoint: 'deploy/ansible/deploy.sh', environments: ['dev', 'staging', 'prod'], steps: ['all', 'setup', 'deploy', 'status'] },
+  }, null, 2))
+  process.env.ALEPO_INFRA_DIR = infra
+
+  const commands = []
+  setDeployExec(async (cmd, args) => { commands.push(args.join(' ')); return 'ok' })
+
+  // 1. dev status: runs, and the agent is told what it found.
+  runner.setAgentCaller(async () => 'looked at dev')
+  const devWf = {
+    slug: 'dep-dev', name: 'Dep dev',
+    steps: [{ id: 'check', agentSlug: 'agent-check', label: 'Check dev', next: [], deploy: { env: 'dev', step: 'status' } }],
+  }
+  const dev = await runner.waitForSettled(
+    (await runner.startRun({ workflow: devWf, initialPrompt: 'D-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(dev.steps[0].status, 'completed', `the step ran; it was ${dev.steps[0].status} (${dev.steps[0].error ?? 'no error'})`)
+  assert.ok(commands.some(c => /--step status --env dev/.test(c)), `dev status ran; commands were ${JSON.stringify(commands)}`)
+  assert.match(dev.steps[0].input ?? '', /dev/, 'and the agent is told the outcome, not just the run log')
+
+  // 2. prod on a step with NO approval gate: refused, nothing executed.
+  commands.length = 0
+  const prodUngated = {
+    slug: 'dep-prod-ungated', name: 'Dep prod ungated',
+    steps: [{ id: 'ship', agentSlug: 'agent-check', label: 'Ship to prod', next: [], deploy: { env: 'prod', step: 'deploy' } }],
+  }
+  const ungated = await runner.waitForSettled(
+    (await runner.startRun({ workflow: prodUngated, initialPrompt: 'D-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(commands.length, 0,
+    `a prod deploy on an ungated step executes NOTHING; commands were ${JSON.stringify(commands)}`)
+  assert.match(ungated.steps[0].input ?? '', /approv/i,
+    'and the agent is told a gate is missing rather than left wondering why nothing happened')
+
+  setDeployExec(null)
+  delete process.env.ALEPO_INFRA_DIR
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

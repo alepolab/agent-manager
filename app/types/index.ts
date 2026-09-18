@@ -275,6 +275,14 @@ export interface WorkflowStep {
    */
   stack?: 'up'
   /**
+   * Drive the infra repo's deploy.sh for this step: `{ env, step, app?, check? }`.
+   *
+   * Only `dev` runs unattended. Any other environment requires this step to
+   * carry `approval: true` AND for that gate to have been answered - the runner
+   * refuses otherwise, before assembling an ansible argument.
+   */
+  deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }
+  /**
    * Whose decision this gate is. Copied onto `run.question.role` when the gate
    * fires, and enforced by the gate routes.
    *

@@ -34,6 +34,8 @@ export interface WorkflowTemplateStep {
   reviewComments?: boolean
   /** Bring the product's stack up before this step. See WorkflowStep.stack. */
   stack?: 'up'
+  /** Drive deploy.sh for this step. See WorkflowStep.deploy. */
+  deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }
 }
 
 export interface WorkflowTemplate {
@@ -134,6 +136,7 @@ export function materializeTemplateSteps(
     // jira.after once lived in the template and was absent from the seeded JSON.
     if (step.reviewComments) materialized.reviewComments = true
     if (step.stack) materialized.stack = step.stack
+    if (step.deploy) materialized.deploy = step.deploy
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.continuesSession) materialized.continuesSession = true
     return materialized
