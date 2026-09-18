@@ -1526,6 +1526,66 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   setReviewReaders({})
 }
 
+// -- the runner classifies the run itself, and an agent cannot talk it down ---
+// oversight.ts decides whether a gate fires purely from run.blastRadius, and
+// nothing wrote it: every run read as unclassified, so every gate stopped and
+// the tiering never tiered. The agent's own claim cannot be the only source
+// either - a step that wants to skip a gate has every reason to call its change
+// ui_parsing - so the runner derives a floor from the paths actually touched and
+// keeps whichever is STRONGER.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'classify-project')
+  mkdirSync(join(project, 'db', 'migration'), { recursive: true })
+  mkdirSync(join(project, 'src'), { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.'])
+  g(['config', 'user.email', 'test@example.com'])
+  g(['config', 'user.name', 'Test'])
+  writeFileSync(join(project, 'src', 'Foo.java'), 'class Foo {}\n')
+  g(['add', '-A']); g(['commit', '-qm', 'base'])
+
+  const { oversightFor } = await import('../shared/utils/oversight.ts')
+  const wf = { slug: 'classify', name: 'Classify', steps: [{ id: 'intake', agentSlug: 'agent-intake', label: 'Intake & Classification', next: [] }] }
+  const metaOf = (id) => JSON.parse(readFileSync(join(process.env.AGENT_RUNS_DIR, id, 'artifacts', 'meta.json'), 'utf8'))
+
+  // 1. The agent proposes a class and touches nothing risky: its word stands.
+  runner.setAgentCaller(async () => 'looked at it\nPIPELINE-CLASS: ui_parsing')
+  const proposed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-1', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(proposed.blastRadius, 'ui_parsing', `the proposal is adopted; run had ${proposed.blastRadius}`)
+  assert.equal(metaOf(proposed.id).blast_radius, 'ui_parsing', 'and it reaches meta.json, which is what a later reader and the bundle use')
+
+  // 2. THE case this exists for: the agent claims a low class while the change
+  //    touched a migration. The floor wins and the record says so.
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    // The step runs in a LANE WORKTREE, not the project dir, and git tracks
+    // files rather than directories - so db/migration/ does not exist there
+    // until something creates it. Writing the migration the way a real agent
+    // would is what makes the floor fire.
+    const at = dir ?? project
+    mkdirSync(join(at, 'db', 'migration'), { recursive: true })
+    writeFileSync(join(at, 'db', 'migration', 'V2__add_column.sql'), 'ALTER TABLE x ADD y INT;\n')
+    return 'tiny change honestly\nPIPELINE-CLASS: ui_parsing'
+  })
+  const gamed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-2', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(gamed.blastRadius, 'schema',
+    `a migration cannot be classified ui_parsing by the step that wrote it; run had ${gamed.blastRadius}`)
+  assert.equal(gamed.classSource, 'floor', 'and the run records that the floor is why')
+  assert.equal(metaOf(gamed.id).blast_radius, 'schema', 'meta.json carries the adopted class, not the claim')
+
+  // 3. Nothing proposed and nothing risky touched: still unclassified, which
+  //    oversight.ts already treats as stop. A default here would be the one
+  //    answer that must never be assumed.
+  g(['checkout', '-q', '--', '.'])
+  runner.setAgentCaller(async () => 'no classification line at all')
+  const unknown = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-3', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(unknown.blastRadius, undefined, `an unclassified run stays unclassified; it had ${unknown.blastRadius}`)
+  assert.equal(oversightFor(unknown.blastRadius), 'stop', 'and oversight still stops it')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

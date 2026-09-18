@@ -17,7 +17,8 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
-import { checkTestLock, headOf } from './testLock.ts'
+import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
+import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
 import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
@@ -35,10 +36,10 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, transcriptPath } from './claudeDir.ts'
-import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
+import { oversightFor, oversightReason, needsJustification, BLAST_RADIUS_ORDER, type BlastRadius } from '../../shared/utils/oversight.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
-  markArtifactsUnusable,
+  markArtifactsUnusable, recordClassification,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
@@ -665,6 +666,54 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
   }
 }
 
+/**
+ * Record what this step's output and diff say about how risky the run is.
+ *
+ * Never throws and never fails the step: a classification that cannot be
+ * computed leaves the run unclassified, which oversight.ts already treats as
+ * `stop`. Failing here would turn a git hiccup into a dead run while making the
+ * gate no safer.
+ */
+async function adoptClassification(
+  l: Live, run: WorkflowRun, rec: RunStep, output: string, cwd: string | undefined, headBefore: string | null,
+): Promise<void> {
+  const proposed = parseProposal(output)
+  let floor: BlastRadius | null = null
+  if (cwd) {
+    // Against the run's own baseline, not the step's: the class describes the
+    // whole change a reviewer will be asked to approve, and a migration written
+    // three steps ago still makes this run a schema change.
+    const since = run.baseCommit ?? headBefore
+    if (since) {
+      try {
+        floor = floorFrom(await changedPathsSince(cwd, since))
+      } catch (err) {
+        logLine(l, run, rec, `could not read the diff to classify this run: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+  if (proposed === null && floor === null) return
+
+  // An adopted class is a floor of its own from here on. A later step may raise
+  // the run's risk - it may discover the money path - but nothing may lower what
+  // the evidence already established.
+  const result = adopt({ proposed, floor })
+  if (!result.adopted) return
+
+  const held = (run.blastRadius && (BLAST_RADIUS_ORDER as string[]).includes(run.blastRadius))
+    ? run.blastRadius as BlastRadius
+    : null
+  // Already at least this risky: keep what the evidence established. A later
+  // step may RAISE the run's risk - it may discover the money path - but nothing
+  // lowers it, including a step that re-reads a smaller part of the change.
+  if (held && BLAST_RADIUS_ORDER.indexOf(held) >= BLAST_RADIUS_ORDER.indexOf(result.adopted)) return
+
+  run.blastRadius = result.adopted
+  run.classSource = result.source ?? undefined
+  logLine(l, run, rec, classProvenance(result))
+  await recordClassification(run.id, { blast_radius: result.adopted, class_source: result.source ?? undefined })
+}
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
@@ -996,6 +1045,18 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))
+
+    // THE CLASSIFICATION. oversight.ts decides whether a gate fires purely from
+    // run.blastRadius, and nothing ever wrote it: every run read as
+    // unclassified, so every gate stopped and the tiering never tiered.
+    //
+    // Runner-owned, like identity and watch, because a value the classified
+    // party can set is not a control: a step wanting to skip a gate has every
+    // incentive to call its change ui_parsing. The step's PIPELINE-CLASS line is
+    // a PROPOSAL; the floor derived from the paths it actually touched can only
+    // ever raise it, and an already-adopted class is never lowered on a later
+    // visit.
+    await adoptClassification(l, run, rec, output, cwd, headBefore)
 
     // THE TEST LOCK. The step that owns the tests may write them; every other
     // step editing a test invalidates the evidence chain of the whole run - "A

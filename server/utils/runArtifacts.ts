@@ -469,6 +469,35 @@ export async function recordPrUrls(runId: string, prs: { repo: string, url: stri
   }
 }
 
+/**
+ * The run's own classification, written into meta.json by the RUNNER.
+ *
+ * meta.json has always had a place for `blast_radius`; the field was left to
+ * whichever agent felt like filling it, so it stayed empty on every run and
+ * oversight.ts read every run as unclassified. This is the writer, and it is
+ * runner-owned for the same reason `identity` and `watch` are: a value the
+ * classified party can set is not a control.
+ *
+ * Merge-writes like recordPrUrls, and a meta.json that cannot be read is logged
+ * rather than thrown: losing the class must not fail the step that just earned
+ * it, and finalize already reports an unreadable meta.
+ */
+export async function recordClassification(
+  runId: string,
+  cls: { blast_radius?: string, class_source?: string, work_type?: string, origin?: string },
+): Promise<void> {
+  const path = join(runArtifactsDir(runId), 'meta.json')
+  try {
+    const meta = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>
+    const next = { ...meta }
+    for (const [k, v] of Object.entries(cls)) if (v !== undefined) next[k] = v
+    await writeFile(path, `${JSON.stringify(next, null, 2)}\n`)
+    log.info('classification recorded in meta', { runId, ...cls })
+  } catch (err) {
+    log.warn('could not record the classification', { runId, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 export async function markArtifactsUnusable(runId: string): Promise<void> {
   await rm(join(runArtifactsDir(runId), 'meta.json'), { force: true })
   log.error('meta.json removed after a finalize failure; the assembler will see this run as absent', { runId })

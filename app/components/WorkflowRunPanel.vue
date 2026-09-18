@@ -36,6 +36,16 @@ const mayAnswer = computed(() => can('answerGate') && mineToAnswer.value)
  *  enforces, applied here so the reviewer learns it from the button rather than
  *  from a 400 after they have already clicked. */
 const mustJustify = computed(() => needsJustification(props.run?.blastRadius))
+/** Where the class came from, in words a reviewer can act on. The wording comes
+ *  from classification.ts's own vocabulary so the page and the record agree. */
+const classSourceLine = computed(() => {
+  switch (props.run?.classSource) {
+    case 'floor': return 'raised by the files this change touched, over a lower class the step proposed'
+    case 'floor-only': return 'derived from the files this change touched; no step proposed one'
+    case 'proposal': return 'proposed by a step and not contradicted by the files it touched'
+    default: return 'source not recorded'
+  }
+})
 const canApprove = computed(() => !mustJustify.value || !!note.value.trim())
 
 /** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
@@ -259,6 +269,28 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </span>
       <span v-if="!run.ci.final" class="t-label text-label">still moving</span>
     </a>
+
+    <!-- How risky this run is, and who decided that. oversight.ts turns this one
+         field into whether a gate fires at all, and the page never showed it
+         outside a gate prompt - so a reader could not tell whether a run sailed
+         through because it was genuinely a docs change or because nothing had
+         classified it.
+
+         The `floor` case is the one worth seeing: it means a step understated
+         its own change and the files it touched overruled it. -->
+    <p data-testid="run-class" :data-class-source="run.classSource ?? 'none'" class="t-small rounded-lg p-2"
+       style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <template v-if="run.blastRadius">
+        <span class="font-medium" style="color: var(--text-primary);">Risk <span class="font-mono">{{ run.blastRadius }}</span></span>
+        <span class="text-label"> — {{ classSourceLine }}</span>
+        <br><span class="text-label">{{ oversightReason(run.blastRadius) }}</span>
+      </template>
+      <template v-else>
+        <span class="font-medium" :style="{ color: 'var(--warning)' }">Unclassified</span>
+        <span class="text-label"> — no step proposed a risk class and the files touched implied none.</span>
+        <br><span class="text-label">{{ oversightReason(undefined) }}</span>
+      </template>
+    </p>
 
     <!-- When it ran. A reader asking "is this recent?" had to hover a relative
          duration or open the record. -->

@@ -184,6 +184,15 @@ export interface WorkflowRun {
    * base. shared/utils/oversight.ts turns this into whether a gate stops.
    */
   blastRadius?: string
+  /**
+   * Where `blastRadius` came from: `proposal` when a step's own
+   * `PIPELINE-CLASS:` line stood, `floor` when the files the change touched
+   * implied something stronger and overrode it, `floor-only` when no step
+   * proposed anything. A class without its provenance is an assertion, and the
+   * `floor` case is the one a reviewer most needs to see: it means a step
+   * understated its own change. See shared/utils/classification.ts.
+   */
+  classSource?: string
   /** The branch the run branch was cut from and the pull request targets (see server/utils/branchPolicy.ts). */
   baseBranch?: string
   /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
