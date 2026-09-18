@@ -45,8 +45,13 @@ assert.deepEqual(Object.keys(bySlug).sort(), ['oma-csup-to-pr', 'oma-plan-build-
 // Two parallel waves joined twice: research + reproduce -> plan -> review ->
 // backend + frontend -> verify -> refine -> docs.
 assert.equal(bySlug['oma-plan-build-review'].steps, 9, 'the parallel work graph keeps all nine steps')
-// A support ticket to a pull request, gated by three different roles.
-assert.equal(bySlug['oma-csup-to-pr'].steps, 9, 'the CSUP graph keeps all nine steps')
+// A support ticket to a pull request, gated by three different roles, and then a
+// tenth step for what the review leaves on that pull request: the workflow used
+// to end at the PR, so review comments on two real PRs sat unanswered until a
+// person noticed. The count is pinned because a step silently vanishing from a
+// seeded graph is the failure this file exists to catch - it moves only when the
+// template deliberately changes.
+assert.equal(bySlug['oma-csup-to-pr'].steps, 10, 'the CSUP graph keeps all ten steps')
 assert.equal(s.registry.ok, true); assert.equal(s.registry.products, 1)
 assert.ok(s.drifted > 8)
 
