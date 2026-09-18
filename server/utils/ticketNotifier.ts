@@ -44,6 +44,21 @@ export interface TicketOutcome {
   /** The run's own halt/failure reason (`run.error`) — set only when there
    *  is no PR to report, never fabricated when one exists. */
   haltReason?: string
+  /**
+   * What a reviewer should retest, from runner-owned facts only.
+   *
+   * A comment that says "a pull request is ready for review" and nothing else
+   * makes the reporter open the diff to work out what else could have broken —
+   * work the run already did and then discarded. So the repositories it
+   * committed to, the blast radius it was classified as, and the modules its
+   * product declares are named here.
+   *
+   * Deliberately NOT an agent's prose about risk: a regression area nobody can
+   * check against the run record is worse than none. Absent when the run knows
+   * no repositories, and an unclassified blast radius says so rather than
+   * reading as a small one.
+   */
+  regression?: { repos: string[], blastRadius?: string, modules?: string[] }
 }
 
 export interface RenderInput {
@@ -85,6 +100,21 @@ export function renderTicketComment(input: RenderInput): string {
   } else {
     lines.push(`Pipeline run for ${input.ticketKey} stopped before opening a pull request.`)
     lines.push(`Reason: ${input.outcome.haltReason ?? `run ended with status '${input.outcome.runStatus}'`}`)
+  }
+
+  const regression = input.outcome.regression
+  if (regression && regression.repos.length > 0) {
+    lines.push('')
+    lines.push('Regression area — what this touched, and so what to retest:')
+    for (const repo of regression.repos) lines.push(`- ${repo}`)
+    if (regression.modules && regression.modules.length > 0) {
+      lines.push(`Modules in scope: ${regression.modules.join(', ')}.`)
+    }
+    // Named rather than omitted: "no blast radius recorded" is a fact about the
+    // run, and leaving it out would read as "nothing much at risk".
+    lines.push(regression.blastRadius
+      ? `Blast radius: ${regression.blastRadius}.`
+      : 'Blast radius: not classified by this run — treat the scope above as unbounded until someone says otherwise.')
   }
 
   lines.push('')
@@ -164,6 +194,28 @@ export async function credentialsFor(run: WorkflowRun) {
   return resolveJiraCredentials()
 }
 
+/**
+ * The retest surface of a run, from facts the runner owns.
+ *
+ * Repositories come from the product the run matched, widened by anything a
+ * step pulled in (`alsoInScope`) - a run that discovered the fault lived in a
+ * second product has a second regression surface, and run 3ebe1e6e proved a
+ * single run can commit to more than one repository.
+ */
+function regressionArea(run: WorkflowRun): TicketOutcome['regression'] {
+  const repos = new Set<string>(run.product?.repos ?? [])
+  for (const also of run.product?.alsoInScope ?? []) {
+    for (const repo of also.repos ?? []) repos.add(repo)
+  }
+  if (repos.size === 0) return undefined
+  const modules = Object.keys(run.product?.modules ?? {})
+  return {
+    repos: [...repos],
+    ...(run.blastRadius ? { blastRadius: run.blastRadius } : {}),
+    ...(modules.length > 0 ? { modules } : {}),
+  }
+}
+
 export async function notifyTicketOutcome(
   watch: NotifySource,
   ticketKey: string,
@@ -180,6 +232,7 @@ export async function notifyTicketOutcome(
     // Kept whenever the run did not complete, even with a PR present: the
     // 'opened a PR but did not finish' branch above has to be able to say why.
     haltReason: (prUrls.length > 0 && run.status === 'completed') ? undefined : (run.error ?? undefined),
+    regression: regressionArea(run),
   }
 
   const comment = renderTicketComment({

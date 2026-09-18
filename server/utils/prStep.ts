@@ -195,5 +195,51 @@ function prBody(run: WorkflowRun, repo: string, commits: number): string {
     `**Run:** \`${run.id}\` (${run.workflowName})`,
     `**Commits:** ${commits} on \`${run.branch}\` into \`${run.baseBranch}\``,
   ].filter(Boolean).join('  \n')
-  return `${firstLine(run.initialPrompt)}\n\n${rows}\n\nOpened by the pipeline runner. The evidence this run produced is attached to the ticket and kept with the run; a reviewer should read it before merging.`
+  return [
+    firstLine(run.initialPrompt),
+    '',
+    rows,
+    '',
+    regressionSection(run, repo),
+    'Opened by the pipeline runner. The evidence this run produced is attached to the ticket and kept with the run; a reviewer should read it before merging.',
+  ].filter(line => line !== null).join('\n')
+}
+
+/**
+ * What a reviewer should retest, written from facts the runner owns.
+ *
+ * Without it the body says what changed and leaves "what else might this have
+ * broken" to whoever opens the diff - which is the question a reviewer actually
+ * has, and the one the run is best placed to answer: it knows which product it
+ * matched, which repositories that product spans, and how it was classified.
+ *
+ * No agent prose about risk goes in here. A regression area a reader cannot
+ * check against the run record is worse than an absent one, and an unclassified
+ * blast radius is stated rather than omitted, because a missing line reads as
+ * "nothing much at risk".
+ */
+function regressionSection(run: WorkflowRun, repo: string): string {
+  const repos = new Set<string>(run.product?.repos ?? [])
+  for (const also of run.product?.alsoInScope ?? []) {
+    for (const r of also.repos ?? []) repos.add(r)
+  }
+  repos.add(repo)
+  const modules = Object.keys(run.product?.modules ?? {})
+
+  const lines = [
+    '## Regression area',
+    '',
+    'What this run touched, and therefore what to retest:',
+    '',
+    ...[...repos].map(r => `- \`${r}\`${r === repo ? ' (this pull request)' : ''}`),
+  ]
+  if (modules.length > 0) lines.push('', `Modules in scope: ${modules.map(m => `\`${m}\``).join(', ')}.`)
+  lines.push(
+    '',
+    run.blastRadius
+      ? `Blast radius: \`${run.blastRadius}\`.`
+      : 'Blast radius: **not classified** by this run - treat the scope above as unbounded until someone says otherwise.',
+    '',
+  )
+  return lines.join('\n')
 }

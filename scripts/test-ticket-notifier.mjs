@@ -48,6 +48,62 @@ function writeMeta(runId, meta) {
   assert.doesNotMatch(comment, /For vis:/, 'no For-vis name configured means no For-vis line, never a placeholder')
 }
 
+// -- the comment names the regression area -------------------------------
+// A ticket comment saying "a pull request is ready for review" tells the
+// reporter nothing about what else the change could have broken. The reviewer
+// then has to open the diff to work out what to retest, which is exactly the
+// work the run already did and threw away.
+//
+// Only runner-owned facts go in: the repositories the run committed to, the
+// blast radius it was classified as, and the modules the product declares. No
+// prose from an agent, because a regression area nobody can check is worse than
+// none at all.
+{
+  const comment = renderTicketComment({
+    ticketKey: 'CSUP-7495',
+    watchName: 'Jira Watch',
+    owner: 'Priya Nair',
+    outcome: {
+      runId: 'run-9', runStatus: 'completed',
+      prUrls: ['https://github.com/alepolab/administrator_lbss/pull/117'],
+      regression: {
+        repos: ['alepolab/administrator_lbss', 'alepolab/liferay-extension_lbss'],
+        blastRadius: 'ui_parsing',
+        modules: ['administrator', 'liferay-extension'],
+      },
+    },
+  })
+  assert.match(comment, /Regression area/i, 'the comment names a regression area')
+  assert.match(comment, /administrator_lbss/, 'and the repositories that were touched')
+  assert.match(comment, /liferay-extension_lbss/, 'including the second repo of a multi-repo run')
+  assert.match(comment, /ui_parsing/, 'and the blast radius the run was classified as')
+}
+
+// -- an unclassified run says so rather than implying a small blast radius --
+{
+  const comment = renderTicketComment({
+    ticketKey: 'CSUP-7496',
+    watchName: 'Jira Watch',
+    outcome: {
+      runId: 'run-10', runStatus: 'completed',
+      prUrls: ['https://github.com/alepolab/pms/pull/1'],
+      regression: { repos: ['alepolab/pms'] },
+    },
+  })
+  assert.match(comment, /Regression area/i)
+  assert.match(comment, /not classified|unclassified/i, 'an absent blast radius is stated, never omitted silently')
+}
+
+// -- nothing known means no section, not an empty heading -----------------
+{
+  const comment = renderTicketComment({
+    ticketKey: 'CSUP-7497',
+    watchName: 'Jira Watch',
+    outcome: { runId: 'run-11', runStatus: 'failed', prUrls: [] },
+  })
+  assert.doesNotMatch(comment, /Regression area/i, 'a run that knows no repos writes no regression heading')
+}
+
 // ── 2. A halted run states the reason, never a fabricated PR ───────────────
 {
   const comment = renderTicketComment({

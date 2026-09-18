@@ -142,6 +142,39 @@ function fakeExec(repos, log = []) {
   assert.match(out, /sasktel-customizations/)
 }
 
+// ---- the PR body names the regression area -----------------------------------
+// A reviewer opening the PR should not have to diff it to learn what else the
+// change could have broken. Runner-owned facts only: the repositories the
+// product declares, the blast radius, the commit count.
+{
+  const repos = { '/work/ase_lbss@fix-CSUP-7514': { name: 'alepolab/ase_lbss', branch: RUN_BRANCH, commitsAhead: 2 } }
+  const log = []
+  const withProduct = {
+    ...run,
+    blastRadius: 'schema',
+    product: {
+      name: 'crm', repos: ['alepolab/ase_lbss', 'alepolab/administrator_lbss'],
+      modules: { 'modules/administrator': 'alepolab/administrator_lbss' },
+      branches: {}, stack: { compose: 'x', topology_default: 'y' }, tests: {},
+    },
+  }
+  await runPrStep(withProduct, { exec: fakeExec(repos, log), repoDirs: Object.keys(repos) })
+  const create = log.find(l => l.includes('pr create'))
+  assert.match(create, /Regression area/i, 'the body names a regression area')
+  assert.match(create, /administrator_lbss/, 'including a repo of the product the run matched')
+  assert.match(create, /schema/, 'and the blast radius it was classified as')
+}
+
+// ---- an unclassified run says so in the body too -----------------------------
+{
+  const repos = { '/work/ase_lbss@fix-CSUP-7514': { name: 'alepolab/ase_lbss', branch: RUN_BRANCH, commitsAhead: 1 } }
+  const log = []
+  await runPrStep(run, { exec: fakeExec(repos, log), repoDirs: Object.keys(repos) })
+  const create = log.find(l => l.includes('pr create'))
+  assert.match(create, /not classified|unclassified/i,
+    'an absent blast radius is stated, never left to read as a small one')
+}
+
 // ── 5. the PR targets the run's base branch, never a guessed default ───────
 {
   const repos = { '/work/ase_lbss@fix-CSUP-7514': { name: 'alepolab/ase_lbss', branch: RUN_BRANCH, commitsAhead: 1 } }
@@ -166,7 +199,7 @@ function fakeExec(repos, log = []) {
   }
 }
 
-// \u2500\u2500 the URL reaches meta.json, which is the only place the UI looks \u2500\u2500\u2500\u2500\u2500\u2500\u2500\n// `RunVerdictCard` renders `fix.repos[].pr` and the Jira outcome comment reads
+// ---- the URL reaches meta.json, which is the only place the UI looks -------
 // it through `readReportedPrUrls`. Opening a pull request and not recording it
 // leaves both saying there is none, which is the state run 3ebe1e6e was in.
 {
