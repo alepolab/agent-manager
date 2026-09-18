@@ -324,10 +324,18 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'debug-investigator',
         label: 'Reproduce & Failing Test',
         next: ['architecture-reviewer'],
-        // The only step that may write tests. Every step after it is under the
+        // The only step that may write tests - and the only step whose output
+        // the whole run is later judged against, which is why it is monitored.
+        //
+        // The comment here used to say every step after this one is "under the
         // plugin's test lock, so the agent that writes the fix cannot relax the
-        // test that judges it.
+        // test that judges it". That was not true: the runner writes the unlock
+        // file into the run worktree and never removes it, and nothing read the
+        // diff, so the fix agent could edit the oracle freely. The control now
+        // exists (server/utils/testLock.ts) and the honest statement is that
+        // the lock is enforced by reading the diff, not by the unlock file.
         testsUnlocked: true,
+        monitorSlug: 'qa-reviewer',
       },
       // 4. GATE 1 of 3 - the plan. Joins both collect lanes and reads their
       // evidence. The DEVELOPER answers: it is their scope and their next step.
@@ -351,8 +359,17 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'backend-engineer',
         label: 'Implement Fix',
         ownerRole: 'developer',
-        next: ['frontend-engineer'],
-        monitorSlug: 'refactor-engineer',
+        // The migration review reads what THIS step did to schema and data, so
+        // it is ready the moment this step lands. It used to sit behind the
+        // client change and therefore behind the QA gate - a whole agent turn of
+        // latency bought for nothing, since the two share no data dependency and
+        // write different files. They now run as one wave, each in its own lane.
+        next: ['frontend-engineer', 'db-engineer'],
+        // Judged by the agent that never writes source. `refactor-engineer` was
+        // reviewing this step, and its own contract is behaviour-preserving
+        // refactoring - briefed on metrics, not on whether the diff touched the
+        // test that judges the fix.
+        monitorSlug: 'qa-reviewer',
         maxVisits: 3,
       },
       {
@@ -361,7 +378,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
         // The user-facing half of the fix. Owned by design, gated by nobody:
         // owning a step is not deciding at one.
         ownerRole: 'designer',
-        next: ['qa-reviewer', 'db-engineer'],
+        next: ['qa-reviewer'],
         monitorSlug: 'refactor-engineer',
         maxVisits: 3,
       },

@@ -142,4 +142,50 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
   )
 }
 
+// ---- the steps that matter are judged by an agent that writes no source ----
+// The reproduction writes the test the whole run is judged against, and the fix
+// is the step that could quietly relax it. Both were monitored by
+// `refactor-engineer`, whose own contract is behaviour-preserving refactoring -
+// an agent briefed on metrics, not on whether the diff touched the oracle. The
+// reproduction had no monitor at all.
+{
+  const csup = workflowTemplates.find(t => t.id === 'oma-csup-to-pr' || t.name.startsWith('CSUP'))
+  const repro = csup.steps.find(s => /reproduce/i.test(s.label))
+  const fix = csup.steps.find(s => /implement fix/i.test(s.label))
+  assert.ok(repro && fix, 'the reproduction and fix steps are still here')
+  assert.equal(repro.monitorSlug, 'qa-reviewer', 'the reproduction is judged by an agent that never writes source')
+  assert.equal(fix.monitorSlug, 'qa-reviewer', 'the fix is judged for test edits by an agent that never writes source')
+}
+
+// ---- migration review does not wait behind the client change ---------------
+// `db-engineer` reviews what the BACKEND fix did to schema and data. It sat
+// behind `frontend-engineer` and therefore behind the QA gate, which is one
+// whole agent turn of latency bought for nothing: the two steps share no data
+// dependency and write different files.
+{
+  const csup = workflowTemplates.find(t => t.id === 'oma-csup-to-pr' || t.name.startsWith('CSUP'))
+  const { buildGraph, initRunState, markCompleted, readyNodes } = await import('../shared/utils/workflowGraph.ts')
+  const graph = buildGraph(csup.steps.map(s => ({ id: s.agentTemplateId, next: s.next, maxVisits: s.maxVisits })))
+
+  // First: it must still DEPEND on the fix. Deleting the edge would also make
+  // it "ready" - an orphan node is ready from the start - so readiness alone
+  // would pass for the wrong reason and prove nothing about the wave.
+  const fresh = readyNodes(graph, initRunState(graph))
+  assert.ok(
+    !fresh.includes('db-engineer'),
+    `migration review must depend on the backend fix, not float free; it was ready at run start: ${JSON.stringify(fresh)}`,
+  )
+
+  const state = initRunState(graph)
+  for (const id of ['pm-planner', 'research-explorer', 'debug-investigator', 'architecture-reviewer', 'backend-engineer']) {
+    markCompleted(graph, state, id)
+  }
+  const ready = readyNodes(graph, state)
+  assert.ok(
+    ready.includes('db-engineer'),
+    `migration review is ready as soon as the backend fix lands, not after the client change and the QA gate; ready was ${JSON.stringify(ready)}`,
+  )
+  assert.ok(ready.includes('frontend-engineer'), 'and the client change is ready in the same wave, so the two run in parallel lanes')
+}
+
 console.log('step ownership: declared as data, carried to the run, and it decides nothing')
