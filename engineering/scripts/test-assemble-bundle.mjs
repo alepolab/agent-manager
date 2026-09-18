@@ -430,4 +430,52 @@ await check('a bundle without security or deployment is still valid', async () =
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+// ---- the risk class the bundle reports is the one the RUNNER recorded -------
+// `blast_radius` used to be whatever an agent felt like writing into meta.json,
+// and in practice nothing wrote it at all, so the field the oversight policy and
+// every risk story depend on arrived empty. The runner now derives it from the
+// step's proposal plus a floor computed from the paths the change touched
+// (shared/utils/classification.ts) and merge-writes it into meta.json, so the
+// bundle inherits a verified fact instead of a self-report.
+//
+// These cases pin the two properties that make that worth anything: the value
+// travels, and its ABSENCE is a rejection rather than a pass.
+await check('the runner-recorded blast radius travels into the bundle', async () => {
+  const dir = runDir(({ files }) => { files['meta.json'] = JSON.stringify({ ...META, blast_radius: 'schema' }, null, 2) })
+  try {
+    const { bundle } = await assembleBundle(dir)
+    assert.equal(bundle.blast_radius, 'schema', 'the class in meta.json is the class in the bundle')
+    assert.deepEqual(validateBundle(bundle), [], 'and the bundle is valid with it')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+await check('a bundle with no blast radius is REJECTED, not defaulted', async () => {
+  const dir = runDir(({ files }) => {
+    const { blast_radius: _dropped, ...rest } = META
+    files['meta.json'] = JSON.stringify(rest, null, 2)
+  })
+  try {
+    const { bundle } = await assembleBundle(dir)
+    assert.ok(!('blast_radius' in bundle), 'the assembler still invents nothing')
+    const problems = validateBundle(bundle)
+    assert.ok(problems.length > 0, 'an unclassified run cannot produce a valid bundle')
+    assert.ok(problems.some(p => /blast_radius/.test(p)), `and the problem names the field; got ${JSON.stringify(problems)}`)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+// Now that classification actually populates this field, the schema's own
+// conditional finally has teeth: money and protocol changes must carry an
+// adversarial report. Worth pinning here, because the first real `money` run
+// would otherwise discover it as a validation failure nobody predicted.
+await check('a money run without an adversarial report is rejected', async () => {
+  const dir = runDir(({ files }) => { files['meta.json'] = JSON.stringify({ ...META, blast_radius: 'money', adversarial: null }, null, 2) })
+  try {
+    const { bundle } = await assembleBundle(dir)
+    assert.equal(bundle.blast_radius, 'money')
+    const problems = validateBundle(bundle)
+    assert.ok(problems.length > 0, 'the schema requires adversarial verification for money changes')
+    assert.ok(problems.some(p => /adversarial/.test(p)), `and says so; got ${JSON.stringify(problems)}`)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 console.log(`\n✓ all ${passed} assemble-bundle tests passed\n`)

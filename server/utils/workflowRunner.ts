@@ -17,8 +17,12 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
-import { checkTestLock, headOf } from './testLock.ts'
+import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
+import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
+import { resolveStackRecipe, StackError } from './stackRecipe.ts'
+import { stackUp, stackDown } from './stackLifecycle.ts'
+import { planDeploy, runDeploy, DeployError } from './deployStep.ts'
 import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
@@ -35,10 +39,10 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, transcriptPath } from './claudeDir.ts'
-import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
+import { oversightFor, oversightReason, needsJustification, BLAST_RADIUS_ORDER, type BlastRadius } from '../../shared/utils/oversight.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
-  markArtifactsUnusable,
+  markArtifactsUnusable, recordClassification,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
@@ -86,7 +90,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -313,6 +317,32 @@ function budgetExceeded(run: WorkflowRun): string | null {
   return null
 }
 
+/**
+ * Take down the stack this run started, once, and record that it happened.
+ *
+ * Idempotent by `stackStopped`: publish() runs on every status transition and a
+ * run can reach a terminal status more than once (a stop after a failure), and
+ * `docker compose down` twice is harmless but a second attempt that fails would
+ * overwrite an accurate record with a confusing one.
+ *
+ * Never throws. A teardown that fails must not change the run's outcome - the
+ * work is done either way - but it is recorded so nobody has to guess whether
+ * containers are still up.
+ */
+async function takeStackDown(run: WorkflowRun): Promise<void> {
+  if (!run.stackStarted || run.stackStopped) return
+  try {
+    const recipe = await resolveStackRecipe({ compose: `alepo-dev-team-infra/${run.stackStarted}` })
+    const result = await stackDown(recipe)
+    run.stackStopped = result.summary
+    log.info('stack taken down with the run', { runId: run.id, product: run.stackStarted, ok: result.ok })
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    run.stackStopped = `Taking the ${run.stackStarted} stack down failed: ${why}. It may still be running; check with docker ps.`
+    log.warn('could not take the stack down', { runId: run.id, product: run.stackStarted, error: why })
+  }
+}
+
 async function publish(run: WorkflowRun) {
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -336,6 +366,12 @@ async function publish(run: WorkflowRun) {
     // Placed AFTER saveRun so a failure to write artifacts can never cost us
     // the run record itself.
     if (TERMINAL_STATUSES.includes(run.status)) {
+      // Take down whatever this run started, here for the same reason finalize
+      // is here: there are six-plus terminal branches and a teardown at each
+      // site is one that gets forgotten. A failed run is exactly when a stack
+      // is most likely to be left running, so this must not be on the happy
+      // path. Volumes are never removed - the data and seed survive.
+      await takeStackDown(run)
       try {
         // Before finalizing: the step logs are appended asynchronously, and an
         // artifact that stops mid-burst is the only record left once the live
@@ -665,6 +701,154 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
   }
 }
 
+/**
+ * Drive deploy.sh for a step that declared a deploy.
+ *
+ * The gate is the step's own: only `dev` runs unattended, and any other
+ * environment needs this step to carry `approval: true` and for that gate to
+ * have been answered. `l.approved` holds exactly that - the ids whose gate a
+ * person has released - so a template that declares a prod deploy without a
+ * gate gets nothing executed and a step told why.
+ *
+ * Never throws: a deploy that cannot run is a fact the agent needs, not a
+ * reason to kill the run.
+ */
+async function runDeployForStep(
+  l: Live, run: WorkflowRun, rec: RunStep, id: string, step: { deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, approval?: boolean },
+): Promise<string> {
+  const want = step.deploy!
+  try {
+    const plan = await planDeploy({ env: want.env, step: want.step, app: want.app, limit: want.limit, check: want.check })
+    // The answered gate, from the runner's own record of what a person
+    // released. Not from the step's declaration, which is what an author
+    // intended rather than what a person decided.
+    const approved = step.approval === true && l.approved.has(id)
+    const result = await runDeploy(plan, { approved, approvedBy: approved ? (run.decisions?.at(-1)?.by ?? 'a gate answer') : undefined })
+    for (const line of result.ran) logLine(l, run, rec, line)
+    logLine(l, run, rec, result.summary)
+    return result.ok
+      ? result.summary
+      : `${result.summary} Do not run deploy.sh yourself - report what you could not verify without it.`
+  } catch (err) {
+    const why = err instanceof DeployError ? err.message : `The deploy could not be planned: ${err instanceof Error ? err.message : String(err)}`
+    logLine(l, run, rec, why)
+    return why
+  }
+}
+
+/**
+ * What a money- or protocol-class run owes the evidence bundle, in the agent's
+ * own input.
+ *
+ * The schema has always required an `adversarial` object for these two classes,
+ * and nothing ever asked for one - the requirement could not even fire until
+ * classification began writing `blast_radius`. The runner deliberately does not
+ * write it: a two-node rerun, an adversarial pattern search and a mutation
+ * score are work, and a runner filling in a plausible object would be
+ * manufacturing evidence rather than collecting it.
+ *
+ * Empty for every other class. A demand that does not apply teaches an agent to
+ * ignore the ones that do.
+ */
+function adversarialDemand(run: WorkflowRun): string {
+  if (run.blastRadius !== 'money' && run.blastRadius !== 'protocol') return ''
+  return `\n\nEVIDENCE THIS RUN OWES: it is classified \`${run.blastRadius}\`, and the evidence bundle requires an `
+    + '`adversarial` object in meta.json for that class. Write it yourself into meta.json with these fields: '
+    + '`report` (what you attacked and what held), `two_node_rerun` (boolean - did the failing case rerun on a second node), '
+    + '`pattern_search` (what you searched the codebase for, e.g. other unguarded call sites of the same shape) and '
+    + '`mutation_score` (0-1, or null if you did not measure one). '
+    + 'The runner will not write this for you: it is verification work, and an invented report is worse than an absent one. '
+    + 'A bundle without it fails validation.\n'
+}
+
+/**
+ * Start the product's stack for a step that declared it needs one.
+ *
+ * Failure is reported into the step's own output rather than thrown: a stack
+ * that cannot start is a fact the step's agent has to know about - and for a
+ * run with no registered stack, no command is invented at all.
+ */
+async function bringStackUp(l: Live, run: WorkflowRun, rec: RunStep): Promise<string> {
+  const compose = run.product?.stack?.compose
+  if (!compose) {
+    const note = 'This step asked for a stack, and this run has no product with a registered stack - '
+      + 'nothing was started. Work without one; do not try to start a stack yourself.'
+    logLine(l, run, rec, note)
+    return note
+  }
+  try {
+    const recipe = await resolveStackRecipe({ compose })
+    const result = await stackUp(recipe)
+    for (const line of result.ran) logLine(l, run, rec, line)
+    logLine(l, run, rec, result.summary)
+    if (result.ok) {
+      // On the RUN, not on Live: a server that dies mid-run must still be able
+      // to find what it started, or the containers are nobody's.
+      run.stackStarted = recipe.product
+      run.stackStopped = undefined
+    }
+    return result.ok
+      ? `${result.summary} The runner started it and will take it down when this run settles; you do not need to.`
+      : `${result.summary} Do not try to start it yourself - report what you could not verify without it.`
+  } catch (err) {
+    // A StackError already explains itself in the terms a person needs: which
+    // file was looked for, or that .env is a human's job.
+    const note = err instanceof StackError
+      ? err.message
+      : `The stack could not be started: ${err instanceof Error ? err.message : String(err)}`
+    logLine(l, run, rec, note)
+    return note
+  }
+}
+
+/**
+ * Record what this step's output and diff say about how risky the run is.
+ *
+ * Never throws and never fails the step: a classification that cannot be
+ * computed leaves the run unclassified, which oversight.ts already treats as
+ * `stop`. Failing here would turn a git hiccup into a dead run while making the
+ * gate no safer.
+ */
+async function adoptClassification(
+  l: Live, run: WorkflowRun, rec: RunStep, output: string, cwd: string | undefined, headBefore: string | null,
+): Promise<void> {
+  const proposed = parseProposal(output)
+  let floor: BlastRadius | null = null
+  if (cwd) {
+    // Against the run's own baseline, not the step's: the class describes the
+    // whole change a reviewer will be asked to approve, and a migration written
+    // three steps ago still makes this run a schema change.
+    const since = run.baseCommit ?? headBefore
+    if (since) {
+      try {
+        floor = floorFrom(await changedPathsSince(cwd, since))
+      } catch (err) {
+        logLine(l, run, rec, `could not read the diff to classify this run: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+  if (proposed === null && floor === null) return
+
+  // An adopted class is a floor of its own from here on. A later step may raise
+  // the run's risk - it may discover the money path - but nothing may lower what
+  // the evidence already established.
+  const result = adopt({ proposed, floor })
+  if (!result.adopted) return
+
+  const held = (run.blastRadius && (BLAST_RADIUS_ORDER as string[]).includes(run.blastRadius))
+    ? run.blastRadius as BlastRadius
+    : null
+  // Already at least this risky: keep what the evidence established. A later
+  // step may RAISE the run's risk - it may discover the money path - but nothing
+  // lowers it, including a step that re-reads a smaller part of the change.
+  if (held && BLAST_RADIUS_ORDER.indexOf(held) >= BLAST_RADIUS_ORDER.indexOf(result.adopted)) return
+
+  run.blastRadius = result.adopted
+  run.classSource = result.source ?? undefined
+  logLine(l, run, rec, classProvenance(result))
+  await recordClassification(run.id, { blast_radius: result.adopted, class_source: result.source ?? undefined })
+}
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
@@ -707,6 +891,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // step itself changed rather than everything the run has done so far.
   const headBefore = cwd ? await headOf(cwd) : null
 
+  // Bring the product's stack up before the agent runs, because a step that
+  // needs a stack cannot do anything without one. The lifecycle is read out of
+  // the product's own compose file, so the runner asks the infra repo how to
+  // start it rather than an agent guessing - and the stack is taken down when
+  // the run settles, in publish(), including when it fails.
+  const stackNote = step.stack === 'up' ? await bringStackUp(l, run, rec) : ''
+  const deployNote = step.deploy ? await runDeployForStep(l, run, rec, id, step) : ''
+
   // Hand this step the review its own pull request collected. Written BEFORE the
   // agent starts, because an agent cannot act on evidence that appears after it
   // finishes - which is the whole reason review comments on three real pull
@@ -732,10 +924,20 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // already has it, and re-sending it invites the model to start over.
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
-  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+  // The stack outcome is part of what this step is working with, so it goes to
+  // the agent rather than only into the run log - including on a resumed visit,
+  // where the header is skipped but the stack may have changed since.
+  const stackContext = stackNote ? `\n\nSTACK: ${stackNote}\n` : ''
+  const deployContext = deployNote ? `\n\nDEPLOY: ${deployNote}\n` : ''
+  // What this run's risk class obliges it to produce. Told while the step can
+  // still do the work: finding out at finalize, or from a CI validation
+  // failure, is finding out too late - a two-node rerun and a pattern search
+  // cannot be done retroactively.
+  const classContext = adversarialDemand(run)
+  const input = stackContext + deployContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
     dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined) + body
+  } : undefined) + body)
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -996,6 +1198,18 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))
+
+    // THE CLASSIFICATION. oversight.ts decides whether a gate fires purely from
+    // run.blastRadius, and nothing ever wrote it: every run read as
+    // unclassified, so every gate stopped and the tiering never tiered.
+    //
+    // Runner-owned, like identity and watch, because a value the classified
+    // party can set is not a control: a step wanting to skip a gate has every
+    // incentive to call its change ui_parsing. The step's PIPELINE-CLASS line is
+    // a PROPOSAL; the floor derived from the paths it actually touched can only
+    // ever raise it, and an already-adopted class is never lowered on a later
+    // visit.
+    await adoptClassification(l, run, rec, output, cwd, headBefore)
 
     // THE TEST LOCK. The step that owns the tests may write them; every other
     // step editing a test invalidates the evidence chain of the whole run - "A

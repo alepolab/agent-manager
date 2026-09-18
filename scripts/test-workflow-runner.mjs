@@ -1526,6 +1526,266 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   setReviewReaders({})
 }
 
+// -- the runner classifies the run itself, and an agent cannot talk it down ---
+// oversight.ts decides whether a gate fires purely from run.blastRadius, and
+// nothing wrote it: every run read as unclassified, so every gate stopped and
+// the tiering never tiered. The agent's own claim cannot be the only source
+// either - a step that wants to skip a gate has every reason to call its change
+// ui_parsing - so the runner derives a floor from the paths actually touched and
+// keeps whichever is STRONGER.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'classify-project')
+  mkdirSync(join(project, 'db', 'migration'), { recursive: true })
+  mkdirSync(join(project, 'src'), { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.'])
+  g(['config', 'user.email', 'test@example.com'])
+  g(['config', 'user.name', 'Test'])
+  writeFileSync(join(project, 'src', 'Foo.java'), 'class Foo {}\n')
+  g(['add', '-A']); g(['commit', '-qm', 'base'])
+
+  const { oversightFor } = await import('../shared/utils/oversight.ts')
+  const wf = { slug: 'classify', name: 'Classify', steps: [{ id: 'intake', agentSlug: 'agent-intake', label: 'Intake & Classification', next: [] }] }
+  const metaOf = (id) => JSON.parse(readFileSync(join(process.env.AGENT_RUNS_DIR, id, 'artifacts', 'meta.json'), 'utf8'))
+
+  // 1. The agent proposes a class and touches nothing risky: its word stands.
+  runner.setAgentCaller(async () => 'looked at it\nPIPELINE-CLASS: ui_parsing')
+  const proposed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-1', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(proposed.blastRadius, 'ui_parsing', `the proposal is adopted; run had ${proposed.blastRadius}`)
+  assert.equal(metaOf(proposed.id).blast_radius, 'ui_parsing', 'and it reaches meta.json, which is what a later reader and the bundle use')
+
+  // 2. THE case this exists for: the agent claims a low class while the change
+  //    touched a migration. The floor wins and the record says so.
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    // The step runs in a LANE WORKTREE, not the project dir, and git tracks
+    // files rather than directories - so db/migration/ does not exist there
+    // until something creates it. Writing the migration the way a real agent
+    // would is what makes the floor fire.
+    const at = dir ?? project
+    mkdirSync(join(at, 'db', 'migration'), { recursive: true })
+    writeFileSync(join(at, 'db', 'migration', 'V2__add_column.sql'), 'ALTER TABLE x ADD y INT;\n')
+    return 'tiny change honestly\nPIPELINE-CLASS: ui_parsing'
+  })
+  const gamed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-2', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(gamed.blastRadius, 'schema',
+    `a migration cannot be classified ui_parsing by the step that wrote it; run had ${gamed.blastRadius}`)
+  assert.equal(gamed.classSource, 'floor', 'and the run records that the floor is why')
+  assert.equal(metaOf(gamed.id).blast_radius, 'schema', 'meta.json carries the adopted class, not the claim')
+
+  // 3. Nothing proposed and nothing risky touched: still unclassified, which
+  //    oversight.ts already treats as stop. A default here would be the one
+  //    answer that must never be assumed.
+  g(['checkout', '-q', '--', '.'])
+  runner.setAgentCaller(async () => 'no classification line at all')
+  const unknown = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-3', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(unknown.blastRadius, undefined, `an unclassified run stays unclassified; it had ${unknown.blastRadius}`)
+  assert.equal(oversightFor(unknown.blastRadius), 'stop', 'and oversight still stops it')
+}
+
+// -- a step declares a stack; the runner starts it and always takes it down --
+// The runner used to print "Stack: alepo-dev-team-infra/crm" and leave the
+// agent to invent the rest, and nothing owned termination - so a stack left
+// running quietly ate the box. The lifecycle is the runner's job now, and
+// teardown has to happen even when the run FAILS, which is exactly when a
+// half-started stack is most likely to be left behind.
+//
+// No docker here: the commands are captured through the lifecycle module's
+// injected exec seam.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setStackExec } = await import('../server/utils/stackLifecycle.ts')
+  const infra = join(process.env.CLAUDE_DIR, 'infra')
+  mkdirSync(infra, { recursive: true })
+  writeFileSync(join(infra, '.env'), 'X=1\n')
+  writeFileSync(join(infra, 'docker-compose.zed.yml'),
+    'services:\n  a:\n    image: x\n    profiles: [zed-init]\n  b:\n    image: y\n    profiles: [zed-stack]\n')
+  process.env.ALEPO_INFRA_DIR = infra
+
+  const commands = []
+  setStackExec(async (cmd, args) => { commands.push(`${cmd} ${args.join(' ')}`); return '' })
+
+  // A registry product whose stack points at that compose file.
+  const registryDir = join(process.env.CLAUDE_DIR, 'registry')
+  mkdirSync(registryDir, { recursive: true })
+  writeFileSync(join(registryDir, 'products.yaml'),
+    'products:\n  zed:\n    repos: [alepolab/zed]\n    branches: {}\n    stack:\n      compose: alepo-dev-team-infra/zed\n      topology_default: 1node\n    tests: {}\n')
+  process.env.AGENT_REGISTRY_PATH = join(registryDir, 'products.yaml')
+
+  const wf = {
+    slug: 'stacked', name: 'Stacked',
+    steps: [{ id: 'reproduce', agentSlug: 'agent-repro', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  runner.setAgentCaller(async () => 'reproduced it')
+  const done = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, productKey: 'zed', initialPrompt: 'S-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+
+  assert.equal(done.steps[0].status, 'completed', `the step ran; it was ${done.steps[0].status} (${done.steps[0].error ?? 'no error'})`)
+  const ups = commands.filter(c => c.includes(' up'))
+  assert.ok(ups.length >= 2, `init and the services were started; commands were ${JSON.stringify(commands)}`)
+  assert.ok(ups[0].includes('--profile zed-init'), 'init first')
+  assert.ok(ups[ups.length - 1].includes('--profile zed-stack'), 'then the services')
+  assert.equal(done.stackStarted, 'zed', 'the run records that it started a stack, so teardown can find it after a restart')
+
+  const downs = commands.filter(c => / down/.test(c))
+  assert.equal(downs.length, 1, `the stack is taken down exactly once when the run settles; commands were ${JSON.stringify(commands)}`)
+  assert.ok(!/ -v|--volumes/.test(downs[0]), `teardown never removes volumes; command was "${downs[0]}"`)
+  assert.ok(done.stackStopped, 'and the run records that it was taken down')
+
+  // A FAILED run still tears down.
+  commands.length = 0
+  runner.setAgentCaller(async () => { throw new Error('the step blew up') })
+  const failed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, productKey: 'zed', initialPrompt: 'S-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(failed.status, 'failed')
+  assert.ok(commands.some(c => / down/.test(c)),
+    `a failed run still takes its stack down; commands were ${JSON.stringify(commands)}`)
+
+  // A product with no stack registered says so rather than inventing a command.
+  commands.length = 0
+  const bare = {
+    slug: 'stacked-bare', name: 'Bare',
+    steps: [{ id: 'r', agentSlug: 'agent-repro', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  runner.setAgentCaller(async () => 'ok')
+  const noStack = await runner.waitForSettled(
+    (await runner.startRun({ workflow: bare, initialPrompt: 'S-3 no product', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(commands.length, 0, 'no docker command is invented for a run with no registered stack')
+  // Told to the AGENT, not just logged: the agent is the one that has to work
+  // without a stack, and a message it never sees changes nothing about what it
+  // does next.
+  assert.match(noStack.steps[0].input ?? '', /no product with a registered stack/i,
+    `the agent is told there is no stack; its input began "${(noStack.steps[0].input ?? '').slice(0, 120)}"`)
+  assert.match(noStack.steps[0].input ?? '', /do not try to start a stack yourself/i,
+    'and told not to invent one, which is the behaviour this feature replaces')
+
+  setStackExec(null)
+  delete process.env.ALEPO_INFRA_DIR
+  delete process.env.AGENT_REGISTRY_PATH
+}
+
+// -- a money-class run tells its agent what the bundle will demand ----------
+// The schema requires an adversarial report for money and protocol changes, and
+// nothing ever asked an agent for one - the requirement could not even fire
+// until classification started writing blast_radius. Being told at finalize is
+// too late: the work is a two-node rerun and a pattern search, which has to
+// happen while the step is running.
+//
+// The runner cannot write it. That is the point: it demands the work and
+// reports its absence, and never invents the verdict.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'adv-project')
+  mkdirSync(project, { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.']); g(['config', 'user.email', 't@e.com']); g(['config', 'user.name', 'T'])
+  writeFileSync(join(project, 'x.java'), 'class X {}\n'); g(['add', '-A']); g(['commit', '-qm', 'base'])
+
+  const wf = { slug: 'adv', name: 'Adv', steps: [{ id: 'verify', agentSlug: 'agent-verify', label: 'Verify', next: [] }] }
+
+  // The step proposes money, so the run is money-class from its first step on.
+  runner.setAgentCaller(async () => 'checked the tariff maths\nPIPELINE-CLASS: money')
+  const money = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'A-1', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(money.blastRadius, 'money', 'the run is money-class')
+
+  // A second visit is what carries the demand, so run a two-step workflow where
+  // the later step sees the class the earlier one established.
+  const twoStep = {
+    slug: 'adv2', name: 'Adv2',
+    steps: [
+      { id: 'classify', agentSlug: 'agent-classify', label: 'Classify', next: ['verify'] },
+      { id: 'verify', agentSlug: 'agent-verify', label: 'Verify', next: [] },
+    ],
+  }
+  runner.setAgentCaller(async (slug) => slug === 'agent-classify' ? 'PIPELINE-CLASS: money' : 'verified')
+  const done = await runner.waitForSettled(
+    (await runner.startRun({ workflow: twoStep, initialPrompt: 'A-2', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  const verify = done.steps.find(s => s.stepId === 'verify')
+  assert.match(verify.input ?? '', /adversarial/i,
+    `a money-class run tells the next step the bundle needs an adversarial report; its input began "${(verify.input ?? '').slice(0, 140)}"`)
+  assert.match(verify.input ?? '', /two_node_rerun/,
+    'and names the fields, so the agent knows what work is being asked for')
+  assert.match(verify.input ?? '', /mutation_score/)
+
+  // A docs-class run is never asked. A false demand teaches an agent to ignore
+  // the real ones.
+  runner.setAgentCaller(async (slug) => slug === 'agent-classify' ? 'PIPELINE-CLASS: docs' : 'verified')
+  const docs = await runner.waitForSettled(
+    (await runner.startRun({ workflow: twoStep, initialPrompt: 'A-3', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  const docsVerify = docs.steps.find(s => s.stepId === 'verify')
+  assert.ok(!/adversarial/i.test(docsVerify.input ?? ''), 'a docs-class run is told nothing about adversarial reports')
+}
+
+// -- a step can declare a deploy, and prod cannot slip through -------------
+// deploy.sh is the infra repo's one deployment surface. A step declaring
+// `deploy` gets it driven for them; what a step must NOT be able to do is reach
+// a carrier environment because someone wrote a template without a gate.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setDeployExec } = await import('../server/utils/deployStep.ts')
+  const infra = join(process.env.CLAUDE_DIR, 'deploy-infra')
+  mkdirSync(join(infra, 'deploy', 'ansible'), { recursive: true })
+  mkdirSync(join(infra, 'agent'), { recursive: true })
+  writeFileSync(join(infra, '.env'), 'X=1\n')
+  writeFileSync(join(infra, 'deploy', 'ansible', 'deploy.sh'), '#!/usr/bin/env bash\nVALID_ENVS="dev staging prod"\nVALID_STEPS="all setup deploy status"\n')
+  writeFileSync(join(infra, 'agent', 'stack-contract.json'), JSON.stringify({
+    contract_version: 1, products: {}, not_startable: {},
+    deploy: { entrypoint: 'deploy/ansible/deploy.sh', environments: ['dev', 'staging', 'prod'], steps: ['all', 'setup', 'deploy', 'status'] },
+  }, null, 2))
+  process.env.ALEPO_INFRA_DIR = infra
+
+  const commands = []
+  setDeployExec(async (cmd, args) => { commands.push(args.join(' ')); return 'ok' })
+
+  // 1. dev status: runs, and the agent is told what it found.
+  runner.setAgentCaller(async () => 'looked at dev')
+  const devWf = {
+    slug: 'dep-dev', name: 'Dep dev',
+    steps: [{ id: 'check', agentSlug: 'agent-check', label: 'Check dev', next: [], deploy: { env: 'dev', step: 'status' } }],
+  }
+  const dev = await runner.waitForSettled(
+    (await runner.startRun({ workflow: devWf, initialPrompt: 'D-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(dev.steps[0].status, 'completed', `the step ran; it was ${dev.steps[0].status} (${dev.steps[0].error ?? 'no error'})`)
+  assert.ok(commands.some(c => /--step status --env dev/.test(c)), `dev status ran; commands were ${JSON.stringify(commands)}`)
+  assert.match(dev.steps[0].input ?? '', /dev/, 'and the agent is told the outcome, not just the run log')
+
+  // 2. prod on a step with NO approval gate: refused, nothing executed.
+  commands.length = 0
+  const prodUngated = {
+    slug: 'dep-prod-ungated', name: 'Dep prod ungated',
+    steps: [{ id: 'ship', agentSlug: 'agent-check', label: 'Ship to prod', next: [], deploy: { env: 'prod', step: 'deploy' } }],
+  }
+  const ungated = await runner.waitForSettled(
+    (await runner.startRun({ workflow: prodUngated, initialPrompt: 'D-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(commands.length, 0,
+    `a prod deploy on an ungated step executes NOTHING; commands were ${JSON.stringify(commands)}`)
+  assert.match(ungated.steps[0].input ?? '', /approv/i,
+    'and the agent is told a gate is missing rather than left wondering why nothing happened')
+
+  setDeployExec(null)
+  delete process.env.ALEPO_INFRA_DIR
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

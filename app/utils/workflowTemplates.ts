@@ -32,6 +32,10 @@ export interface WorkflowTemplateStep {
   testsUnlocked?: boolean
   /** Hand this step the review its pull request collected. See WorkflowStep.reviewComments. */
   reviewComments?: boolean
+  /** Bring the product's stack up before this step. See WorkflowStep.stack. */
+  stack?: 'up'
+  /** Drive deploy.sh for this step. See WorkflowStep.deploy. */
+  deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }
 }
 
 export interface WorkflowTemplate {
@@ -131,6 +135,8 @@ export function materializeTemplateSteps(
     // A field missing from this whitelist is dropped in silence - which is how
     // jira.after once lived in the template and was absent from the seeded JSON.
     if (step.reviewComments) materialized.reviewComments = true
+    if (step.stack) materialized.stack = step.stack
+    if (step.deploy) materialized.deploy = step.deploy
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.continuesSession) materialized.continuesSession = true
     return materialized
@@ -341,6 +347,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
         // the lock is enforced by reading the diff, not by the unlock file.
         testsUnlocked: true,
         monitorSlug: 'qa-reviewer',
+        // A defect is reproduced against a running product, and this is the step
+        // that reproduces it. The runner brings the stack up from the infra
+        // repo's own compose file and takes it down when the run settles, so the
+        // agent never has to work out which profile to start or remember to
+        // clean up - see server/utils/stackRecipe.ts.
+        stack: 'up',
       },
       // 4. GATE 1 of 3 - the plan. Joins both collect lanes and reads their
       // evidence. The DEVELOPER answers: it is their scope and their next step.

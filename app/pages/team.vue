@@ -22,6 +22,52 @@ interface TeamStatus {
   checkedAt: number
 }
 const status = ref<TeamStatus | null>(null)
+
+/**
+ * Who is on this team, and what each of them may decide.
+ *
+ * The six-role model has been in the codebase since the role split with no way
+ * to use it: roles.json was edited by curl, so a workflow step saying "this is
+ * QA's decision" pointed at a role nobody had been assigned.
+ */
+interface TeamMember {
+  login: string
+  name?: string
+  role: string
+  assigned: boolean
+  hasProfile: boolean
+  label: string
+  capabilities: Record<string, boolean>
+}
+const roster = ref<{ members: TeamMember[], assignable: string[], canAssign: boolean } | null>(null)
+const rosterError = ref<string | null>(null)
+const savingLogin = ref<string | null>(null)
+/** What a role actually grants, in words. Read from the model's own capability
+ *  row rather than restated, so the page and the model cannot drift; the keys
+ *  are camelCase in code and have to be spelled out for a reader. */
+const CAP_WORDS: Record<string, string> = {
+  configure: 'configure the pipeline',
+  startRun: 'start runs',
+  answerGate: 'answer gates',
+  readAllRuns: 'see every run',
+}
+const grants = (m: TeamMember) => Object.entries(m.capabilities)
+  .filter(([, held]) => held)
+  .map(([cap]) => CAP_WORDS[cap] ?? cap)
+async function loadRoster() {
+  try { roster.value = await $fetch('/api/team/members'); rosterError.value = null }
+  catch (e: any) { rosterError.value = e.data?.message || e.message; roster.value = null }
+}
+async function assign(login: string, role: string) {
+  savingLogin.value = login
+  try {
+    // An empty selection CLEARS the assignment rather than storing the default
+    // as a choice: "nobody picked" and "someone picked operator" differ.
+    await $fetch('/api/team/role', { method: 'POST', body: { login, role: role === '' ? null : role } })
+    await loadRoster()
+  } catch (e: any) { rosterError.value = e.data?.message || e.message }
+  finally { savingLogin.value = null }
+}
 interface Checkout { path: string, name: string, owner?: string, exists: boolean, git: boolean, branch?: string, head?: string, dirty: number, dirtyFiles: string[] }
 const checkouts = ref<Checkout[] | null>(null)
 const checkoutsError = ref<string | null>(null)
@@ -84,7 +130,7 @@ async function apply(only?: string[]) {
     toast.add({ title: 'Apply failed', description: e.data?.message || e.message, color: 'error' })
   } finally { syncing.value = null }
 }
-onMounted(() => { refresh(); loadCheckouts() })
+onMounted(() => { refresh(); loadCheckouts(); loadRoster() })
 const color = (s: State) => s === 'ok' ? 'var(--success)' : s === 'missing' ? 'var(--error)' : 'var(--warning)'
 const byState = (items: Item[]) => [...items].sort((a, b) => Number(a.state === 'ok') - Number(b.state === 'ok'))
 const sourceLabel = (s: Source) => s === 'plugin' ? 'from the installed plugin' : s === 'shipped' ? 'from the copy shipped in the app' : s === 'other' ? 'from an override path' : 'no source found'
@@ -116,6 +162,51 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
       <p class="t-ui leading-relaxed text-label">
         The team's agents, skills, commands, workflow, watches, registry and hooks ship in the alepo-engineering plugin and the app's templates. This page shows what on this instance differs from them, and whether the plugin's hooks are actually armed. Applying rewrites only the team-owned files; everything else in the config directory is left alone.
       </p>
+
+      <!-- Who is on this team, and what each of them may decide. The role model
+           decides who may answer which gate, and until now it was reachable only
+           by curl - so "this is QA's decision" named a role nobody held. First
+           on the page on purpose: people come before plugin drift. -->
+      <div :class="[card, 't-small']" :style="cardStyle" data-testid="team-roles">
+        <div class="flex items-center justify-between mb-2">
+          <div class="font-medium" style="color: var(--text-primary);">People and roles</div>
+          <button class="text-label underline focus-ring" @click="loadRoster">Refresh</button>
+        </div>
+        <p v-if="rosterError" class="t-small" :style="{ color: 'var(--error)' }" data-testid="team-roles-error">{{ rosterError }}</p>
+        <template v-if="roster">
+          <p v-if="!roster.members.length" class="text-label" data-testid="team-roles-empty">
+            Nobody has signed in yet, so there is nobody to give a role to.
+          </p>
+          <p v-else-if="roster.members.length === 1" class="text-label mb-1" data-testid="team-roles-solo">
+            One person has signed in to this instance. Roles start mattering once a second does.
+          </p>
+          <div v-for="m in roster.members" :key="m.login" class="py-2" :data-testid="`team-member-${m.login}`" style="border-top: 1px solid var(--border-subtle);">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-mono" style="color: var(--text-primary);">{{ m.login }}</span>
+              <span v-if="m.name" class="text-label">{{ m.name }}</span>
+              <span v-if="!m.hasProfile" class="t-small text-label" title="Given a role but has never signed in">(not signed in)</span>
+              <span v-if="!m.assigned" class="t-small text-label" data-testid="role-default">(no role chosen)</span>
+              <span class="ml-auto">
+                <select v-if="roster.canAssign" class="field-input t-small" style="width: auto;"
+                        :disabled="savingLogin === m.login" :value="m.assigned ? m.role : ''"
+                        :data-testid="`role-select-${m.login}`"
+                        @change="assign(m.login, ($event.target as HTMLSelectElement).value)">
+                  <option value="">no role chosen (defaults to {{ m.role }})</option>
+                  <option v-for="r in roster.assignable" :key="r" :value="r">{{ r }}</option>
+                </select>
+                <span v-else class="font-mono" :data-testid="`role-fixed-${m.login}`">{{ m.role }}</span>
+              </span>
+            </div>
+            <p class="t-small text-label mt-0.5">
+              {{ m.label }}<template v-if="grants(m).length"> Grants: {{ grants(m).join(', ') }}.</template>
+            </p>
+          </div>
+          <p v-if="!roster.canAssign" class="text-label mt-2" data-testid="team-roles-readonly">
+            Only an operator can change a role. Clear VIEW-AS if you are one.
+          </p>
+        </template>
+      </div>
+
 
       <div v-if="error" class="rounded-xl px-4 py-3 flex items-center gap-3" style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);">
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />

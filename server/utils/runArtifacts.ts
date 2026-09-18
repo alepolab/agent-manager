@@ -1,6 +1,6 @@
 import { workspaceRootFor, browserSurface } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
-import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -395,6 +395,78 @@ export async function writeStepArtifact(
  * survive a meta.json an agent corrupted: the runner's own record is the
  * floor this whole design rests on, so it must not be lost to a bad write.
  */
+/**
+ * The filenames the evidence bundle is assembled from.
+ *
+ * `engineering/scripts/assemble-bundle.mjs` reads exactly these and is
+ * deliberately built never to invent a field, so a run that wrote
+ * `implementation-plan.md` instead of `plan.md` produces a bundle missing
+ * `plan_sha` - and that surfaces much later, in CI, as a validation failure
+ * about a field nobody remembers choosing. The artifact header tells agents
+ * WHERE to write but never names these files, which makes the mistake easy to
+ * make and impossible to notice.
+ *
+ * Kept in step with the assembler by name. If a file is added there and not
+ * here, the only cost is that its absence goes unreported - never a false
+ * alarm - which is the safe direction for a check that nobody asked for.
+ */
+const BUNDLE_CONTRACT_FILES = [
+  'context-packet.json',
+  'intent.md',
+  'plan.md',
+  'summary.md',
+  'oracle-before.xml',
+  'oracle-after.xml',
+  'regression.xml',
+] as const
+
+/**
+ * Which contract files this run never wrote.
+ *
+ * Returns `[]` rather than nothing when all are present: "checked, nothing
+ * missing" has to be distinguishable from "never checked", or a reader cannot
+ * tell a complete run from one that predates this check.
+ */
+async function missingContractFiles(dir: string): Promise<string[]> {
+  let present: Set<string>
+  try {
+    present = new Set(await readdir(dir))
+  } catch {
+    // The directory itself is unreadable, which finalize already reports
+    // elsewhere; claiming every file is missing would be a second, louder
+    // complaint about the same fault.
+    return []
+  }
+  return BUNDLE_CONTRACT_FILES.filter(f => !present.has(f))
+}
+
+/** Blast radii the bundle schema demands an adversarial report for. */
+const ADVERSARIAL_REQUIRED_FOR = new Set(['money', 'protocol'])
+
+/**
+ * Whether this run owes an adversarial report it has not produced.
+ *
+ * The schema has always required one for money and protocol changes
+ * (evidence-bundle.v0.1.schema.json), and the conditional could never fire
+ * while `blast_radius` was empty. Classification populates it now, so the first
+ * real money-path run would otherwise meet that requirement as a CI validation
+ * failure about a field nobody had been asked for.
+ *
+ * Reported, NEVER written. The schema asks for a two-node rerun, an adversarial
+ * pattern search and a mutation score - verification work an agent performs -
+ * and a runner inventing a plausible object would be manufacturing evidence,
+ * which is worse than the failed validation it would hide.
+ *
+ * Silent for every other class. A false demand is not harmless: it teaches an
+ * agent to ignore the real ones.
+ */
+function owesAdversarialReport(run: WorkflowRun, meta: Record<string, unknown>): boolean {
+  const cls = run.blastRadius ?? (typeof meta.blast_radius === 'string' ? meta.blast_radius : undefined)
+  if (!cls || !ADVERSARIAL_REQUIRED_FOR.has(cls)) return false
+  const report = meta.adversarial
+  return !report || typeof report !== 'object' || Array.isArray(report)
+}
+
 export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   const dir = runArtifactsDir(run.id)
   const path = join(dir, 'meta.json')
@@ -412,7 +484,19 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   if (fix === undefined) delete merged.fix
   else merged.fix = fix
 
+  // Runner-owned, like identity and cost: it is a fact about the directory the
+  // runner can see for itself, and finalize is the last moment anyone looks.
+  const contractMissing = await missingContractFiles(dir)
+  // `adversarial` is a meta key rather than a file, but it is the same class of
+  // gap - something the bundle requires and this run did not produce - so it is
+  // reported in the same place a reader already looks.
+  if (owesAdversarialReport(run, merged)) contractMissing.push('adversarial')
+  merged.contract_missing = contractMissing
+
   await writeFile(path, JSON.stringify(merged, null, 2))
+  if (contractMissing.length) {
+    log.warn('run is missing evidence-bundle contract files', { runId: run.id, missing: contractMissing })
+  }
   log.debug('meta.json reconciled with runner-owned facts', { runId: run.id, hasFix: fix !== undefined })
 }
 
@@ -466,6 +550,35 @@ export async function recordPrUrls(runId: string, prs: { repo: string, url: stri
     // A meta.json that cannot be read is already reported by finalize; losing
     // the URL here must not fail the step that just opened a real PR.
     log.warn('could not record pull request urls', { runId, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
+ * The run's own classification, written into meta.json by the RUNNER.
+ *
+ * meta.json has always had a place for `blast_radius`; the field was left to
+ * whichever agent felt like filling it, so it stayed empty on every run and
+ * oversight.ts read every run as unclassified. This is the writer, and it is
+ * runner-owned for the same reason `identity` and `watch` are: a value the
+ * classified party can set is not a control.
+ *
+ * Merge-writes like recordPrUrls, and a meta.json that cannot be read is logged
+ * rather than thrown: losing the class must not fail the step that just earned
+ * it, and finalize already reports an unreadable meta.
+ */
+export async function recordClassification(
+  runId: string,
+  cls: { blast_radius?: string, class_source?: string, work_type?: string, origin?: string },
+): Promise<void> {
+  const path = join(runArtifactsDir(runId), 'meta.json')
+  try {
+    const meta = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>
+    const next = { ...meta }
+    for (const [k, v] of Object.entries(cls)) if (v !== undefined) next[k] = v
+    await writeFile(path, `${JSON.stringify(next, null, 2)}\n`)
+    log.info('classification recorded in meta', { runId, ...cls })
+  } catch (err) {
+    log.warn('could not record the classification', { runId, error: err instanceof Error ? err.message : String(err) })
   }
 }
 
