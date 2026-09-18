@@ -154,6 +154,10 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
   const fix = csup.steps.find(s => /implement fix/i.test(s.label))
   assert.ok(repro && fix, 'the reproduction and fix steps are still here')
   assert.equal(repro.monitorSlug, 'qa-reviewer', 'the reproduction is judged by an agent that never writes source')
+  // The step that reproduces a defect needs the product running. Pinned because
+  // a capability no template uses is a capability that quietly rots - the review
+  // reader was tree-shaken out of the built bundle for exactly that reason.
+  assert.equal(repro.stack, 'up', 'the reproduction step asks the runner for a running stack')
   assert.equal(fix.monitorSlug, 'qa-reviewer', 'the fix is judged for test edits by an agent that never writes source')
 }
 

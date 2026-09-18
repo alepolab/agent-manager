@@ -344,6 +344,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
         // the lock is enforced by reading the diff, not by the unlock file.
         testsUnlocked: true,
         monitorSlug: 'qa-reviewer',
+        // A defect is reproduced against a running product, and this is the step
+        // that reproduces it. The runner brings the stack up from the infra
+        // repo's own compose file and takes it down when the run settles, so the
+        // agent never has to work out which profile to start or remember to
+        // clean up - see server/utils/stackRecipe.ts.
+        stack: 'up',
       },
       // 4. GATE 1 of 3 - the plan. Joins both collect lanes and reads their
       // evidence. The DEVELOPER answers: it is their scope and their next step.
