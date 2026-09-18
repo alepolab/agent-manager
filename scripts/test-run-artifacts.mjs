@@ -652,6 +652,78 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   assert.deepEqual(meta.contract_missing, [], 'a complete run records an empty list rather than no list at all')
 }
 
+// ---- a money run is told it owes an adversarial report ---------------------
+// The bundle schema has always required an `adversarial` object for money and
+// protocol changes (evidence-bundle.v0.1.schema.json:399-410). That conditional
+// could never fire while blast_radius was empty; classification populates it
+// now, so the first real money-path run would hit a validation failure about a
+// field nobody had been asked for.
+//
+// The runner must NOT write that object. The schema asks for a two-node rerun,
+// an adversarial pattern search and a mutation score - verification work an
+// agent performs - and a runner inventing a plausible one would be
+// manufacturing evidence, which is worse than the failed validation. So it
+// reports the absence and leaves the work where it belongs.
+{
+  const runId = 'adversarial-missing'
+  const dir = A.runArtifactsDir(runId)
+  mkdirSync(dir, { recursive: true })
+  for (const f of ['context-packet.json', 'intent.md', 'plan.md', 'summary.md', 'oracle-before.xml', 'oracle-after.xml', 'regression.xml']) {
+    writeFileSync(join(dir, f), f.endsWith('.json') ? '{}' : 'x')
+  }
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ identity: 'local', blast_radius: 'money' }, null, 2))
+
+  await A.finalizeRunArtifacts({
+    id: runId, workflowSlug: 'w', workflowName: 'W', status: 'completed', blastRadius: 'money',
+    watch: 'direct-invocation', startedAt: Date.now(), steps: [], budget: { maxMinutes: 1, maxTokens: 1 },
+  })
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.ok(Array.isArray(meta.contract_missing), 'the contract check still runs')
+  assert.ok(meta.contract_missing.includes('adversarial'),
+    `a money run with no adversarial report has that reported; got ${JSON.stringify(meta.contract_missing)}`)
+  // Reported, never invented.
+  assert.equal(meta.adversarial, undefined, 'and the runner does NOT write the object itself - that would be manufacturing evidence')
+}
+
+// ---- a money run that HAS one is not nagged --------------------------------
+{
+  const runId = 'adversarial-present'
+  const dir = A.runArtifactsDir(runId)
+  mkdirSync(dir, { recursive: true })
+  for (const f of ['context-packet.json', 'intent.md', 'plan.md', 'summary.md', 'oracle-before.xml', 'oracle-after.xml', 'regression.xml']) {
+    writeFileSync(join(dir, f), f.endsWith('.json') ? '{}' : 'x')
+  }
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({
+    identity: 'local', blast_radius: 'protocol',
+    adversarial: { report: 'two nodes reran the tariff path', two_node_rerun: true, pattern_search: 'searched for unguarded rounding', mutation_score: 0.82 },
+  }, null, 2))
+  await A.finalizeRunArtifacts({
+    id: runId, workflowSlug: 'w', workflowName: 'W', status: 'completed', blastRadius: 'protocol',
+    watch: 'direct-invocation', startedAt: Date.now(), steps: [], budget: { maxMinutes: 1, maxTokens: 1 },
+  })
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.ok(!meta.contract_missing.includes('adversarial'), 'a report that exists is not reported missing')
+  assert.equal(meta.adversarial.mutation_score, 0.82, 'and the agent\'s own report is left exactly as it was')
+}
+
+// ---- a docs run is never asked for one -------------------------------------
+// A false demand is not harmless: it teaches an agent to ignore the real ones.
+{
+  const runId = 'adversarial-not-required'
+  const dir = A.runArtifactsDir(runId)
+  mkdirSync(dir, { recursive: true })
+  for (const f of ['context-packet.json', 'intent.md', 'plan.md', 'summary.md', 'oracle-before.xml', 'oracle-after.xml', 'regression.xml']) {
+    writeFileSync(join(dir, f), f.endsWith('.json') ? '{}' : 'x')
+  }
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ identity: 'local', blast_radius: 'docs' }, null, 2))
+  await A.finalizeRunArtifacts({
+    id: runId, workflowSlug: 'w', workflowName: 'W', status: 'completed', blastRadius: 'docs',
+    watch: 'direct-invocation', startedAt: Date.now(), steps: [], budget: { maxMinutes: 1, maxTokens: 1 },
+  })
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.deepEqual(meta.contract_missing, [], 'a docs run owes no adversarial report and is told nothing')
+}
+
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('run artifacts: all checks passed')

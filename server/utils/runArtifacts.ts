@@ -440,6 +440,33 @@ async function missingContractFiles(dir: string): Promise<string[]> {
   return BUNDLE_CONTRACT_FILES.filter(f => !present.has(f))
 }
 
+/** Blast radii the bundle schema demands an adversarial report for. */
+const ADVERSARIAL_REQUIRED_FOR = new Set(['money', 'protocol'])
+
+/**
+ * Whether this run owes an adversarial report it has not produced.
+ *
+ * The schema has always required one for money and protocol changes
+ * (evidence-bundle.v0.1.schema.json), and the conditional could never fire
+ * while `blast_radius` was empty. Classification populates it now, so the first
+ * real money-path run would otherwise meet that requirement as a CI validation
+ * failure about a field nobody had been asked for.
+ *
+ * Reported, NEVER written. The schema asks for a two-node rerun, an adversarial
+ * pattern search and a mutation score - verification work an agent performs -
+ * and a runner inventing a plausible object would be manufacturing evidence,
+ * which is worse than the failed validation it would hide.
+ *
+ * Silent for every other class. A false demand is not harmless: it teaches an
+ * agent to ignore the real ones.
+ */
+function owesAdversarialReport(run: WorkflowRun, meta: Record<string, unknown>): boolean {
+  const cls = run.blastRadius ?? (typeof meta.blast_radius === 'string' ? meta.blast_radius : undefined)
+  if (!cls || !ADVERSARIAL_REQUIRED_FOR.has(cls)) return false
+  const report = meta.adversarial
+  return !report || typeof report !== 'object' || Array.isArray(report)
+}
+
 export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   const dir = runArtifactsDir(run.id)
   const path = join(dir, 'meta.json')
@@ -460,6 +487,10 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   // Runner-owned, like identity and cost: it is a fact about the directory the
   // runner can see for itself, and finalize is the last moment anyone looks.
   const contractMissing = await missingContractFiles(dir)
+  // `adversarial` is a meta key rather than a file, but it is the same class of
+  // gap - something the bundle requires and this run did not produce - so it is
+  // reported in the same place a reader already looks.
+  if (owesAdversarialReport(run, merged)) contractMissing.push('adversarial')
   merged.contract_missing = contractMissing
 
   await writeFile(path, JSON.stringify(merged, null, 2))

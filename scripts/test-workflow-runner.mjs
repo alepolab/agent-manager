@@ -1673,6 +1673,65 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   delete process.env.AGENT_REGISTRY_PATH
 }
 
+// -- a money-class run tells its agent what the bundle will demand ----------
+// The schema requires an adversarial report for money and protocol changes, and
+// nothing ever asked an agent for one - the requirement could not even fire
+// until classification started writing blast_radius. Being told at finalize is
+// too late: the work is a two-node rerun and a pattern search, which has to
+// happen while the step is running.
+//
+// The runner cannot write it. That is the point: it demands the work and
+// reports its absence, and never invents the verdict.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'adv-project')
+  mkdirSync(project, { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.']); g(['config', 'user.email', 't@e.com']); g(['config', 'user.name', 'T'])
+  writeFileSync(join(project, 'x.java'), 'class X {}\n'); g(['add', '-A']); g(['commit', '-qm', 'base'])
+
+  const wf = { slug: 'adv', name: 'Adv', steps: [{ id: 'verify', agentSlug: 'agent-verify', label: 'Verify', next: [] }] }
+
+  // The step proposes money, so the run is money-class from its first step on.
+  runner.setAgentCaller(async () => 'checked the tariff maths\nPIPELINE-CLASS: money')
+  const money = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'A-1', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(money.blastRadius, 'money', 'the run is money-class')
+
+  // A second visit is what carries the demand, so run a two-step workflow where
+  // the later step sees the class the earlier one established.
+  const twoStep = {
+    slug: 'adv2', name: 'Adv2',
+    steps: [
+      { id: 'classify', agentSlug: 'agent-classify', label: 'Classify', next: ['verify'] },
+      { id: 'verify', agentSlug: 'agent-verify', label: 'Verify', next: [] },
+    ],
+  }
+  runner.setAgentCaller(async (slug) => slug === 'agent-classify' ? 'PIPELINE-CLASS: money' : 'verified')
+  const done = await runner.waitForSettled(
+    (await runner.startRun({ workflow: twoStep, initialPrompt: 'A-2', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  const verify = done.steps.find(s => s.stepId === 'verify')
+  assert.match(verify.input ?? '', /adversarial/i,
+    `a money-class run tells the next step the bundle needs an adversarial report; its input began "${(verify.input ?? '').slice(0, 140)}"`)
+  assert.match(verify.input ?? '', /two_node_rerun/,
+    'and names the fields, so the agent knows what work is being asked for')
+  assert.match(verify.input ?? '', /mutation_score/)
+
+  // A docs-class run is never asked. A false demand teaches an agent to ignore
+  // the real ones.
+  runner.setAgentCaller(async (slug) => slug === 'agent-classify' ? 'PIPELINE-CLASS: docs' : 'verified')
+  const docs = await runner.waitForSettled(
+    (await runner.startRun({ workflow: twoStep, initialPrompt: 'A-3', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  const docsVerify = docs.steps.find(s => s.stepId === 'verify')
+  assert.ok(!/adversarial/i.test(docsVerify.input ?? ''), 'a docs-class run is told nothing about adversarial reports')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

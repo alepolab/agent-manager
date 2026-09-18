@@ -701,6 +701,31 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
 }
 
 /**
+ * What a money- or protocol-class run owes the evidence bundle, in the agent's
+ * own input.
+ *
+ * The schema has always required an `adversarial` object for these two classes,
+ * and nothing ever asked for one - the requirement could not even fire until
+ * classification began writing `blast_radius`. The runner deliberately does not
+ * write it: a two-node rerun, an adversarial pattern search and a mutation
+ * score are work, and a runner filling in a plausible object would be
+ * manufacturing evidence rather than collecting it.
+ *
+ * Empty for every other class. A demand that does not apply teaches an agent to
+ * ignore the ones that do.
+ */
+function adversarialDemand(run: WorkflowRun): string {
+  if (run.blastRadius !== 'money' && run.blastRadius !== 'protocol') return ''
+  return `\n\nEVIDENCE THIS RUN OWES: it is classified \`${run.blastRadius}\`, and the evidence bundle requires an `
+    + '`adversarial` object in meta.json for that class. Write it yourself into meta.json with these fields: '
+    + '`report` (what you attacked and what held), `two_node_rerun` (boolean - did the failing case rerun on a second node), '
+    + '`pattern_search` (what you searched the codebase for, e.g. other unguarded call sites of the same shape) and '
+    + '`mutation_score` (0-1, or null if you did not measure one). '
+    + 'The runner will not write this for you: it is verification work, and an invented report is worse than an absent one. '
+    + 'A bundle without it fails validation.\n'
+}
+
+/**
  * Start the product's stack for a step that declared it needs one.
  *
  * Failure is reported into the step's own output rather than thrown: a stack
@@ -866,7 +891,12 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // the agent rather than only into the run log - including on a resumed visit,
   // where the header is skipped but the stack may have changed since.
   const stackContext = stackNote ? `\n\nSTACK: ${stackNote}\n` : ''
-  const input = stackContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+  // What this run's risk class obliges it to produce. Told while the step can
+  // still do the work: finding out at finalize, or from a CI validation
+  // failure, is finding out too late - a two-node rerun and a pattern search
+  // cannot be done retroactively.
+  const classContext = adversarialDemand(run)
+  const input = stackContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
     dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined) + body)
