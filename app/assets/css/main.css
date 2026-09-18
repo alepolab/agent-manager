@@ -393,6 +393,18 @@ body {
   }
 }
 
+/* The evidence pane: a file list beside a viewer, but only when there is room
+   for both. A fixed 15rem list against a 390px viewport left the viewer about
+   45px wide - file contents arrived one character per line, and a download
+   button underneath was a sliver nobody could read. Below this width the list
+   sits above the viewer instead, which is the only arrangement where a person
+   can both pick a file and see it. */
+@media (min-width: 641px) {
+  .artifacts-grid {
+    grid-template-columns: 15rem minmax(0, 1fr);
+  }
+}
+
 /* ============================================
    Graph Canvas
    ============================================ */

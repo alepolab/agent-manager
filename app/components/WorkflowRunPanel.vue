@@ -234,6 +234,38 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       The process that was running this is gone. Its steps are frozen where they stopped.
     </p>
 
+    <!-- Why it failed. The page a person opens to understand a run was the one
+         page that never showed `run.error`: a rejected run, a preflight failure
+         and a runner crash all arrived here as the same red word in the
+         subtitle, and the sentence saying which was sitting unread on the
+         record. It is one sentence by construction, so it is rendered whole. -->
+    <p v-if="run.error" data-testid="run-error" class="t-small rounded-lg p-2"
+       style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+       :style="{ color: STATUS_COLOR.failed }">
+      {{ run.error }}
+    </p>
+
+    <!-- How the pull request is doing. The poller records this on the run and
+         nothing rendered it, so the last verdict on a run's work - whether its
+         own CI went green - was reachable only by reading the JSON. -->
+    <a v-if="run.ci" data-testid="run-ci" :data-ci-status="run.ci.status"
+       :href="run.ci.pr" target="_blank" rel="noopener"
+       class="inline-flex items-center gap-2 rounded-lg px-3 py-2 t-small focus-ring"
+       style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+       :title="run.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || 'no checks reported'">
+      <UIcon name="i-lucide-git-pull-request-arrow" class="size-4 shrink-0" />
+      <span :style="{ color: run.ci.status === 'failing' ? STATUS_COLOR.failed : run.ci.status === 'passing' ? STATUS_COLOR.completed : 'var(--text-secondary)' }">
+        CI {{ run.ci.status }}<span v-if="run.ci.checks.length" class="text-label"> — {{ run.ci.checks.length }} check{{ run.ci.checks.length === 1 ? '' : 's' }}</span>
+      </span>
+      <span v-if="!run.ci.final" class="t-label text-label">still moving</span>
+    </a>
+
+    <!-- When it ran. A reader asking "is this recent?" had to hover a relative
+         duration or open the record. -->
+    <p data-testid="run-times" class="t-small text-label">
+      Started {{ new Date(run.startedAt).toLocaleString() }}<template v-if="run.endedAt">, ended {{ new Date(run.endedAt).toLocaleString() }}</template>
+    </p>
+
     <!-- What the runner checked before any agent ran. Only the checks that need
          a person: an all-clear is the silent, expected case. -->
     <div v-if="preflightNotable.length" class="rounded-lg p-2 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
