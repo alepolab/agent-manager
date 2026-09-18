@@ -39,6 +39,15 @@ const realExec: ExecLike = async (cmd, args) => {
   return stdout
 }
 
+let injectedExec: ExecLike | null = null
+/**
+ * Test seam, matching `ciPoller.setCheckReader` and
+ * `reviewComments.setReviewReaders`. The runner calls `stackUp`/`stackDown`
+ * without an exec, so this is how a test drives the real code path without
+ * starting a single container. Pass null to restore.
+ */
+export function setStackExec(fn: ExecLike | null) { injectedExec = fn }
+
 export interface StackResult {
   ok: boolean
   /** One line per command actually run, in order. */
@@ -63,7 +72,7 @@ function upArgs(recipe: StackRecipe, profile: string, detach: boolean): string[]
  * migrations, and inventing a command for it would fail confusingly.
  */
 export async function stackUp(recipe: StackRecipe, opts: { exec?: ExecLike } = {}): Promise<StackResult> {
-  const exec = opts.exec ?? realExec
+  const exec = opts.exec ?? injectedExec ?? realExec
   const ran: string[] = []
 
   for (const stage of recipe.stages) {
@@ -102,7 +111,7 @@ export async function stackUp(recipe: StackRecipe, opts: { exec?: ExecLike } = {
  * accumulating those is how the next run fails for a reason nobody can find.
  */
 export async function stackDown(recipe: StackRecipe, opts: { exec?: ExecLike } = {}): Promise<StackResult> {
-  const exec = opts.exec ?? realExec
+  const exec = opts.exec ?? injectedExec ?? realExec
   const args = ['compose', '-f', recipe.composePath, '--env-file', recipe.envFile]
   for (const stage of recipe.stages) args.push('--profile', stage.profile)
   args.push('down')

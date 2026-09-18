@@ -28,9 +28,19 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-/** The infra checkout that owns every product's compose file. */
-export const DEFAULT_INFRA_DIR = process.env.ALEPO_INFRA_DIR
-  || join(process.env.HOME ?? '', 'alepo-workspace', 'alepo-dev-team-infra')
+/**
+ * The infra checkout that owns every product's compose file.
+ *
+ * Read on every call rather than captured at import: a module-level constant
+ * freezes whatever the environment happened to be when the first import ran,
+ * which makes ALEPO_INFRA_DIR silently ineffective for anything that sets it
+ * later - a test, or a server that resolves its config after boot. That exact
+ * mistake cost the first attempt at this feature a debugging round.
+ */
+export function defaultInfraDir(): string {
+  return process.env.ALEPO_INFRA_DIR
+    || join(process.env.HOME ?? '', 'alepo-workspace', 'alepo-dev-team-infra')
+}
 
 export class StackError extends Error {
   constructor(message: string) {
@@ -113,7 +123,7 @@ export async function resolveStackRecipe(opts: {
   compose: string
   infraDir?: string
 }): Promise<StackRecipe> {
-  const infraDir = opts.infraDir ?? DEFAULT_INFRA_DIR
+  const infraDir = opts.infraDir ?? defaultInfraDir()
   const product = opts.compose.split('/').filter(Boolean).pop() ?? ''
   if (!product) {
     throw new StackError(`The registry's stack reference "${opts.compose}" names no product, so there is nothing to bring up.`)

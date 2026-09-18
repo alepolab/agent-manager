@@ -266,6 +266,15 @@ export interface WorkflowStep {
    */
   reviewComments?: boolean
   /**
+   * Bring the product's stack up before this step's agent runs.
+   *
+   * The runner reads the lifecycle out of the product's own compose file in the
+   * infra repo (server/utils/stackRecipe.ts), so a step asks for a stack rather
+   * than describing how to build one. The stack is taken down when the run
+   * settles, including when it fails.
+   */
+  stack?: 'up'
+  /**
    * Whose decision this gate is. Copied onto `run.question.role` when the gate
    * fires, and enforced by the gate routes.
    *

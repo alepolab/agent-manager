@@ -1586,6 +1586,93 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(oversightFor(unknown.blastRadius), 'stop', 'and oversight still stops it')
 }
 
+// -- a step declares a stack; the runner starts it and always takes it down --
+// The runner used to print "Stack: alepo-dev-team-infra/crm" and leave the
+// agent to invent the rest, and nothing owned termination - so a stack left
+// running quietly ate the box. The lifecycle is the runner's job now, and
+// teardown has to happen even when the run FAILS, which is exactly when a
+// half-started stack is most likely to be left behind.
+//
+// No docker here: the commands are captured through the lifecycle module's
+// injected exec seam.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setStackExec } = await import('../server/utils/stackLifecycle.ts')
+  const infra = join(process.env.CLAUDE_DIR, 'infra')
+  mkdirSync(infra, { recursive: true })
+  writeFileSync(join(infra, '.env'), 'X=1\n')
+  writeFileSync(join(infra, 'docker-compose.zed.yml'),
+    'services:\n  a:\n    image: x\n    profiles: [zed-init]\n  b:\n    image: y\n    profiles: [zed-stack]\n')
+  process.env.ALEPO_INFRA_DIR = infra
+
+  const commands = []
+  setStackExec(async (cmd, args) => { commands.push(`${cmd} ${args.join(' ')}`); return '' })
+
+  // A registry product whose stack points at that compose file.
+  const registryDir = join(process.env.CLAUDE_DIR, 'registry')
+  mkdirSync(registryDir, { recursive: true })
+  writeFileSync(join(registryDir, 'products.yaml'),
+    'products:\n  zed:\n    repos: [alepolab/zed]\n    branches: {}\n    stack:\n      compose: alepo-dev-team-infra/zed\n      topology_default: 1node\n    tests: {}\n')
+  process.env.AGENT_REGISTRY_PATH = join(registryDir, 'products.yaml')
+
+  const wf = {
+    slug: 'stacked', name: 'Stacked',
+    steps: [{ id: 'reproduce', agentSlug: 'agent-repro', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  runner.setAgentCaller(async () => 'reproduced it')
+  const done = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, productKey: 'zed', initialPrompt: 'S-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+
+  assert.equal(done.steps[0].status, 'completed', `the step ran; it was ${done.steps[0].status} (${done.steps[0].error ?? 'no error'})`)
+  const ups = commands.filter(c => c.includes(' up'))
+  assert.ok(ups.length >= 2, `init and the services were started; commands were ${JSON.stringify(commands)}`)
+  assert.ok(ups[0].includes('--profile zed-init'), 'init first')
+  assert.ok(ups[ups.length - 1].includes('--profile zed-stack'), 'then the services')
+  assert.equal(done.stackStarted, 'zed', 'the run records that it started a stack, so teardown can find it after a restart')
+
+  const downs = commands.filter(c => / down/.test(c))
+  assert.equal(downs.length, 1, `the stack is taken down exactly once when the run settles; commands were ${JSON.stringify(commands)}`)
+  assert.ok(!/ -v|--volumes/.test(downs[0]), `teardown never removes volumes; command was "${downs[0]}"`)
+  assert.ok(done.stackStopped, 'and the run records that it was taken down')
+
+  // A FAILED run still tears down.
+  commands.length = 0
+  runner.setAgentCaller(async () => { throw new Error('the step blew up') })
+  const failed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, productKey: 'zed', initialPrompt: 'S-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(failed.status, 'failed')
+  assert.ok(commands.some(c => / down/.test(c)),
+    `a failed run still takes its stack down; commands were ${JSON.stringify(commands)}`)
+
+  // A product with no stack registered says so rather than inventing a command.
+  commands.length = 0
+  const bare = {
+    slug: 'stacked-bare', name: 'Bare',
+    steps: [{ id: 'r', agentSlug: 'agent-repro', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  runner.setAgentCaller(async () => 'ok')
+  const noStack = await runner.waitForSettled(
+    (await runner.startRun({ workflow: bare, initialPrompt: 'S-3 no product', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(commands.length, 0, 'no docker command is invented for a run with no registered stack')
+  // Told to the AGENT, not just logged: the agent is the one that has to work
+  // without a stack, and a message it never sees changes nothing about what it
+  // does next.
+  assert.match(noStack.steps[0].input ?? '', /no product with a registered stack/i,
+    `the agent is told there is no stack; its input began "${(noStack.steps[0].input ?? '').slice(0, 120)}"`)
+  assert.match(noStack.steps[0].input ?? '', /do not try to start a stack yourself/i,
+    'and told not to invent one, which is the behaviour this feature replaces')
+
+  setStackExec(null)
+  delete process.env.ALEPO_INFRA_DIR
+  delete process.env.AGENT_REGISTRY_PATH
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

@@ -207,4 +207,23 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
   )
 }
 
+// ---- `stack` survives materialisation too ----------------------------------
+// Same trap as reviewComments and, before it, jira.after: the whitelist copies
+// named fields and drops anything else IN SILENCE. A step that asks for a stack
+// and loses the field on the way to the seeded workflow runs with no stack and
+// no complaint, which is indistinguishable from the behaviour this replaced.
+//
+// Asserted against a synthetic template rather than a shipped one, because no
+// template declares a stack yet - the carrying is what must be proven, not the
+// current template content.
+{
+  const template = {
+    id: 'synthetic-stack', name: 'Synthetic', description: 'fixture',
+    steps: [{ agentTemplateId: 'pm-planner', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  const materialized = materializeTemplateSteps(template, { 'pm-planner': 'pm-planner' })
+  assert.equal(materialized[0].stack, 'up',
+    'stack must reach the seeded workflow, or the step silently runs without the stack it asked for')
+}
+
 console.log('step ownership: declared as data, carried to the run, and it decides nothing')

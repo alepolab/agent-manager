@@ -32,6 +32,8 @@ export interface WorkflowTemplateStep {
   testsUnlocked?: boolean
   /** Hand this step the review its pull request collected. See WorkflowStep.reviewComments. */
   reviewComments?: boolean
+  /** Bring the product's stack up before this step. See WorkflowStep.stack. */
+  stack?: 'up'
 }
 
 export interface WorkflowTemplate {
@@ -131,6 +133,7 @@ export function materializeTemplateSteps(
     // A field missing from this whitelist is dropped in silence - which is how
     // jira.after once lived in the template and was absent from the seeded JSON.
     if (step.reviewComments) materialized.reviewComments = true
+    if (step.stack) materialized.stack = step.stack
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.continuesSession) materialized.continuesSession = true
     return materialized

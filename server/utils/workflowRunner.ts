@@ -20,6 +20,8 @@ import { captureBaseline } from './gitFacts.ts'
 import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
 import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
+import { resolveStackRecipe, StackError } from './stackRecipe.ts'
+import { stackUp, stackDown } from './stackLifecycle.ts'
 import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
@@ -87,7 +89,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -314,6 +316,32 @@ function budgetExceeded(run: WorkflowRun): string | null {
   return null
 }
 
+/**
+ * Take down the stack this run started, once, and record that it happened.
+ *
+ * Idempotent by `stackStopped`: publish() runs on every status transition and a
+ * run can reach a terminal status more than once (a stop after a failure), and
+ * `docker compose down` twice is harmless but a second attempt that fails would
+ * overwrite an accurate record with a confusing one.
+ *
+ * Never throws. A teardown that fails must not change the run's outcome - the
+ * work is done either way - but it is recorded so nobody has to guess whether
+ * containers are still up.
+ */
+async function takeStackDown(run: WorkflowRun): Promise<void> {
+  if (!run.stackStarted || run.stackStopped) return
+  try {
+    const recipe = await resolveStackRecipe({ compose: `alepo-dev-team-infra/${run.stackStarted}` })
+    const result = await stackDown(recipe)
+    run.stackStopped = result.summary
+    log.info('stack taken down with the run', { runId: run.id, product: run.stackStarted, ok: result.ok })
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    run.stackStopped = `Taking the ${run.stackStarted} stack down failed: ${why}. It may still be running; check with docker ps.`
+    log.warn('could not take the stack down', { runId: run.id, product: run.stackStarted, error: why })
+  }
+}
+
 async function publish(run: WorkflowRun) {
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -337,6 +365,12 @@ async function publish(run: WorkflowRun) {
     // Placed AFTER saveRun so a failure to write artifacts can never cost us
     // the run record itself.
     if (TERMINAL_STATUSES.includes(run.status)) {
+      // Take down whatever this run started, here for the same reason finalize
+      // is here: there are six-plus terminal branches and a teardown at each
+      // site is one that gets forgotten. A failed run is exactly when a stack
+      // is most likely to be left running, so this must not be on the happy
+      // path. Volumes are never removed - the data and seed survive.
+      await takeStackDown(run)
       try {
         // Before finalizing: the step logs are appended asynchronously, and an
         // artifact that stops mid-burst is the only record left once the live
@@ -667,6 +701,46 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
 }
 
 /**
+ * Start the product's stack for a step that declared it needs one.
+ *
+ * Failure is reported into the step's own output rather than thrown: a stack
+ * that cannot start is a fact the step's agent has to know about - and for a
+ * run with no registered stack, no command is invented at all.
+ */
+async function bringStackUp(l: Live, run: WorkflowRun, rec: RunStep): Promise<string> {
+  const compose = run.product?.stack?.compose
+  if (!compose) {
+    const note = 'This step asked for a stack, and this run has no product with a registered stack - '
+      + 'nothing was started. Work without one; do not try to start a stack yourself.'
+    logLine(l, run, rec, note)
+    return note
+  }
+  try {
+    const recipe = await resolveStackRecipe({ compose })
+    const result = await stackUp(recipe)
+    for (const line of result.ran) logLine(l, run, rec, line)
+    logLine(l, run, rec, result.summary)
+    if (result.ok) {
+      // On the RUN, not on Live: a server that dies mid-run must still be able
+      // to find what it started, or the containers are nobody's.
+      run.stackStarted = recipe.product
+      run.stackStopped = undefined
+    }
+    return result.ok
+      ? `${result.summary} The runner started it and will take it down when this run settles; you do not need to.`
+      : `${result.summary} Do not try to start it yourself - report what you could not verify without it.`
+  } catch (err) {
+    // A StackError already explains itself in the terms a person needs: which
+    // file was looked for, or that .env is a human's job.
+    const note = err instanceof StackError
+      ? err.message
+      : `The stack could not be started: ${err instanceof Error ? err.message : String(err)}`
+    logLine(l, run, rec, note)
+    return note
+  }
+}
+
+/**
  * Record what this step's output and diff say about how risky the run is.
  *
  * Never throws and never fails the step: a classification that cannot be
@@ -756,6 +830,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // step itself changed rather than everything the run has done so far.
   const headBefore = cwd ? await headOf(cwd) : null
 
+  // Bring the product's stack up before the agent runs, because a step that
+  // needs a stack cannot do anything without one. The lifecycle is read out of
+  // the product's own compose file, so the runner asks the infra repo how to
+  // start it rather than an agent guessing - and the stack is taken down when
+  // the run settles, in publish(), including when it fails.
+  const stackNote = step.stack === 'up' ? await bringStackUp(l, run, rec) : ''
+
   // Hand this step the review its own pull request collected. Written BEFORE the
   // agent starts, because an agent cannot act on evidence that appears after it
   // finishes - which is the whole reason review comments on three real pull
@@ -781,10 +862,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // already has it, and re-sending it invites the model to start over.
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
-  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+  // The stack outcome is part of what this step is working with, so it goes to
+  // the agent rather than only into the run log - including on a resumed visit,
+  // where the header is skipped but the stack may have changed since.
+  const stackContext = stackNote ? `\n\nSTACK: ${stackNote}\n` : ''
+  const input = stackContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
     dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined) + body
+  } : undefined) + body)
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
