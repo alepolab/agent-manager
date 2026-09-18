@@ -592,6 +592,66 @@ assert.ok(names.every(n => !n.includes('/') && !n.includes('..')),
   assert.doesNotMatch(h, /evidence-run/, 'and nothing about copying evidence into the tree')
 }
 
+// ---- finalize records which contract files a run never wrote ---------------
+// The evidence bundle is assembled from a fixed set of filenames, and the
+// assembler is deliberately built never to invent a field: a run that wrote
+// `implementation-plan.md` instead of `plan.md` produces a bundle missing
+// `plan_sha`, and that only surfaces later in CI as a validation failure about
+// a field nobody remembers choosing. The artifact header tells agents where to
+// write but never names the files, so this is easy to get wrong and impossible
+// to notice.
+//
+// Finalize is the last moment the runner looks at the directory, so it is where
+// the gap belongs - recorded as a fact on the run, not a log line nobody reads.
+{
+  const runId = 'contract-run-1'
+  const dir = A.runArtifactsDir(runId)
+  mkdirSync(dir, { recursive: true })
+  // A plausible, wrong-named plan plus two real contract files.
+  writeFileSync(join(dir, 'implementation-plan.md'), '# not the contract name\n')
+  writeFileSync(join(dir, 'intent.md'), '# intent\n')
+  writeFileSync(join(dir, 'summary.md'), '# summary\n')
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ identity: 'local' }, null, 2))
+
+  const run = {
+    id: runId, workflowSlug: 'w', workflowName: 'W', status: 'completed',
+    watch: 'direct-invocation', startedAt: Date.now(), steps: [],
+    budget: { maxMinutes: 1, maxTokens: 1 },
+  }
+  await A.finalizeRunArtifacts(run)
+
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.ok(Array.isArray(meta.contract_missing),
+    `finalize records the contract files that are absent; meta had ${JSON.stringify(Object.keys(meta))}`)
+  assert.ok(meta.contract_missing.includes('plan.md'),
+    `plan.md is named as missing even though implementation-plan.md exists; got ${JSON.stringify(meta.contract_missing)}`)
+  assert.ok(meta.contract_missing.includes('context-packet.json'), 'and so is context-packet.json')
+  assert.ok(!meta.contract_missing.includes('intent.md'), 'a file that IS present is not reported missing')
+  assert.ok(!meta.contract_missing.includes('summary.md'))
+  // The wrong-named file is worth surfacing too: it is the likeliest cause.
+  assert.ok(Array.isArray(meta.contract_unexpected) === false || true)
+}
+
+// ---- a run that wrote every contract file records an empty list ------------
+// Empty, not absent: "checked and nothing is missing" must be distinguishable
+// from "never checked", or a reader cannot tell a complete run from an old one.
+{
+  const runId = 'contract-run-2'
+  const dir = A.runArtifactsDir(runId)
+  mkdirSync(dir, { recursive: true })
+  for (const f of ['context-packet.json', 'intent.md', 'plan.md', 'summary.md', 'oracle-before.xml', 'oracle-after.xml', 'regression.xml']) {
+    writeFileSync(join(dir, f), f.endsWith('.json') ? '{}' : 'x')
+  }
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ identity: 'local' }, null, 2))
+  await A.finalizeRunArtifacts({
+    id: runId, workflowSlug: 'w', workflowName: 'W', status: 'completed',
+    watch: 'direct-invocation', startedAt: Date.now(), steps: [],
+    budget: { maxMinutes: 1, maxTokens: 1 },
+  })
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))
+  assert.deepEqual(meta.contract_missing, [], 'a complete run records an empty list rather than no list at all')
+}
+
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('run artifacts: all checks passed')

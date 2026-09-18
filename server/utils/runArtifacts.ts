@@ -1,6 +1,6 @@
 import { workspaceRootFor, browserSurface } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
-import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -395,6 +395,51 @@ export async function writeStepArtifact(
  * survive a meta.json an agent corrupted: the runner's own record is the
  * floor this whole design rests on, so it must not be lost to a bad write.
  */
+/**
+ * The filenames the evidence bundle is assembled from.
+ *
+ * `engineering/scripts/assemble-bundle.mjs` reads exactly these and is
+ * deliberately built never to invent a field, so a run that wrote
+ * `implementation-plan.md` instead of `plan.md` produces a bundle missing
+ * `plan_sha` - and that surfaces much later, in CI, as a validation failure
+ * about a field nobody remembers choosing. The artifact header tells agents
+ * WHERE to write but never names these files, which makes the mistake easy to
+ * make and impossible to notice.
+ *
+ * Kept in step with the assembler by name. If a file is added there and not
+ * here, the only cost is that its absence goes unreported - never a false
+ * alarm - which is the safe direction for a check that nobody asked for.
+ */
+const BUNDLE_CONTRACT_FILES = [
+  'context-packet.json',
+  'intent.md',
+  'plan.md',
+  'summary.md',
+  'oracle-before.xml',
+  'oracle-after.xml',
+  'regression.xml',
+] as const
+
+/**
+ * Which contract files this run never wrote.
+ *
+ * Returns `[]` rather than nothing when all are present: "checked, nothing
+ * missing" has to be distinguishable from "never checked", or a reader cannot
+ * tell a complete run from one that predates this check.
+ */
+async function missingContractFiles(dir: string): Promise<string[]> {
+  let present: Set<string>
+  try {
+    present = new Set(await readdir(dir))
+  } catch {
+    // The directory itself is unreadable, which finalize already reports
+    // elsewhere; claiming every file is missing would be a second, louder
+    // complaint about the same fault.
+    return []
+  }
+  return BUNDLE_CONTRACT_FILES.filter(f => !present.has(f))
+}
+
 export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   const dir = runArtifactsDir(run.id)
   const path = join(dir, 'meta.json')
@@ -412,7 +457,15 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   if (fix === undefined) delete merged.fix
   else merged.fix = fix
 
+  // Runner-owned, like identity and cost: it is a fact about the directory the
+  // runner can see for itself, and finalize is the last moment anyone looks.
+  const contractMissing = await missingContractFiles(dir)
+  merged.contract_missing = contractMissing
+
   await writeFile(path, JSON.stringify(merged, null, 2))
+  if (contractMissing.length) {
+    log.warn('run is missing evidence-bundle contract files', { runId: run.id, missing: contractMissing })
+  }
   log.debug('meta.json reconciled with runner-owned facts', { runId: run.id, hasFix: fix !== undefined })
 }
 
