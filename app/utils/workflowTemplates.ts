@@ -30,6 +30,8 @@ export interface WorkflowTemplateStep {
   jira?: { transition?: string, comment?: boolean, attach?: boolean, after?: boolean }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
+  /** Hand this step the review its pull request collected. See WorkflowStep.reviewComments. */
+  reviewComments?: boolean
 }
 
 export interface WorkflowTemplate {
@@ -126,6 +128,9 @@ export function materializeTemplateSteps(
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     if (step.jira !== undefined) materialized.jira = step.jira
     if (step.pr) materialized.pr = true
+    // A field missing from this whitelist is dropped in silence - which is how
+    // jira.after once lived in the template and was absent from the seeded JSON.
+    if (step.reviewComments) materialized.reviewComments = true
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.continuesSession) materialized.continuesSession = true
     return materialized
@@ -447,6 +452,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'refactor-engineer',
         label: 'Address Review Comments',
         ownerRole: 'developer',
+        // The runner hands this step the review its pull request collected, as
+        // review-comments.json in the run's artifacts, before the agent starts.
+        reviewComments: true,
         next: [],
         contextMode: 'ancestors',
         approval: true,

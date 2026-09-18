@@ -116,6 +116,14 @@ export interface ReviewCommentsArtifact {
 export type ChecksReader = (prUrl: string) => Promise<CheckRow[]>
 export type CommentReader = (pr: { owner: string, repo: string, number: number }) => Promise<RawComment[]>
 
+let injected: { readChecks?: ChecksReader, readComments?: CommentReader } = {}
+/**
+ * Test seam, matching `ciPoller.setCheckReader`. The runner calls
+ * `collectReviewComments` without readers, so this is how a test drives the
+ * real code path with no network and no `gh` on the box.
+ */
+export function setReviewReaders(readers: { readChecks?: ChecksReader, readComments?: CommentReader }) { injected = readers }
+
 const realChecksReader: ChecksReader = async (prUrl) => {
   const { stdout } = await execFileP('gh', ['pr', 'checks', prUrl, '--json', 'name,bucket,state,completedAt'], { timeout: 30_000 })
   const parsed = JSON.parse(stdout || '[]')
@@ -263,8 +271,8 @@ export interface CollectOptions {
  * closed without being seen.
  */
 export async function collectReviewComments(run: WorkflowRun, opts: CollectOptions): Promise<ReviewCommentsArtifact> {
-  const readChecks = opts.readChecks ?? realChecksReader
-  const readComments = opts.readComments ?? realCommentReader
+  const readChecks = opts.readChecks ?? injected.readChecks ?? realChecksReader
+  const readComments = opts.readComments ?? injected.readComments ?? realCommentReader
   const artifact: ReviewCommentsArtifact = { fetchedAt: Date.now(), prs: [] }
 
   if (!opts.prUrls.length) {

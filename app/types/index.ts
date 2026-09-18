@@ -259,6 +259,13 @@ export interface WorkflowStep {
   /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
   approval?: boolean
   /**
+   * Hand this step the review a GitHub Actions run left on the run's pull
+   * request. The runner writes `review-comments.json` into the run's artifacts
+   * BEFORE the agent starts, because an agent cannot act on evidence that
+   * appears after it finishes.
+   */
+  reviewComments?: boolean
+  /**
    * Whose decision this gate is. Copied onto `run.question.role` when the gate
    * fires, and enforced by the gate routes.
    *

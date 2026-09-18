@@ -188,4 +188,23 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
   assert.ok(ready.includes('frontend-engineer'), 'and the client change is ready in the same wave, so the two run in parallel lanes')
 }
 
+// ---- reviewComments survives materialisation -------------------------------
+// The template pipeline copies a whitelist of fields, and a field missing from
+// it is dropped IN SILENCE - which is how `jira.after` once lived in the
+// template and was absent from the seeded JSON, so the step's agent never ran.
+// Declaring the field is therefore not enough; it has to arrive in the workflow
+// the runner actually reads.
+{
+  const csup = workflowTemplates.find(t => t.id === 'oma-csup-to-pr' || t.name.startsWith('CSUP'))
+  const slugs = Object.fromEntries(csup.steps.map(s => [s.agentTemplateId, s.agentTemplateId]))
+  const materialized = materializeTemplateSteps(csup, slugs)
+  const review = materialized.find(s => /review comment/i.test(s.label))
+  assert.ok(review, 'the review-comment step materialised')
+  assert.equal(
+    review.reviewComments,
+    true,
+    'reviewComments must reach the seeded workflow, or the runner never collects the review and the step reads nothing',
+  )
+}
+
 console.log('step ownership: declared as data, carried to the run, and it decides nothing')

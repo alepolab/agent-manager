@@ -18,6 +18,8 @@ import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions }
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { checkTestLock, headOf } from './testLock.ts'
+import { collectReviewComments } from './reviewComments.ts'
+import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
@@ -84,7 +86,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -704,6 +706,28 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // The commit this step starts from, so the test lock below can read what the
   // step itself changed rather than everything the run has done so far.
   const headBefore = cwd ? await headOf(cwd) : null
+
+  // Hand this step the review its own pull request collected. Written BEFORE the
+  // agent starts, because an agent cannot act on evidence that appears after it
+  // finishes - which is the whole reason review comments on three real pull
+  // requests went unanswered until a person noticed them.
+  //
+  // Never fatal: a run whose review cannot be read should still run its step and
+  // say so, rather than failing over a reviewer's availability.
+  if (step.reviewComments) {
+    try {
+      const prUrls = await prUrlsOf(run)
+      const collected = await collectReviewComments(run, { prUrls })
+      const actionable = collected.prs.reduce((n, p) => n + p.counts.actionable, 0)
+      const waiting = collected.prs.filter(p => !p.review.ready).map(p => `${p.repo}#${p.number}: ${p.review.why}`)
+      logLine(l, run, rec, prUrls.length
+        ? `review-comments.json written: ${actionable} actionable comment(s) across ${collected.prs.length} pull request(s)`
+        : 'review-comments.json written: this run recorded no pull request, so there is no review to read')
+      for (const w of waiting) logLine(l, run, rec, `review not ready - ${w}`)
+    } catch (err) {
+      logLine(l, run, rec, `could not collect review comments: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)

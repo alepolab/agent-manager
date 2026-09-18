@@ -1469,6 +1469,63 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
     `the step that owns the tests may write them; it was ${owner.steps[0].status} (${owner.steps[0].error ?? 'no error'})`)
 }
 
+// -- a step declared reviewComments gets the review BEFORE it runs ------------
+// The read module existed and nothing called it, so the review a GitHub Actions
+// run leaves on the PR was still unread by the pipeline. A step that is supposed
+// to act on those comments has to be HANDED them: the runner collects them into
+// the run's artifacts before the agent starts, because an agent cannot act on a
+// file that appears after it finishes.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setReviewReaders } = await import('../server/utils/reviewComments.ts')
+  const asked = []
+  setReviewReaders({
+    readChecks: async (url) => { asked.push('checks'); return [{ name: 'claude-review', bucket: 'pass', state: 'SUCCESS', completedAt: '2026-09-18T04:52:03Z' }] },
+    readComments: async (pr) => {
+      asked.push(`comments:${pr.owner}/${pr.repo}#${pr.number}`)
+      return [
+        { id: 11, user: { login: 'github-actions[bot]' }, path: 'a.java', line: 5, body: '\u{1F7E1} Nit [Design] \u2014 duplicated default' },
+        { id: 12, user: { login: 'a-human' }, path: 'a.java', line: 6, body: 'I disagree with the bot here.' },
+      ]
+    },
+  })
+
+  const wf = {
+    slug: 'review-step', name: 'Review step',
+    steps: [{ id: 'address', agentSlug: 'agent-address', label: 'Address Review Comments', next: [], reviewComments: true }],
+  }
+  // The agent's own view: the file must ALREADY be on disk when it runs, since
+  // an agent cannot act on evidence that appears after it finishes.
+  let sawArtifactWhenItRan = false
+  runner.setAgentCaller(async () => {
+    sawArtifactWhenItRan = readdirSync(process.env.AGENT_RUNS_DIR)
+      .some(id => existsSync(join(process.env.AGENT_RUNS_DIR, id, 'artifacts', 'review-comments.json')))
+    return 'addressed them'
+  })
+
+  const started = await runner.startRun({ workflow: wf, initialPrompt: 'REV-1 address review', watch: 'direct-invocation', autoRun: false })
+  // meta.json is what names the run's PRs - the same field the UI and ciPoller read.
+  mkdirSync(join(process.env.AGENT_RUNS_DIR, started.id, 'artifacts'), { recursive: true })
+  writeFileSync(
+    join(process.env.AGENT_RUNS_DIR, started.id, 'artifacts', 'meta.json'),
+    JSON.stringify({ fix: { repos: [{ repo: 'alepolab/ase_lbss', pr: 'https://github.com/alepolab/ase_lbss/pull/159' }] } }, null, 2),
+  )
+  await runner.continueRun(started.id)
+  const done = await runner.waitForSettled(started.id, TIMEOUT)
+  assert.equal(done.steps[0].status, 'completed', `the step ran; it was ${done.steps[0].status} (${done.steps[0].error ?? 'no error'})`)
+  assert.ok(asked.includes('comments:alepolab/ase_lbss#159'),
+    `the runner read the PR's review comments; calls were ${JSON.stringify(asked)}`)
+
+  const artifact = JSON.parse(readFileSync(join(process.env.AGENT_RUNS_DIR, started.id, 'artifacts', 'review-comments.json'), 'utf8'))
+  assert.equal(artifact.prs.length, 1, 'the artifact covers the run\'s pull request')
+  assert.equal(artifact.prs[0].comments.length, 1, 'the bot\'s comment is actionable')
+  assert.equal(artifact.prs[0].counts.humanComments, 1, 'and the human comment is counted, not acted on')
+  assert.equal(artifact.prs[0].review.ready, true, 'the review had finished, so acting on it is licensed')
+  assert.equal(sawArtifactWhenItRan, true, 'and it was on disk BEFORE the agent ran, not written afterwards')
+
+  setReviewReaders({})
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')
