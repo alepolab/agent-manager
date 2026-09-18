@@ -17,6 +17,7 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
+import { checkTestLock, headOf } from './testLock.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
@@ -700,6 +701,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // agent ran in a lane is how the last worktree bug read from the outside.
   const cwd = l.laneDirs[id] ?? run.projectDir
   if (step.testsUnlocked && cwd) await unlockTests(run, step.label, cwd)
+  // The commit this step starts from, so the test lock below can read what the
+  // step itself changed rather than everything the run has done so far.
+  const headBefore = cwd ? await headOf(cwd) : null
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
@@ -968,6 +972,40 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))
+
+    // THE TEST LOCK. The step that owns the tests may write them; every other
+    // step editing a test invalidates the evidence chain of the whole run - "A
+    // modified test file is never a pass, and no amount of subsequent green
+    // recovers it" (.agents/workflows/runbook-a/resources/phase-gates.md). The
+    // unlock file alone never enforced this, because nothing read the diff.
+    //
+    // Checked before the monitor, deliberately: a monitor reviewing an output
+    // whose tests were softened is reviewing a fiction, and it would vote on
+    // prose while the diff underneath it is the actual verdict.
+    if (cwd && headBefore) {
+      const lock = await checkTestLock({ dir: cwd, since: headBefore, testsUnlocked: step.testsUnlocked })
+      if (lock.indeterminate) {
+        // Unknown is not a violation, and failing a step because git could not
+        // be read would turn an environment fault into a defect report. It is
+        // recorded so the gap is visible on the record rather than silent.
+        logLine(l, run, rec, `test lock not verified: ${lock.why}`)
+        log.warn('test lock could not be verified', { runId: run.id, stepId: id, why: lock.why })
+      } else if (!lock.ok) {
+        markFailed(l.state, id)
+        const why = `This step modified ${lock.touched.length} test file(s) it does not own: ${lock.touched.join(', ')}. `
+          + 'A modified test is never a pass - it invalidates the run\'s evidence chain, and no amount of subsequent green recovers it. '
+          + 'Revert the test changes and fix the code the test judges, or declare the step testsUnlocked if writing tests is genuinely its job.'
+        for (const line of why.split('\n')) logLine(l, run, rec, line)
+        Object.assign(rec, { status: 'failed', output: recorded, model, usage, error: why, completedAt: Date.now() })
+        log.warn('step broke the test lock', { runId: run.id, stepId: id, touched: lock.touched })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      } else if (lock.touched.length) {
+        // The owning step's own test files, named on the record: the evidence
+        // should say which oracle this run is judged against.
+        logLine(l, run, rec, `tests written by this step: ${lock.touched.join(', ')}`)
+      }
+    }
 
     if (step.monitorSlug) {
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id))

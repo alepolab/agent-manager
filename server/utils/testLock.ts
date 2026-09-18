@@ -55,6 +55,23 @@ const TEST_PATH_PATTERNS: RegExp[] = [
   /(^|\/)test_[^/]+\.py$/i,
 ]
 
+/**
+ * The checkout's current HEAD, or null when it cannot be read.
+ *
+ * Lives here rather than in the runner so the only module shelling out to git
+ * for this control is the one that owns it. Null rather than a throw: a step
+ * whose checkout has no commits yet must still run, and `checkTestLock` reports
+ * an unreadable range as indeterminate anyway.
+ */
+export async function headOf(dir: string, exec?: TestLockInput['exec']): Promise<string | null> {
+  try {
+    const out = await (exec ?? realExec)('git', ['rev-parse', 'HEAD'], { cwd: dir })
+    return out.trim() || null
+  } catch {
+    return null
+  }
+}
+
 /** The subset of `paths` that are tests judging the change. */
 export function testPathsIn(paths: string[]): string[] {
   return (paths ?? []).filter((p) => {

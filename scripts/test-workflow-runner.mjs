@@ -1401,6 +1401,74 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.ok(!out.includes('example.invalid'), 'and never the placeholder URL')
 }
 
+// -- a step that edits the test judging it FAILS -------------------------------
+// The estate's gate says "A modified test file is never a pass - it invalidates
+// the run's entire evidence chain, and no amount of subsequent green recovers
+// it" (.agents/workflows/runbook-a/resources/phase-gates.md:119-121) and nothing
+// enforced it: the unlock file is written into the checkout and never removed,
+// so the fix agent could soften the oracle and every green afterwards would be
+// a green about nothing.
+//
+// Driven against real git in a real checkout, because the claim is about what
+// the working tree CONTAINS after the step ran, not what the agent reported.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'lock-project')
+  mkdirSync(join(project, 'src', 'test'), { recursive: true })
+  mkdirSync(join(project, 'src', 'main'), { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.'])
+  g(['config', 'user.email', 'test@example.com'])
+  g(['config', 'user.name', 'Test'])
+  writeFileSync(join(project, 'src', 'main', 'Foo.java'), 'class Foo {}\n')
+  writeFileSync(join(project, 'src', 'test', 'FooTest.java'), '// the oracle\n')
+  g(['add', '-A'])
+  g(['commit', '-qm', 'the failing test this run is judged by'])
+
+  const lockWf = { slug: 'lock', name: 'Lock', steps: [{ id: 'fix', agentSlug: 'agent-fix', label: 'Implement Fix', next: [] }] }
+
+  // 1. The agent softens the very test that judges it.
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    writeFileSync(join(dir ?? project, 'src', 'test', 'FooTest.java'), '// assertion removed\n')
+    return 'fixed it'
+  })
+  const broke = await runner.waitForSettled(
+    (await runner.startRun({ workflow: lockWf, initialPrompt: 'LOCK-1 fix', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(broke.steps[0].status, 'failed',
+    `a step that edits the judging test must fail; it was ${broke.steps[0].status}`)
+  assert.match(broke.steps[0].error ?? '', /FooTest\.java/,
+    `and the error names the file it touched; error was ${JSON.stringify(broke.steps[0].error)}`)
+
+  // 2. A production-only change is untouched by the check.
+  g(['checkout', '-q', '--', '.'])
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    writeFileSync(join(dir ?? project, 'src', 'main', 'Foo.java'), 'class Foo { int fixed = 1; }\n')
+    return 'fixed it properly'
+  })
+  const clean = await runner.waitForSettled(
+    (await runner.startRun({ workflow: lockWf, initialPrompt: 'LOCK-2 fix', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(clean.steps[0].status, 'completed',
+    `a production-only change still passes; it was ${clean.steps[0].status} (${clean.steps[0].error ?? 'no error'})`)
+
+  // 3. The step that OWNS the tests may write them.
+  g(['checkout', '-q', '--', '.'])
+  const ownerWf = { slug: 'lock-owner', name: 'Lock owner', steps: [{ id: 'repro', agentSlug: 'agent-repro', label: 'Reproduce', next: [], testsUnlocked: true }] }
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    writeFileSync(join(dir ?? project, 'src', 'test', 'FooTest.java'), '// a new reproduction\n')
+    return 'wrote the failing test'
+  })
+  const owner = await runner.waitForSettled(
+    (await runner.startRun({ workflow: ownerWf, initialPrompt: 'LOCK-3 repro', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(owner.steps[0].status, 'completed',
+    `the step that owns the tests may write them; it was ${owner.steps[0].status} (${owner.steps[0].error ?? 'no error'})`)
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')
