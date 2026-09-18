@@ -70,6 +70,52 @@ export interface StackRecipe {
   stages: StackStage[]
   /** Stage kinds this product's compose file does not declare. */
   missingStages: StageKind[]
+  /**
+   * Setup profiles the infra repo could not put in order - `aaa-stack-init`,
+   * `pms-bootstrap`, `ocs-config` and friends, which no `<p>-init` lookup
+   * finds. Present only when the published contract is used, because a scan
+   * cannot know about them.
+   *
+   * A caller must treat these as "setup exists here that nobody sequenced",
+   * never as "this product needs no setup": the second reading starts an
+   * uninitialised stack.
+   */
+  unorderedSetupProfiles: string[]
+  /** `contract` when the infra repo published the lifecycle, `scan` when it was derived here. */
+  source: 'contract' | 'scan'
+}
+
+/** The contract the infra repo generates for this consumer. See its agent/README.md. */
+const CONTRACT_PATH = join('agent', 'stack-contract.json')
+
+interface ContractProduct {
+  compose_file?: string
+  overlays?: string[]
+  env_file?: string
+  stages?: { kind?: string, profile?: string, detach?: boolean }[]
+  missing_stages?: string[]
+  unordered_setup_profiles?: string[]
+  operator_only_profiles?: string[]
+  profiles_declared?: string[]
+}
+
+/**
+ * The published contract, or null when this checkout does not have one.
+ *
+ * Null rather than a throw for every failure mode - absent, unparsable, wrong
+ * shape - because the scan still works. An infra checkout on an older branch
+ * must not stop a run; it just gets the derived lifecycle instead of the
+ * published one, and `source` says which it got.
+ */
+async function readContract(infraDir: string): Promise<{ products?: Record<string, ContractProduct>, not_startable?: Record<string, { compose_file?: string, profiles_declared?: string[], why?: string }> } | null> {
+  const path = join(infraDir, CONTRACT_PATH)
+  if (!existsSync(path)) return null
+  try {
+    const doc = JSON.parse(await readFile(path, 'utf-8'))
+    return doc && typeof doc === 'object' ? doc : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -155,6 +201,44 @@ export async function resolveStackRecipe(opts: {
     )
   }
 
+  // The infra repo's own contract, when it publishes one. Preferred over
+  // scanning because it carries facts a scan cannot produce - chiefly the setup
+  // profiles that sit outside the `<p>-init` convention - and because its CI
+  // fails if it has drifted from the compose files.
+  const contract = await readContract(infraDir)
+  const published = contract?.products?.[product]
+  if (published?.stages?.length) {
+    const stages: StackStage[] = published.stages
+      .filter(s => typeof s.profile === 'string' && typeof s.kind === 'string')
+      .map(s => ({ kind: s.kind as StageKind, profile: s.profile!, detach: s.detach === true }))
+    if (stages.some(s => s.kind === 'stack')) {
+      return {
+        product,
+        infraDir,
+        composeFile: published.compose_file ?? composeFile,
+        composePath: join(infraDir, published.compose_file ?? composeFile),
+        envFile: published.env_file ? join(infraDir, published.env_file) : envFile,
+        profilesDeclared: published.profiles_declared ?? [],
+        stages,
+        missingStages: (published.missing_stages ?? []).filter((k): k is StageKind => k === 'init' || k === 'liquibase' || k === 'stack'),
+        unorderedSetupProfiles: published.unordered_setup_profiles ?? [],
+        source: 'contract',
+      }
+    }
+  }
+
+  // The contract knows WHY some compose files have no single entry point -
+  // docker-compose.database.yml declares db/mariadb/mongodb/mysql and no
+  // database-stack. Scanning would only report a missing profile; passing the
+  // reason on tells a caller what to do instead.
+  const notStartable = contract?.not_startable?.[product]
+  if (notStartable) {
+    throw new StackError(
+      `${product} has no single stack to bring up: ${notStartable.why ?? 'the infra repo lists it as not startable'} `
+      + `Profiles it declares: ${(notStartable.profiles_declared ?? []).join(', ') || 'none'}.`,
+    )
+  }
+
   const profilesDeclared = profilesIn(await readFile(composePath, 'utf-8'))
   const stages: StackStage[] = []
   const missingStages: StageKind[] = []
@@ -171,5 +255,8 @@ export async function resolveStackRecipe(opts: {
     )
   }
 
-  return { product, infraDir, composeFile, composePath, envFile, profilesDeclared, stages, missingStages }
+  // `unorderedSetupProfiles` is empty on this path by construction: a scan
+  // cannot tell a setup profile from any other unconventional name, and
+  // guessing would be the exact mistake the contract exists to prevent.
+  return { product, infraDir, composeFile, composePath, envFile, profilesDeclared, stages, missingStages, unorderedSetupProfiles: [], source: 'scan' }
 }

@@ -162,6 +162,115 @@ writeFileSync(join(infra, 'docker-compose.bare.yml'), `services:
     'the services are NOT started after migrations failed - a stack on a half-migrated database is worse than none')
 }
 
+// ---- the committed contract is preferred over scanning ---------------------
+// The infra repo now publishes agent/stack-contract.json: the same knowledge,
+// generated from its own compose files and drift-gated by its own CI. Reading
+// that is better than scanning, for one reason that matters - it carries facts
+// scanning CANNOT produce, like which setup profiles exist outside the
+// <p>-init convention (aaa-stack-init, pms-bootstrap, ocs-config). A scan
+// reports "no init stage" for those, which would start an uninitialised stack.
+{
+  const withContract = mkdtempSync(join(tmpdir(), 'infra-contract-'))
+  writeFileSync(join(withContract, '.env'), 'X=1\n')
+  writeFileSync(join(withContract, 'docker-compose.zzz.yml'),
+    'services:\n  a:\n    image: x\n    profiles: [zzz-stack]\n')
+  mkdirSync(join(withContract, 'agent'), { recursive: true })
+  writeFileSync(join(withContract, 'agent', 'stack-contract.json'), JSON.stringify({
+    contract_version: 1,
+    products: {
+      zzz: {
+        compose_file: 'docker-compose.zzz.yml',
+        overlays: [],
+        env_file: '.env',
+        stages: [
+          { kind: 'init', profile: 'zzz-prepare', detach: false },
+          { kind: 'stack', profile: 'zzz-stack', detach: true },
+        ],
+        missing_stages: ['liquibase'],
+        unordered_setup_profiles: ['zzz-host-init'],
+        operator_only_profiles: ['zzz-liquibase-rollback'],
+        profiles_declared: ['zzz-host-init', 'zzz-liquibase-rollback', 'zzz-prepare', 'zzz-stack'],
+      },
+    },
+    not_startable: {},
+    teardown: { removes_volumes: false },
+  }, null, 2))
+
+  const r = await resolveStackRecipe({ infraDir: withContract, compose: 'alepo-dev-team-infra/zzz' })
+  assert.equal(r.source, 'contract', `the published contract is used when it exists; source was ${r.source}`)
+  // `zzz-prepare` is NOT derivable by scanning for `zzz-init` - proof the
+  // contract was read rather than the file guessed at.
+  assert.deepEqual(r.stages.map(s => s.profile), ['zzz-prepare', 'zzz-stack'],
+    'the contract\'s stages are used, including one no convention would find')
+  assert.deepEqual(r.unorderedSetupProfiles, ['zzz-host-init'],
+    'setup profiles the contract could not order are carried through, so a caller is not told setup is absent')
+  assert.deepEqual(r.missingStages, ['liquibase'])
+  rmSync(withContract, { recursive: true, force: true })
+}
+
+// ---- an infra checkout without the contract still works --------------------
+// An older checkout, or one on a branch predating the contract, must not stop a
+// run: the scan is the fallback, and it says which path it took so a reader can
+// tell a derived lifecycle from a published one.
+{
+  const r = await resolveStackRecipe({ infraDir: infra, compose: 'alepo-dev-team-infra/foo' })
+  assert.equal(r.source, 'scan', `no contract means scanning; source was ${r.source}`)
+  assert.deepEqual(r.stages.map(s => s.profile), ['foo-init', 'foo-liquibase', 'foo-stack'])
+  assert.deepEqual(r.unorderedSetupProfiles, [], 'a scan cannot know about unconventional setup profiles, and says so by reporting none')
+}
+
+// ---- a contract that does not list this product falls back, not fails ------
+{
+  const partial = mkdtempSync(join(tmpdir(), 'infra-partial-'))
+  writeFileSync(join(partial, '.env'), 'X=1\n')
+  writeFileSync(join(partial, 'docker-compose.foo.yml'),
+    'services:\n  a:\n    image: x\n    profiles: [foo-stack]\n  b:\n    image: y\n    profiles: [foo-init]\n')
+  mkdirSync(join(partial, 'agent'), { recursive: true })
+  writeFileSync(join(partial, 'agent', 'stack-contract.json'),
+    JSON.stringify({ contract_version: 1, products: { other: {} }, not_startable: {} }, null, 2))
+  const r = await resolveStackRecipe({ infraDir: partial, compose: 'alepo-dev-team-infra/foo' })
+  assert.equal(r.source, 'scan', 'a product absent from the contract is scanned rather than refused')
+  assert.deepEqual(r.stages.map(s => s.profile), ['foo-init', 'foo-stack'])
+  rmSync(partial, { recursive: true, force: true })
+}
+
+// ---- a product the contract marks not-startable says why -------------------
+// docker-compose.database.yml declares db/mariadb/mongodb/mysql and no
+// database-stack. Scanning would just fail on the missing profile; the contract
+// knows the reason, and a caller deserves it.
+{
+  const nostack = mkdtempSync(join(tmpdir(), 'infra-nostack-'))
+  writeFileSync(join(nostack, '.env'), 'X=1\n')
+  writeFileSync(join(nostack, 'docker-compose.database.yml'),
+    'services:\n  a:\n    image: x\n    profiles: [mariadb]\n')
+  mkdirSync(join(nostack, 'agent'), { recursive: true })
+  writeFileSync(join(nostack, 'agent', 'stack-contract.json'), JSON.stringify({
+    contract_version: 1, products: {}, not_startable: {
+      database: {
+        compose_file: 'docker-compose.database.yml',
+        profiles_declared: ['db', 'mariadb', 'mongodb', 'mysql'],
+        why: 'declares no database-stack profile, so this generator cannot name one entry point; start it by naming the profile you want.',
+      },
+    },
+  }, null, 2))
+  await assert.rejects(
+    () => resolveStackRecipe({ infraDir: nostack, compose: 'alepo-dev-team-infra/database' }),
+    (e) => {
+      assert.ok(e instanceof StackError)
+      // Asserted on the contract's OWN wording, not on words the fallback
+      // scan's error happens to share: the scan also says "database-stack" and
+      // lists "mariadb", so matching those proved nothing about which path ran.
+      assert.match(e.message, /naming the profile you want/,
+        `the contract's own explanation is passed on, not the scan's; got "${e.message}"`)
+      assert.match(e.message, /mongodb/,
+        'including the profiles only the contract knows about, since the compose fixture declares just mariadb')
+      return true
+    },
+    'a not-startable product is refused with the contract\'s own explanation',
+  )
+  rmSync(nostack, { recursive: true, force: true })
+}
+
 // ---- against the REAL infra repo, read-only --------------------------------
 // Proves it reads rather than assumes. Skipped where the checkout is absent
 // (CI), and the skip is reported rather than silently passing.
