@@ -33,34 +33,12 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'agent-caller-wiring-'))
 // Import exactly as server/api/workflows/[slug]/runs.post.ts does: relative,
 // no extension, no separate side-effect import of agentCaller.ts.
 const runner = await import('../server/utils/workflowRunner.ts')
-const { callAgent, ceSkillsDir } = await import('../server/utils/agentCaller.ts')
+const { callAgent } = await import('../server/utils/agentCaller.ts')
 
-// CE_SKILLS_DIR: the compound-engineering plugin's skills, or empty — never a guess.
-{
-  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs')
-  assert.equal(await ceSkillsDir(), '', 'no installed_plugins.json means no plugin, and an empty value the ce steps halt on')
-  mkdirSync(join(process.env.CLAUDE_DIR, 'plugins'), { recursive: true })
-  const installed = join(process.env.CLAUDE_DIR, 'plugins', 'installed_plugins.json')
-  writeFileSync(installed, JSON.stringify({ plugins: { 'superpowers@x': [{ installPath: '/p/super' }], 'compound-engineering@compound-engineering-plugin': [{ installPath: '/p/ce/3.21.1' }] } }))
-  assert.equal(await ceSkillsDir(), '/p/ce/3.21.1/skills', 'the compound-engineering entry, whichever marketplace it came from')
-  writeFileSync(installed, '{ not json')
-  assert.equal(await ceSkillsDir(), '', 'a broken registry reads as no plugin')
-  rmSync(installed)
-
-  // The copy the image ships (Dockerfile: /app/vendor/compound-engineering) is
-  // the fallback, so a container needs no plugin installed in its config
-  // directory. It only counts when ce-plan is actually in it — an empty
-  // directory is still "not installed", not a path the ce steps would halt in.
-  const shipped = mkdtempSync(join(tmpdir(), 'ce-shipped-'))
-  assert.equal(await ceSkillsDir(shipped), '', 'a shipped directory without ce-plan is no fallback')
-  mkdirSync(join(shipped, 'ce-plan'), { recursive: true })
-  writeFileSync(join(shipped, 'ce-plan', 'SKILL.md'), '# ce-plan')
-  assert.equal(await ceSkillsDir(shipped), shipped, 'with no plugin installed, the shipped copy is the answer')
-  writeFileSync(installed, JSON.stringify({ plugins: { 'compound-engineering@compound-engineering-plugin': [{ installPath: '/p/ce/3.21.1' }] } }))
-  assert.equal(await ceSkillsDir(shipped), '/p/ce/3.21.1/skills', 'an installed plugin still wins over the shipped copy')
-  rmSync(installed)
-  rmSync(shipped, { recursive: true, force: true })
-}
+// CE_SKILLS_DIR and ceSkillsDir() are gone. They resolved the
+// compound-engineering skills for Runbook C's Plan/Implement/Review/Push steps;
+// that runbook and the sdlc-* agents that ran it were removed with this app's
+// estate, so nothing reads those skills and the resolver had no callers left.
 
 // ── 1. Importing workflowRunner.ts alone wires the real caller ────────────
 // No setAgentCaller() call has happened yet in this process. If the wiring

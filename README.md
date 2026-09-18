@@ -1,42 +1,56 @@
 # Agent Manager
 
-Alepo's shared control plane for agentic software delivery. It runs the ticket-to-PR pipeline (Runbook A), watches Jira queues, and gives every developer a browser UI over the team's Claude Code setup: agents, skills, commands, workflows, plugins and MCP servers.
+Alepo's shared control plane for agentic software delivery. It runs step-graph workflows over a team of Claude Code agents, keeps every developer's instance in step with the team's agent estate, and gives everyone a browser UI over the setup: agents, skills, commands, workflows, plugins and MCP servers.
 
-One instance serves the team. Developers sign in with GitHub, add a Jira token once, and start runs from a ticket key. Team standards ship in the `alepo-engineering` plugin and are re-applied from the Team page.
+One instance serves the team. Developers sign in with GitHub, add a Jira token once, and start runs from a ticket key or a prompt. The agents, skills and workflows come from the oh-my-agent estate under `.agents/`, which ships with the application source and is re-applied at boot and from the Team page. Team enforcement (hooks, product registry, recipes) ships in the `alepo-engineering` plugin.
 
 ## What it does
 
-**Runbook A: ticket to evidence-backed PR.** Eight agent steps, each reviewed by a monitor that votes continue, retry or abort:
+**Agents.** The instance carries the twelve oh-my-agent agents, seeded straight from `.agents/agents/`:
+
+| Agent | Use for |
+|---|---|
+| `pm-planner` | Requirements analysis, task decomposition, API contract definition |
+| `architecture-reviewer` | System design, module boundaries, ADRs, tradeoff analysis |
+| `backend-engineer` | API, authentication and DB migration implementation |
+| `frontend-engineer` | React, Next.js, Angular and TypeScript UI work |
+| `mobile-engineer` | Flutter, React Native and Swift implementation |
+| `db-engineer` | Schema, ERD, migrations, query tuning, vector DB work |
+| `tf-infra-engineer` | Terraform provisioning, IAM/OIDC, networking, plan review |
+| `debug-investigator` | Error analysis, root cause identification, regression tests |
+| `refactor-engineer` | Behaviour-preserving refactors with characterisation tests |
+| `qa-reviewer` | OWASP security, performance, accessibility and code quality review |
+| `docs-curator` | Documentation drift detection and sync after code changes |
+| `research-explorer` | Cross-source research with cited, trust-labelled findings |
+
+Each agent declares the skills it needs; those come from `.agents/skills/` and are seeded beside the agents.
+
+**Plan, Build, Review.** The one step-graph workflow the instance ships. Each step runs an agent; the reviewer is never the implementer and sees the whole chain, not only the step before it:
 
 | Step | Agent | Output |
 |---|---|---|
-| Jira: In Progress | `sdlc-jira-tracker` | Runner-executed: the ticket moves to In Progress so nobody else picks it up |
-| Ticket Intake | `sdlc-ticket-intake` | Context packet: product, repo, branch, acceptance criteria |
-| Stand Up Stack | `sdlc-stack-provisioner` | The product stack running locally from the recipe |
-| Failing Test | `sdlc-test-author` | A parameterised test that reproduces the bug and fails |
-| Implement Fix | `sdlc-fix-implementer` | Minimal root-cause fix; tests are locked by the plugin hook |
-| Verify + Regression | `sdlc-verifier` | Every new test row passes, nothing that passed before breaks |
-| Browser Trace | `sdlc-trace-capture` | Screenshots and console for UI-facing changes |
-| Security Review | `sdlc-security-review` | Graded findings and a verdict on the diff |
-| Evidence Bundle + PR | `sdlc-evidence-and-pr` | PR carrying the evidence bundle; Jira comment with link and cost |
-| PR Checks + Review | `sdlc-pr-follow-up` | Reviewer checklist answered, checks watched, automated-review blockers fixed and pushed until the PR is mergeable |
-| Jira: Dev Done | `sdlc-jira-tracker` | Runner-executed: ticket moved from In Progress to Dev Done (matched to the project's own workflow), outcome comment posted, and the run's evidence files attached. Both Jira steps write only when `JIRA_POST_ENABLED=1` |
+| Plan | `pm-planner` | The request decomposed into tasks and contracts |
+| Implement | `backend-engineer` | The change, built against the plan |
+| Review | `qa-reviewer` | Review of the plan and the change together. This is the one human gate, owned by QA, so a developer can't accept their own verification |
 
-**Runbook C: ce ticket to QA-proven PR.** The same intake, stack, security and Jira steps, with the middle built on the compound-engineering skills (`ce-plan`, `ce-work`, `ce-code-review`, `ce-commit-push-pr`, read at run time from the installed plugin, or from the copy the image ships under `/app/vendor/compound-engineering`) and QA as the gate. Every run works in its own git worktree beside the clone (`<repo>@<branch>`), so the developer's checkout is never switched under them:
+Runs are persisted, survive server restarts, can be paused, stopped, restarted from any step with a note, or cloned. Budgets cap minutes and tokens per run.
 
-| Step | Agent | Produces |
-|------|-------|----------|
-| Plan | `sdlc-ce-plan` | `plan.md` and `qa-plan.md`: numbered cases, each automated or manual, mapped to the acceptance criteria |
-| Implement Fix | `sdlc-ce-work` | The automated cases as real tests, written first; the fix; local commits on the run branch |
-| Code Review | `sdlc-ce-review` | Findings verified and graded; blockers fixed and committed; `review.md` |
-| Update Stack | `sdlc-stack-update` | The image rebuilt from the worktree and redeployed in place, proved by image id and health |
-| Automated QA | `sdlc-qa-automated` | QA plan cases, registry suites, gates and Playwright against the fixed build, as junit XML |
-| Manual QA | `sdlc-qa-manual` | Every manual case performed in a real browser: screenshot per state, verdict per case, exploratory probes; a FAIL sends the run back to Implement Fix |
-| Push + PR | `sdlc-ce-ship` | The branch pushed and the PR opened, its body quoting the QA, review and security reports |
+**Runbook A: ticket to evidence-backed PR.** A markdown workflow at `.agents/workflows/runbook-a.md`, projected into the instance as a skill (the way `oma link` projects every oh-my-agent workflow into a Claude runtime). Its deliverable is the evidence bundle, not the diff. The steps, with the gates defined in `.agents/workflows/runbook-a/resources/phase-gates.md`:
 
-Verify, Browser Trace and Security Review run in parallel after the fix. Runs are persisted, survive server restarts, can be paused, stopped, restarted from any step with a note, or cloned. Budgets cap minutes and tokens per run.
+| Step | Produces |
+|---|---|
+| 0. Has this already been fixed? | `prior-art.md`: commits, branches and PRs searched for the ticket key |
+| 1. Ticket intake and classification | `context-packet.json` and `meta.json`, including the blast radius that decides how much oversight the change gets (INTAKE_GATE) |
+| 2. Stand up the stack | The affected product's profile running and healthy, or `skip.md` saying what was checked |
+| 3. Write the failing oracle | A parameterised test of five or six rows, failing against the unfixed code, captured as `oracle-before.xml` (ORACLE_GATE) |
+| 4. Fix the root cause | Minimal fix committed locally; tests are locked once source changes (IMPL_GATE) |
+| 5. Verify | `oracle-after.xml` and `regression.xml` from the runner's own reports; adversarial search for `protocol` and `money` changes |
+| 6. Capture a trace | A browser trace for UI-class changes, or "n/a" |
+| 7. Assemble the bundle and open the PR | The bundle validated and posted as the PR body on `fix/<ticket-key>` (SHIP_GATE) |
 
-**Watches.** JQL queries in `engineering/registry/watches.yaml` feed tickets into the pipeline automatically. New watches start in shadow mode.
+Steps 5 and 6 run in parallel and are scored together at VERIFY_GATE. Facts a tool can compute (commits, files changed, oracle verdicts, tool versions) are never accepted from the agent's own report.
+
+**Watches.** JQL queries created on the Watches page feed tickets into a workflow automatically. New watches start in shadow mode. The registry's `watches.yaml` still ships with the plugin but isn't seeded on this instance.
 
 **Claude Code setup.** Create and edit agents, skills, commands, workflows and settings in the browser. Changes land in the instance's config directory as ordinary markdown and JSON.
 
@@ -53,7 +67,7 @@ AGENT_MANAGER_URL=http://<host>:3030 \
 docker compose -f docker-compose.team.yml up -d --build
 ```
 
-Config, runs, user profiles and product checkouts live on one volume under `/srv/agent-manager`. Nothing from a developer's home directory is mounted. At boot the instance installs the team's agents, skills and workflow from the plugin and the shipped templates.
+Config, runs, user profiles and product checkouts live on one volume under `/srv/agent-manager`. Nothing from a developer's home directory is mounted. At boot the instance seeds the agents, skills and workflows from `.agents/` and the commands from the plugin.
 
 Before the first sign-in:
 
@@ -84,7 +98,7 @@ Requires Bun 1.3 and a working `claude` login on the host.
 - **Home.** Type a ticket key such as `SCN-402` and press Start. A bare key is expanded from Jira when your profile holds a token. Below the form: runs that need you (paused, failed, interrupted, CI failing), your recent runs with cost, and team drift.
 - **Runs.** Every run with status, product, cost, CI result and who started it. Open one to see step output and artifacts, restart from a step with a note, clone, or stop.
 - **Profile.** Atlassian email and Jira API token, stored encrypted. Test connection checks them with the `jira` CLI.
-- **Team.** Drift between this instance and the plugin. Apply team standards rewrites only team-owned files.
+- **Team.** Drift between this instance and the estate in `.agents/` plus the plugin's commands. Apply team standards rewrites only team-owned files and lists anything it overwrote.
 - **Settings.** Labs toggle exposes the retired Graph, Explore and Output styles pages.
 
 From a terminal:
@@ -122,7 +136,7 @@ All values are environment variables. Never write them into files in this repo.
 | Variable | Effect |
 |---|---|
 | `CLAUDE_DIR` | Config directory the app manages (default `~/.claude`). |
-| `AGENT_RUNS_DIR`, `AGENT_WORKSPACE_ROOT` | Where run records live and where the provisioner clones product repos. |
+| `AGENT_RUNS_DIR`, `AGENT_WORKSPACE_ROOT` | Where run records live and where product repos are cloned. |
 | `AGENT_RUN_MAX_MINUTES`, `AGENT_RUN_MAX_TOKENS` | Per-run caps checked between steps (defaults 180 and 8,000,000). |
 | `AGENT_GH_TOKEN` | Fallback `GH_TOKEN` for agent calls when the starting user has no GitHub token. |
 | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` | Handed to the agents' `claude` process untouched. Point them at a proxy such as teamclaude when the mounted claude.ai login alone hits its limit; the key then takes precedence over that login. |
@@ -134,19 +148,15 @@ All values are environment variables. Never write them into files in this repo.
 | `AGENT_REGISTRY_PATH` | Override the product registry, otherwise read from the installed plugin. |
 | `TEAM_SEED_ON_BOOT=0` | Skip applying team standards at boot. |
 
-### Smoke sweep
-
-`node scripts/smoke-all.mjs [product ...]` runs the Smoke Check workflow (one `sdlc-smoke-check` step: checkout, build, tests, registry verdict) for every registered product or the named ones, through the instance API with `AGENT_MANAGER_API_TOKEN`, two at a time, and writes the table to `~/.agent-manager/smoke-<timestamp>.json`. Run it before handing an instance to a team.
-
 ## The alepo-engineering plugin
 
 `engineering/` is a Claude Code plugin marketplace with one plugin. It carries what the pipeline enforces and what it needs to route work:
 
 - `hooks/`: plan gate (no edits before `.agent/plan.md`), test lock (tests freeze once source changes), secrets guard (denies reading credential files and env dumps).
 - `registry/products.yaml`: products grouped by suite, their repos, branches, stack profiles and test commands. Entries marked CONFIRM have unverified routing.
-- `registry/watches.yaml`: the Jira queues the triage loop reads.
+- `registry/environments.yaml` and `registry/watches.yaml`: environment profiles, and the Jira queues a triage loop would read.
 - `recipes/*.md`: per-product stand-up and verification recipes.
-- `skills/`, `commands/`: intent template, regression matrix, triage, reproduce, baseline.
+- `commands/`: baseline, deploy, reproduce, tasks-picker-infra, teardown, triage.
 - `schemas/evidence-bundle.v0.1.schema.json`: what every agent-authored PR carries.
 
 To add a product: add an entry under its suite in `registry/products.yaml` (key, labels, repos, default branch, stack profile, test command), write `recipes/<key>.md` describing how to stand the stack up and prove it is healthy, run the validator, and open a PR. Intake routes a ticket to the product by key, label or component name.
@@ -160,7 +170,7 @@ bun run dev          # dev server on 3030
 bun run build        # production build
 bun run typecheck    # nuxt typecheck
 for t in scripts/test-*.mjs engineering/scripts/test-*.mjs; do node "$t" || break; done
-node scripts/sync-agents.mjs   # push sdlc-* templates into a checkout's config dir
+node scripts/sync-agents.mjs   # push the .agents/ agents and skills into a checkout's config dir
 ```
 
 Tests are plain Node scripts with no framework. `node scripts/check-live-concurrency.mjs` checks the stale-save and settings guards against a running instance. `bun run test:e2e` needs a staged docker config and browser libs (`bun run e2e:libs`).
@@ -169,7 +179,8 @@ Layout:
 
 | Path | Holds |
 |---|---|
-| `app/` | Nuxt pages, components, composables; `app/utils/templates.ts` is the source of the sdlc-* agents |
+| `.agents/` | The oh-my-agent estate: agents, skills, workflows. Single source of truth; owned by oh-my-agent, never edited by hand here |
+| `app/` | Nuxt pages, components, composables; `app/utils/workflowTemplates.ts` defines the shipped step-graph workflow |
 | `server/api/` | REST and WebSocket routes |
 | `server/utils/` | Workflow runner, registry, artifacts, notifications, CI poller, users, sessions, team sync |
 | `shared/types/` | Run and watch types shared by client and server |

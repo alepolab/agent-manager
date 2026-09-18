@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ROLES, SHORT_ROLE, type Role } from '~~/shared/types/role'
+
 const route = useRoute()
 const { claudeDir, exists: claudeDirExists, load: loadConfig } = useClaudeDir()
 const { fetchAll: fetchAgents, agents } = useAgents()
@@ -34,6 +36,20 @@ onMounted(() => {
 })
 const { isPanelOpen: chatOpen } = useChat()
 const colorMode = useColorMode()
+
+/**
+ * The VIEW-AS control's roles, and the short label each gets.
+ *
+ * Derived from `ROLES` rather than written out again: the picker used to be a
+ * four-element literal with the labels in a nested ternary, so a role added to
+ * the type appeared everywhere except the one control built to inspect it.
+ * `operator` leads because it is the way back to yourself.
+ */
+// Labels come from shared/types/role.ts now, so a step's owner chip and this
+// picker cannot drift apart. `operator` is the one exception: in every other
+// surface it is the OPS role, and here it is the way back to being yourself.
+const pickerLabel = (r: Role) => (r === 'operator' ? 'You' : SHORT_ROLE[r])
+const viewAsRoles = computed<Role[]>(() => ['operator', ...ROLES.filter(r => r !== 'operator')])
 
 /** Switching to your own role clears the impersonation rather than setting one. */
 const switchingRole = ref(false)
@@ -103,6 +119,13 @@ const navTopAll = [
 const NAV_BY_ROLE: Record<string, string[]> = {
   developer: ['/', '/runs', '/agents', '/skills', '/commands'],
   qa: ['/', '/runs'],
+  // An architect reads across runs rather than inside one, so they are offered
+  // the board and the relationship graph. Both are read-only and the API
+  // refuses the writes regardless, so offering them costs nothing.
+  architect: ['/', '/runs', '/board', '/graph'],
+  // A designer reviews what a run produced. Artifacts are in `navMid` for
+  // everyone, which is where their evidence lives until a design surface exists.
+  designer: ['/', '/runs'],
   // A manager's screen is the board, not the run list with its buttons removed.
   manager: ['/', '/board', '/runs'],
 }
@@ -395,19 +418,24 @@ function badgeFor(to: string) {
              and because a gate or a run list is often what you want to inspect. -->
         <div v-if="me?.realRole === 'operator' && !sidebarCollapsed" class="px-2.5 pb-1">
           <div class="t-label mb-1" style="color: var(--text-disabled);">View as</div>
-          <div class="flex rounded-lg overflow-hidden" style="border: 1px solid var(--border-subtle);">
+          <!-- Three columns, two rows: six roles in a single strip would give
+               each label ~30px in a 200px sidebar and truncate every one. -->
+          <div
+            class="grid grid-cols-3 rounded-lg overflow-hidden"
+            style="border: 1px solid var(--border-subtle); gap: 1px; background: var(--border-subtle);"
+          >
             <button
-              v-for="r in ['operator', 'developer', 'qa', 'manager']" :key="r"
-              class="flex-1 py-1 t-label focus-ring transition-colors"
+              v-for="r in viewAsRoles" :key="r"
+              class="py-1 t-label focus-ring transition-colors"
               :style="{
-                background: role === r ? 'var(--accent-muted)' : 'transparent',
+                background: role === r ? 'var(--accent-muted)' : 'var(--surface-raised)',
                 color: role === r ? 'var(--accent)' : 'var(--text-tertiary)',
               }"
               :title="r === 'operator' ? 'Your own role' : `See the app as a ${r}`"
               :aria-pressed="role === r"
               :disabled="switchingRole"
               @click="switchRole(r)"
-            >{{ r === 'operator' ? 'You' : r === 'developer' ? 'Dev' : r === 'manager' ? 'Mgr' : 'QA' }}</button>
+            >{{ pickerLabel(r) }}</button>
           </div>
         </div>
 

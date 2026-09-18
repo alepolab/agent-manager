@@ -276,6 +276,84 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
   return out
 }
 
+/**
+ * One branch of a parallel wave, and the branch it commits on.
+ *
+ * Every step of a run used to work in the run's single worktree, which is safe
+ * for steps that read and races for steps that write: two agents committing at
+ * once contend for one index, and whichever loses reports a `index.lock` error
+ * or sweeps the other's half-written files into its own commit. The workflow
+ * page said as much in a tooltip and left it at that.
+ *
+ * A lane is therefore a worktree per concurrent step, on its own branch cut
+ * from the run branch's tip, merged back into the run branch the moment the
+ * wave settles (`mergeLane`) and then removed (`removeLane`). Lanes never
+ * outlive their wave, so the run branch stays the one place the work lives and
+ * every later step - and the pull request - sees all of it.
+ *
+ * Only the run's own repository gets a lane. A super-repo whose modules are
+ * their own repositories (nestedRepos) keeps sharing its module worktrees, so
+ * two agents writing the SAME module in one wave still race; the workflows
+ * this ships put at most one writer per wave for that reason.
+ */
+export const laneBranchFor = (branch: string, label: string) =>
+  `${branch}--lane-${(label.toLowerCase().match(/[a-z0-9]+/g) ?? ['step']).join('-').slice(0, 40)}`
+
+/** Where a lane works: beside the run's worktree, named after the lane's branch. */
+export const laneDirFor = (runWorktree: string, laneBranch: string) =>
+  `${runWorktree}__${laneBranch.split('--lane-').pop()!.replace(/[^A-Za-z0-9_.-]+/g, '-')}`
+
+/**
+ * Cut one lane. Reused when it already exists on the right branch, which is
+ * what a restart into the middle of a wave finds.
+ *
+ * `git worktree add` is run from the run's worktree: a linked worktree answers
+ * for the whole clone, so the lane is registered against the same repository
+ * without needing to know where the clone is.
+ */
+export async function ensureLane(runWorktree: string, laneBranch: string): Promise<string> {
+  const dir = laneDirFor(runWorktree, laneBranch)
+  if (existsSync(join(dir, '.git'))) {
+    const current = await git(dir, ['branch', '--show-current']).catch(() => '')
+    if (current === laneBranch) return dir
+    throw new Error(`${dir} exists and is on ${current || 'no branch'}, not ${laneBranch}`)
+  }
+  // A lane directory deleted by hand leaves a registration that blocks the branch.
+  await git(runWorktree, ['worktree', 'prune'])
+  // From HEAD, not from a remote: the lane continues the run's own work, which
+  // only exists locally on the run branch.
+  await git(runWorktree, ['worktree', 'add', '--quiet', '-B', laneBranch, dir, 'HEAD'])
+  return dir
+}
+
+/**
+ * Merge a settled lane back into the run branch, in the run's worktree.
+ *
+ * Returns what happened, as a sentence for the run log. A lane that committed
+ * nothing merges to nothing and says so. A conflict throws: two agents that
+ * edited the same lines is exactly the case a person must see, and a silent
+ * `-X ours` here would delete one agent's work while reporting success.
+ */
+export async function mergeLane(runWorktree: string, laneBranch: string): Promise<string> {
+  const ahead = await git(runWorktree, ['rev-list', '--count', `HEAD..${laneBranch}`]).catch(() => '0')
+  if (ahead === '0') return `${laneBranch}: no commits to merge.`
+  try {
+    await git(runWorktree, ['merge', '--no-edit', '--no-ff', laneBranch])
+    return `${laneBranch}: merged ${ahead} commit(s) into the run branch.`
+  } catch (err) {
+    await git(runWorktree, ['merge', '--abort']).catch(() => {})
+    throw new Error(`${laneBranch} conflicts with the run branch and was left unmerged (${err instanceof Error ? err.message : String(err)}). Its commits are still on that branch: merge it by hand, then restart the step that needs them.`)
+  }
+}
+
+/** Remove a lane's worktree and its branch. Best effort: a lane left behind is noise, not damage. */
+export async function removeLane(runWorktree: string, laneBranch: string): Promise<void> {
+  const dir = laneDirFor(runWorktree, laneBranch)
+  await git(runWorktree, ['worktree', 'remove', '--force', dir]).catch(() => {})
+  await git(runWorktree, ['worktree', 'prune']).catch(() => {})
+  await git(runWorktree, ['branch', '-D', laneBranch]).catch(() => {})
+}
+
 /** Git repositories one level under the checkout or under its modules/ directory. */
 export function nestedRepos(path: string): string[] {
   const out: string[] = []

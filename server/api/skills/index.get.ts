@@ -35,11 +35,11 @@ export default defineEventHandler(async (event) => {
    * Agent bodies, for the skills an agent reads WITHOUT declaring.
    *
    * The sdlc agents deliberately do not declare the language-matched or
-   * compound-engineering skills in frontmatter: buildAgentSystemPrompt inlines
+   * large skill sets in frontmatter: buildAgentSystemPrompt inlines
    * the full body of every declared skill, and declaring all 24 language
    * skills measured at ~80,000 tokens added to every agent's prompt on every
    * step (see scripts/test-vendored-ecc-skills.mjs). They carry a catalogue
-   * instead and read the matching file from $SDLC_SKILLS_DIR or $CE_SKILLS_DIR
+   * instead and read the matching file from $SDLC_SKILLS_DIR
    * at run time.
    *
    * The relationship is real either way - it is how the skill reaches an agent

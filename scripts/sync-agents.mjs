@@ -26,9 +26,7 @@ import { homedir } from 'node:os'
 const dryRun = process.argv.includes('--dry-run')
 const claudeDir = process.env.CLAUDE_DIR || join(homedir(), '.claude')
 
-const { agentTemplates } = await import('../app/utils/templates.ts')
-const { workflowTemplates, materializeTemplateSteps, RUNBOOK_FILES } = await import('../app/utils/workflowTemplates.ts')
-const { serializeFrontmatter } = await import('../server/utils/frontmatter.ts')
+const omaAgentsDir = join(import.meta.dirname, '..', '.agents', 'agents')
 
 // Seed the plugin's own skills into CLAUDE_DIR/skills first.
 //
@@ -41,7 +39,7 @@ const { serializeFrontmatter } = await import('../server/utils/frontmatter.ts')
 // all. Seeding into the skills directory uses the first resolution path, which
 // does not depend on the plugin index.
 function seedSkills() {
-  const src = join(import.meta.dirname, '..', 'engineering', 'skills')
+  const src = join(import.meta.dirname, '..', '.agents', 'skills')
   if (!existsSync(src)) return
   for (const name of readdirSync(src)) {
     const from = join(src, name, 'SKILL.md')
@@ -84,9 +82,15 @@ function seedCommands() {
 seedSkills()
 seedCommands()
 
-const sdlc = agentTemplates.filter(t => t.id.startsWith('sdlc-'))
+// The oh-my-agent estate, read from the SSOT. The refuse-to-write-nothing guard
+// stays: writing an empty set over a seeded instance is the failure this script
+// exists to prevent.
+const sdlc = existsSync(omaAgentsDir)
+  ? readdirSync(omaAgentsDir).filter(f => f.endsWith('.md'))
+      .map(f => ({ id: f.replace(/\.md$/, ''), body: readFileSync(join(omaAgentsDir, f), 'utf8') }))
+  : []
 if (!sdlc.length) {
-  console.error('No sdlc-* agent templates found — refusing to write nothing over something.')
+  console.error('No agents found in .agents/agents — refusing to write nothing over something.')
   process.exit(2)
 }
 
@@ -97,7 +101,7 @@ let drifted = 0
 
 for (const t of sdlc) {
   const path = join(claudeDir, 'agents', `${t.id}.md`)
-  const next = serializeFrontmatter(t.frontmatter, t.body)
+  const next = t.body
   const current = existsSync(path) ? readFileSync(path, 'utf8') : null
   if (current === next) { console.log(`  ok      ${t.id}`); continue }
   drifted++
@@ -110,30 +114,8 @@ for (const t of sdlc) {
 // what each declares instead — the fields whose silent absence made the first
 // real run meaningless. Every shipped runbook, from the same map the server's
 // team sync seeds from.
-for (const [templateId, file] of Object.entries(RUNBOOK_FILES)) {
-  const runbook = workflowTemplates.find(t => t.id === templateId)
-  if (!runbook) { console.error(`${templateId} workflow template not found.`); process.exit(2) }
-  const slugs = {}
-  for (const s of runbook.steps) {
-    slugs[s.agentTemplateId] = s.agentTemplateId
-    if (s.monitorSlug) slugs[s.monitorSlug] = s.monitorSlug
-  }
-  const wfPath = join(claudeDir, 'workflows', `${file}.json`)
-  const existing = existsSync(wfPath) ? JSON.parse(readFileSync(wfPath, 'utf8')) : null
-  const steps = materializeTemplateSteps(runbook, slugs, existing?.steps?.map(s => s.id))
-  if (!dryRun) {
-    writeFileSync(wfPath, JSON.stringify({
-      name: runbook.name,
-      description: runbook.description,
-      steps,
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
-    }, null, 2))
-  }
-  console.log(`\n${runbook.name} steps:`)
-  for (const s of steps) {
-    console.log(`  ${s.agentSlug.padEnd(26)} contextMode=${s.contextMode ?? '-'} monitor=${s.monitorSlug ?? '-'}`)
-  }
-}
+// No runbook workflows on this instance: oh-my-agent ships markdown workflows,
+// which this app's *.json loader cannot run. Nothing to report here.
 
 if (dryRun && drifted) {
   console.error(`\n${drifted} agent(s) on disk differ from the templates. Run without --dry-run to sync.`)

@@ -18,14 +18,20 @@ export interface WorkflowTemplateStep {
   approval?: boolean
   /** See WorkflowStep.gateRole. */
   gateRole?: Role
+  /** See WorkflowStep.ownerRole. Whose work the step is; grants nothing. */
+  ownerRole?: Role
+  /** See WorkflowStep.pr. The runner pushes the branch and opens the PR. */
+  pr?: boolean
   /** See WorkflowStep.continuesSession. */
   continuesSession?: boolean
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, after?: boolean }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
+  /** Hand this step the review its pull request collected. See WorkflowStep.reviewComments. */
+  reviewComments?: boolean
 }
 
 export interface WorkflowTemplate {
@@ -87,6 +93,12 @@ export function materializeTemplateSteps(
       // sets it: a step that declares whose gate it is should not silently lose
       // that when someone later toggles `approval` back on.
       ...(step.gateRole ? { gateRole: step.gateRole } : {}),
+      // Carried for the same reason gateRole is: a step that declares whose
+      // work it is must not lose that on the way to the workflow the runner
+      // reads. A field missing from this whitelist is dropped in silence -
+      // which is how `jira.after` once worked in the template and was absent
+      // from the seeded JSON.
+      ...(step.ownerRole ? { ownerRole: step.ownerRole } : {}),
     }
     if (step.next) {
       const resolved = step.next
@@ -115,143 +127,340 @@ export function materializeTemplateSteps(
     if (step.maxVisits !== undefined) materialized.maxVisits = step.maxVisits
     if (step.contextMode !== undefined) materialized.contextMode = step.contextMode
     if (step.jira !== undefined) materialized.jira = step.jira
+    if (step.pr) materialized.pr = true
+    // A field missing from this whitelist is dropped in silence - which is how
+    // jira.after once lived in the template and was absent from the seeded JSON.
+    if (step.reviewComments) materialized.reviewComments = true
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.continuesSession) materialized.continuesSession = true
     return materialized
   })
 }
 
-/** The runbooks the team ships: template id -> the file name each is seeded as under the config dir's workflows/. Shared by the server's team sync and scripts/sync-agents.mjs. */
-export const RUNBOOK_FILES: Record<string, string> = {
-  'runbook-a-jira-to-diff': 'runbook-a-ticket-to-evidence-backed-pr',
-  'runbook-c-ce-ticket-to-pr': 'runbook-c-ce-ticket-to-qa-proven-pr',
-}
-
 export const workflowTemplates: WorkflowTemplate[] = [
   {
-    id: 'code-review-pipeline',
-    name: 'Code Review Pipeline',
-    description: 'Review code changes then update documentation.',
-    icon: 'i-lucide-scan-eye',
+    id: 'oma-plan-build-review',
+    name: 'Work: Parallel Plan, Build, Verify',
+    description: 'Investigate and reproduce in parallel, plan from both, implement backend and frontend in parallel, then verify, refine and document.',
+    icon: 'i-lucide-git-branch',
+    // `agentTemplateId` IS the agent slug here: runbookSteps() builds an
+    // identity map (teamSync.ts:207-211), so these resolve directly against the
+    // oh-my-agent agents this instance seeds from .agents/agents — no entry in
+    // `agentTemplates` is needed, which is why an empty catalogue does not stop
+    // this materialising.
+    //
+    // The shape is oh-my-agent's /work phases with /orchestrate's fan-out:
+    // COLLECT (2 lanes) -> PLAN -> IMPL (2 lanes) -> VERIFY -> REFINE -> SHIP.
+    // Two waves run in parallel and two steps are joins; `markCompleted` arms a
+    // forward target only once EVERY forward predecessor completed
+    // (shared/utils/workflowGraph.ts), so each join really waits for its lanes.
+    //
+    // One agent per step, deliberately: `next` names a step by its
+    // `agentTemplateId`, so the same agent twice makes every edge pointing at it
+    // ambiguous (materializeTemplateSteps: "the last step wins").
     steps: [
-      { agentTemplateId: 'code-reviewer', label: 'Review Code' },
-      { agentTemplateId: 'documentation-writer', label: 'Update Docs' },
+      // COLLECT. Both are entry nodes - no forward predecessors - so the engine
+      // starts them together rather than in array order.
+      {
+        agentTemplateId: 'research-explorer',
+        label: 'Research & Prior Art',
+        next: ['pm-planner'],
+      },
+      {
+        agentTemplateId: 'debug-investigator',
+        label: 'Reproduce & Failing Test',
+        next: ['pm-planner'],
+        // This step owns the tests, and only this step: it writes the failing
+        // regression test that proves the defect, and the test-lock guardrail
+        // then freezes tests for every step after it. Unlocking the implementer
+        // lanes instead would let the agent that writes the fix also relax the
+        // test that judges it.
+        testsUnlocked: true,
+      },
+      // PLAN. A join over both collect lanes, and it needs their evidence, not
+      // just the immediately preceding output.
+      {
+        agentTemplateId: 'pm-planner',
+        label: 'Plan',
+        next: ['architecture-reviewer'],
+        contextMode: 'ancestors',
+      },
+      // Reviews the plan before any code is written, and fans out to the
+      // implementation lanes. No approval: the run is meant to reach QA without
+      // a babysitter, and a plan nobody implemented yet is cheap to redo.
+      {
+        agentTemplateId: 'architecture-reviewer',
+        label: 'Plan Review',
+        next: ['backend-engineer', 'frontend-engineer'],
+        contextMode: 'ancestors',
+      },
+      // IMPL, in parallel, and genuinely concurrent: each step works in its own
+      // lane worktree on its own branch, both merged into the run branch when
+      // the wave settles. Split by layer so the lanes do not merge-conflict either.
+      {
+        agentTemplateId: 'backend-engineer',
+        label: 'Implement Backend',
+        next: ['qa-reviewer'],
+      },
+      {
+        agentTemplateId: 'frontend-engineer',
+        label: 'Implement Frontend',
+        next: ['qa-reviewer'],
+      },
+      // VERIFY. The join over both lanes, and the one human gate: QA owns it, so
+      // a developer cannot accept their own verification. `ancestors` because a
+      // review that cannot see the plan and the failing test cannot tell whether
+      // the change met either.
+      {
+        agentTemplateId: 'qa-reviewer',
+        label: 'Verify',
+        next: ['refactor-engineer'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'qa',
+      },
+      // REFINE, then SHIP. Both run after verification passes, never before: a
+      // refactor judged by nothing is how a green suite turns red.
+      {
+        agentTemplateId: 'refactor-engineer',
+        label: 'Refine',
+        next: ['docs-curator'],
+      },
+      {
+        agentTemplateId: 'docs-curator',
+        label: 'Docs & Handoff',
+        // Explicitly terminal: an absent `next` would fall back to array order,
+        // and this step being last today is an accident of ordering, not intent.
+        next: [],
+        contextMode: 'ancestors',
+      },
     ],
   },
   {
-    id: 'content-creation',
-    name: 'Content Creation',
-    description: 'Research a topic then write about it.',
-    icon: 'i-lucide-pen-line',
+    id: 'oma-csup-to-pr',
+    name: 'CSUP: support ticket to pull request',
+    description: 'A customer-support ticket taken to an opened pull request, with the plan, verification and ship decisions owned by three different people.',
+    icon: 'i-lucide-life-buoy',
+    // Every gate this engine has, used for what it is for:
+    //
+    //   approval + gateRole  three HUMAN gates, one per persona (below).
+    //   monitorSlug          an automated reviewer on each writing step, voting
+    //                        CONTINUE / RETRY / ABORT on that step's output.
+    //   maxVisits            how many times a step may be re-entered by a RETRY
+    //                        vote or a rework before the run gives up.
+    //   contextMode          'ancestors' for the steps that judge, so a reviewer
+    //                        sees the plan and the failing test, not just the
+    //                        step before it.
+    //   testsUnlocked        exactly one step owns the tests.
+    //   jira                 runner-executed transitions and the outcome comment.
+    //
+    // The three gates are deliberately THREE ROLES, not one: a developer
+    // authorises the plan they are about to implement, QA alone accepts the
+    // verification, and the release itself belongs to neither of them.
+    // `gateRole` is enforced server-side (requireGateRole), so this is a rule
+    // rather than a convention - one person cannot answer all three.
+    //
+    // The ship gate names `operator`, not `manager`, and the reason is worth
+    // recording: this template first said `manager`, which reads correctly and
+    // cannot work. A manager holds `answerGate: false` by design ("reads
+    // progress across runs, changes nothing"), and `continue.post.ts` checks
+    // that capability BEFORE gate ownership - so the one gate the template
+    // called theirs returned a 403 that did not even name them as its owner.
+    // Naming the operator makes the refusal truthful and keeps the separation
+    // that matters: the author does not ship, and neither does the verifier.
+    // Giving `manager` the capability instead would widen a role the role
+    // model and its tests define as read-only, and would also hand it the
+    // queue-clearing that rides on the same capability.
+    //
+    // Whether a gate actually stops is NOT decided here. `approval` marks a
+    // point where a gate MAY fire; shared/utils/oversight.ts decides from the
+    // blast radius intake records - docs/ui_parsing flow through, schema and
+    // deployment stop, protocol and money refuse an approval with no written
+    // reason. That is why step 1 exists: with no radius on the record every
+    // gate stops blindly, which is how CSUP-7516 - a money-path change to tax
+    // arithmetic - was approved in a single click.
+    //
+    // CSUP is a cross-product support queue: its tickets land in Billing,
+    // Selfcare, CRM, OCS and WSO2 alike, and engineering/registry/products.yaml
+    // has no `projects: [CSUP]` entry for that reason. The product therefore
+    // comes from the run (a productKey chosen at start, or resolution from the
+    // ticket text), never from this template.
+    //
+    // Every concurrent step gets its OWN git worktree, cut from the run branch
+    // and merged back when the wave settles (openLanes/closeLanes in
+    // workflowRunner.ts), so a fan-out of writers no longer races on one index.
+    // The two implementation steps below are still serial, for a different and
+    // unchanged reason: the client change is written against the contract the
+    // backend step just settled, so running them together would leave the
+    // frontend guessing at it.
     steps: [
-      { agentTemplateId: 'research-assistant', label: 'Research' },
-      { agentTemplateId: 'writing-assistant', label: 'Write' },
-    ],
-  },
-  {
-    id: 'email-workflow',
-    name: 'Email Workflow',
-    description: 'Draft content then format as a professional email.',
-    icon: 'i-lucide-mail',
-    steps: [
-      { agentTemplateId: 'writing-assistant', label: 'Draft Content' },
-      { agentTemplateId: 'email-drafter', label: 'Format Email' },
-    ],
-  },
-  {
-    id: 'runbook-a-jira-to-diff',
-    name: 'Runbook A — Ticket to Evidence-Backed PR',
-    description: 'Paste a support ticket: stands up the stack, writes a failing parameterised test, fixes the cause, verifies, and opens a PR carrying the evidence bundle.',
-    icon: 'i-lucide-git-pull-request-arrow',
-    steps: [
-      // Runner-executed, no model: the ticket moves to In Progress the moment the
-      // run starts, so nobody else picks it up while an agent is on it.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack',
-        next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', next: ['sdlc-fix-implementer'], monitorSlug: 'sdlc-step-monitor' },
-      // Verification and browser evidence are independent of each other - one wave.
-      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['sdlc-verifier', 'sdlc-trace-capture', 'sdlc-security-review'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-verifier', label: 'Verify + Regression',
-        next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-trace-capture', label: 'Browser Trace', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      // Security review runs beside verification and tracing; the PR waits on all three.
-      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-evidence-and-pr'], monitorSlug: 'sdlc-step-monitor' },
-      // The one step with an outward effect: it pushes and opens the pull request, and
-      // it waits for a person. The gate at the diff on the bug path - GTAC has already
-      // gated these on reproducibility, so one human decision at the diff is the whole
-      // human workflow for a C-sub up to the PR; the Jira write below is the other.
-      { agentTemplateId: 'sdlc-evidence-and-pr', label: 'Evidence Bundle + PR',
-        next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-      // Closes the loop the PR opens: reviewer checklist answered, checks watched, blockers
-      // from the automated review fixed and pushed. Loops on RETRY until mergeable.
-      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review',
-        next: ['sdlc-jira-tracker'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
-      // `next` names a template id, and a repeated id resolves to its LAST step, which
-      // is this one: the review step, not the In Progress step at the top.
-      // The second gate on the bug path: the one step that writes to a customer's
-      // ticket, and it waits for a person. Moving an issue to Dev Done, commenting on it and attaching the
-      // evidence is the pipeline ASSERTING the work is finished, to an audience
-      // of reporters, watchers and whoever is on support that week. A human
-      // qualifies that claim before it is made. Starting the run is what
-      // justifies the In Progress transition above; nothing justifies Dev Done
-      // except someone having looked.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-    ],
-  },
-  {
-    id: 'runbook-c-ce-ticket-to-pr',
-    name: 'Runbook C — ce Ticket to QA-Proven PR',
-    description: 'Paste a ticket: stands up the stack, plans the change and its QA cases, implements and reviews the way the compound-engineering skills do, rebuilds the stack from the fix, runs automated and manual QA against it, and opens the PR carrying all of it.',
-    icon: 'i-lucide-workflow',
-    steps: [
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: In Progress', next: ['sdlc-ticket-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-ticket-intake', label: 'Ticket Intake', next: ['sdlc-stack-provisioner'], monitorSlug: 'sdlc-step-monitor' },
-      // The runner makes the run's worktree beside the clone as soon as this step has cloned it; every step after works there.
-      { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', next: ['sdlc-ce-plan'], monitorSlug: 'sdlc-step-monitor' },
-      // ce-plan: the implementation plan and the QA plan (automated and manual cases) the run is judged by.
-      { agentTemplateId: 'sdlc-ce-plan', label: 'Plan', next: ['sdlc-ce-work'], monitorSlug: 'sdlc-step-monitor' },
-      // Labelled as in Runbook A on purpose: the security review and the QA steps send work back to "Implement Fix".
-      // ce-work writes each test before the code that passes it, in one step, so the
-      // test lock that guards Runbook A's separate fix step would stop it after the
-      // first source edit; a real run asked the operator for the unlock and stalled.
-      // Gate 1 of 4 on the feature path: a person approves the plan before an agent
-      // spends an hour building from it.
-      // Continues the planner's session. It is the same agent's work: the plan
-      // it just wrote, the files it just read, the repository it just learned.
-      // Across the recorded runs this pair and its Runbook A equivalent were
-      // over half of every run's cost, each half rebuilding what the other had
-      // just finished learning.
-      { agentTemplateId: 'sdlc-ce-work', label: 'Implement Fix', next: ['sdlc-ce-review'], approval: true, gateRole: 'developer', continuesSession: true, monitorSlug: 'sdlc-step-monitor', testsUnlocked: true },
-      { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
-      // Gate 2 of 4: the diff. Rebuilding the stack is the first step that acts on the
-      // change, so approval here is the last moment a person sees it before it runs.
-      // Rebuilds the image from the worktree and redeploys in place, alone, before anything tests it.
-      { agentTemplateId: 'sdlc-stack-update', label: 'Update Stack', next: ['sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review'], approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-      // QA is the gate: both halves and the security review run against the rebuilt stack in one wave, and a FAIL sends the run back to Implement Fix.
-      { agentTemplateId: 'sdlc-qa-automated', label: 'Automated QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-qa-manual', label: 'Manual QA', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-security-review', label: 'Security Review', next: ['sdlc-ce-ship'], monitorSlug: 'sdlc-step-monitor' },
-      // Gate 3 of 4: verification. QA answers this one - the automated and manual QA
-      // reports and the security review are all in before anything is pushed.
-      // The one step with an outward effect: pushes the branch and opens the PR quoting the QA, review and security reports.
-      // QA's gate, per the comment above: the automated and manual QA reports and
-      // the security review are all in before anything is pushed, so the person
-      // who owns verification is the person who accepts it.
-      { agentTemplateId: 'sdlc-ce-ship', label: 'Push + PR', next: ['sdlc-pr-follow-up'], contextMode: 'ancestors', approval: true, gateRole: 'qa', monitorSlug: 'sdlc-step-monitor' },
-      // Continues the ship step's session: same branch, same PR, same GitHub
-      // context, minutes later. Answering a reviewer on a PR you just opened is
-      // not a new problem.
-      { agentTemplateId: 'sdlc-pr-follow-up', label: 'PR Checks + Review', next: ['sdlc-jira-tracker'], contextMode: 'ancestors', continuesSession: true, maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
-      // Gate 4 of 4: the one step that writes to a customer's ticket, and it waits
-      // for a person. Moving an issue to Dev Done, commenting on it and attaching
-      // the evidence is the pipeline ASSERTING the work is finished, to an
-      // audience of reporters, watchers and whoever is on support that week. A
-      // human qualifies that claim before it is made. Starting the run is what
-      // justifies the In Progress transition above; nothing justifies Dev Done
-      // except someone having looked.
-      { agentTemplateId: 'sdlc-jira-tracker', label: 'Jira: Dev Done', next: [], jira: { transition: 'Dev Done', comment: true, attach: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
+      // 1. Runner moves the ticket to In Progress, and the agent records the
+      // classification everything downstream reads: work_type and origin pick
+      // the base branch (baseBranchFor), blast_radius sets how hard each gate
+      // below bites.
+      {
+        agentTemplateId: 'pm-planner',
+        label: 'Intake & Classification',
+        next: ['research-explorer', 'debug-investigator'],
+        // No Jira config at all any more, and both halves of that are
+        // deliberate.
+        //
+        // The transition is gone because Jira refused it on every run: moving
+        // the ticket needs the 'Administer Projects' permission this instance's
+        // account does not hold, and a step that reports a 400 every time
+        // teaches people to ignore its output.
+        //
+        // Losing the config entirely is also what makes this step DO its job.
+        // The runner performs a step's Jira work INSTEAD of calling its agent
+        // unless told `after`, so while a bare `jira` sat here pm-planner never
+        // ran, and the classification this step exists to record - work type,
+        // origin, blast radius - was never written. Every gate downstream then
+        // read "no blast radius recorded yet" and stopped for a person, which
+        // is safe and entirely unearned.
+      },
+      // 2-3. COLLECT, in parallel. One writer in the wave: research reads, and
+      // only the reproduction step writes - and what it writes is the test.
+      {
+        agentTemplateId: 'research-explorer',
+        label: 'Prior Art & Customer Impact',
+        next: ['architecture-reviewer'],
+      },
+      {
+        agentTemplateId: 'debug-investigator',
+        label: 'Reproduce & Failing Test',
+        next: ['architecture-reviewer'],
+        // The only step that may write tests - and the only step whose output
+        // the whole run is later judged against, which is why it is monitored.
+        //
+        // The comment here used to say every step after this one is "under the
+        // plugin's test lock, so the agent that writes the fix cannot relax the
+        // test that judges it". That was not true: the runner writes the unlock
+        // file into the run worktree and never removes it, and nothing read the
+        // diff, so the fix agent could edit the oracle freely. The control now
+        // exists (server/utils/testLock.ts) and the honest statement is that
+        // the lock is enforced by reading the diff, not by the unlock file.
+        testsUnlocked: true,
+        monitorSlug: 'qa-reviewer',
+      },
+      // 4. GATE 1 of 3 - the plan. Joins both collect lanes and reads their
+      // evidence. The DEVELOPER answers: it is their scope and their next step.
+      {
+        agentTemplateId: 'architecture-reviewer',
+        label: 'Plan Review',
+        next: ['backend-engineer'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'developer',
+        // Owner and gate differ here on purpose, and this step is the reason
+        // ownership cannot be derived: the work is the architect's review, the
+        // decision is the developer's because it is their plan and their next
+        // step. Deriving an owner from either field would contradict the other.
+        ownerRole: 'architect',
+      },
+      // 5-6. IMPL, serialized on a real dependency rather than on git: the
+      // client change follows the contract the fix settles. Each carries an
+      // automated reviewer that can vote it back for another visit.
+      {
+        agentTemplateId: 'backend-engineer',
+        label: 'Implement Fix',
+        ownerRole: 'developer',
+        // The migration review reads what THIS step did to schema and data, so
+        // it is ready the moment this step lands. It used to sit behind the
+        // client change and therefore behind the QA gate - a whole agent turn of
+        // latency bought for nothing, since the two share no data dependency and
+        // write different files. They now run as one wave, each in its own lane.
+        next: ['frontend-engineer', 'db-engineer'],
+        // Judged by the agent that never writes source. `refactor-engineer` was
+        // reviewing this step, and its own contract is behaviour-preserving
+        // refactoring - briefed on metrics, not on whether the diff touched the
+        // test that judges the fix.
+        monitorSlug: 'qa-reviewer',
+        maxVisits: 3,
+      },
+      {
+        agentTemplateId: 'frontend-engineer',
+        label: 'Implement Client Change',
+        // The user-facing half of the fix. Owned by design, gated by nobody:
+        // owning a step is not deciding at one.
+        ownerRole: 'designer',
+        next: ['qa-reviewer'],
+        monitorSlug: 'refactor-engineer',
+        maxVisits: 3,
+      },
+      // 7-8. VERIFY, in parallel, each in its own lane worktree. Gate 2 of 3
+      // sits on the QA lane: QA alone accepts the verification of someone
+      // else's change.
+      {
+        agentTemplateId: 'qa-reviewer',
+        label: 'Verify, Security & Regression',
+        ownerRole: 'qa',
+        next: ['docs-curator'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'qa',
+      },
+      {
+        agentTemplateId: 'db-engineer',
+        label: 'Data & Migration Review',
+        // Schema and migration cost lands on other teams and on future runs,
+        // which is the architect's business even though no gate fires here yet.
+        ownerRole: 'architect',
+        next: ['docs-curator'],
+        contextMode: 'ancestors',
+      },
+      // 9. GATE 3 of 3 - shipping. Joins both review lanes. Opening the pull
+      // request is the release decision, and neither the author nor the
+      // verifier owns it. The runner then opens that PR and posts the outcome
+      // comment with the evidence attached.
+      {
+        agentTemplateId: 'docs-curator',
+        label: 'Evidence, Docs & Pull Request',
+        ownerRole: 'operator',
+        next: ['refactor-engineer'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'operator',
+        // The RUNNER opens the pull request (`pr`), then posts the comment and
+        // attaches the evidence (`jira.after`) - in that order, so the comment
+        // carries the URL. The agent was expected to open the PR and never did:
+        // it is a documentation curator, and no agent in the estate opens one.
+        //
+        // No `transition`: moving the ticket to Dev Done needs the 'Administer
+        // Projects' permission this instance's account does not hold, so it
+        // failed with a 400 on every run. The comment and the attachments work,
+        // and they are the parts a reporter actually reads.
+        pr: true,
+        jira: { comment: true, attach: true, after: true },
+      },
+      // 10. AFTER THE PULL REQUEST. The workflow used to end at step 9, which
+      // meant it treated review as somebody else's problem: two pull requests
+      // from one run collected review comments - a duplicated constant that
+      // could drift, and untested security-sensitive escaping - and nothing in
+      // the pipeline ever read them. They sat until a person noticed.
+      //
+      // GATED, and that is the whole design. A review lands minutes after the
+      // push, so a step that ran straight after step 9 would open an empty pull
+      // request, find nothing and report success - the same hollow success as a
+      // ship step that opened no PR at all. The developer releases this gate
+      // when the comments are actually in, which is also the person who has to
+      // live with the answer.
+      //
+      // `refactor-engineer` because revising code under review is what it is
+      // for, and because `next` resolves by agentTemplateId: an agent already
+      // used in this template would make routing ambiguous.
+      {
+        agentTemplateId: 'refactor-engineer',
+        label: 'Address Review Comments',
+        ownerRole: 'developer',
+        // The runner hands this step the review its pull request collected, as
+        // review-comments.json in the run's artifacts, before the agent starts.
+        reviewComments: true,
+        next: [],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'developer',
+        maxVisits: 3,
+      },
     ],
   },
 ]

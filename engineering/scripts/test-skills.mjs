@@ -72,11 +72,16 @@ function readFrontmatter(path) {
 
 // ═══ Skills ══════════════════════════════════════════════════════════════
 
-const skillsDir = join(root, 'skills')
+// The oh-my-agent SSOT is the only skill tree on this instance; engineering/
+// no longer ships skills of its own (see the prune on chore/prune-to-oma).
+const skillsDir = join(root, '..', '.agents', 'skills')
 assert.ok(existsSync(skillsDir), 'skills/ must exist')
 
+// `_shared/` is oh-my-agent's shared-fragment tree (core/, runtime/), read by
+// name from skill bodies rather than being a skill itself — it has no SKILL.md
+// and must not be judged as one.
 const skillDirs = readdirSync(skillsDir).filter(name =>
-  statSync(join(skillsDir, name)).isDirectory())
+  name !== '_shared' && statSync(join(skillsDir, name)).isDirectory())
 assert.ok(skillDirs.length > 0, 'skills/ must contain at least one skill directory')
 
 for (const dirName of skillDirs) {
@@ -99,10 +104,14 @@ console.log(`skills: ${skillDirs.length} directories, each has a SKILL.md whose 
 
 // Both content skills this task set out to write must actually be present —
 // not just "whatever is in skills/ is internally consistent."
-for (const slug of ['regression-matrix', 'intent-template']) {
+// Two oh-my-agent skills whose absence would mean the SSOT did not ship: the
+// QA skill every qa-reviewer run declares, and the debug skill behind
+// debug-investigator. `regression-matrix` and `intent-template` were
+// engineering/skills entries and went with that tree.
+for (const slug of ['oma-qa', 'oma-debug']) {
   assert.ok(skillDirs.includes(slug), `skills/${slug}/ must exist`)
 }
-console.log('skills: regression-matrix and intent-template are both present')
+console.log('skills: oma-qa and oma-debug are both present')
 
 // ═══ Commands ════════════════════════════════════════════════════════════
 

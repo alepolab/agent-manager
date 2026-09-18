@@ -13,6 +13,16 @@ export interface RunStep {
   label: string
   /** The agent behind this step. The operator's real question is "which agent, and how is it doing". */
   agentSlug: string
+  /**
+   * Whose work this step is, copied from the workflow at run creation \u2014 the way
+   * `gateRole` is copied onto `run.question.role` when a gate fires.
+   *
+   * Copied rather than looked up so the run page renders a chip without
+   * loading the workflow, and so a later template edit cannot rewrite a
+   * finished run's history. Absent on every run recorded before the field
+   * existed; those render no owner rather than a guessed one.
+   */
+  ownerRole?: Role
   status: RunStepStatus
   input: string
   output: string
@@ -35,6 +45,12 @@ export interface RunStep {
   sessionProject?: string
   /** When this visit continued an earlier SDK session rather than starting one, that session's id. */
   resumedFrom?: string
+  /**
+   * The directory this step's agent worked in, when it was not the run's own
+   * worktree: its lane, cut because the step ran concurrently with others.
+   * Absent for every step of a single-step wave, which works in run.projectDir.
+   */
+  worktree?: string
   /** Tokens the agent call actually consumed, as the SDK reported them. */
   usage?: { input_tokens: number, output_tokens: number, /** Of input_tokens, served from the prompt cache. */ cache_read_input_tokens?: number, /** The SDK's own cost figure for the call, when it reported one. */ usd?: number } | null
   /** Lightweight, THROTTLED progress telemetry surfaced from callAgent's SDK

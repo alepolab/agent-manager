@@ -6,8 +6,21 @@ import { runArtifactsDir } from './runArtifacts.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
-/** A workflow step the runner executes itself: move the ticket, post the outcome comment, or both. */
+/** A workflow step's Jira work: move the ticket, post the outcome comment, or both. */
 export interface JiraStepConfig {
+  /**
+   * Run the step's AGENT first and this Jira work once it has succeeded,
+   * instead of the Jira work replacing the agent entirely.
+   *
+   * The default (false) is right for a step that is only a transition. It was
+   * silently wrong for the shipped step labelled "Evidence, Docs & Pull
+   * Request": carrying a `jira` config made the runner skip its agent, so the
+   * step completed successfully having assembled no evidence and opened no
+   * pull request. The order matters in one direction only - the outcome
+   * comment reports the pull request URLs the agent produced, so the agent has
+   * to have run before the comment is rendered.
+   */
+  after?: boolean
   /** Target status name, matched case-insensitively (with common synonyms) against the transitions the ticket offers right now. */
   transition?: string
   /** Post the run's outcome comment (the same one the notifier renders when a run settles). */

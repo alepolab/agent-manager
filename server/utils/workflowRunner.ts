@@ -17,8 +17,11 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
+import { checkTestLock, headOf } from './testLock.ts'
+import { collectReviewComments } from './reviewComments.ts'
+import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
+import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 
 /**
@@ -83,7 +86,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -124,6 +127,14 @@ interface Live {
    * it ran out of turns, the operator answered it, or a person restarted it.
    */
   resumeFrom: Record<string, string>
+  /**
+   * stepId -> the lane worktree this step's agent works in, for the duration of
+   * one parallel wave. Empty for a wave of one, which keeps the single-lane path
+   * exactly as it was: the step works in the run's own worktree.
+   */
+  laneDirs: Record<string, string>
+  /** stepId -> the lane branch to merge back into the run branch when the wave settles. */
+  laneBranches: Record<string, string>
   /** Steps the operator has approved to run (see WorkflowStep.approval). */
   approved: Set<string>
   /** Operator notes addressed to a step, delivered with its next input. */
@@ -634,13 +645,23 @@ async function runMonitor(
  * code by design, so the runner writes that file for it and the reason rides
  * with the run. Never staged: nothing under .agent/ but plan.md is.
  */
-async function unlockTests(run: WorkflowRun, label: string): Promise<void> {
-  const dir = join(run.projectDir!, '.agent')
-  try {
-    await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, 'test-unlock.json'), JSON.stringify({ reason: `The "${label}" step of ${run.workflowName} writes tests and code together by design.`, run: run.id, step: label, at: new Date().toISOString() }, null, 2))
-  } catch (err) {
-    log.warn('could not write the test unlock; the plugin lock will stop the step at its first test edit', { runId: run.id, dir, error: err instanceof Error ? err.message : String(err) })
+async function unlockTests(run: WorkflowRun, label: string, workdir: string): Promise<void> {
+  const body = JSON.stringify({ reason: `The "${label}" step of ${run.workflowName} writes tests and code together by design.`, run: run.id, step: label, at: new Date().toISOString() }, null, 2)
+  // The hook reads the unlock relative to the directory the agent is in, so the
+  // step's own workdir is the one that decides whether it may edit tests. When
+  // that workdir is a lane, the run's worktree gets a copy too: the lane is
+  // removed once its wave merges, and the unlock is also the evidence that this
+  // step was allowed to touch tests and why. Losing that with the lane would
+  // leave the reason nowhere on the record.
+  const targets = workdir === run.projectDir || !run.projectDir ? [workdir] : [workdir, run.projectDir]
+  for (const target of targets) {
+    const dir = join(target, '.agent')
+    try {
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, 'test-unlock.json'), body)
+    } catch (err) {
+      log.warn('could not write the test unlock; the plugin lock will stop the step at its first test edit', { runId: run.id, dir, error: err instanceof Error ? err.message : String(err) })
+    }
   }
 }
 
@@ -675,13 +696,44 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // the moment a checkout exists, so no step ever commits on main or develop,
   // and the header below names it.
   await ensureRunCheckout(run)
-  if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
+  // Where this step's agent actually works: its own lane when the wave runs more
+  // than one step, else the run's worktree. Everything below uses `cwd` rather
+  // than run.projectDir, so the agent, the header it is given and the record all
+  // name the same directory - a header promising the run worktree while the
+  // agent ran in a lane is how the last worktree bug read from the outside.
+  const cwd = l.laneDirs[id] ?? run.projectDir
+  if (step.testsUnlocked && cwd) await unlockTests(run, step.label, cwd)
+  // The commit this step starts from, so the test lock below can read what the
+  // step itself changed rather than everything the run has done so far.
+  const headBefore = cwd ? await headOf(cwd) : null
+
+  // Hand this step the review its own pull request collected. Written BEFORE the
+  // agent starts, because an agent cannot act on evidence that appears after it
+  // finishes - which is the whole reason review comments on three real pull
+  // requests went unanswered until a person noticed them.
+  //
+  // Never fatal: a run whose review cannot be read should still run its step and
+  // say so, rather than failing over a reviewer's availability.
+  if (step.reviewComments) {
+    try {
+      const prUrls = await prUrlsOf(run)
+      const collected = await collectReviewComments(run, { prUrls })
+      const actionable = collected.prs.reduce((n, p) => n + p.counts.actionable, 0)
+      const waiting = collected.prs.filter(p => !p.review.ready).map(p => `${p.repo}#${p.number}: ${p.review.why}`)
+      logLine(l, run, rec, prUrls.length
+        ? `review-comments.json written: ${actionable} actionable comment(s) across ${collected.prs.length} pull request(s)`
+        : 'review-comments.json written: this run recorded no pull request, so there is no review to read')
+      for (const w of waiting) logLine(l, run, rec, `review not ready - ${w}`)
+    } catch (err) {
+      logLine(l, run, rec, `could not collect review comments: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
-  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
-    dir: run.projectDir, branch: run.branch,
+  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+    dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined) + body
 
@@ -722,7 +774,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // A Jira step is the runner's own work: no model, no prompt, a REST call or
   // two, and an honest sentence about each. It settles like any other step so
   // the graph, the artifacts and the run page treat it the same.
-  if (step.jira) {
+  //
+  // `jira.after` opts out of that: the step has real agent work AND Jira work,
+  // so the agent runs first and the REST calls follow below. Without it this
+  // branch returned before the agent ran at all - which is how a step labelled
+  // "Evidence, Docs & Pull Request" completed successfully having assembled no
+  // evidence, written no docs and opened no pull request, its entire output
+  // three sentences about Jira.
+  if (step.jira && !step.jira.after) {
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
     let output: string
     try {
@@ -748,7 +807,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    const raw = await agentCaller(step.agentSlug, input, cwd, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
@@ -881,10 +940,54 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // differs, so the evidence bundle can distinguish "nothing was needed"
     // from "it was fixed". See parseSkip for why this outcome exists.
     const skip = parseSkip(output)
-    l.outputs[id] = output
+
+    // The pull request, BEFORE the Jira half below, so the outcome comment can
+    // carry a URL the runner has actually got. A step declaring `pr` gets this
+    // whether or not its agent mentioned a pull request - which is the point:
+    // the step labelled "Evidence, Docs & Pull Request" completed nine times
+    // over without opening one, because no agent in the estate opens PRs.
+    let prLines: string[] = []
+    if (step.pr && !skip) {
+      const { runPrStep } = await import('./prStep.ts')
+      const { recordPrUrls } = await import('./runArtifacts.ts')
+      try {
+        const result = await runPrStep(run)
+        prLines = result.lines
+        await recordPrUrls(run.id, result.prs)
+      } catch (err) {
+        // Never fatal: the commits are already on the branch, and a step that
+        // fails here would hide the work rather than ship it.
+        prLines = [`Pull request step failed: ${err instanceof Error ? err.message : String(err)}. The commits are on ${run.branch ?? 'the run branch'}.`]
+      }
+      for (const line of prLines) logLine(l, run, rec, line)
+    }
+
+    // The Jira half of an `after` step, once the agent's half has succeeded.
+    // This order is the point: the outcome comment reads the pull request URLs
+    // the agent has just reported, so running Jira first would post a comment
+    // about work that had not happened yet.
+    let recorded = prLines.length ? `${output}\n\n${prLines.join('\n')}` : output
+    if (step.jira?.after && !skip) {
+      let jiraOut: string
+      try {
+        jiraOut = await runJiraStep(run, step.jira)
+      } catch (err) {
+        jiraOut = `Jira step failed: ${err instanceof Error ? err.message : String(err)}. The ticket was not changed; the run goes on.`
+      }
+      // A Jira skip - no ticket on this run - must not skip the STEP, whose
+      // agent just did the work. The sentinel is rendered as a plain sentence
+      // so parseSkip cannot see it downstream either.
+      const note = jiraOut.startsWith('PIPELINE-SKIP:')
+        ? jiraOut.replace(/^PIPELINE-SKIP:\s*/, 'Jira: ')
+        : jiraOut
+      for (const line of note.split('\n')) logLine(l, run, rec, line)
+      recorded = `${recorded}\n\n${note}`
+    }
+
+    l.outputs[id] = recorded
     Object.assign(rec, {
       status: skip ? 'skipped' : 'completed',
-      output, model, usage, completedAt: Date.now(),
+      output: recorded, model, usage, completedAt: Date.now(),
       ...(skip ? { skipReason: skip } : {}),
     })
     log.info(skip ? 'step skipped itself' : 'step completed', () => ({
@@ -893,6 +996,40 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))
+
+    // THE TEST LOCK. The step that owns the tests may write them; every other
+    // step editing a test invalidates the evidence chain of the whole run - "A
+    // modified test file is never a pass, and no amount of subsequent green
+    // recovers it" (.agents/workflows/runbook-a/resources/phase-gates.md). The
+    // unlock file alone never enforced this, because nothing read the diff.
+    //
+    // Checked before the monitor, deliberately: a monitor reviewing an output
+    // whose tests were softened is reviewing a fiction, and it would vote on
+    // prose while the diff underneath it is the actual verdict.
+    if (cwd && headBefore) {
+      const lock = await checkTestLock({ dir: cwd, since: headBefore, testsUnlocked: step.testsUnlocked })
+      if (lock.indeterminate) {
+        // Unknown is not a violation, and failing a step because git could not
+        // be read would turn an environment fault into a defect report. It is
+        // recorded so the gap is visible on the record rather than silent.
+        logLine(l, run, rec, `test lock not verified: ${lock.why}`)
+        log.warn('test lock could not be verified', { runId: run.id, stepId: id, why: lock.why })
+      } else if (!lock.ok) {
+        markFailed(l.state, id)
+        const why = `This step modified ${lock.touched.length} test file(s) it does not own: ${lock.touched.join(', ')}. `
+          + 'A modified test is never a pass - it invalidates the run\'s evidence chain, and no amount of subsequent green recovers it. '
+          + 'Revert the test changes and fix the code the test judges, or declare the step testsUnlocked if writing tests is genuinely its job.'
+        for (const line of why.split('\n')) logLine(l, run, rec, line)
+        Object.assign(rec, { status: 'failed', output: recorded, model, usage, error: why, completedAt: Date.now() })
+        log.warn('step broke the test lock', { runId: run.id, stepId: id, touched: lock.touched })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      } else if (lock.touched.length) {
+        // The owning step's own test files, named on the record: the evidence
+        // should say which oracle this run is judged against.
+        logLine(l, run, rec, `tests written by this step: ${lock.touched.join(', ')}`)
+      }
+    }
 
     if (step.monitorSlug) {
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id))
@@ -1102,6 +1239,9 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   log.debug('wave starting', { runId: run.id, stepIds: wave })
   await publish(run)
 
+  // One worktree per concurrent step, cut before any of them starts.
+  await openLanes(l, run, wave)
+
   // Genuine concurrency (C4), each executeNode call publish()es independently as it
   // progresses (mirroring the client engine's parallel step execution). publish() (above)
   // serializes those writes per run id so they can never race on disk.
@@ -1115,6 +1255,23 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
     run.status = 'stopped'
     run.endedAt ??= Date.now()
+    run.currentStepIds = []
+    run.nextStepIds = []
+    l.running = false
+    await publish(run)
+    return run
+  }
+
+  // The wave is over: fold every lane's commits back into the run branch before
+  // anything reads the checkout again. Done for a failed wave too, so a lane
+  // that did complete beside a failing sibling keeps its work.
+  const laneFailure = await closeLanes(l, run, wave)
+  if (laneFailure) {
+    skipPending(l.state)
+    for (const s of run.steps) if (s.status === 'pending') s.status = 'skipped'
+    run.status = 'failed'
+    run.error = laneFailure
+    run.endedAt = Date.now()
     run.currentStepIds = []
     run.nextStepIds = []
     l.running = false
@@ -1250,6 +1407,80 @@ async function readClassification(run: WorkflowRun): Promise<{ work_type?: strin
   } catch { return null }
 }
 
+/**
+ * Give every step of a parallel wave its own worktree, so two agents writing at
+ * once cannot contend for one git index.
+ *
+ * Sequential on purpose: `worktree add` takes the repository's index lock, and
+ * the whole reason lanes exist is that concurrent git in one checkout fails.
+ *
+ * A wave of one gets nothing - that step works in the run's worktree, exactly
+ * as before lanes existed. Jira steps get nothing either: the runner makes REST
+ * calls for them and no agent ever enters a directory.
+ *
+ * Best effort per lane: a lane that cannot be cut leaves that step in the run
+ * worktree with a warning, which is the old behaviour rather than a dead run.
+ */
+async function openLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<void> {
+  if (wave.length < 2 || !run.projectDir || !run.branch) return
+  for (const id of wave) {
+    const step = stepOf(l, id)
+    if (!step || step.jira) continue
+    const laneBranch = laneBranchFor(run.branch, step.label)
+    try {
+      l.laneDirs[id] = await ensureLane(run.projectDir, laneBranch)
+      l.laneBranches[id] = laneBranch
+      const rec = recOf(run, id)
+      if (rec) rec.worktree = l.laneDirs[id]
+    } catch (err) {
+      log.warn('could not cut a lane worktree; this step shares the run worktree with its wave', {
+        runId: run.id, stepId: id, laneBranch, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  if (Object.keys(l.laneBranches).length) {
+    log.info('wave lanes ready', { runId: run.id, lanes: wave.map(id => l.laneBranches[id]).filter(Boolean) })
+  }
+}
+
+/**
+ * Merge every lane of a settled wave back into the run branch and remove it, so
+ * the run branch holds all of the wave's work before the next step reads the
+ * checkout - and so the pull request is cut from one branch, not several.
+ *
+ * Only lanes whose step COMPLETED are merged: a failed step's commits stay on
+ * its lane branch rather than landing half-done work on the run branch, and the
+ * branch is left in place so a person can look at it.
+ *
+ * A conflict is reported on the run and fails the wave. Two agents that edited
+ * the same lines is a workflow whose lanes were not disjoint, and no automatic
+ * resolution here could be trusted to keep both.
+ */
+async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<string | null> {
+  if (!run.projectDir) return null
+  let failure: string | null = null
+  for (const id of wave) {
+    const laneBranch = l.laneBranches[id]
+    if (!laneBranch) continue
+    const rec = recOf(run, id)
+    delete l.laneDirs[id]
+    delete l.laneBranches[id]
+    if (rec?.status !== 'completed') {
+      log.warn('lane left unmerged: its step did not complete', { runId: run.id, stepId: id, laneBranch, status: rec?.status })
+      continue
+    }
+    try {
+      const said = await mergeLane(run.projectDir, laneBranch)
+      log.info('lane merged', { runId: run.id, stepId: id, result: said })
+      await removeLane(run.projectDir, laneBranch)
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err)
+      log.error('lane could not be merged', { runId: run.id, stepId: id, laneBranch, error: failure })
+    }
+  }
+  return failure
+}
+
 // Wave siblings start together and each asks for the checkout; git takes one
 // index lock at a time, and the second `worktree add` used to fail into the
 // silent fallback. One creation per run at a time, the others await it.
@@ -1357,7 +1588,10 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     ticketKey,
     projectDir,
     baseCommit,
-    steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
+    // `ownerRole` is snapshotted with the rest: the run page must render whose
+    // work a step is without loading the workflow, and a template edited after
+    // this run started must not rewrite what this run's history says.
+    steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug, ...(s.ownerRole ? { ownerRole: s.ownerRole } : {}) })),
   })
   await ensureRunCheckout(run)
   // Before the gate below, not after: a run that fails preflight is precisely
@@ -1386,7 +1620,7 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const graph = buildGraph(opts.workflow.steps)
   const l: Live = {
     workflow: opts.workflow, graph, state: initRunState(graph),
-    outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
+    outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(), laneDirs: {}, laneBranches: {},
   }
   live.set(run.id, l)
   void driveToSettlement(l, run)
@@ -1693,7 +1927,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(),
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(), laneDirs: {}, laneBranches: {},
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   // A declared skip is a settled outcome, the same as completed: a restart of a

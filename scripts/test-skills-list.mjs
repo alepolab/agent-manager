@@ -18,7 +18,7 @@ assert.equal(R.matchMcpServer([], 'atlassian', { mcp: 'atlassian' }, ''), undefi
 // Every skill on the instance reaches an agent somehow, and the page must say
 // which way. `agents` means DECLARED — buildAgentSystemPrompt inlines the whole
 // body into that agent's prompt. `readBy` means the agent is told to cat it
-// from $SDLC_SKILLS_DIR or $CE_SKILLS_DIR at run time; declaring those instead
+// from $SDLC_SKILLS_DIR at run time; declaring those instead
 // measured at ~80,000 tokens per agent per step, which is why they are not in
 // frontmatter and why the two lists must not be merged into one.
 //
@@ -26,14 +26,14 @@ assert.equal(R.matchMcpServer([], 'atlassian', { mcp: 'atlassian' }, ''), undefi
 // relationship existed only inside prompt prose.
 {
   const declared = { name: 'Fix Implementer', slug: 'sdlc-fix-implementer' }
-  const catalogue = { name: 'CE Work', slug: 'sdlc-ce-work' }
+  const catalogue = { name: 'Backend Engineer', slug: 'backend-engineer' }
   const bodyOf = slug => slug === declared.slug
     ? 'nothing to see'
-    : 'Read `$CE_SKILLS_DIR/ce-work/SKILL.md` first, and the row for `python-testing` when it applies.'
+    : 'Read `$SDLC_SKILLS_DIR/python-testing/SKILL.md` first, and the row for `python-testing` when it applies.'
 
   // The shapes the handler matches, asserted here so a prompt rewrite that
   // drops them is caught by a test rather than by an empty badge.
-  assert.ok(bodyOf(catalogue.slug).includes('_SKILLS_DIR/ce-work/'), 'the run-time path form')
+  assert.ok(bodyOf(catalogue.slug).includes('_SKILLS_DIR/python-testing/'), 'the run-time path form')
   assert.ok(bodyOf(catalogue.slug).includes('`python-testing`'), 'the catalogue row form')
   assert.ok(!bodyOf(declared.slug).includes('_SKILLS_DIR/'), 'an agent that declares a skill needs no body reference')
 }

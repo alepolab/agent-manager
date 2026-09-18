@@ -1320,6 +1320,212 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.match(lost.steps.find(s => s.stepId === 'r').error, /not a step of this run/)
 }
 
+// ── a step may carry BOTH agent work and Jira work, in that order ─────────
+//
+// The runner performs a step's Jira work INSTEAD of calling its agent, which is
+// right for a step that is only a transition and silently wrong for one that is
+// not: the shipped "Evidence, Docs & Pull Request" step completed successfully
+// having assembled no evidence and opened no pull request, because the presence
+// of `jira` returned before its agent ran. `jira.after` is the opt-out, and the
+// ORDER is the point - the outcome comment has to be able to name a pull request
+// the agent opened moments earlier.
+//
+// Posting stays disabled here, so every assertion below is about the runner and
+// nothing leaves the process.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const called = []
+  runner.setAgentCaller(async (agentSlug) => { called.push(agentSlug); return `did ${agentSlug} work` })
+
+  const withJira = {
+    slug: 'jira-order', name: 'Jira order',
+    steps: [
+      { id: 'move', agentSlug: 'agent-tracker', label: 'Move the ticket', next: ['ship'], jira: { transition: 'In Progress' } },
+      { id: 'ship', agentSlug: 'agent-ship', label: 'Evidence, Docs & Pull Request', next: [], jira: { transition: 'Dev Done', comment: true, after: true } },
+    ],
+  }
+  const settled = await runner.waitForSettled(
+    (await runner.startRun({ workflow: withJira, initialPrompt: 'CSUP-1 ship it', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(settled.status, 'completed', `the run completed (was ${settled.status}: ${settled.error ?? 'no error'})`)
+
+  // The transition-only step called no agent; the after step called exactly its own.
+  assert.deepEqual(called, ['agent-ship'], 'a jira step runs no agent, and an after step runs only its own')
+
+  const move = settled.steps.find(s => s.stepId === 'move')
+  const ship = settled.steps.find(s => s.stepId === 'ship')
+  assert.doesNotMatch(move.output, /did agent-tracker work/, 'a transition-only step is still the runner\'s own work')
+  assert.match(move.output, /In Progress/, 'and still says what it would have done')
+
+  // Both halves are on the record, the agent's first.
+  assert.match(ship.output, /did agent-ship work/, "the after step keeps its agent's output")
+  assert.match(ship.output, /Dev Done/, 'and appends the Jira work to it')
+  assert.ok(
+    ship.output.indexOf('did agent-ship work') < ship.output.indexOf('Dev Done'),
+    'the agent ran BEFORE the Jira work, or the comment could not carry what the agent produced',
+  )
+  assert.equal(ship.status, 'completed', 'the step completed')
+  assert.equal(ship.skipReason, undefined, 'and a Jira sentence never turns into a skip of the step')
+  // Downstream context and the run page read the step's output, so both halves
+  // have to be in the recorded one - not only in the log.
+  assert.equal(settled.steps.at(-1).output, ship.output, 'the recorded output is the one the run carries')
+}
+
+// \u2500\u2500 the pull request is opened BEFORE the Jira comment \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n// The comment reports the pull request URLs the run produced, so posting it
+// first is a comment about work that has not happened. Asserted on the order of
+// the two halves in the step's recorded output, because that is the same order
+// the runner performed them in.
+{
+  delete process.env.JIRA_POST_ENABLED
+  runner.setAgentCaller(async (agentSlug) => `did ${agentSlug} work`)
+  const both = {
+    slug: 'pr-then-jira', name: 'PR then Jira',
+    steps: [
+      { id: 'ship', agentSlug: 'agent-ship', label: 'Evidence, Docs & Pull Request', next: [], pr: true, jira: { transition: 'Dev Done', comment: true, after: true } },
+    ],
+  }
+  const settled = await runner.waitForSettled(
+    (await runner.startRun({ workflow: both, initialPrompt: 'CSUP-1 ship it', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(settled.status, 'completed', `the run completed (was ${settled.status}: ${settled.error ?? 'no error'})`)
+  const out = settled.steps[0].output
+  // No checkout here, so the PR half reports honestly that it has nothing to
+  // push - which is exactly what it must do rather than inventing a URL.
+  const prAt = Math.max(out.indexOf('pull request'), out.indexOf('Pull request'))
+  const jiraAt = out.indexOf('Dev Done')
+  assert.ok(prAt >= 0, `the pr half ran and said something; output was:\n${out}`)
+  assert.ok(jiraAt >= 0, 'the jira half ran too')
+  assert.ok(prAt < jiraAt, 'the pull request half must be recorded before the Jira half, or the comment cannot carry the URL')
+  assert.ok(!out.includes('example.invalid'), 'and never the placeholder URL')
+}
+
+// -- a step that edits the test judging it FAILS -------------------------------
+// The estate's gate says "A modified test file is never a pass - it invalidates
+// the run's entire evidence chain, and no amount of subsequent green recovers
+// it" (.agents/workflows/runbook-a/resources/phase-gates.md:119-121) and nothing
+// enforced it: the unlock file is written into the checkout and never removed,
+// so the fix agent could soften the oracle and every green afterwards would be
+// a green about nothing.
+//
+// Driven against real git in a real checkout, because the claim is about what
+// the working tree CONTAINS after the step ran, not what the agent reported.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'lock-project')
+  mkdirSync(join(project, 'src', 'test'), { recursive: true })
+  mkdirSync(join(project, 'src', 'main'), { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.'])
+  g(['config', 'user.email', 'test@example.com'])
+  g(['config', 'user.name', 'Test'])
+  writeFileSync(join(project, 'src', 'main', 'Foo.java'), 'class Foo {}\n')
+  writeFileSync(join(project, 'src', 'test', 'FooTest.java'), '// the oracle\n')
+  g(['add', '-A'])
+  g(['commit', '-qm', 'the failing test this run is judged by'])
+
+  const lockWf = { slug: 'lock', name: 'Lock', steps: [{ id: 'fix', agentSlug: 'agent-fix', label: 'Implement Fix', next: [] }] }
+
+  // 1. The agent softens the very test that judges it.
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    writeFileSync(join(dir ?? project, 'src', 'test', 'FooTest.java'), '// assertion removed\n')
+    return 'fixed it'
+  })
+  const broke = await runner.waitForSettled(
+    (await runner.startRun({ workflow: lockWf, initialPrompt: 'LOCK-1 fix', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(broke.steps[0].status, 'failed',
+    `a step that edits the judging test must fail; it was ${broke.steps[0].status}`)
+  assert.match(broke.steps[0].error ?? '', /FooTest\.java/,
+    `and the error names the file it touched; error was ${JSON.stringify(broke.steps[0].error)}`)
+
+  // 2. A production-only change is untouched by the check.
+  g(['checkout', '-q', '--', '.'])
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    writeFileSync(join(dir ?? project, 'src', 'main', 'Foo.java'), 'class Foo { int fixed = 1; }\n')
+    return 'fixed it properly'
+  })
+  const clean = await runner.waitForSettled(
+    (await runner.startRun({ workflow: lockWf, initialPrompt: 'LOCK-2 fix', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(clean.steps[0].status, 'completed',
+    `a production-only change still passes; it was ${clean.steps[0].status} (${clean.steps[0].error ?? 'no error'})`)
+
+  // 3. The step that OWNS the tests may write them.
+  g(['checkout', '-q', '--', '.'])
+  const ownerWf = { slug: 'lock-owner', name: 'Lock owner', steps: [{ id: 'repro', agentSlug: 'agent-repro', label: 'Reproduce', next: [], testsUnlocked: true }] }
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    writeFileSync(join(dir ?? project, 'src', 'test', 'FooTest.java'), '// a new reproduction\n')
+    return 'wrote the failing test'
+  })
+  const owner = await runner.waitForSettled(
+    (await runner.startRun({ workflow: ownerWf, initialPrompt: 'LOCK-3 repro', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(owner.steps[0].status, 'completed',
+    `the step that owns the tests may write them; it was ${owner.steps[0].status} (${owner.steps[0].error ?? 'no error'})`)
+}
+
+// -- a step declared reviewComments gets the review BEFORE it runs ------------
+// The read module existed and nothing called it, so the review a GitHub Actions
+// run leaves on the PR was still unread by the pipeline. A step that is supposed
+// to act on those comments has to be HANDED them: the runner collects them into
+// the run's artifacts before the agent starts, because an agent cannot act on a
+// file that appears after it finishes.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setReviewReaders } = await import('../server/utils/reviewComments.ts')
+  const asked = []
+  setReviewReaders({
+    readChecks: async (url) => { asked.push('checks'); return [{ name: 'claude-review', bucket: 'pass', state: 'SUCCESS', completedAt: '2026-09-18T04:52:03Z' }] },
+    readComments: async (pr) => {
+      asked.push(`comments:${pr.owner}/${pr.repo}#${pr.number}`)
+      return [
+        { id: 11, user: { login: 'github-actions[bot]' }, path: 'a.java', line: 5, body: '\u{1F7E1} Nit [Design] \u2014 duplicated default' },
+        { id: 12, user: { login: 'a-human' }, path: 'a.java', line: 6, body: 'I disagree with the bot here.' },
+      ]
+    },
+  })
+
+  const wf = {
+    slug: 'review-step', name: 'Review step',
+    steps: [{ id: 'address', agentSlug: 'agent-address', label: 'Address Review Comments', next: [], reviewComments: true }],
+  }
+  // The agent's own view: the file must ALREADY be on disk when it runs, since
+  // an agent cannot act on evidence that appears after it finishes.
+  let sawArtifactWhenItRan = false
+  runner.setAgentCaller(async () => {
+    sawArtifactWhenItRan = readdirSync(process.env.AGENT_RUNS_DIR)
+      .some(id => existsSync(join(process.env.AGENT_RUNS_DIR, id, 'artifacts', 'review-comments.json')))
+    return 'addressed them'
+  })
+
+  const started = await runner.startRun({ workflow: wf, initialPrompt: 'REV-1 address review', watch: 'direct-invocation', autoRun: false })
+  // meta.json is what names the run's PRs - the same field the UI and ciPoller read.
+  mkdirSync(join(process.env.AGENT_RUNS_DIR, started.id, 'artifacts'), { recursive: true })
+  writeFileSync(
+    join(process.env.AGENT_RUNS_DIR, started.id, 'artifacts', 'meta.json'),
+    JSON.stringify({ fix: { repos: [{ repo: 'alepolab/ase_lbss', pr: 'https://github.com/alepolab/ase_lbss/pull/159' }] } }, null, 2),
+  )
+  await runner.continueRun(started.id)
+  const done = await runner.waitForSettled(started.id, TIMEOUT)
+  assert.equal(done.steps[0].status, 'completed', `the step ran; it was ${done.steps[0].status} (${done.steps[0].error ?? 'no error'})`)
+  assert.ok(asked.includes('comments:alepolab/ase_lbss#159'),
+    `the runner read the PR's review comments; calls were ${JSON.stringify(asked)}`)
+
+  const artifact = JSON.parse(readFileSync(join(process.env.AGENT_RUNS_DIR, started.id, 'artifacts', 'review-comments.json'), 'utf8'))
+  assert.equal(artifact.prs.length, 1, 'the artifact covers the run\'s pull request')
+  assert.equal(artifact.prs[0].comments.length, 1, 'the bot\'s comment is actionable')
+  assert.equal(artifact.prs[0].counts.humanComments, 1, 'and the human comment is counted, not acted on')
+  assert.equal(artifact.prs[0].review.ready, true, 'the review had finished, so acting on it is licensed')
+  assert.equal(sawArtifactWhenItRan, true, 'and it was on disk BEFORE the agent ran, not written afterwards')
+
+  setReviewReaders({})
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')

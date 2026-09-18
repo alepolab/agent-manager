@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
+import type { Role } from '~~/shared/types/role'
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 import { oversightFor } from '~~/shared/utils/oversight'
@@ -116,10 +117,12 @@ const dismissable = computed(() => attention.value.filter(r => r.status !== 'pau
  * sorts by, so the list reads in the order it is written in.
  */
 const mine = computed(() => runs.value
-  // QA can never start a run, so filtering on `startedBy` left them a section
-  // that is empty by construction, forever. Their own history is the decisions
-  // they took — which the record already carries.
-  .filter(r => (role.value === 'qa'
+  // A role that cannot start a run has no `startedBy` of its own, so filtering
+  // on it left them a section that is empty by construction, forever. Their
+  // history is the decisions they took — which the record already carries.
+  // Keyed on the capability rather than on `role === 'qa'`, or every reviewer
+  // role added after QA inherits the empty section QA was rescued from.
+  .filter(r => (!can('startRun')
     ? (r.decisions ?? []).some(d => d.by === me.value?.login)
     : r.startedBy && r.startedBy === me.value?.login))
   .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a))
@@ -263,16 +266,24 @@ const noteColour = (l: string) => (l === 'error' ? 'var(--error)' : l === 'warn'
 const queueEmpty = computed(() => ({
   developer: 'No decisions waiting. Start a run below when you have a ticket.',
   qa: 'Nothing to verify. Runs appear here when they reach the verification gate.',
+  architect: 'Nothing to review. Runs appear here when they reach a schema, contract or migration gate.',
+  designer: 'Nothing to accept. Runs appear here when they reach the design gate.',
   manager: 'Nothing open.',
   operator: 'No open gates, and nothing failing.',
 }[role.value ?? 'operator'] ?? 'Nothing waiting on you.'))
-const pageTitle = computed(() => (role.value === 'qa' ? 'Verification queue' : 'Your runs'))
+/** The queue's name is the reviewer's job, so each reviewing role gets its own. */
+const REVIEW_QUEUE_TITLE: Partial<Record<Role, string>> = {
+  qa: 'Verification queue',
+  architect: 'Architecture review queue',
+  designer: 'Design review queue',
+}
+const pageTitle = computed(() => REVIEW_QUEUE_TITLE[role.value ?? 'operator'] ?? 'Your runs')
 // Not "Your runs" — that is the page's own title, and a section repeating its
 // page's heading says the section has no subject of its own.
-const minedTitle = computed(() => (role.value === 'qa' ? 'Runs you have decided on' : 'Recent'))
-const minedEmpty = computed(() => (role.value === 'qa'
-  ? 'You have not decided on a run yet. Your approvals and send-backs appear here.'
-  : 'You have not started a run yet. Paste a ticket above to start one.'))
+const minedTitle = computed(() => (can('startRun') ? 'Recent' : 'Runs you have decided on'))
+const minedEmpty = computed(() => (can('startRun')
+  ? 'You have not started a run yet. Paste a ticket above to start one.'
+  : 'You have not decided on a run yet. Your approvals and send-backs appear here.'))
 </script>
 
 <template>

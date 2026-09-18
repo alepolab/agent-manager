@@ -43,6 +43,15 @@ const ext = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase(
  *  mojibake and the console highlighted it as source; a QA run's four
  *  screenshots were unviewable. */
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
+/** Evidence that plays. A run fixing a UI defect writes its before/after pair as
+ *  .webm, and fetching one as text produced a megabyte of replacement
+ *  characters highlighted as source - the one artifact showing the defect
+ *  MOVING was the one nobody could watch. */
+const VIDEO_EXT = new Set(['webm', 'mp4'])
+/** Evidence that is opened elsewhere: a Playwright trace, an archive, a PDF.
+ *  There is no useful inline rendering, and decoding it as text is worse than
+ *  admitting that. */
+const DOWNLOAD_EXT = new Set(['zip', 'gz', 'tgz', 'tar', 'har', 'pdf'])
 const kind = computed(() => {
   const n = selected.value ?? ''
   const e = ext(n)
@@ -51,9 +60,11 @@ const kind = computed(() => {
   if (e === 'xml') return 'xml'
   if (e === 'log') return 'log'
   if (IMAGE_EXT.has(e)) return 'image'
+  if (VIDEO_EXT.has(e)) return 'video'
+  if (DOWNLOAD_EXT.has(e)) return 'download'
   return 'code'
 })
-const LANG: Record<string, string> = { java: 'java', py: 'python', ts: 'typescript', js: 'javascript', sh: 'bash', yml: 'yaml', yaml: 'yaml', xml: 'xml', json: 'json', diff: 'diff', sql: 'sql', vue: 'vue', txt: 'text' }
+const LANG: Record<string, string> = { java: 'java', py: 'python', ts: 'typescript', js: 'javascript', sh: 'bash', yml: 'yaml', yaml: 'yaml', xml: 'xml', json: 'json', diff: 'diff', patch: 'diff', sql: 'sql', vue: 'vue', txt: 'text' }
 
 const fileUrl = (name: string) => `/api/runs/${props.runId}/artifacts/${name.split('/').map(encodeURIComponent).join('/')}`
 
@@ -61,8 +72,10 @@ async function open(name: string) {
   selected.value = name
   loading.value = true
   search.value = ''
-  // An image is served as itself; the browser fetches it from the same route.
-  if (IMAGE_EXT.has(ext(name))) { raw.value = ''; rendered.value = ''; loading.value = false; return }
+  // Served as itself; the browser fetches it from the same route. Fetching any
+  // of these as text is what turned a video into mojibake.
+  const e = ext(name)
+  if (IMAGE_EXT.has(e) || VIDEO_EXT.has(e) || DOWNLOAD_EXT.has(e)) { raw.value = ''; rendered.value = ''; loading.value = false; return }
   try {
     raw.value = await $fetch<string>(fileUrl(name), { responseType: 'text' })
     await render()
@@ -136,7 +149,14 @@ const rawLines = computed(() => {
   const lines = (kind.value === 'json' ? pretty(raw.value) : raw.value).split('\n')
   return lines.map((text, i) => ({ n: i + 1, text })).filter(l => !q || l.text.toLowerCase().includes(q))
 })
-const showRaw = computed(() => kind.value !== 'image' && (mode.value === 'raw' || (kind.value !== 'markdown' && kind.value !== 'json' && kind.value !== 'log' && !rendered.value && !junit.value) || !!search.value.trim()))
+/**
+ * Kinds that are never shown as text. An image was already exempt; a video and
+ * an archive have to be too, or this branch wins the v-else-if chain and shows
+ * the raw-bytes view for a file whose bytes were deliberately never fetched -
+ * an empty line-numbered pane where the player or the download button belongs.
+ */
+const BINARY_KINDS = new Set(['image', 'video', 'download'])
+const showRaw = computed(() => !BINARY_KINDS.has(kind.value) && (mode.value === 'raw' || (kind.value !== 'markdown' && kind.value !== 'json' && kind.value !== 'log' && !rendered.value && !junit.value) || !!search.value.trim()))
 
 async function copy() {
   try { await navigator.clipboard.writeText(raw.value); copied.value = true; setTimeout(() => { copied.value = false }, 1500) } catch { /* clipboard unavailable */ }
@@ -164,6 +184,13 @@ const groups = computed(() => {
   return Object.entries(g).sort(([a], [b]) => a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b))
 })
 const size = (n: number) => n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`
+
+/** The listed size of one artifact by name - what a video or an archive shows
+ *  instead of contents, so "3 MB" answers "is this worth downloading". */
+const sizeOf = (name: string) => {
+  const f = files.value.find(x => x.name === name)
+  return f ? size(f.size) : 'size unknown'
+}
 let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => { refresh(); timer = setInterval(() => { if (props.live) refresh() }, 10_000) })
 onUnmounted(() => { if (timer) clearInterval(timer) })
@@ -173,7 +200,12 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="grid gap-3 h-full min-h-0" style="grid-template-columns: 15rem minmax(0, 1fr);">
+  <!-- One column on a phone, two from `sm` up. The fixed 15rem list against a
+       390px viewport left the viewer about 45px wide: file contents arrived as
+       one character per line, and the download button added below was a sliver
+       nobody could read or press. A list above and a viewer beneath is the only
+       arrangement where both are usable at that width. -->
+  <div class="grid gap-3 h-full min-h-0 grid-cols-1 artifacts-grid">
     <div class="overflow-y-auto t-small space-y-2 pr-1 min-h-0">
       <div class="flex items-center justify-between"><span class="text-section-label">Evidence files</span><button class="text-label underline focus-ring" @click="refresh">Refresh</button></div>
       <div v-if="listError" class="rounded p-2 space-y-1" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
@@ -230,6 +262,28 @@ defineExpose({ refresh })
           <p class="t-small text-label mt-2">{{ selected }} — click to open full size</p>
         </div>
 
+        <!-- a recording is watched. The before/after pair a UI fix writes is the
+             only artifact that shows the defect moving; it used to be fetched as
+             text and highlighted as source. -->
+        <div v-else-if="kind === 'video'" class="p-2" data-testid="artifact-video">
+          <video :src="fileUrl(selected!)" controls preload="metadata" class="max-w-full h-auto rounded" style="border: 1px solid var(--border-subtle);" />
+          <p class="t-small text-label mt-2">{{ selected }} — {{ sizeOf(selected!) }}</p>
+        </div>
+
+        <!-- a trace or an archive is opened elsewhere. Saying so is more honest
+             than decoding a zip as UTF-8 and calling the result evidence. -->
+        <div v-else-if="kind === 'download'" class="p-3 space-y-2" data-testid="artifact-download">
+          <a :href="fileUrl(selected!)" download class="inline-flex items-center gap-2 rounded-lg px-3 py-2 t-ui focus-ring"
+             style="background: var(--accent-muted); border: 1px solid var(--accent); color: var(--accent);">
+            <UIcon name="i-lucide-download" class="size-4 shrink-0" />
+            <span>Download {{ selected }}</span>
+          </a>
+          <p class="t-small text-label">
+            {{ sizeOf(selected!) }}. Nothing useful renders inline.
+            <template v-if="selected!.endsWith('.zip')">A Playwright trace opens with <span class="font-mono">npx playwright show-trace</span>.</template>
+          </p>
+        </div>
+
         <!-- markdown -->
         <div v-else-if="kind === 'markdown'" class="prose prose-sm max-w-none t-ui leading-relaxed break-words evidence-prose" v-html="rendered" />
 
@@ -257,6 +311,12 @@ defineExpose({ refresh })
               <div class="whitespace-pre-wrap break-words" style="color: var(--text-secondary);">{{ f.message }}</div>
             </div>
           </div>
+          <!-- A suite that ran nothing is not a suite that passed. "Every case
+               passed" over tests=0 is the most expensive sentence this pane can
+               print: it reads as proof while proving nothing. -->
+          <p v-else-if="!junit.total.tests" data-testid="junit-empty" class="t-small" style="color: var(--warning);">
+            No cases ran. This is not a pass — a suite that executed nothing proves nothing.
+          </p>
           <p v-else class="t-small" style="color: var(--success);">Every case passed.</p>
           <div class="evidence-code t-small" v-html="rendered" />
         </div>

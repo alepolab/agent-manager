@@ -55,7 +55,6 @@ export async function agentEnvFor(startedBy?: string): Promise<Record<string, st
     ...(process.env.AGENT_GH_TOKEN ? { GH_TOKEN: process.env.AGENT_GH_TOKEN, GITHUB_TOKEN: process.env.AGENT_GH_TOKEN } : {}),
     SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
     SDLC_SKILLS_DIR: sdlcSkillsDir(),
-    CE_SKILLS_DIR: await ceSkillsDir(),
     // Pipeline commits are unsigned. The developer's own ~/.gitconfig is
     // mounted into the container and may say commit.gpgsign=true, but the
     // agents hold no signing key and the image has no gpg: a real run
@@ -87,34 +86,6 @@ export function sdlcScriptsDir(): string {
  */
 export function sdlcSkillsDir(): string {
   return resolveClaudePath('skills')
-}
-
-/**
- * Absolute path to the compound-engineering skills directory, handed to every
- * agent as `CE_SKILLS_DIR`. The ce runbook's steps read `ce-plan`, `ce-work`,
- * `ce-code-review` and `ce-commit-push-pr` from there at run time, for the
- * reason SDLC_SKILLS_DIR exists: those four alone are ~240,000 bytes, and
- * declaring them would inline all of it into every step's prompt.
- *
- * Resolution order, the same as the guardrail hooks (agentHooks.ts): the
- * compound-engineering plugin installed in this instance's config directory
- * first, then the copy the image ships at /app/vendor/compound-engineering
- * (see the Dockerfile). An installed plugin wins so a developer can try a
- * newer release; the shipped copy means a container never depends on a
- * `claude plugin install` having been run against the right directory. A real
- * run halted twice on exactly that: the plugin was installed on the operator's
- * host while the app read a config volume that had never seen it.
- *
- * Empty when neither exists; a ce step halts on that rather than improvising
- * the skill from memory.
- */
-export async function ceSkillsDir(shipped = join(process.cwd(), 'vendor', 'compound-engineering', 'skills')): Promise<string> {
-  try {
-    const installed = JSON.parse(await readFile(resolveClaudePath('plugins', 'installed_plugins.json'), 'utf-8'))
-    const entry = Object.entries<any>(installed?.plugins ?? {}).find(([k]) => k.startsWith('compound-engineering@'))?.[1]?.[0]
-    if (entry?.installPath) return join(entry.installPath, 'skills')
-  } catch { /* no registry, or not JSON: not installed */ }
-  return existsSync(join(shipped, 'ce-plan', 'SKILL.md')) ? shipped : ''
 }
 
 const log = createLogger('agent')

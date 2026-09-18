@@ -130,8 +130,8 @@ export interface Skill {
   agents?: { name: string; slug: string }[]
   /**
    * Agents that read this skill from disk at run time without declaring it —
-   * the language catalogue ($SDLC_SKILLS_DIR) and the compound-engineering
-   * steps ($CE_SKILLS_DIR). Separate from `agents` because declaring these
+   * the language catalogue ($SDLC_SKILLS_DIR), read by name at run time
+   * rather than declared. Separate from `agents` because declaring these
    * instead would add ~80,000 tokens to every agent's prompt on every step.
    */
   readBy?: { name: string; slug: string }[]
@@ -259,6 +259,13 @@ export interface WorkflowStep {
   /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
   approval?: boolean
   /**
+   * Hand this step the review a GitHub Actions run left on the run's pull
+   * request. The runner writes `review-comments.json` into the run's artifacts
+   * BEFORE the agent starts, because an agent cannot act on evidence that
+   * appears after it finishes.
+   */
+  reviewComments?: boolean
+  /**
    * Whose decision this gate is. Copied onto `run.question.role` when the gate
    * fires, and enforced by the gate routes.
    *
@@ -270,6 +277,20 @@ export interface WorkflowStep {
    * backstop for a role nobody on this instance holds.
    */
   gateRole?: Role
+  /**
+   * Whose WORK this step is \u2014 a different question from whose decision its
+   * gate is (`gateRole`) and from what the reader may do (`can()`).
+   *
+   * It grants nothing and is read only to render. A person opening a run asks
+   * "which of these steps is mine", and the console had no field to answer
+   * with: a step said which agent ran it and, on three of nine, whose gate it
+   * carried. Deriving the owner from those two was rejected on evidence \u2014 the
+   * CSUP template's "Plan Review" runs `architecture-reviewer` while its gate
+   * belongs to `developer`, so the two disagree on the first real step, and
+   * most steps map to no role at all. A derived owner would be a guess wearing
+   * a fact's shape.
+   */
+  ownerRole?: Role
   /** Canvas position, persisted so branches and loops keep their layout. */
   position?: { x: number, y: number }
   /**
@@ -280,7 +301,29 @@ export interface WorkflowStep {
    */
   contextMode?: 'predecessors' | 'ancestors'
   /** Present on a step the runner executes itself, without a model: move the ticket, post the outcome comment, or both. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean }
+  /**
+   * Jira work the RUNNER performs for this step: move the ticket, post the
+   * outcome comment, attach the evidence.
+   *
+   * By default this replaces the step's agent entirely - no model, no prompt,
+   * just the REST calls. `after: true` keeps the agent and runs the Jira work
+   * once it has succeeded, which is the only order in which the outcome
+   * comment can carry a pull request the agent opened in that same step.
+   */
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, after?: boolean }
+  /**
+   * After this step's agent succeeds, the RUNNER pushes the run's branch and
+   * opens a pull request into the run's base branch, for every repository in
+   * the checkout that is on that branch - then records each URL in
+   * `meta.fix.repos[].pr`.
+   *
+   * It is the runner's job because it was nobody's: a run committed a CRM gate
+   * and its documentation, this step reported success, and no pull request
+   * existed - the step's agent curates docs, and no agent in the estate opens
+   * a PR. Ordered before the Jira work so the outcome comment can carry a URL
+   * that exists.
+   */
+  pr?: boolean
   /**
    * This step writes tests and code together, so the plugin's test lock (armed the
    * moment source is edited) must not block it: the runner writes the unlock file
