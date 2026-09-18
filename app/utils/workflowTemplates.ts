@@ -394,7 +394,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'docs-curator',
         label: 'Evidence, Docs & Pull Request',
         ownerRole: 'operator',
-        next: [],
+        next: ['refactor-engineer'],
         contextMode: 'ancestors',
         approval: true,
         gateRole: 'operator',
@@ -409,6 +409,32 @@ export const workflowTemplates: WorkflowTemplate[] = [
         // and they are the parts a reporter actually reads.
         pr: true,
         jira: { comment: true, attach: true, after: true },
+      },
+      // 10. AFTER THE PULL REQUEST. The workflow used to end at step 9, which
+      // meant it treated review as somebody else's problem: two pull requests
+      // from one run collected review comments - a duplicated constant that
+      // could drift, and untested security-sensitive escaping - and nothing in
+      // the pipeline ever read them. They sat until a person noticed.
+      //
+      // GATED, and that is the whole design. A review lands minutes after the
+      // push, so a step that ran straight after step 9 would open an empty pull
+      // request, find nothing and report success - the same hollow success as a
+      // ship step that opened no PR at all. The developer releases this gate
+      // when the comments are actually in, which is also the person who has to
+      // live with the answer.
+      //
+      // `refactor-engineer` because revising code under review is what it is
+      // for, and because `next` resolves by agentTemplateId: an agent already
+      // used in this template would make routing ambiguous.
+      {
+        agentTemplateId: 'refactor-engineer',
+        label: 'Address Review Comments',
+        ownerRole: 'developer',
+        next: [],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'developer',
+        maxVisits: 3,
       },
     ],
   },

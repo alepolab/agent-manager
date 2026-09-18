@@ -101,4 +101,45 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
   assert.deepEqual(offenders, [], `ownership must stay presentational; these routes read it: ${offenders.join(', ')}`)
 }
 
+// ---- the ticket-to-PR workflow does not end at the pull request -------------
+// Two PRs from one run collected review comments and nothing in the pipeline
+// ever read them: the workflow's last step opened the PR and stopped, so the
+// comments sat there until a person noticed. A workflow that ships a PR and
+// has no step for what comes back is a workflow that treats review as somebody
+// else's problem.
+//
+// The step is gated on purpose. Reviews arrive minutes after the push, so a
+// step that ran straight after the ship step would find an empty PR and report
+// success - the same hollow-success shape as the ship step that opened no pull
+// request. The gate is what makes it useful: a person releases it when the
+// comments are actually in.
+{
+  const csup = workflowTemplates.find(t => t.id === 'oma-csup-to-pr' || t.name.startsWith('CSUP'))
+  assert.ok(csup, 'the CSUP template is still here')
+
+  const review = csup.steps.find(s => /review comment/i.test(s.label))
+  assert.ok(review, 'the CSUP workflow has a step for the comments a review leaves on its pull request')
+  assert.ok(review.approval, 'it is a gate: reviews land after the push, so a person releases it when they are in')
+  assert.ok(review.gateRole, 'and the gate names whose decision it is')
+  assert.deepEqual(review.next ?? [], [], 'it is the terminal step')
+
+  // The ship step must actually route into it, or it is unreachable.
+  const ship = csup.steps.find(s => s.pr)
+  assert.ok(ship, 'the ship step is the one that opens the pull request')
+  assert.deepEqual(
+    ship.next,
+    [review.agentTemplateId],
+    'the ship step routes into the review-comment step, or nothing ever reaches it',
+  )
+
+  // Its agent must be one the template does not already use: `next` resolves by
+  // agentTemplateId, so a duplicate would make routing ambiguous.
+  const slugs = csup.steps.map(s => s.agentTemplateId)
+  assert.equal(
+    slugs.filter(s => s === review.agentTemplateId).length,
+    1,
+    'the review step uses an agent no other step in this template uses',
+  )
+}
+
 console.log('step ownership: declared as data, carried to the run, and it decides nothing')
