@@ -15,7 +15,7 @@
  * ponytail: a fixed delay, not a handshake — make it a signal if seeding ever
  * grows slow enough to matter.
  */
-import { resumeInterruptedRuns } from '../utils/workflowRunner.ts'
+import { resumeInterruptedRuns, completePendingTicketNotifications } from '../utils/workflowRunner.ts'
 
 export default defineNitroPlugin(() => {
   if (process.env.RESUME_ON_BOOT === '0') return
@@ -27,5 +27,14 @@ export default defineNitroPlugin(() => {
         }
       })
       .catch(err => console.error('[resume] could not resume interrupted runs:', err?.message ?? err))
+    // A ticket the previous process finished work for but never told. Safe to
+    // repeat: the notifier reads its own marker before posting.
+    completePendingTicketNotifications()
+      .then((r) => {
+        if (r.notified.length || r.failed.length) {
+          console.log(`[resume] ${r.notified.length} owed ticket comment(s) sent, ${r.failed.length} still owed`)
+        }
+      })
+      .catch(err => console.error('[resume] could not finish owed ticket notifications:', err?.message ?? err))
   }, 5000)
 })

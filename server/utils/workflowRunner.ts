@@ -36,7 +36,7 @@ import { runPreflight as realPreflight, preflightFailure, type PreflightReport, 
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification, BLAST_RADIUS_ORDER, type BlastRadius } from '../../shared/utils/oversight.ts'
@@ -46,6 +46,7 @@ import {
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
+import { isJiraPostingEnabled } from './jiraCredentials.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
@@ -343,6 +344,63 @@ async function takeStackDown(run: WorkflowRun): Promise<void> {
   }
 }
 
+/**
+ * Posting the ticket outcome, behind a seam so tests never reach Jira.
+ * Defaults to the real notifier.
+ */
+type TicketPoster = typeof notifyTicketOutcome
+let ticketPoster: TicketPoster | null = null
+export function setTicketPoster(fn: TicketPoster | null) { ticketPoster = fn }
+const postTicketOutcome: TicketPoster = (...args) => (ticketPoster ?? notifyTicketOutcome)(...args)
+
+/** Records that the comment has landed, so no later boot re-owes it. */
+async function clearNotifyIntent(run: WorkflowRun): Promise<void> {
+  if (run.ticketNotifyPending !== true) return
+  run.ticketNotifyPending = false
+  await saveRun(run)
+}
+
+/**
+ * Finishes ticket notifications a dead process owed.
+ *
+ * publish() saves the terminal status before it posts, because the comment
+ * renders from finalized artifacts - the PR URLs it quotes are written by
+ * finalizeRunArtifacts, which must run first. That ordering means a process
+ * death between the two leaves a run recorded as finished whose ticket was
+ * never told, and a settled run is never re-published, so nothing retries.
+ *
+ * Rather than reorder and post a comment that cannot name the PR, the INTENT
+ * is written with the terminal status and cleared only once the comment is
+ * really on the ticket. This sweep, run at boot, is what clears it. A repeat
+ * is safe because notifyTicketOutcome reads its own marker first.
+ */
+export async function completePendingTicketNotifications(): Promise<{ notified: string[], failed: string[] }> {
+  const out = { notified: [] as string[], failed: [] as string[] }
+  for (const run of await listRuns()) {
+    if (run.ticketNotifyPending !== true || !run.ticketKey) continue
+    try {
+      const result = await postTicketOutcome({ id: run.watch, name: run.workflowName }, run.ticketKey, run)
+      if (result.posted) {
+        await clearNotifyIntent(run)
+        out.notified.push(run.id)
+        log.info('finished a ticket notification the previous process owed', { runId: run.id, ticketKey: run.ticketKey })
+      } else {
+        // Still owed: posting is disabled, or Jira refused. Left on the record
+        // rather than dropped, because dropping it is the silent loss this
+        // whole mechanism exists to prevent.
+        out.failed.push(run.id)
+      }
+    } catch (err) {
+      out.failed.push(run.id)
+      log.warn('could not finish an owed ticket notification', {
+        runId: run.id, ticketKey: run.ticketKey,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return out
+}
+
 async function publish(run: WorkflowRun) {
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -353,6 +411,17 @@ async function publish(run: WorkflowRun) {
   if (run.status === 'running') startRunClock(run)
   else settleRunClock(run)
   run.usage = computeUsage(run)
+  // The intent to notify is written WITH the terminal status, in the same
+  // saveRun below - not after the post. A process that dies before posting
+  // then leaves a record that still says the comment is owed.
+  // Only when posting is actually on. With JIRA_POST_ENABLED unset the comment
+  // is rendered and recorded but deliberately never sent, so nothing is owed -
+  // marking it pending would have every run on an ordinary machine accrue a
+  // debt that each boot then re-renders forever.
+  if (TERMINAL_STATUSES.includes(run.status) && run.ticketKey && !run.ticketCommented
+    && run.ticketNotifyPending === undefined && isJiraPostingEnabled()) {
+    run.ticketNotifyPending = true
+  }
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
     await saveRun(run)
@@ -372,6 +441,7 @@ async function publish(run: WorkflowRun) {
       // is most likely to be left running, so this must not be on the happy
       // path. Volumes are never removed - the data and seed survive.
       await takeStackDown(run)
+      await withdrawTestUnlocks(run)
       try {
         // Before finalizing: the step logs are appended asynchronously, and an
         // artifact that stops mid-burst is the only record left once the live
@@ -391,17 +461,22 @@ async function publish(run: WorkflowRun) {
         // Unless a Jira step of the workflow already posted it.
         if (run.ticketKey && !run.ticketCommented) {
           try {
-            const result = await notifyTicketOutcome(
+            const result = await postTicketOutcome(
               { id: run.watch, name: run.workflowName },
               run.ticketKey,
               run,
             )
+            // Cleared only on a real post. `posted` is also true when the
+            // marker says a previous attempt did it, which is equally a reason
+            // to stop owing it.
+            if (result.posted) await clearNotifyIntent(run)
             log.info('ticket notified', {
               runId: run.id, ticketKey: run.ticketKey,
               posted: result.posted, reason: result.reason ?? '(none)',
             })
           } catch (err) {
-            log.error('ticket notification failed; the run itself is unaffected', {
+            // The intent stays on the record, so the next boot finishes it.
+            log.error('ticket notification failed; it stays owed and the next boot will retry', {
               runId: run.id, ticketKey: run.ticketKey,
               error: err instanceof Error ? err.message : String(err),
             })
@@ -694,11 +769,47 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
     const dir = join(target, '.agent')
     try {
       await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, 'test-unlock.json'), body)
+      const path = join(dir, 'test-unlock.json')
+      await writeFile(path, body)
+      // Remembered ON THE RECORD, not in memory: the capability has to be
+      // withdrawn even if this process dies and another one finishes the run.
+      if (!run.testUnlocks?.includes(path)) run.testUnlocks = [...(run.testUnlocks ?? []), path]
     } catch (err) {
       log.warn('could not write the test unlock; the plugin lock will stop the step at its first test edit', { runId: run.id, dir, error: err instanceof Error ? err.message : String(err) })
     }
   }
+}
+
+/**
+ * Withdraws the permission to edit tests when the run that earned it ends.
+ *
+ * The unlock was written into the checkout and nothing ever removed it, so
+ * every later agent working in that checkout inherited it - a capability
+ * granted to one step, for one reason, held forever afterwards. The lock only
+ * means something if it comes back.
+ *
+ * Only files this run wrote are removed, checked by the run id inside them: a
+ * lane's checkout can be shared, and deleting someone else's unlock would
+ * silently stop their step at its first test edit.
+ */
+async function withdrawTestUnlocks(run: WorkflowRun): Promise<void> {
+  for (const path of run.testUnlocks ?? []) {
+    try {
+      const body = await readFile(path, 'utf-8')
+      const owner = JSON.parse(body)?.run
+      if (owner && owner !== run.id) continue
+      // The unlock is TWO things: permission, and the record of why a step was
+      // allowed to touch tests. Only the permission is withdrawn - the reason
+      // is copied into the run's own evidence first, or removing the file
+      // would delete the justification along with the grant.
+      try {
+        await mkdir(runArtifactsDir(run.id), { recursive: true })
+        await writeFile(join(runArtifactsDir(run.id), 'test-unlock.json'), body)
+      } catch { /* evidence is best effort; the capability still has to go */ }
+      await rm(path, { force: true })
+    } catch { /* already gone, or a lane removed with its worktree */ }
+  }
+  run.testUnlocks = []
 }
 
 /**
@@ -2129,6 +2240,22 @@ export function _dropLive(runId: string) { live.delete(runId) }
  * have armed live; their outputs and inputs come back from the record. Anything
  * not completed stays pending and unarmed until a predecessor arms it.
  */
+/**
+ * The gates a person has already answered, from the durable record.
+ *
+ * This used to be an empty set, so a restart forgot every approval: the
+ * resumed run raised the same gate at the same step and asked the same person
+ * the same question again. The decisions were on the record the whole time -
+ * `recordDecision` appends one for every answered gate - and nothing read them
+ * back.
+ *
+ * Only `approved` counts. A rejection is not permission, and a rework decision
+ * means the step is meant to run again with feedback, not to skip its gate.
+ */
+function approvalsFrom(run: WorkflowRun): Set<string> {
+  return new Set((run.decisions ?? []).filter(d => d.verdict === 'approved').map(d => d.stepId))
+}
+
 async function rehydrate(run: WorkflowRun): Promise<Live> {
   const existing = live.get(run.id)
   if (existing) return existing
@@ -2141,7 +2268,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(), laneDirs: {}, laneBranches: {},
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: approvalsFrom(run), notes: {}, steer: new Map(), laneDirs: {}, laneBranches: {},
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   // A declared skip is a settled outcome, the same as completed: a restart of a

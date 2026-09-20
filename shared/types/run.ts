@@ -211,6 +211,24 @@ export interface WorkflowRun {
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
   ticketCommented?: boolean
+
+  /**
+   * True while the outcome comment is owed but not yet on the ticket.
+   *
+   * Written WITH the terminal status, cleared only once the comment really
+   * posted. A process that dies in between leaves this true, and the boot
+   * sweep finishes it - the alternative is a ticket that never learns its run
+   * finished, which nothing else in the system would ever notice.
+   */
+  ticketNotifyPending?: boolean
+
+  /**
+   * Paths of the `.agent/test-unlock.json` files this run wrote.
+   *
+   * On the record rather than in memory so the capability is withdrawn even
+   * when another process finishes the run. Cleared when they are removed.
+   */
+  testUnlocks?: string[]
   /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
   /**
    * What the runner checked before any agent ran: the compose file, the

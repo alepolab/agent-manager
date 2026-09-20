@@ -24,6 +24,7 @@ const runner = await import('../server/utils/workflowRunner.ts')
 // scripts/test-preflight.mjs asserts. One case below restores the real gate.
 runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 const store = await import('../server/utils/workflowRunStore.ts')
+const { recordDecision } = await import('../shared/utils/runDecisions.ts')
 
 const TIMEOUT = 5000
 
@@ -887,8 +888,14 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(ul.status, 'completed')
   assert.equal(seenUnlock['agent-a'], false, 'a step without the flag sees no unlock file')
   assert.equal(seenUnlock['agent-b'], true, 'the flagged step finds .agent/test-unlock.json in its worktree')
-  const unlock = JSON.parse(readFileSync(join(ul.projectDir, '.agent', 'test-unlock.json'), 'utf8'))
-  assert.match(unlock.reason, /writes tests and code together/, 'with the reason recorded for the evidence')
+  // The unlock is two things: permission while the run works, and the record
+  // of WHY a step was allowed to touch tests. When the run ends the permission
+  // is withdrawn from the checkout - it used to be left behind, so every later
+  // agent there inherited it - and the reason is kept with the run's evidence.
+  assert.equal(existsSync(join(ul.projectDir, '.agent', 'test-unlock.json')), false,
+    'the capability does not outlive the run that earned it')
+  const unlock = JSON.parse(readFileSync(join(process.env.AGENT_RUNS_DIR, ul.id, 'artifacts', 'test-unlock.json'), 'utf8'))
+  assert.match(unlock.reason, /writes tests and code together/, 'with the reason kept as evidence where the run keeps the rest')
   rmSync(projectDir, { recursive: true, force: true })
 }
 
@@ -1784,6 +1791,180 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 
   setDeployExec(null)
   delete process.env.ALEPO_INFRA_DIR
+}
+
+// -- a ticket outcome is never silently lost -------------------------------
+// publish() saves the terminal status BEFORE it posts the comment
+// (workflowRunner.ts:358 then :392). A process death in between leaves a run
+// whose record says `completed` and whose ticket was never told - and because
+// a settled run is never re-published, nothing ever retries it. Silence on a
+// carrier ticket is worse than a duplicate: a duplicate is noise a person
+// reconciles, silence is a ticket nobody knows has finished.
+//
+// So the INTENT to notify goes on the record before the status does, and is
+// only cleared once the comment is really on the ticket.
+{
+  process.env.JIRA_POST_ENABLED = '1'
+  process.env.JIRA_BASE_URL = 'https://example.atlassian.net'
+  process.env.JIRA_EMAIL = 'bot@example.com'
+  process.env.JIRA_API_TOKEN = 'bot-token'
+
+  // The post fails, standing in for the process dying before it happened.
+  let attempts = 0
+  runner.setTicketPoster(async () => { attempts += 1; throw new Error('jira unreachable') })
+  runner.setAgentCaller(async () => 'did the work')
+
+  const wf = {
+    slug: 'notify-lost', name: 'Notify lost',
+    steps: [{ id: 'work', agentSlug: 'agent-check', label: 'Work', next: [] }],
+  }
+  const started = await runner.startRun({ workflow: wf, initialPrompt: 'N-1', watch: 'direct-invocation', autoRun: true, ticketKey: 'CSUP-900' })
+  const settled = await runner.waitForSettled(started.id, TIMEOUT)
+  assert.equal(settled.status, 'completed', 'a Jira failure must never change the run outcome')
+  assert.equal(attempts, 1, 'it tried once')
+  assert.equal(settled.ticketNotifyPending, true,
+    'the unfinished notification stays on the record, or a restart has no way to know it is owed')
+
+  // The boot sweep completes what the dead process could not.
+  const posted = []
+  runner.setTicketPoster(async (_watch, key) => { posted.push(key); return { posted: true, comment: 'c', artifactPath: 'p' } })
+  const swept = await runner.completePendingTicketNotifications()
+  // Scoped to this run: the sweep is global by design and earlier runs in this
+  // shared directory legitimately owe comments of their own.
+  assert.ok(posted.includes('CSUP-900'), `the owed comment is sent on the next boot; posted ${JSON.stringify(posted)}`)
+  assert.ok(swept.notified.includes(started.id), 'and the run is reported as notified')
+
+  const after = await store.getRun(started.id)
+  assert.equal(after.ticketNotifyPending, false, 'and the intent is cleared, so a second boot does not send it again')
+
+  // A second sweep must be quiet: nothing is owed.
+  posted.length = 0
+  await runner.completePendingTicketNotifications()
+  assert.ok(!posted.includes('CSUP-900'),
+    `a second boot must not send it again; posted ${JSON.stringify(posted)}`)
+
+  // A run whose post SUCCEEDS owes nothing afterwards: publish clears the
+  // intent itself, so the boot sweep has no work to do for it.
+  const straight = []
+  runner.setTicketPoster(async (_watch, key) => { straight.push(key); return { posted: true, comment: 'c', artifactPath: 'p' } })
+  const clean = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'N-3', watch: 'direct-invocation', autoRun: true, ticketKey: 'CSUP-901' })).id,
+    TIMEOUT,
+  )
+  assert.deepEqual(straight, ['CSUP-901'], 'the comment went out with the run')
+  assert.equal((await store.getRun(clean.id)).ticketNotifyPending, false,
+    'and publish cleared the intent, so no later boot re-sends it')
+
+  // A run that never had a ticket is never swept.
+  runner.setTicketPoster(async () => ({ posted: true, comment: 'c', artifactPath: 'p' }))
+  const noTicket = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'N-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.notEqual(noTicket.ticketNotifyPending, true, 'a run with no ticket owes no notification')
+
+  runner.setTicketPoster(null)
+  delete process.env.JIRA_POST_ENABLED
+}
+
+// -- a decision a person made survives the process that took it -----------
+// rehydrate built `approved: new Set()` and nothing repopulated it from
+// run.decisions (workflowRunner.ts:2144). A gate answered before a restart was
+// forgotten, so the resumed run raised the SAME gate at the SAME step and
+// asked the same person the same question again.
+{
+  const calls = []
+  runner.setAgentCaller(async (slug) => { calls.push(slug); return 'work' })
+  const wf = {
+    slug: 'gate-survives', name: 'Gate survives',
+    steps: [
+      { id: 'ask', agentSlug: 'agent-a', label: 'Ask', next: [], approval: true },
+    ],
+  }
+  // Seeded on disk: rehydrate rebuilds the run from the workflow file, which
+  // is exactly what a restarted process has to work from.
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'gate-survives.json'),
+    JSON.stringify({ ...wf, description: '', createdAt: new Date().toISOString() }))
+  const started = await runner.startRun({ workflow: wf, initialPrompt: 'G-1', watch: 'direct-invocation', autoRun: true })
+  for (let i = 0; i < 60 && !(await store.getRun(started.id)).question; i++) await new Promise(r => setTimeout(r, 50))
+  assert.ok((await store.getRun(started.id)).question, 'the gate was raised')
+
+  // The route records the decision on the record before the runner resumes;
+  // that record is all a restart has. Written here the way continue.post.ts
+  // writes it.
+  {
+    const rec = await store.getRun(started.id)
+    const decision = recordDecision(rec, 'approved', 'sandeep')
+    assert.ok(decision, 'a gate that was asked yields a decision')
+    await store.saveRun(rec)
+  }
+
+  // Now the process dies with the gate answered but the step not yet run.
+  {
+    const path = join(process.env.CLAUDE_DIR, 'workflow-runs', `${started.id}.json`)
+    const rec = JSON.parse(readFileSync(path, 'utf8'))
+    rec.status = 'running'; rec.pid = 2 ** 22 + 11
+    rec.currentStepIds = ['ask']
+    rec.steps.find(s => s.stepId === 'ask').status = 'running'
+    writeFileSync(path, JSON.stringify(rec))
+    runner._dropLive(started.id)
+  }
+  assert.equal((await store.getRun(started.id)).status, 'interrupted', 'the dead process reads as interrupted')
+
+  calls.length = 0
+  const resumed = await runner.waitForSettled((await runner.continueRun(started.id)).id, TIMEOUT)
+  assert.equal(resumed.question, undefined,
+    'the resumed run must NOT re-ask a gate this person already answered')
+  assert.ok(calls.includes('agent-a'), `the approved step actually ran; calls were ${JSON.stringify(calls)}`)
+  assert.equal(resumed.status, 'completed', `and the run finished; it was ${resumed.status}`)
+
+  // A decision is not permission unless it APPROVED. A gate sent back for
+  // rework must be asked again after a restart - counting any decision as an
+  // approval would let a rejected deploy gate through, which is the one
+  // mistake this set must never make.
+  const sentBack = await runner.startRun({ workflow: wf, initialPrompt: 'G-2', watch: 'direct-invocation', autoRun: true })
+  for (let i = 0; i < 60 && !(await store.getRun(sentBack.id)).question; i++) await new Promise(r => setTimeout(r, 50))
+  {
+    const rec = await store.getRun(sentBack.id)
+    assert.ok(recordDecision(rec, 'sent-back', 'sandeep', 'not like that'), 'the gate was answered, with a refusal')
+    await store.saveRun(rec)
+    const path = join(process.env.CLAUDE_DIR, 'workflow-runs', `${sentBack.id}.json`)
+    const raw = JSON.parse(readFileSync(path, 'utf8'))
+    raw.status = 'running'; raw.pid = 2 ** 22 + 13
+    raw.currentStepIds = ['ask']
+    raw.steps.find(s => s.stepId === 'ask').status = 'running'
+    raw.question = undefined
+    writeFileSync(path, JSON.stringify(raw))
+    runner._dropLive(sentBack.id)
+  }
+  const afterRefusal = await runner.continueRun(sentBack.id)
+  for (let i = 0; i < 60 && !(await store.getRun(sentBack.id)).question; i++) await new Promise(r => setTimeout(r, 50))
+  assert.ok((await store.getRun(sentBack.id)).question,
+    'a gate that was SENT BACK is asked again after a restart; only an approval carries over')
+  await runner.stopRun(sentBack.id).catch(() => {})
+}
+
+// -- the test-unlock capability does not outlive the run that earned it ---
+// workflowRunner.ts:771 writes .agent/test-unlock.json into the checkout and
+// nothing ever removed it, so every later agent in that checkout inherited
+// permission to edit tests - a capability granted once and held forever.
+{
+  const checkout = join(process.env.CLAUDE_DIR, 'unlock-checkout')
+  mkdirSync(join(checkout, '.agent'), { recursive: true })
+  writeFileSync(join(checkout, '.agent', 'test-unlock.json'), JSON.stringify({ run: 'someone-elses-run' }))
+
+  runner.setAgentCaller(async () => 'work')
+  const wf = {
+    slug: 'unlock-clean', name: 'Unlock clean',
+    steps: [{ id: 'w', agentSlug: 'agent-check', label: 'Writes tests', next: [], testsUnlocked: true }],
+  }
+  const run = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'U-1', watch: 'direct-invocation', autoRun: true, projectDir: checkout })).id,
+    TIMEOUT,
+  )
+  assert.ok(['completed', 'failed'].includes(run.status), `the run settled: ${run.status}`)
+  assert.equal(existsSync(join(checkout, '.agent', 'test-unlock.json')), false,
+    'the unlock is removed when the run that granted it finishes, or the next agent in this checkout inherits it')
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
