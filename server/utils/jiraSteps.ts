@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isJiraPostingEnabled, jiraAuthHeader } from './jiraCredentials.ts'
 import { credentialsFor, notifyTicketOutcome } from './ticketNotifier.ts'
@@ -81,6 +81,31 @@ export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchIm
 }
 
 /**
+ * Which files are already on this ticket, from the ledger beside the evidence.
+ *
+ * Any doubt - missing, unreadable, or written for a different ticket - reads as
+ * "nothing has landed", so the files are attached. Attaching a duplicate is
+ * untidy; skipping a file that was never attached means the reviewer does not
+ * have the evidence, which is the failure that matters.
+ */
+async function readAttachmentLedger(path: string, key: string): Promise<Set<string>> {
+  try {
+    const doc = JSON.parse(await readFile(path, 'utf-8'))
+    if (doc?.ticketKey !== key || !Array.isArray(doc?.attached)) return new Set()
+    return new Set(doc.attached.filter((n: unknown): n is string => typeof n === 'string'))
+  } catch {
+    return new Set()
+  }
+}
+
+/** Best effort: a ledger that cannot be written costs a duplicate, not the attachment. */
+async function writeAttachmentLedger(path: string, key: string, attached: Set<string>): Promise<void> {
+  try {
+    await writeFile(path, JSON.stringify({ ticketKey: key, attached: [...attached], updatedAt: new Date().toISOString() }, null, 2))
+  } catch { /* the upload already happened; a missing ledger only risks a repeat */ }
+}
+
+/**
  * Attaches the run's top-level evidence files to the ticket (the bundle, the
  * reports, the oracle XML), so a reviewer sees the proof on the ticket itself.
  * The per-step logs under steps/ stay in Agent Manager; they are noise on a
@@ -91,28 +116,57 @@ async function attachArtifacts(run: WorkflowRun, key: string, fetchImpl: FetchLi
   const dir = runArtifactsDir(run.id)
   let names: string[]
   try {
-    names = (await readdir(dir, { withFileTypes: true })).filter(e => e.isFile()).map(e => e.name)
+    names = (await readdir(dir, { withFileTypes: true }))
+      .filter(e => e.isFile() && e.name !== 'jira-attachments.json')
+      .map(e => e.name)
   } catch {
     return `No evidence directory to attach for ${key}.`
   }
   if (!names.length) return `No evidence files to attach to ${key}.`
+
+  // What is already on the ticket, recorded per file as it lands.
+  //
+  // Without it, a run whose process died part-way through this loop attached
+  // three of seven files, and the resumed step attached all seven - leaving
+  // the ticket carrying three duplicates. The count in the returned sentence
+  // was the only record, and a sentence is not something a restart can read.
+  // The ledger lives beside the evidence and must never become evidence: it
+  // is bookkeeping, and attaching it puts agent-manager's internals on a
+  // customer's ticket. Caught by its own test - the first version uploaded it.
+  const ledgerName = 'jira-attachments.json'
+  const ledgerPath = join(dir, ledgerName)
+  const landed = await readAttachmentLedger(ledgerPath, key)
+  const todo = names.filter(n => !landed.has(n))
+  const skipped = names.length - todo.length
+  if (!todo.length) {
+    return `All ${names.length} evidence file(s) are already on the ticket ${key}; nothing re-attached.`
+  }
+
   const creds = await credentialsFor(run)
   const url = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}/attachments`
   const headers = { Authorization: jiraAuthHeader(creds), 'X-Atlassian-Token': 'no-check', Accept: 'application/json' }
   let done = 0
   const failed: string[] = []
-  for (const name of names) {
+  for (const name of todo) {
     try {
       const form = new FormData()
       form.append('file', new Blob([await readFile(join(dir, name))]), name)
       const res = await fetchImpl(url, { method: 'POST', headers, body: form })
-      if (res.ok) done++
-      else failed.push(`${name} (HTTP ${res.status})`)
+      if (res.ok) {
+        done++
+        landed.add(name)
+        // Written per file, not once at the end: the whole point is to survive
+        // a death in the middle of this loop.
+        await writeAttachmentLedger(ledgerPath, key, landed)
+      } else {
+        failed.push(`${name} (HTTP ${res.status})`)
+      }
     } catch (err) {
       failed.push(`${name} (${err instanceof Error ? err.message : String(err)})`)
     }
   }
-  return `Attached ${done} of ${names.length} evidence file(s) to ${key}${failed.length ? `; failed: ${failed.slice(0, 3).join(', ')}` : ''}.`
+  const already = skipped ? `; ${skipped} already on the ticket` : ''
+  return `Attached ${done} of ${todo.length} evidence file(s) to ${key}${already}${failed.length ? `; failed: ${failed.slice(0, 3).join(', ')}` : ''}.`
 }
 
 /**

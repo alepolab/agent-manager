@@ -240,4 +240,70 @@ function writeMeta(runId, meta) {
 }
 
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
+// ══ the comment is posted once, even across a restart ════════════════════
+// A run whose process dies mid-step comes back as `interrupted`, and resuming
+// re-runs the frozen step (workflowRunStore.ts:79-100, workflowRunner.ts:1866).
+// The step's in-memory `ticketCommented` died with the process, so the second
+// attempt used to post a second comment onto a real ticket - and because the
+// comment renders from the run's state at the moment of posting, the two can
+// contradict each other.
+//
+// The durable marker was already being written and never read: jira-comment.json
+// carries posted:true, the run id and the ticket key.
+{
+  process.env.JIRA_POST_ENABLED = '1'
+  process.env.JIRA_BASE_URL = 'https://example.atlassian.net'
+  process.env.JIRA_EMAIL = 'bot@example.com'
+  process.env.JIRA_API_TOKEN = 'bot-token'
+  const run = { id: `idem-${Date.now()}`, status: 'completed', error: undefined }
+
+  let posts = 0
+  const fetchOk = async () => { posts += 1; return { ok: true, status: 201, text: async () => '' } }
+
+  const first = await notifyTicketOutcome(watch, 'CSUP-200', run, {}, fetchOk)
+  assert.equal(first.posted, true, 'the first attempt posts')
+  assert.equal(posts, 1)
+  assert.ok(existsSync(first.artifactPath), 'and records the marker it will read next time')
+
+  // The restart: same run, same ticket, a fresh attempt with no memory.
+  const second = await notifyTicketOutcome(watch, 'CSUP-200', run, {}, fetchOk)
+  assert.equal(posts, 1, `the second attempt posts NOTHING; it posted ${posts} times in total`)
+  assert.equal(second.posted, true, 'and still reports the comment as posted, because it is on the ticket')
+  assert.equal(second.alreadyPosted, true, 'flagged so a caller can tell a fresh post from a suppressed one')
+
+  // A different ticket is a different effect and must still post.
+  const other = await notifyTicketOutcome(watch, 'CSUP-201', run, {}, fetchOk)
+  assert.equal(posts, 2, `a different ticket still posts; total posts ${posts}`)
+  assert.equal(other.alreadyPosted, undefined)
+}
+
+// ── uncertainty means POST, never suppress ───────────────────────────────
+// A lost comment is worse than a duplicate: a duplicate is noise a person
+// reconciles, silence is a ticket nobody knows finished. So an unreadable or
+// half-written marker must not be read as "already done".
+{
+  process.env.JIRA_POST_ENABLED = '1'
+  process.env.JIRA_BASE_URL = 'https://example.atlassian.net'
+  process.env.JIRA_EMAIL = 'bot@example.com'
+  process.env.JIRA_API_TOKEN = 'bot-token'
+  const run = { id: `idem-bad-${Date.now()}`, status: 'completed', error: undefined }
+  const dir = join(process.env.AGENT_RUNS_DIR, run.id, 'artifacts')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'jira-comment.json'), '{ this is not json')
+
+  let posts = 0
+  const r = await notifyTicketOutcome(watch, 'CSUP-300', run, {}, async () => { posts += 1; return { ok: true, status: 201, text: async () => '' } })
+  assert.equal(posts, 1, 'an unreadable marker means post, because suppressing on uncertainty loses the outcome')
+  assert.equal(r.posted, true)
+
+  // A marker that records a FAILED post must not suppress the retry either.
+  const run2 = { id: `idem-failed-${Date.now()}`, status: 'completed', error: undefined }
+  const dir2 = join(process.env.AGENT_RUNS_DIR, run2.id, 'artifacts')
+  mkdirSync(dir2, { recursive: true })
+  writeFileSync(join(dir2, 'jira-comment.json'), JSON.stringify({ runId: run2.id, ticketKey: 'CSUP-301', posted: false, reason: 'HTTP 503' }))
+  let posts2 = 0
+  await notifyTicketOutcome(watch, 'CSUP-301', run2, {}, async () => { posts2 += 1; return { ok: true, status: 201, text: async () => '' } })
+  assert.equal(posts2, 1, 'a marker saying the post FAILED is a reason to retry, not to skip')
+}
+
 console.log('ticketNotifier: all assertions passed')
