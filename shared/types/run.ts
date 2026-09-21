@@ -101,6 +101,15 @@ export interface RunCi {
   error?: string
 }
 
+/**
+ * Set only on a record scripts/recover-run-records.mjs rebuilt from the run's
+ * artifacts after the original was lost. It marks the record as second-hand:
+ * everything in it was read from artifacts the runner wrote, and the fields the
+ * artifacts never carried — `initialPrompt`, the workflow slug — are absent
+ * rather than reconstructed.
+ */
+export interface RunRecovery { at: number, from: string, note: string }
+
 export interface RunUsage { input_tokens: number, output_tokens: number, /** Of input_tokens, the ones read back from the prompt cache. */ cached_tokens?: number, usd: number }
 export interface RunBudget { maxMinutes: number, maxTokens: number }
 
@@ -280,6 +289,8 @@ export interface WorkflowRun {
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
   ci?: RunCi
+  /** Present only on a record rebuilt from artifacts; see RunRecovery. */
+  recovered?: RunRecovery
   /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
   budget: RunBudget
   currentStepIds: string[]
