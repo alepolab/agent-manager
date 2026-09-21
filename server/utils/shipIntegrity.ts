@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { nestedRepos } from './workspace.ts'
+import { workingTreeDirty } from './gitFacts.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
@@ -178,6 +179,19 @@ export async function shipIntegrity(run: WorkflowRun, expectPr: boolean, meta: R
       findings.push({ problem: 'unpushed', repo: name, detail: `${run.branch} exists only locally in ${dir} — nothing was pushed.` })
     } else if (ahead && ahead > 0) {
       findings.push({ problem: 'unpushed', repo: name, detail: `${ahead} commit(s) on ${run.branch} in ${dir} are not on origin — a reviewer cannot fetch them.` })
+    }
+
+    // Uncommitted work in the checkout itself. One run left 46 modified files,
+    // +593/-279, uncommitted on the head of a HUMAN's open pull request branch;
+    // another left doc edits that survived only as an artifact patch. Neither
+    // is in any commit, so neither is in any pull request.
+    const dirty = await workingTreeDirty(dir)
+    if (dirty?.length) {
+      findings.push({
+        problem: 'dirty',
+        repo: name,
+        detail: `${dirty.length} uncommitted file(s) in ${dir} — not in any commit, so not in any pull request: ${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? '…' : ''}`,
+      })
     }
 
     for (const lane of await orphanLanes(dir, run.branch)) {

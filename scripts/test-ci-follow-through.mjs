@@ -170,3 +170,26 @@ const runWithPrs = async (prompt, prs) => {
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('ci follow-through: every PR is polled to merge or close, merges are recorded, and a red check tells somebody')
+
+// ── A gate waiting on a person says so, once per window ─────────────────────
+//
+// One run spent 16.8 hours paused on a question nobody answered, against 104
+// minutes of work. The ask-time was recorded all along and nothing looked at it.
+{
+  process.env.AGENT_GATE_SLA_MINUTES = '60'
+  const waiting = await store.createRun({
+    workflowSlug: 'w', workflowName: 'Runbook', autoRun: true, initialPrompt: 'SCN-9',
+    watch: 'direct-invocation', steps: [{ stepId: 'a', label: 'Verify', agentSlug: 'x' }],
+  })
+  waiting.status = 'paused'
+  waiting.question = { stepId: 'a', kind: 'approval', text: 'Approve "Verify"', askedAt: Date.now() - 30 * 60_000 }
+  await store.saveRun(waiting)
+  assert.equal(await C.sweepWaitingGates(), 0, 'a gate inside its window is nobody\'s business yet')
+
+  waiting.question.askedAt = Date.now() - 3 * 60 * 60_000
+  await store.saveRun(waiting)
+  assert.equal(await C.sweepWaitingGates(), 1, 'a gate past its window is reported')
+  assert.equal(await C.sweepWaitingGates(), 0, 'and reported once per window, not once per tick')
+}
+
+console.log('ci follow-through: and a gate nobody answered is reported once per window')

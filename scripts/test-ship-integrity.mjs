@@ -114,6 +114,14 @@ try {
   const withPr = { fix: { repos: [{ repo: name, pr: 'https://github.com/x/y/pull/1' }] } }
   assert.deepEqual(await shipIntegrity(run, true, withPr), [], 'a pull request closes it')
 
+  // 5b. Uncommitted work in the checkout is unreachable too — the shape that
+  //     left 46 modified files on the head of a human's open pull request.
+  writeFileSync(join(clone, 'never-committed.txt'), 'the half nobody committed\n')
+  const withDirt = await shipIntegrity(run, true, withPr)
+  assert.equal(withDirt.find(f => f.problem === 'dirty')?.repo, name,
+    'an uncommitted file at the end of a run is in no commit and therefore in no pull request')
+  await git(clone, ['clean', '-qfd'])
+
   // 6. The exemptions. A repository with no origin has nowhere to push; one
   //    with an origin URL it has never fetched is a fixture, not a failure.
   const local = join(root, 'local')

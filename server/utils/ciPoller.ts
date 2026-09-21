@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { listRuns, getRun, saveRun } from './workflowRunStore.ts'
 import { PLACEHOLDER_PR, runArtifactsDir } from './runArtifacts.ts'
-import { notifyCiFailing } from './notify.ts'
+import { notifyCiFailing, notifyGateWaiting } from './notify.ts'
 import type { WorkflowRun, RunCi } from '~~/shared/types/run'
 
 const execFileP = promisify(execFile)
@@ -139,7 +139,36 @@ async function readPr(url: string): Promise<RunCiPr> {
 }
 
 /** One pass over the runs worth polling. Returns how many were checked. */
+/**
+ * How long a gate may wait for a person before it says so again.
+ *
+ * One run spent 16.8 hours paused on a question nobody answered, against 104
+ * minutes of work; across thirteen runs, 9,877 calendar minutes hold 2,487
+ * active ones. The question's ask-time was already recorded and nothing ever
+ * looked at it — this is that look. It reminds; it never answers, never times
+ * out, and never stops a run. Deciding is a person's job; remembering is not.
+ */
+const GATE_SLA_MS = Number(process.env.AGENT_GATE_SLA_MINUTES || 120) * 60_000
+const remindedAt = new Map<string, number>()
+
+export async function sweepWaitingGates(now = Date.now()): Promise<number> {
+  let reminded = 0
+  for (const run of await listRuns()) {
+    if (run.status !== 'paused' || !run.question?.askedAt) continue
+    const waited = now - run.question.askedAt
+    if (waited < GATE_SLA_MS) continue
+    // Once per SLA window, not once per tick.
+    const last = remindedAt.get(run.id) ?? 0
+    if (now - last < GATE_SLA_MS) continue
+    remindedAt.set(run.id, now)
+    notifyGateWaiting(run, Math.round(waited / 60_000))
+    reminded++
+  }
+  return reminded
+}
+
 export async function pollOnce(now = Date.now()): Promise<number> {
+  await sweepWaitingGates(now).catch(() => 0)
   let checked = 0
   for (const run of await listRuns()) {
     // A failed run can still have opened its PR (a budget cap after the PR step, say); its checks matter as much.

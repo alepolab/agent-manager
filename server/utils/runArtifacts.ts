@@ -468,6 +468,20 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
 
   // Runner-owned, like identity and cost: it is a fact about the directory the
   // runner can see for itself, and finalize is the last moment anyone looks.
+  // What is in this bundle that somebody must think about before copying it,
+  // and the roots every absolute path inside it was written against — 426 files
+  // name /home/sandeep and 295 name a container path, on a machine where
+  // neither may exist when the bundle is read.
+  try {
+    const { scanSensitivity } = await import('./evidenceContract.ts')
+    const sensitivity = await scanSensitivity(dir)
+    if (sensitivity) merged.sensitivity = sensitivity
+  } catch { /* a label is never worth failing a run over */ }
+  merged.path_roots = {
+    workspace: workspaceRootFor(run.startedBy),
+    artifacts: dir,
+    claude_dir: getClaudeDir(),
+  }
   const contractMissing = await missingContractFiles(dir)
   // `adversarial` is a meta key rather than a file, but it is the same class of
   // gap - something the bundle requires and this run did not produce - so it is

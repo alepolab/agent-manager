@@ -172,6 +172,22 @@ export function notifyCiFailing(run: WorkflowRun, ci: RunCi): void {
   announce(run, 'ci-failing', text, { pr: ci.pr, failing: bad }, `:${ci.pr}`)
 }
 
+/**
+ * A gate has been waiting for a person longer than anyone intended.
+ *
+ * Called from the CI poller's tick, which is the only clock this app has. One
+ * run sat 16.8 hours on an unanswered question against 104 minutes of work, and
+ * across thirteen runs three quarters of the calendar time is this. A reminder,
+ * not an escalation: nothing here answers a gate or stops a run.
+ */
+export function notifyGateWaiting(run: WorkflowRun, waitedMinutes: number): void {
+  const label = run.steps.find(s => s.stepId === run.question?.stepId)?.label ?? 'a gate'
+  const hours = waitedMinutes >= 90 ? `${Math.round(waitedMinutes / 60)}h` : `${waitedMinutes} min`
+  const text = `${run.workflowName}: waiting ${hours} for a decision on "${label}"`
+    + `${run.ticketKey ? ` (${run.ticketKey})` : ''}\n${baseUrlOf()}/runs/${run.id}`
+  announce(run, 'paused-on-gate', text, { waitedMinutes, step: label }, `:gate:${run.question?.stepId ?? ''}`)
+}
+
 /** Everything a transition should trigger; called from the runner's publish.
  *  The Jira write-back lives in ticketNotifier.ts, gated by JIRA_POST_ENABLED. */
 export function onRunTransition(run: WorkflowRun): void {

@@ -91,3 +91,42 @@ assert.equal(bad.ok, false); assert.ok(bad.error, 'the reason travels with the v
 
 rmSync(root, { recursive: true, force: true })
 console.log('workspace: all assertions passed')
+
+// ── A commit made in a run worktree says which run made it ──────────────────
+//
+// Every agent commit across thirteen runs was authored by the operator, and
+// grepping every one of them for a run id returned nothing: `git log` could not
+// answer "was this agent-written?" or "where is the evidence for this line?".
+{
+  const { installRunTrailer } = await import('../server/utils/workspace.ts')
+  const repo = mkdtempSync(join(tmpdir(), 'trailer-'))
+  execFileSync('git', ['init', '-q', repo])
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo })
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo })
+  writeFileSync(join(repo, 'a.txt'), 'x\n')
+  execFileSync('git', ['add', '-A'], { cwd: repo })
+  execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo })
+
+  await installRunTrailer(repo, 'fix/CSUP-1-9a6ea7d0')
+  writeFileSync(join(repo, 'b.txt'), 'y\n')
+  execFileSync('git', ['add', '-A'], { cwd: repo })
+  execFileSync('git', ['commit', '-qm', 'the fix'], { cwd: repo })
+  const body = execFileSync('git', ['log', '-1', '--format=%B'], { cwd: repo, encoding: 'utf8' })
+  assert.match(body, /Run-Id: 9a6ea7d0/, 'the commit carries its run id, so the evidence is one grep away')
+
+  // Twice is once: an amend or a rebase must not stack trailers.
+  execFileSync('git', ['commit', '-q', '--amend', '--no-edit'], { cwd: repo })
+  const amended = execFileSync('git', ['log', '-1', '--format=%B'], { cwd: repo, encoding: 'utf8' })
+  assert.equal((amended.match(/Run-Id:/g) ?? []).length, 1, 'the trailer is added once, not once per commit attempt')
+
+  // A branch that is not a run branch is left alone.
+  const plain = mkdtempSync(join(tmpdir(), 'trailer-plain-'))
+  execFileSync('git', ['init', '-q', plain])
+  await installRunTrailer(plain, 'feature/ordinary-branch')
+  assert.ok(!existsSync(join(plain, '.git', 'hooks', 'prepare-commit-msg')),
+    'no hook is installed outside a run worktree')
+  rmSync(repo, { recursive: true, force: true })
+  rmSync(plain, { recursive: true, force: true })
+}
+
+console.log('workspace: the run trailer and the scratch exclude are pinned too')

@@ -300,6 +300,15 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
       await git(r, ['worktree', 'add', '--quiet', '-B', branch, wt, ...(start ? [start] : [])])
     }
     await excludeFromGit(wt, '.agent/evidence-run/')
+    // Everything under the scratch directory EXCEPT the plan, which the plan
+    // gate requires a run to commit. `.agent/source-edited` and
+    // `.agent/test-unlock.json` littered six worktrees and one run added its own
+    // .gitignore rule for them; the pattern pair is that policy, once, for every
+    // run. `.agent/*` rather than `.agent/`, because a negation cannot re-include
+    // a file inside an excluded DIRECTORY.
+    await excludeFromGit(wt, '.agent/*')
+    await excludeFromGit(wt, '!.agent/plan.md')
+    await installRunTrailer(wt, branch)
     out.push(wt)
   }
   return out
@@ -399,6 +408,45 @@ export function nestedRepos(path: string): string[] {
 }
 
 /** Evidence copies never reach a commit, whatever an agent stages: the path is excluded in the checkout itself. */
+/**
+ * A commit made in a run worktree says which run made it.
+ *
+ * Every agent commit across thirteen runs is authored by the operator, and
+ * `git log` cannot answer "was this agent-written?" or "where is the evidence
+ * for this line?" — grepping every run commit for a run id returns nothing. The
+ * `Co-Authored-By` trailer that was supposed to mark them is missing from four
+ * commits outright and carries a stray personal address on a fifth.
+ *
+ * A `prepare-commit-msg` hook rather than a runner-side amend: the agents commit
+ * themselves, through whatever git invocation they choose, and a hook is the one
+ * place every one of those passes through. Written into the worktree's own hooks
+ * directory, so it exists for this run and nothing else on the machine.
+ */
+export async function installRunTrailer(worktree: string, branch: string): Promise<void> {
+  const runId = branch.split('-').pop() ?? ''
+  if (!/^[0-9a-f]{6,}$/i.test(runId)) return // not a run branch: nothing to stamp
+  try {
+    const gitDir = (await git(worktree, ['rev-parse', '--path-format=absolute', '--git-dir'])).trim()
+    const hooks = join(gitDir, 'hooks')
+    await mkdir(hooks, { recursive: true })
+    const hook = join(hooks, 'prepare-commit-msg')
+    // Idempotent and additive: a message that already carries the trailer (an
+    // amend, a rebase) is left alone.
+    const body = [
+      '#!/bin/sh',
+      '# Installed by Agent Manager for this run worktree. Stamps the run id on',
+      '# every commit made here, so `git log --grep` can find the evidence.',
+      `RUN_TRAILER="Run-Id: ${runId}"`,
+      'grep -qF "$RUN_TRAILER" "$1" 2>/dev/null && exit 0',
+      'printf "\n%s\n" "$RUN_TRAILER" >> "$1"',
+      '',
+    ].join('\n')
+    await writeFile(hook, body, { mode: 0o755 })
+  } catch {
+    // A missing hook is a missing trailer, never a failed run.
+  }
+}
+
 export async function excludeFromGit(path: string, pattern: string): Promise<void> {
   // In a linked worktree `.git` is a file: info/exclude lives in the common dir, shared by every worktree of the clone.
   const gitDir = await git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => join(path, '.git'))
