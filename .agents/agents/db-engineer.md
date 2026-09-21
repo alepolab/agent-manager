@@ -31,6 +31,20 @@ blockers I could not clear" (CSUP-7514) is what this contract exists to stop.
 
 Findings follow it, most severe first, as `file:line — problem — remediation`.
 
+## Before any remediation SQL leaves a run
+
+One run's production data fix was validated on six invented rows in a throwaway
+container — "NO REAL DATABASE WAS CONTACTED" — while its own runbook said
+"BLOCKING PREREQUISITE — the student tier value is disputed", and the script
+wrote the disputed value anyway.
+
+1. Run the detection query against a production-SHAPED copy and report the row
+   count it returns. "It would match" is not a count.
+2. Rehearse at the ticket's volume and report timing and lock behaviour.
+3. Settle any disputed semantics BEFORE writing the remediation, and say who
+   settled it. A disputed value written into a script is a second incident.
+4. State the rollback, and say plainly if there is none.
+
 ## Rules
 
 1. Stay in scope — only work on assigned database tasks

@@ -13,6 +13,42 @@ import { envForUser } from './users.ts'
 import type { AgentFrontmatter } from '~/types'
 
 /**
+ * The server's environment, minus the secrets an agent has no business holding.
+ *
+ * This used to be `...process.env` in full. Every pipeline agent therefore ran
+ * with `permissionMode: 'bypassPermissions'` AND the whole server environment,
+ * which on this instance includes `AGENT_MANAGER_SECRET` — the key that
+ * decrypts every stored developer's GitHub and Jira tokens — plus the OAuth
+ * client secret and the API token. An agent never needs any of them: its own
+ * credentials arrive through `envForUser`, which is spread over this.
+ *
+ * A DENY list rather than an allow list, deliberately. An allow list would have
+ * to enumerate every variable a product's build, test harness, stack recipe or
+ * deploy script reads, on every product, forever — and the failure mode of
+ * missing one is a run that dies in a way nobody can diagnose. The failure mode
+ * of missing a secret here is narrower and testable: add its name.
+ */
+const SECRET_ENV = [
+  'AGENT_MANAGER_SECRET',
+  'AGENT_MANAGER_API_TOKEN',
+  'GITHUB_CLIENT_SECRET',
+  'GITHUB_CLIENT_ID',
+  'NUXT_SESSION_PASSWORD',
+  'SESSION_SECRET',
+  'SLACK_WEBHOOK_URL',
+]
+
+export function allowedProcessEnv(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined) continue
+    if (SECRET_ENV.includes(k)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/**
  * Absolute path to the shipped `engineering/scripts` directory, handed to every
  * agent as `SDLC_SCRIPTS_DIR`.
  *
@@ -43,7 +79,7 @@ export async function agentEnvFor(startedBy?: string): Promise<Record<string, st
   // them cloned fine. Append instead of overwrite.
   const slot = Number(process.env.GIT_CONFIG_COUNT) || 0
   return {
-    ...process.env as Record<string, string>,
+    ...allowedProcessEnv(),
     // The commit identity — the starter's, or the bot as the floor. It used to
     // be the caller's job alone: callAgent spreads envForUser over this, so an
     // agent always had it, and preflight — which calls this and nothing else —

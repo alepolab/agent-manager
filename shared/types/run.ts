@@ -309,6 +309,14 @@ export interface WorkflowRun {
    * restart the workflow definition may have changed under the run.
    */
   expectsPr?: boolean
+  /**
+   * The step graph this run executes, copied from the workflow at creation.
+   * A boot reseed rewrites the definitions on disk and interrupted runs resume
+   * five seconds later, so without this a run resumes against a graph it never
+   * started on. Typed loosely on purpose: it is the runner's own WorkflowLike
+   * step shape, which shared types deliberately do not model.
+   */
+  workflowSnapshot?: unknown[]
   /** Why this ticket was run again although a completed run already existed. */
   rerunReason?: string
   /**
@@ -460,5 +468,7 @@ export interface NewRunInput {
   expectsPr?: boolean
   /** See WorkflowRun.rerunReason. */
   rerunReason?: string
+  /** See WorkflowRun.workflowSnapshot. */
+  workflowSnapshot?: unknown[]
   steps: { stepId: string, label: string, agentSlug: string }[]
 }

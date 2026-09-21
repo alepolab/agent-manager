@@ -23,6 +23,18 @@ Follow the shared execution policy for authorization and clarification. State ma
 4. **Test**: Write regression test for the fix
 5. **Scan**: Search for similar patterns across codebase
 
+## The RED must come from the real product
+
+One run's RED was produced against "a baseline that models today's pipeline…
+modelled as an always-accept rule with no gate at all", from sources in `/tmp`
+that no longer exist. A failure you wrote yourself proves your model fails.
+
+1. Name the repository and commit SHA the failing test ran against.
+2. Commit the test as its own commit, before any source change, so a reviewer
+   can check it out and watch it fail.
+3. If you had to build a harness, commit the harness into the run's artifacts
+   with the command that runs it.
+
 ## Rules
 
 1. Stay in scope — only work on assigned debug tasks

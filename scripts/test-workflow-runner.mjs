@@ -657,13 +657,30 @@ assert.equal(rst.steps.find(s => s.stepId === 'b').visits, 2, 'visits keep count
 const stepFiles = readdirSync(join(process.env.AGENT_RUNS_DIR, rst.id, 'artifacts', 'steps'))
 assert.ok(stepFiles.some(f => /step-02-.*-restart-1\.json$/.test(f)), 'the failed attempt is snapshotted before the restart')
 
-// A genuinely different workflow (extra step) is refused, not guessed at.
+// A genuinely different workflow (extra step) on disk no longer decides
+// anything for a run that carries its own graph: `workflowSnapshot` is taken at
+// creation precisely so a boot reseed cannot rewrite the definition under a run
+// that is still inside it. The run replays the steps it actually started with.
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
   name: workflow.name, description: '',
   steps: [...workflow.steps, { id: 'e', agentSlug: 'agent-e', label: 'E', next: [] }],
 }))
 runner._dropLive(rst.id)
-await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/, 'a reshaped workflow refuses restart')
+const reshaped = await runner.restartRun(rst.id, 'b')
+assert.equal(reshaped.steps.length, workflow.steps.length,
+  'the run keeps its own step graph; the workflow gaining a step does not add one to a run in flight')
+await runner.waitForSettled(reshaped.id, TIMEOUT)
+
+// A run recorded BEFORE snapshots existed has no graph of its own, so the old
+// rule still holds for it: a reshaped workflow is refused rather than guessed at.
+{
+  const legacy = await store.getRun(rst.id)
+  delete legacy.workflowSnapshot
+  await store.saveRun(legacy)
+  runner._dropLive(rst.id)
+  await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/,
+    'a run with no snapshot still refuses a reshaped workflow')
+}
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'),
   JSON.stringify({ name: workflow.name, description: '', steps: workflow.steps }))
 

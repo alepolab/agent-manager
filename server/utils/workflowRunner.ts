@@ -358,7 +358,7 @@ async function takeStackDown(run: WorkflowRun): Promise<void> {
   if (!run.stackStarted || run.stackStopped) return
   try {
     const recipe = await resolveStackRecipe({ compose: `alepo-dev-team-infra/${run.stackStarted}` })
-    const result = await stackDown(recipe)
+    const result = await stackDown(recipe, { runId: run.id })
     run.stackStopped = result.summary
     log.info('stack taken down with the run', { runId: run.id, product: run.stackStarted, ok: result.ok })
   } catch (err) {
@@ -438,6 +438,33 @@ export async function completePendingTicketNotifications(): Promise<{ notified: 
  * of the pushed branch, or on no branch with a pull request at all. Every one
  * of them read as success on the runs page and in its Jira comment.
  */
+/**
+ * The risk class of a run nothing classified, measured from what it changed.
+ *
+ * Six of thirteen runs carried no class at all and two carried one that did not
+ * match the diff — a 1,850-line change that added a server-side call to an
+ * external address API was recorded `ui_parsing`. Oversight, review depth and
+ * customer notification all key off this field, so an absent one is not a
+ * neutral default: it is every gate firing on a guess. The floor is computed
+ * from the paths git says the run touched, the same function intake's own
+ * proposal is checked against, and recorded with its provenance so nobody reads
+ * it as a step's own claim.
+ */
+async function classifyFromDiff(run: WorkflowRun): Promise<void> {
+  if (run.blastRadius || !run.projectDir || !run.baseCommit) return
+  try {
+    const floor = floorFrom(await changedPathsSince(run.projectDir, run.baseCommit))
+    if (!floor) return
+    run.blastRadius = floor
+    run.classSource = 'floor-only'
+    log.info('blast radius measured from the diff at the end of the run', { runId: run.id, blastRadius: floor })
+  } catch (err) {
+    // Unmeasurable stays unclassified, which oversight already treats as the
+    // most cautious answer. A guess here would be worse than the absence.
+    log.warn('could not measure a blast radius from the diff', { runId: run.id, error: String(err) })
+  }
+}
+
 async function enforceShipIntegrity(run: WorkflowRun): Promise<void> {
   if (run.status !== 'completed' || run.shipIntegrity) return
   // Read from the RECORD, not from live state: a run resumed after a restart
@@ -467,7 +494,10 @@ async function enforceShipIntegrity(run: WorkflowRun): Promise<void> {
 }
 
 async function publish(run: WorkflowRun) {
-  if (TERMINAL_STATUSES.includes(run.status)) await enforceShipIntegrity(run)
+  if (TERMINAL_STATUSES.includes(run.status)) {
+    await classifyFromDiff(run)
+    await enforceShipIntegrity(run)
+  }
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
   // and there are too many terminal branches for per-site bookkeeping to stay
@@ -500,6 +530,17 @@ async function publish(run: WorkflowRun) {
     // finalizeRunArtifacts is a read-merge-write, so repeating it is harmless.
     // Placed AFTER saveRun so a failure to write artifacts can never cost us
     // the run record itself.
+    if (!TERMINAL_STATUSES.includes(run.status) && EVIDENCE_FINAL_STATUSES.includes(run.status)) {
+      // An interrupted run: its evidence is finalized, nothing else is. No
+      // teardown (a resume needs the stack), no ticket comment (the run has not
+      // ended), no reaping (its containers may be mid-step).
+      try {
+        await flushLogs(run.id)
+        await finalizeRunArtifacts(run)
+      } catch (err) {
+        log.warn('could not finalize the artifacts of an interrupted run', { runId: run.id, error: String(err) })
+      }
+    }
     if (TERMINAL_STATUSES.includes(run.status)) {
       // Take down whatever this run started, here for the same reason finalize
       // is here: there are six-plus terminal branches and a teardown at each
@@ -507,6 +548,17 @@ async function publish(run: WorkflowRun) {
       // is most likely to be left running, so this must not be on the happy
       // path. Volumes are never removed - the data and seed survive.
       await takeStackDown(run)
+      // Then whatever the run created that the stack recipe does not own:
+      // 150 GB of images, containers and build cache leaked because nothing
+      // was labelled and nothing looked. Only objects carrying THIS run's
+      // label are touched, and never a volume.
+      try {
+        const { reapRun } = await import('./dockerReap.ts')
+        const reaped = await reapRun(run.id, { apply: true })
+        if (reaped.removed.length) log.info('reaped docker objects this run created', { runId: run.id, removed: reaped.removed.length })
+      } catch (err) {
+        log.warn('could not reap this run\'s docker objects', { runId: run.id, error: String(err) })
+      }
       await withdrawTestUnlocks(run)
       try {
         // Before finalizing: the step logs are appended asynchronously, and an
@@ -577,6 +629,19 @@ const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'completed', 'faile
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
+
+/**
+ * Statuses whose EVIDENCE is final even though the run may move again.
+ *
+ * `interrupted` is not terminal — the process died and a later boot resumes it
+ * — but its artifacts are as complete as they will ever be until that happens,
+ * and finalize is what writes the contract report, the provenance and the
+ * index row. A run that is never resumed used to be checked by nothing at all:
+ * no `contract_missing`, no index row, no summary. Teardown and the ticket
+ * comment stay behind TERMINAL_STATUSES, because those are about the run
+ * ending, not about the evidence being current.
+ */
+const EVIDENCE_FINAL_STATUSES: WorkflowRun['status'][] = [...TERMINAL_STATUSES, 'interrupted']
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
@@ -1006,7 +1071,7 @@ async function bringStackUp(l: Live, run: WorkflowRun, rec: RunStep): Promise<st
   }
   try {
     const recipe = await resolveStackRecipe({ compose })
-    const result = await stackUp(recipe)
+    const result = await stackUp(recipe, { runId: run.id })
     for (const line of result.ran) logLine(l, run, rec, line)
     logLine(l, run, rec, result.summary)
     if (result.ok) {
@@ -2226,6 +2291,10 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     // pull request, and must not be talked out of failing one that does ship by
     // a template edited after the run started.
     expectsPr: opts.workflow.steps.some(s => s.pr === true),
+    // The graph this run will actually execute, kept with the run. See
+    // rehydrate: a boot reseed rewrites the definitions on disk, and a resume
+    // five seconds later used to pick up the new one mid-run.
+    workflowSnapshot: opts.workflow.steps,
     ...(opts.rerunReason ? { rerunReason: opts.rerunReason } : {}),
     // `ownerRole` is snapshotted with the rest: the run page must render whose
     // work a step is without loading the workflow, and a template edited after
@@ -2530,6 +2599,7 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   if (l) {
     l.stopped = true
     skipPending(l.state)
+    for (const id of l.aborts.keys()) recordRestart(run, id, 'a person stopped the run while this step was in flight')
     for (const ac of l.aborts.values()) ac.abort()
   }
   for (const s of run.steps) if (s.status === 'pending' || s.status === 'waiting') s.status = 'skipped'
@@ -2581,7 +2651,15 @@ function approvalsFrom(run: WorkflowRun): Set<string> {
 async function rehydrate(run: WorkflowRun): Promise<Live> {
   const existing = live.get(run.id)
   if (existing) return existing
-  const workflow = await loadWorkflowSteps(run.workflowSlug)
+  // The run's OWN snapshot first. On boot the seeder rewrites the workflow
+  // definitions on disk and interrupted runs resume five seconds later, so a
+  // run interrupted at step 5 of the old graph would otherwise resume against
+  // the new one — the definition changing under a run that is still inside it.
+  // Falling back to disk keeps every run recorded before the snapshot existed
+  // resumable.
+  const workflow = run.workflowSnapshot
+    ? { slug: run.workflowSlug, name: run.workflowName, steps: run.workflowSnapshot }
+    : await loadWorkflowSteps(run.workflowSlug)
   if (!workflow) {
     throw new RestartError(409, `Workflow "${run.workflowSlug}" no longer exists, so this run cannot be rebuilt`)
   }
@@ -2668,6 +2746,11 @@ const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted'
  * step's output, under the same run id and artifacts directory. The previous
  * attempt of each reset step is snapshotted the way monitor retries are.
  */
+/** Appended by every path that ends an attempt; see WorkflowRun.restarts. */
+function recordRestart(run: WorkflowRun, stepId: string, reason: string): void {
+  run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId, reason }]
+}
+
 export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string, opts: { /** The runner itself hands a running run over (a widened run); the settled-status gate is the operator's, not its. */ fromRunner?: boolean } = {}): Promise<WorkflowRun> {
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
@@ -2684,6 +2767,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
       { runId: active.id },
     )
   }
+  recordRestart(run, stepId, note ? `an operator restarted from this step: ${note}` : 'an operator restarted from this step')
   // A restart starts from what is on disk. An in-memory record left by a
   // previous attempt carries that attempt's state, and a second restart
   // scheduled against it found nothing to run and reported the run complete.

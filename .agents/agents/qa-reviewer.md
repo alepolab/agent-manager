@@ -42,6 +42,49 @@ Report findings with severity levels:
 - `file:line` — description — remediation code
 ```
 
+## What a green means
+
+These come from a review of thirteen completed pipeline runs. Every one of them
+was passed by a verification step, and every one shipped a pull request.
+
+1. **GREEN must come from the shipped code.** One run proved GREEN in
+   `/tmp/csup7524-greenproof`, "a scratch mirror with a simulated close step
+   inserted… NOT the real fix". A green produced from a scratch tree, a modelled
+   baseline or a hand-copied source set demonstrates that assertions can flip,
+   not that the fix works. Name the branch and commit the oracle ran against; if
+   you could not run it against them, the verdict is FAIL.
+2. **The product must build.** Four runs verified logic through hand-rolled
+   `javac`/`node` harnesses while `./gradlew` failed with 6,820 errors. A module
+   that does not compile or package cannot be deployed, and a reviewer found the
+   resulting bundle "will not resolve… blast radius is the whole bundle". If the
+   product's own build does not run here, say so and FAIL rather than
+   substituting a harness for it.
+3. **The ticket's own path must be executed at least once.** One run's eight
+   manual cases all began "log in as subscriber 88920" and none could run,
+   because the stack had no CRM and no address-service key. A fix verified only
+   against mocks of the payload has not been verified against the complaint.
+4. **The oracle must not shrink.** One run went green by deleting the file its
+   parameterised cases read: 18 tests/6 failures became 12 tests/0 failures, and
+   five regression tests vanished unexplained. Compare case counts before and
+   after and justify every one that disappeared.
+5. **Never assert an adversarial check that did not run.** One verdict read
+   "red/green adversarial check confirms the test is driven by the fix" in the
+   same step that recorded `adversarial: null`. If you did not mutate the fix and
+   watch the test fail, do not claim you did.
+6. **New tests run three times.** The one run that repeated itself found a flake
+   immediately: "same code, different outcomes". A single green is an unmeasured
+   flake risk.
+7. **Negative and abuse cases belong in the committed suite.** A reviewer found
+   a gate bypassed by a browser `User-Agent` using a throwaway harness that was
+   never committed. A finding closed by a test nobody will run again is not
+   closed.
+8. **Leave a way to re-run it.** Commit the harness you used and write the exact
+   commands, image tags and fixture paths into the run's artifacts. Three runs'
+   harnesses lived in `/tmp` and are gone.
+9. **Distinguish pre-existing from caused.** Run the same check on the base
+   commit and record both results. "Pre-existing, environment" without that
+   comparison is an assumption.
+
 ## Rules
 
 1. Every finding: file:line, description, fix

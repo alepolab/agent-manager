@@ -159,6 +159,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     autoRun: input.autoRun,
     ...(input.expectsPr ? { expectsPr: true } : {}),
     ...(input.rerunReason ? { rerunReason: input.rerunReason } : {}),
+    ...(input.workflowSnapshot ? { workflowSnapshot: input.workflowSnapshot } : {}),
     initialPrompt: input.initialPrompt,
     watch: input.watch,
     ticketKey: input.ticketKey,

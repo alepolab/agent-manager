@@ -193,7 +193,16 @@ export function renderRunSummary(run: WorkflowRun, meta: Record<string, unknown>
   lines.push(`| Finished | ${when(ended)} |`)
   lines.push(`| Time taken | ${duration(ended ? ended - run.startedAt : undefined)} |`)
   lines.push(`| Steps | ${run.steps.filter(s => s.status === 'completed').length} done of ${run.steps.length} |`)
-  if (cost.totals.cost_usd !== null) lines.push(`| Machine cost | $${cost.totals.cost_usd.toFixed(2)} |`)
+  // From the RUN RECORD, which the runner writes at every publish — not
+  // recomputed here. The same run reported $35.85 on this page, $66.77 across
+  // its step files and nothing at all in its record, because three readers each
+  // did their own arithmetic. One writer, quoted everywhere.
+  if (typeof run.usage?.usd === 'number') {
+    const unmeasured = run.steps.filter(s => s.status === 'completed' && !(s as { usage?: unknown }).usage).length
+    lines.push(`| Machine cost | $${run.usage.usd.toFixed(2)}${unmeasured ? ` (${unmeasured} step(s) reported no usage)` : ''} |`)
+  } else if (cost.totals.cost_usd !== null) {
+    lines.push(`| Machine cost | $${cost.totals.cost_usd.toFixed(2)} |`)
+  }
   if (run.branch) lines.push(`| Branch | \`${run.branch}\` |`)
   lines.push(`| Pull request | ${prs.length ? prs.map(p => `[${p.repo}](${p.pr})`).join(', ') : 'none'} |`)
   if (run.startedBy) lines.push(`| Started by | ${run.startedBy} |`)
