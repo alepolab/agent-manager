@@ -21,6 +21,35 @@ async function gitRaw(cwd: string, args: string[]): Promise<string> {
   return stdout
 }
 
+/**
+ * Everything in `dir` that is not committed, as one patch — or null when there
+ * is nothing, or git could not be asked.
+ *
+ * This is a copy, not a rescue: the work still belongs in a commit. It exists
+ * because a run has already been saved by exactly this artifact. SBN-4091's
+ * frontend fix was gone from every worktree, ref, stash and dangling commit,
+ * and the recovering step found "the only surviving copy is the run artifact
+ * diff-T2-frontend-SBN-4091.patch". A lane that holds uncommitted work is the
+ * same situation one `worktree remove` earlier.
+ *
+ * `add -N` (intent-to-add, no content) is what makes untracked files appear in
+ * `diff HEAD` at all; without it a brand-new file — the usual shape of a lost
+ * fix — is absent from the patch that is supposed to preserve it. It touches
+ * the index and nothing else, in a worktree that is being kept anyway.
+ */
+export async function uncommittedPatch(dir: string | undefined): Promise<string | null> {
+  if (!dir) return null
+  try {
+    await git(dir, ['add', '-N', '--', '.'])
+    const patch = await gitRaw(dir, ['diff', 'HEAD'])
+    return patch.trim() ? patch : null
+  } catch {
+    // Unreadable for the same reasons workingTreeDirty returns null. The caller
+    // keeps the worktree either way; this only decides whether a copy exists.
+    return null
+  }
+}
+
 /** What `computeFixFacts` can prove straight from git, in the run's project
  *  directory. Deliberately NOT `pr` — a pull request is a GitHub construct
  *  no git command can produce, so the caller (runArtifacts.ts) is the one

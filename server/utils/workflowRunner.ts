@@ -16,7 +16,7 @@ import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
-import { captureBaseline, workingTreeDirty } from './gitFacts.ts'
+import { captureBaseline, workingTreeDirty, uncommittedPatch } from './gitFacts.ts'
 import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
 import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
@@ -1910,6 +1910,29 @@ async function openLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<voi
  * the same lines is a workflow whose lanes were not disjoint, and no automatic
  * resolution here could be trusted to keep both.
  */
+/**
+ * Write a lane's uncommitted work into the run's artifacts, and answer the
+ * file name — or null when there was nothing to save, or saving failed.
+ *
+ * Best effort by design: the worktree is being kept regardless, so a failure
+ * here loses nothing that was not already safe. It must never take the wave
+ * down, which is the whole reason it swallows its own errors.
+ */
+async function saveLanePatch(run: WorkflowRun, stepId: string, laneDir: string | undefined): Promise<string | null> {
+  try {
+    const patch = await uncommittedPatch(laneDir)
+    if (!patch) return null
+    const name = `lane-uncommitted-${safeName(recOf(run, stepId)?.label ?? stepId)}.patch`
+    await writeFile(join(runArtifactsDir(run.id), name), patch)
+    return name
+  } catch (err) {
+    log.warn('could not save the lane patch', { runId: run.id, stepId, error: String(err) })
+    return null
+  }
+}
+
+const safeName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'step'
+
 async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<string | null> {
   if (!run.projectDir) return null
   let failure: string | null = null
@@ -1942,9 +1965,16 @@ async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<st
       // permits the removal.
       const left = await workingTreeDirty(laneDir)
       if (left === null || left.length) {
+        // A copy in the run's evidence, before anything else. Keeping the
+        // worktree protects the work from this code; the patch protects it from
+        // the next person to run `worktree remove --force` by hand, which is
+        // what the message below tells them to do. SBN-4091's frontend fix was
+        // recovered from exactly this kind of artifact and from nothing else.
+        const saved = await saveLanePatch(run, id, laneDir)
         rec.laneKept = left === null
           ? `${laneBranch}: its worktree at ${laneDir} could not be checked for uncommitted work, so it was kept. Look before you remove it: git -C ${run.projectDir} worktree remove ${laneDir}`
           : `${laneBranch}: ${left.length} uncommitted file(s) left in ${laneDir}. They are NOT in the run branch — commit them there or copy them out, then: git -C ${run.projectDir} worktree remove --force ${laneDir}`
+        if (saved) rec.laneKept += ` A copy of the uncommitted work is in the run's artifacts as ${saved}.`
         log.warn('lane kept: its worktree still holds uncommitted work', {
           runId: run.id, stepId: id, laneBranch, uncommitted: left?.length ?? 'unmeasurable', laneDir,
         })

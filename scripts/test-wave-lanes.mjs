@@ -15,7 +15,7 @@
  * nothing left registered afterwards.
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -360,6 +360,16 @@ try {
   // both directions so a later edit cannot quietly start failing runs over a
   // stray build artifact, or stop reporting the ones that matter.
   assert.equal(settled2.status, 'completed', 'a kept lane does not fail the run')
+  // And a copy of that work is in the run's evidence, because the message above
+  // tells a person to run `worktree remove --force` once they have taken it out
+  // - and SBN-4091 survived only because such a patch existed.
+  const patch = join(process.env.AGENT_RUNS_DIR, settled2.id, 'artifacts', 'lane-uncommitted-implement-frontend.patch')
+  assert.ok(existsSync(patch), `the uncommitted work is copied into the run artifacts (${patch})`)
+  const text = readFileSync(patch, 'utf8')
+  assert.match(text, /client-fix\.txt/, 'and the patch names the file')
+  assert.match(text, /the fix nobody committed/, 'and carries its content, not just its name')
+  assert.match(frontRec.laneKept ?? '', /lane-uncommitted-implement-frontend\.patch/,
+    'the step record points at the copy')
 
   // An UNMEASURABLE lane is kept too. workingTreeDirty answers null when it
   // cannot read the tree at all - a locked or corrupted index, a permission
