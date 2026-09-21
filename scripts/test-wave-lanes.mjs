@@ -254,7 +254,34 @@ try {
     assert.equal((await git(done.projectDir, ['worktree', 'list'])).split('\n').length, 2, 'no lane outlives the retried wave')
   }
 
-  console.log('wave lanes: ok')
+  // ── a lane's test unlock stays inside that lane ─────────────────────────
+// Run a3cb9d37 (CSUP-7526, $35.54): the client lane could not commit because
+// lock state armed by the BACKEND lane was reachable from it. The unlock was
+// written into the run's shared worktree as well as the lane's own, which
+// makes that shared `.agent` directory a channel between lanes running at the
+// same moment - one lane's permission visible to a sibling that never earned
+// it, in exactly the wave where both are writing.
+//
+// The copy existed so the reason would survive the lane being removed. That is
+// now the run's evidence's job: withdrawTestUnlocks copies the reason into the
+// run artifacts when the run ends.
+{
+  const { testUnlockTargets } = await import('../server/utils/workflowRunner.ts')
+  const run = { id: 'lane-scope', projectDir: '/w/run-worktree' }
+  const lane = '/w/run-worktree__implement-client-change'
+
+  assert.deepEqual(testUnlockTargets(run, lane), [lane],
+    'a lane unlock is written ONLY in that lane; the run worktree is shared with every sibling lane')
+
+  // A step that is not in a lane works in the run's own worktree, and still
+  // gets its unlock there.
+  assert.deepEqual(testUnlockTargets(run, '/w/run-worktree'), ['/w/run-worktree'])
+
+  // A run with no checkout at all still yields the one directory it has.
+  assert.deepEqual(testUnlockTargets({ id: 'x' }, '/tmp/somewhere'), ['/tmp/somewhere'])
+}
+
+console.log('wave lanes: ok')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

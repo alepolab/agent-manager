@@ -756,6 +756,25 @@ async function runMonitor(
  * code by design, so the runner writes that file for it and the reason rides
  * with the run. Never staged: nothing under .agent/ but plan.md is.
  */
+/**
+ * Where a step's test unlock may be written: its own working directory, and
+ * nowhere else.
+ *
+ * This used to also copy the unlock into the run's shared worktree, so the
+ * reason would survive the lane being removed. That made the shared `.agent`
+ * directory a channel between lanes running at the same moment: run a3cb9d37
+ * lost its client lane's work because lock state armed by the BACKEND lane was
+ * reachable from it, and the client fix ended up staged and uncommitted.
+ *
+ * A capability granted to one step must not be visible to a sibling that never
+ * earned it. The reason is preserved by withdrawTestUnlocks, which copies it
+ * into the run's own evidence when the run ends - a better home for it than a
+ * worktree that gets deleted.
+ */
+export function testUnlockTargets(run: { projectDir?: string }, workdir: string): string[] {
+  return [workdir]
+}
+
 async function unlockTests(run: WorkflowRun, label: string, workdir: string): Promise<void> {
   const body = JSON.stringify({ reason: `The "${label}" step of ${run.workflowName} writes tests and code together by design.`, run: run.id, step: label, at: new Date().toISOString() }, null, 2)
   // The hook reads the unlock relative to the directory the agent is in, so the
@@ -764,8 +783,18 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
   // removed once its wave merges, and the unlock is also the evidence that this
   // step was allowed to touch tests and why. Losing that with the lane would
   // leave the reason nowhere on the record.
-  const targets = workdir === run.projectDir || !run.projectDir ? [workdir] : [workdir, run.projectDir]
-  for (const target of targets) {
+  // The reason is recorded with the run's evidence AS THE GRANT IS MADE, not
+  // when it is withdrawn. A lane's worktree is removed once its wave merges,
+  // taking the unlock file with it - so a copy made at teardown finds nothing,
+  // and the justification for touching tests would exist nowhere. That is the
+  // need the old copy-into-the-shared-worktree served, without making the
+  // shared directory a channel between concurrent lanes.
+  try {
+    await mkdir(runArtifactsDir(run.id), { recursive: true })
+    await writeFile(join(runArtifactsDir(run.id), 'test-unlock.json'), body)
+  } catch { /* evidence is best effort; the grant below is what the step needs */ }
+
+  for (const target of testUnlockTargets(run, workdir)) {
     const dir = join(target, '.agent')
     try {
       await mkdir(dir, { recursive: true })
@@ -798,14 +827,9 @@ async function withdrawTestUnlocks(run: WorkflowRun): Promise<void> {
       const body = await readFile(path, 'utf-8')
       const owner = JSON.parse(body)?.run
       if (owner && owner !== run.id) continue
-      // The unlock is TWO things: permission, and the record of why a step was
-      // allowed to touch tests. Only the permission is withdrawn - the reason
-      // is copied into the run's own evidence first, or removing the file
-      // would delete the justification along with the grant.
-      try {
-        await mkdir(runArtifactsDir(run.id), { recursive: true })
-        await writeFile(join(runArtifactsDir(run.id), 'test-unlock.json'), body)
-      } catch { /* evidence is best effort; the capability still has to go */ }
+      // Only the permission is withdrawn. The reason was already written to the
+      // run's evidence when the grant was made, which is the only moment it is
+      // certain to still exist: a lane worktree may be gone by now.
       await rm(path, { force: true })
     } catch { /* already gone, or a lane removed with its worktree */ }
   }

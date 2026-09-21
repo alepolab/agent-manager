@@ -1,4 +1,29 @@
 /**
+ * Did this run commit somewhere its product does not own?
+ *
+ * Run a3cb9d37 (CSUP-7526) resolved product `infra` from one word in the
+ * ticket's Environment boilerplate, so its worktree was cut from the devops
+ * repo while the lanes did the real work in lum-selfcare-v1. The PR step was
+ * one step away from opening a pull request against a repository where
+ * nothing had changed - a PR that reads as the fix while containing none of
+ * it, on a ticket a customer is waiting on. A monitor caught that one, after
+ * $35.54 and 72 minutes; a monitor is not a mechanism.
+ *
+ * Returns the sentence to fail with, or null when there is nothing to say.
+ * Silent when nothing was committed (a run with no work is the PR step's own
+ * story to tell) and when the product is unregistered (an empty repo list
+ * cannot contradict anything).
+ */
+export function repoMismatch(productRepos: string[], committedRepos: string[]): string | null {
+  if (!productRepos.length || !committedRepos.length) return null
+  const strays = committedRepos.filter(r => !productRepos.includes(r))
+  if (!strays.length) return null
+  return `This run is registered against ${productRepos.join(', ')}, but its commits are in ${strays.join(', ')}. `
+    + 'Opening a pull request now would target a repository where nothing changed and leave the real work out of it. '
+    + 'The ticket was almost certainly routed to the wrong product: check the registry entry before re-running.'
+}
+
+/**
  * The runner pushes the run's branch and opens the pull request.
  *
  * This exists because nothing else did it. A run committed a 286-line CRM gate
@@ -125,6 +150,15 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
       repo = parseOwnerRepo(url) ?? dir
     } catch {
       lines.push(`${dir}: no origin remote, so there is nowhere to open a pull request.`)
+      continue
+    }
+
+    // Before anything is pushed: does this checkout even belong to the run's
+    // product? Run a3cb9d37 was one call from opening a PR on the devops repo
+    // for a Selfcare fix that lived somewhere else entirely.
+    const mismatch = repoMismatch(run.product?.repos ?? [], [repo])
+    if (mismatch) {
+      lines.push(mismatch)
       continue
     }
 

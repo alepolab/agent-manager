@@ -243,4 +243,58 @@ function fakeExec(repos, log = []) {
 }
 
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
+// ── a run that worked outside its product's repos is stopped ────────────
+// Run a3cb9d37 (CSUP-7526) resolved product `infra` from one word of ticket
+// boilerplate, so the run's worktree was cut from the devops repo while the
+// lanes did the real work in lum-selfcare-v1. The PR step would have opened a
+// pull request against a repository where nothing changed, omitting the fix
+// entirely - a PR that reads as the fix while containing none of it. The
+// monitor caught it, but only after $35.54 and 72 minutes.
+//
+// Whoever is about to open a PR has both facts to hand and must compare them.
+{
+  const { repoMismatch } = await import('../server/utils/prStep.ts')
+
+  const wrong = repoMismatch(['alepolab/alepo-dev-team-infra'], ['alepolab/lum-selfcare-v1'])
+  assert.ok(wrong, 'committing outside the product\'s repos is a mismatch')
+  assert.match(wrong, /alepo-dev-team-infra/, 'the message names the repo the run was routed to')
+  assert.match(wrong, /lum-selfcare-v1/, 'and the repo the work actually landed in')
+
+  // The ordinary case is silent.
+  assert.equal(repoMismatch(['alepolab/lum-selfcare-v1'], ['alepolab/lum-selfcare-v1']), null)
+  // A multi-repo product: any subset of its own repos is fine.
+  assert.equal(repoMismatch(['alepolab/selfcarenow', 'alepolab/lum-selfcare-v1'], ['alepolab/lum-selfcare-v1']), null)
+  // Nothing committed anywhere is not a mismatch - it is a run with no work,
+  // which the PR step already reports in its own words.
+  assert.equal(repoMismatch(['alepolab/lum-selfcare-v1'], []), null)
+  // An unregistered product cannot contradict anything.
+  assert.equal(repoMismatch([], ['alepolab/lum-selfcare-v1']), null)
+}
+
+// ── and runPrStep refuses to open it ────────────────────────────────────
+// Not just a function that can tell: the step itself must not push or open a
+// PR when the checkout belongs to a repo the product does not own.
+{
+  const dir = '/work/lum-selfcare-v1@fix-CSUP-7526'
+  const repos = { [dir]: { name: 'alepolab/lum-selfcare-v1', branch: 'fix/CSUP-7526-a3cb9d37', commitsAhead: 3, prNumber: 9 } }
+  const log = []
+  const misrouted = {
+    ...run,
+    id: 'a3cb9d37-cd6b-4ac4-a39d-b4e8825a1d0a',
+    ticketKey: 'CSUP-7526',
+    branch: 'fix/CSUP-7526-a3cb9d37',
+    projectDir: dir,
+    // What the boilerplate routing produced.
+    product: { name: 'infra', repos: ['alepolab/alepo-dev-team-infra'], branches: {}, tests: {} },
+  }
+
+  const out = await runPrStep(misrouted, { exec: fakeExec(repos, log), repoDirs: Object.keys(repos) })
+  const said = out.lines.join('\n')
+  assert.match(said, /alepo-dev-team-infra/, `the refusal names the repo the run was routed to: ${said}`)
+  assert.match(said, /lum-selfcare-v1/, 'and the repo the work is actually in')
+  assert.deepEqual(out.prs, [], 'no pull request is reported')
+  assert.ok(!log.some(l => /gh pr create/.test(l)), `and none is opened; git/gh calls were ${JSON.stringify(log)}`)
+  assert.ok(!log.some(l => / push/.test(l)), 'nothing is pushed either: the branch belongs to a repo this run should not be touching')
+}
+
 console.log('pr step: the runner opens the pull request, names every repo, records it in meta, and never reports one it did not open')
