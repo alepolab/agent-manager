@@ -35,6 +35,13 @@ import type { AgentFrontmatter } from '~/types'
  * finished its fix and then halted at `git commit`.
  */
 export async function agentEnvFor(startedBy?: string): Promise<Record<string, string>> {
+  // Slot 0 was hardcoded here, and GIT_CONFIG_COUNT with it. Any git config the
+  // DEPLOYMENT passes the same way was silently dropped for every agent: the
+  // local compose file supplies `credential.helper` in slot 0, so agents ran
+  // with no credential helper at all and private clones failed with "could not
+  // read Username for 'https://github.com'" while the server process beside
+  // them cloned fine. Append instead of overwrite.
+  const slot = Number(process.env.GIT_CONFIG_COUNT) || 0
   return {
     ...process.env as Record<string, string>,
     // The commit identity — the starter's, or the bot as the floor. It used to
@@ -60,9 +67,9 @@ export async function agentEnvFor(startedBy?: string): Promise<Record<string, st
     // agents hold no signing key and the image has no gpg: a real run
     // finished its fix and then halted at `git commit`. Environment config
     // outranks every file, so this holds for every git the agent runs.
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'commit.gpgsign',
-    GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_COUNT: String(slot + 1),
+    [`GIT_CONFIG_KEY_${slot}`]: 'commit.gpgsign',
+    [`GIT_CONFIG_VALUE_${slot}`]: 'false',
   }
 }
 

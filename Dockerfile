@@ -221,7 +221,23 @@ RUN set -eux; \
     tar -xzf /tmp/gh.tgz -C /tmp; \
     install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh; \
     rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_amd64"; \
+    ln -sf /usr/local/bin/gh /usr/bin/gh; \
     gh --version
+# The symlink is not tidiness. A developer's ~/.gitconfig — bind-mounted in on
+# a local desktop — names the helper by ABSOLUTE path, as `gh auth setup-git`
+# writes it:
+#
+#   [credential "https://github.com"]
+#       helper = !/usr/bin/gh auth git-credential
+#
+# gh installs to /usr/local/bin here, so every git command in this container
+# printed `/usr/bin/gh: not found` and, for a private repo, went on to fail:
+#
+#   fatal: could not read Username for 'https://github.com': No such device
+#
+# That killed real clones inside runs (104 occurrences across 35 steps). The
+# host path cannot be rewritten — the file is mounted read-only and belongs to
+# the developer — so the container provides the path it names.
 
 # Run as a non-root user.
 #
