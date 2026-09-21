@@ -41,8 +41,12 @@ const base = {
 // Shipped nothing, but every step passed: the headline must not read as success.
 const nothing = renderRunSummary(base, {})
 assert.ok(nothing.includes('# CSUP-7524 — what this run did'), 'the ticket names the page')
-assert.ok(/without opening a pull request/.test(nothing.split('\n')[2]),
+// The headline is the first line of the BODY: YAML front matter now sits above
+// it, so this reads the line after the closing `---` rather than a fixed index.
+const headline = (text) => text.split('\n---\n').pop().split('\n').filter(Boolean)[1]
+assert.ok(/without opening a pull request/.test(headline(nothing)),
   'a run that shipped nothing must say so in the first line, whatever its status word says')
+assert.ok(nothing.startsWith('---\n'), 'and the page opens with machine-readable front matter')
 assert.ok(nothing.includes('| Pull request | none |'))
 
 // The same run with a PR recorded reads as work waiting for a human.

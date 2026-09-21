@@ -2,6 +2,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runArtifactsDir } from './runArtifacts.ts'
 import { summarizeRunCost } from './costReport.ts'
+import { fixReposAndCommits } from './runIndex.ts'
+import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun, RunStep } from '~~/shared/types/run'
 
@@ -78,6 +80,55 @@ function firstSentence(s: string): string {
   return cut
 }
 
+/**
+ * The same core facts as runIndex.ts's `RunIndexRow`, as YAML front matter
+ * ahead of the prose body below. Hand-rolled rather than a YAML library — this
+ * is a flat map, and `JSON.stringify` already produces a valid YAML
+ * double-quoted scalar, so every string value is quoted through it instead of
+ * through YAML's own escaping rules. A key the run never produced a value for
+ * (no ticket, no PR, unmeasured cost) is omitted entirely, never emitted as
+ * `null` — the same "absent rather than guessed" rule runIndex.ts's row keeps.
+ *
+ * Exported so a caller that only wants the machine-readable half (or a test)
+ * doesn't have to parse it back out of the rendered page. `renderRunSummary`
+ * prepends this ahead of the prose body, unchanged below it.
+ */
+export function runSummaryFrontMatter(run: WorkflowRun, meta: Record<string, unknown>): string {
+  const prs = pullRequests(meta)
+  const { repos, commits } = fixReposAndCommits(meta)
+  const lastStepEnd = run.steps.reduce((max, s) => Math.max(max, s.completedAt ?? 0), 0)
+  const ended = run.endedAt ?? (lastStepEnd || undefined)
+  const blastRadius = run.blastRadius ?? (typeof meta.blast_radius === 'string' ? meta.blast_radius : undefined)
+  const cost = summarizeRunCost(run)
+
+  const lines: string[] = ['---']
+  lines.push(`runId: ${JSON.stringify(run.id)}`)
+  if (run.ticketKey) lines.push(`ticket: ${JSON.stringify(run.ticketKey)}`)
+  lines.push(`workflow: ${JSON.stringify(run.workflowSlug)}`)
+  if (run.product?.name) lines.push(`product: ${JSON.stringify(run.product.name)}`)
+  lines.push(`status: ${JSON.stringify(run.status)}`)
+  lines.push(`started: ${JSON.stringify(new Date(run.startedAt).toISOString())}`)
+  if (ended) lines.push(`ended: ${JSON.stringify(new Date(ended).toISOString())}`)
+  lines.push(`active_minutes: ${Math.round(runElapsedMinutes(run))}`)
+  if (cost.totals.measured_step_count > 0) lines.push(`cost_usd: ${cost.totals.cost_usd}`)
+  if (prs.length) {
+    lines.push('prs:')
+    for (const p of prs) lines.push(`  - repo: ${JSON.stringify(p.repo)}\n    url: ${JSON.stringify(p.pr)}`)
+  }
+  if (repos.length) {
+    lines.push('repos:')
+    for (const r of repos) lines.push(`  - ${JSON.stringify(r)}`)
+  }
+  if (commits.length) {
+    lines.push('commits:')
+    for (const c of commits) lines.push(`  - ${JSON.stringify(c)}`)
+  }
+  if (blastRadius) lines.push(`blast_radius: ${JSON.stringify(blastRadius)}`)
+  lines.push(`recovered: ${Boolean(run.recovered)}`)
+  lines.push('---')
+  return lines.join('\n')
+}
+
 /** Pull requests the runner recorded, from meta.fix.repos[].pr. */
 function pullRequests(meta: Record<string, unknown>): { repo: string, pr: string }[] {
   const fix = meta.fix
@@ -123,7 +174,7 @@ export function renderRunSummary(run: WorkflowRun, meta: Record<string, unknown>
   // The ticket's own first line, which is a human summary someone already wrote.
   const ask = firstSentence((run.initialPrompt ?? '').split('\n')[0] ?? '')
 
-  const lines: string[] = []
+  const lines: string[] = [runSummaryFrontMatter(run, meta), '']
   lines.push(`# ${title}`, '')
   lines.push(verdict(run, prs), '')
   if (ask) lines.push(`**What it was asked to do:** ${ask}`, '')
@@ -178,6 +229,18 @@ export function renderRunSummary(run: WorkflowRun, meta: Record<string, unknown>
     lines.push('')
   }
 
+  // The scope boundary, first among the sections a reviewer reads after the
+  // steps: the runner promises every agent that "the summary prints them".
+  if (run.notDone?.length) {
+    lines.push('## What this run did not do', '')
+    for (const e of run.notDone) lines.push(`- **${e.what}** — ${e.why} _(${e.label})_`)
+    lines.push('')
+  }
+  if (run.shipIntegrity?.length) {
+    lines.push('## What could not be reached', '')
+    for (const f of run.shipIntegrity) lines.push(`- **${f.repo}** — ${f.detail}`)
+    lines.push('')
+  }
   lines.push('## Where the detail is', '')
   lines.push(`Everything this run produced is in \`${runArtifactsDir(run.id)}\`.`)
   lines.push('`steps/` holds one file per step above, with the full transcript; `meta.json` holds the machine-readable facts this page was written from.')

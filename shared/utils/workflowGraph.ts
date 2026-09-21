@@ -359,6 +359,28 @@ export function parseSkip(text: string | undefined | null): string | null {
 }
 
 /**
+ * What a step deliberately did NOT do, in a form something other than a person
+ * can read.
+ *
+ *   PIPELINE-NOT-DONE: <what> — <why>
+ *
+ * CSUP-7524 ended "Two blockers remain, both outside this lane's authority" and
+ * never listed them; its implement step said "The forward fix is implemented,
+ * tested and committed. The backfill is not" — of 10,547 orphan records the
+ * ticket was about. Eight of thirteen runs state nothing of the kind at all,
+ * and two of thirteen metas mention a residual. The scope boundary is the first
+ * thing a reviewer needs and the last thing anybody wrote down.
+ *
+ * Every line is kept, not just the last: a step can leave several things
+ * undone, and dropping all but one would be a second omission.
+ */
+export function parseNotDone(text: string | undefined | null): { what: string, why: string }[] {
+  return [...(text ?? '').matchAll(/^PIPELINE-NOT-DONE:[^\S\n]*(.+?)[^\S\n]*(?:—|:| - )[^\S\n]*(.*)$/gm)]
+    .map(m => ({ what: m[1]!.trim(), why: m[2]!.trim() }))
+    .filter(e => e.what)
+}
+
+/**
  * A review step's own answer: did the work it judged pass or not.
  *
  * This exists because five consecutive runs shipped a pull request over their
