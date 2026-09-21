@@ -96,6 +96,29 @@ services:
       # The token is passed through the environment only; it is never written
       # into the image, the volume, or any file the container keeps.
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    # Keep the logs, and keep them bounded.
+    #
+    # `docker logs agents-ui` returned FOUR lines after a container recreate:
+    # every runner log line from 8-21 Sep — thirteen days, thirteen real runs,
+    # every preflight verdict, every stack command, every agent failure — was
+    # gone, because docker's default json-file driver keeps a container's logs
+    # ON THE CONTAINER, and recreating one (a rebuild, an image bump, a compose
+    # edit) throws the old container and its whole log away. Nothing here wrote
+    # to a file, so there was no second copy: the only record of what a run did
+    # at 03:00 was in a buffer that no longer exists.
+    #
+    # This does NOT survive a recreate either — nothing in a compose logging
+    # driver can — but it does two things that matter: it caps the size so a
+    # long-lived container cannot fill the disk with one unrotated file (the
+    # default is unlimited), and it keeps five rotations instead of one, so the
+    # history reaches back past the last few minutes while the container lives.
+    # Shipping the logs somewhere that outlives the container is a separate job
+    # and deliberately not smuggled in here.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/api/health"]
       interval: 30s

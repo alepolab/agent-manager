@@ -20,7 +20,8 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { pipelineHooks } from './agentHooks.ts'
 import { checkoutState } from './workspace.ts'
-import { checkoutDirFor } from './workspace.ts'
+import { checkoutDirFor, workspaceRootFor } from './workspace.ts'
+import { agentRunsRoot } from './runArtifacts.ts'
 import { transitionReachable } from './jiraSteps.ts'
 import { credentialsFor } from './ticketNotifier.ts'
 import { agentEnvFor } from './agentCaller.ts'
@@ -40,6 +41,23 @@ export interface PreflightSteps {
   label: string
   jira?: { transition?: string }
   testsUnlocked?: boolean
+}
+
+/** Below this, a run is one clone or one artifacts bundle away from a full disk. */
+const LOW_DISK_GB = 20
+
+/** Free space on the filesystem holding `path`, or null when df could not say.
+ *  The nearest existing ancestor is measured, because the directory a run will
+ *  create does not exist yet on a fresh host — and its filesystem is the same one. */
+async function freeGb(path: string): Promise<{ gb: number, usedPct: number, mount: string } | null> {
+  let probe = path
+  while (probe && probe !== '/' && !existsSync(probe)) probe = join(probe, '..')
+  const { stdout } = await execFileP('df', ['-Pk', probe], { timeout: 10_000 })
+  const line = stdout.trim().split('\n').pop() ?? ''
+  const cols = line.split(/\s+/)
+  const availableKb = Number(cols[3])
+  if (!Number.isFinite(availableKb)) return null
+  return { gb: availableKb / 1024 / 1024, usedPct: Number.parseInt(cols[4] ?? '', 10) || 0, mount: cols[5] ?? probe }
 }
 
 /** The one-line reason a run must not start, or null. */
@@ -221,6 +239,27 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       return { name: 'test unlock', level: 'ok', detail: `.agent/ is writable in ${run.projectDir}, so "${unlockedStep.label}" can be unlocked.` }
     })
   }
+
+  // ── the two things that stop runs and no check ever looked at ─────────────
+  // Neither is ever fatal: a run on a tight disk usually finishes, and a run
+  // nobody is notified about is still a run. They are `warn` because both were
+  // invisible, and both were measured. The workspace held 40 GB with fourteen
+  // leftover worktrees on it; the artifacts directory grows without bound and
+  // nothing prunes it.
+  for (const [name, path] of [['workspace disk', workspaceRootFor(run.startedBy)], ['artifacts disk', agentRunsRoot()]] as const) {
+    await guard(name, async () => {
+      const free = await freeGb(path)
+      if (free === null) return { name, level: 'warn', detail: `df could not measure ${path}; free space on it is unknown.` }
+      return free.gb < LOW_DISK_GB
+        ? { name, level: 'warn', detail: `${free.gb.toFixed(1)} GB free on ${free.mount} (${path}), ${free.usedPct}% used. Runs clone repos, cut worktrees and write artifacts here; below ${LOW_DISK_GB} GB one of them will fail on a full disk.` }
+        : { name, level: 'ok', detail: `${free.gb.toFixed(1)} GB free on ${free.mount} (${path}), ${free.usedPct}% used` }
+    })
+  }
+  add('alerting', process.env.SLACK_WEBHOOK_URL ? 'ok' : 'warn',
+    process.env.SLACK_WEBHOOK_URL
+      ? 'SLACK_WEBHOOK_URL is set; a pause, a failure or a red check reaches Slack.'
+      : 'SLACK_WEBHOOK_URL is unset, so nothing about this run reaches Slack — a run paused on its budget waits until somebody happens to look. '
+        + `Every notification is still appended to notifications.jsonl under ${agentRunsRoot()}.`)
 
   const report = { at: Date.now(), checks }
   const failed = checks.filter(c => c.level === 'fail').length

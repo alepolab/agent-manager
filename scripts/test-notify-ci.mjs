@@ -38,7 +38,10 @@ assert.equal(posted.length, 2)
 assert.match(posted[1].body.text, /FAILED at Intake .* Budget exceeded/, 'a failure carries its reason')
 delete process.env.SLACK_WEBHOOK_URL
 
-// ── ci poller: classification, persistence, and stopping when final ──────
+// ── ci poller: classification, persistence, and stopping once SETTLED ────
+// Settled means the pull request is merged or closed. A green check is not
+// settled: the poller used to stop there, and a review of thirteen runs found
+// none of them could say whether the work had shipped.
 assert.equal(C.classify([]), 'pending')
 assert.equal(C.classify([{ bucket: 'pass' }, { bucket: 'skipping' }]), 'passing')
 assert.equal(C.classify([{ bucket: 'pass' }, { bucket: 'fail' }]), 'failing')
@@ -57,7 +60,11 @@ writeFileSync(join(A.runArtifactsDir(placeholder.id), 'meta.json'), JSON.stringi
 
 const asked = []
 let answer = [{ name: 'build', bucket: 'pending' }]
+let state = { state: 'open' }
 C.setCheckReader(async (url) => { asked.push(url); return answer })
+// Stubbed like the check reader: the poller now also asks whether the PR
+// merged, and no test may shell out to a real `gh`.
+C.setPrReader(async () => state)
 assert.equal(await C.pollOnce(), 1, 'only the run with a real PR is polled')
 assert.deepEqual(asked, ['https://github.com/o/r/pull/7'])
 let after = await store.getRun(done.id)
@@ -65,9 +72,17 @@ assert.equal(after.ci.status, 'pending'); assert.equal(after.ci.final, false)
 answer = [{ name: 'build', bucket: 'pass' }, { name: 'lint', bucket: 'pass' }]
 assert.equal(await C.pollOnce(), 1, 'a pending PR is polled again')
 after = await store.getRun(done.id)
-assert.equal(after.ci.status, 'passing'); assert.equal(after.ci.final, true)
-assert.equal(await C.pollOnce(), 0, 'a final result is not polled again')
+// `final` means "there is nothing left to watch": every PR merged or closed.
+// It used to mean "the checks stopped changing", which ended the watch on an
+// open, unmerged pull request — see scripts/test-ci-follow-through.mjs.
+assert.equal(after.ci.status, 'passing'); assert.equal(after.ci.final, false, 'green checks on an open PR are not the end')
+state = { state: 'merged', merged_sha: 'f00dcafe', merged_at: '2026-09-20T09:00:00Z' }
+assert.equal(await C.pollOnce(), 1)
+after = await store.getRun(done.id)
+assert.equal(after.ci.final, true); assert.equal(after.ci.merged_sha, 'f00dcafe', 'and the merge is recorded')
+assert.equal(await C.pollOnce(), 0, 'a merged run is not polled again')
 C.setCheckReader(async () => { throw new Error('gh: not logged in') })
+C.setPrReader(async () => ({ state: 'open' }))
 const errRun = await store.createRun({ workflowSlug: 'w', workflowName: 'Runbook', autoRun: true, initialPrompt: 'SCN-4', watch: 'direct-invocation',
   steps: [{ stepId: 'a', label: 'Intake', agentSlug: 'x' }] })
 await store.saveRun({ ...errRun, status: 'completed', endedAt: Date.now() })

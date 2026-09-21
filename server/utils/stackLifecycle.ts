@@ -25,17 +25,28 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createLogger } from './log.ts'
+import { labelEnv } from './dockerReap.ts'
 import type { StackRecipe } from './stackRecipe.ts'
 
 const log = createLogger('runner')
 const execFileP = promisify(execFile)
 
-export type ExecLike = (cmd: string, args: string[]) => Promise<string>
+/**
+ * `env` carries the run id to the docker child, and only ever adds to the
+ * process environment - see dockerReap.ts for why a compose stack cannot be
+ * labelled with a flag, and what a compose file has to do to pick this up.
+ * Optional, so every existing caller and test seam is unchanged.
+ */
+export type ExecLike = (cmd: string, args: string[], env?: Record<string, string>) => Promise<string>
 
-const realExec: ExecLike = async (cmd, args) => {
+const realExec: ExecLike = async (cmd, args, env) => {
   // Generous: a first `up` pulls images, and a liquibase stage on a real
   // schema is minutes rather than seconds.
-  const { stdout } = await execFileP(cmd, args, { timeout: 30 * 60_000, maxBuffer: 32 * 1024 * 1024 })
+  const { stdout } = await execFileP(cmd, args, {
+    timeout: 30 * 60_000,
+    maxBuffer: 32 * 1024 * 1024,
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+  })
   return stdout
 }
 
@@ -71,15 +82,18 @@ function upArgs(recipe: StackRecipe, profile: string, detach: boolean): string[]
  * the summary says which - a product with no liquibase profile genuinely has no
  * migrations, and inventing a command for it would fail confusingly.
  */
-export async function stackUp(recipe: StackRecipe, opts: { exec?: ExecLike } = {}): Promise<StackResult> {
+export async function stackUp(recipe: StackRecipe, opts: { exec?: ExecLike, runId?: string } = {}): Promise<StackResult> {
   const exec = opts.exec ?? injectedExec ?? realExec
   const ran: string[] = []
+  // Whose stack this is. 150 GB of containers, images and build cache leaked
+  // because nothing said; dockerReap.ts removes only what this marks.
+  const env = opts.runId ? labelEnv(opts.runId) : undefined
 
   for (const stage of recipe.stages) {
     const args = upArgs(recipe, stage.profile, stage.detach)
     ran.push(`docker ${args.join(' ')}`)
     try {
-      await exec('docker', args)
+      await exec('docker', args, env)
     } catch (err) {
       const why = message(err)
       log.warn('stack stage failed', { product: recipe.product, profile: stage.profile, error: why })
@@ -110,7 +124,7 @@ export async function stackUp(recipe: StackRecipe, opts: { exec?: ExecLike } = {
  * single profile leaves the init and liquibase containers behind, and a box
  * accumulating those is how the next run fails for a reason nobody can find.
  */
-export async function stackDown(recipe: StackRecipe, opts: { exec?: ExecLike } = {}): Promise<StackResult> {
+export async function stackDown(recipe: StackRecipe, opts: { exec?: ExecLike, runId?: string } = {}): Promise<StackResult> {
   const exec = opts.exec ?? injectedExec ?? realExec
   const args = ['compose', '-f', recipe.composePath, '--env-file', recipe.envFile]
   for (const stage of recipe.stages) args.push('--profile', stage.profile)
@@ -118,7 +132,10 @@ export async function stackDown(recipe: StackRecipe, opts: { exec?: ExecLike } =
 
   const ran = [`docker ${args.join(' ')}`]
   try {
-    await exec('docker', args)
+    // Same environment as the `up`: a compose file that interpolated the run id
+    // into a label must resolve it the same way here, or `down` sees a
+    // different project than the one that was started.
+    await exec('docker', args, opts.runId ? labelEnv(opts.runId) : undefined)
   } catch (err) {
     const why = message(err)
     log.warn('stack down failed', { product: recipe.product, error: why })

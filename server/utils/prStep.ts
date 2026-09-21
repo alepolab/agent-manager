@@ -117,6 +117,21 @@ function discoverRepoDirs(projectDir: string): string[] {
  * - a placeholder, or a swallowed error - is how a run once told a customer's
  * ticket that a pull request was ready at `https://example.invalid/pending`.
  */
+/**
+ * Pull requests other runs have open, by repository — read from the run index
+ * so it costs one file read rather than a scan of every run's artifacts.
+ */
+async function openPrsElsewhere(run: WorkflowRun): Promise<{ repo: string, ticket?: string, pr: string }[]> {
+  const { readRunIndex } = await import('./runIndex.ts')
+  const rows = await readRunIndex()
+  const out: { repo: string, ticket?: string, pr: string }[] = []
+  for (const row of rows) {
+    if (row.runId === run.id) continue
+    for (const pr of row.prs ?? []) out.push({ repo: pr.repo, ...(row.ticket ? { ticket: row.ticket } : {}), pr: pr.url })
+  }
+  return out
+}
+
 export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Promise<PrStepResult> {
   const exec = opts.exec ?? realExec
   const lines: string[] = []
@@ -134,6 +149,15 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
   }
 
   const dirs = opts.repoDirs ?? discoverRepoDirs(run.projectDir)
+
+  // Who else is already in this repository.
+  //
+  // Three pull requests landed on `ase_lbss` within four days from three
+  // independent runs, plus two more on a second repo, and no run's evidence
+  // mentioned another's branch. Nothing here blocks: merge order is a human
+  // decision. But the person reading this step's output is the last one who can
+  // make it, so they are told.
+  const concurrent = await openPrsElsewhere(run).catch(() => [])
 
   for (const dir of dirs) {
     let branch: string
@@ -200,6 +224,13 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
       }
       prs.push({ repo, url })
       lines.push(`${repo}: opened ${url} (${ahead} commit${ahead === 1 ? '' : 's'} into ${run.baseBranch}).`)
+      const others = concurrent.filter(c => c.repo === repo)
+      if (others.length) {
+        lines.push(
+          `${repo}: ${others.length} other pull request${others.length === 1 ? '' : 's'} from recent runs are open on this repository`
+          + ` — ${others.map(o => `${o.ticket ?? 'a run'} ${o.pr}`).join(', ')}. Nobody has decided a merge order.`,
+        )
+      }
     } catch (err) {
       // A branch that already has a PR is the common case on a restart: ask gh
       // for the existing one rather than reporting a failure a reviewer cannot act on.
