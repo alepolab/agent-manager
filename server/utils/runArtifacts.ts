@@ -494,6 +494,15 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   merged.contract_missing = contractMissing
 
   await writeFile(path, JSON.stringify(merged, null, 2))
+  // The one file in here a person reads. Written last, from the reconciled
+  // meta.json above, and never allowed to take the run down with it: a summary
+  // is a convenience, the evidence is the record.
+  try {
+    const { writeRunSummary } = await import('./runSummary.ts')
+    await writeRunSummary(run)
+  } catch (e) {
+    log.warn('run summary not written', { runId: run.id, error: String(e) })
+  }
   if (contractMissing.length) {
     log.warn('run is missing evidence-bundle contract files', { runId: run.id, missing: contractMissing })
   }
