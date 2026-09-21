@@ -269,9 +269,14 @@ RUN set -eux; \
 # `chown -R` over /app and /root/.claude rewrites every file into a new layer:
 # it cost 106 MB (433 -> 539) for metadata changes alone, because a layer stores
 # whole files, not the bits that differ.
-RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs \
+# /root/.claude/workflow-runs is created here, empty, for one reason: compose
+# mounts a volume of its own on it so the run records outlive the claude-config
+# reseed, and a named volume takes its ownership from the image path it seeds
+# from. Without this directory the volume is created root-owned and the server
+# (uid 1000) cannot write a single run record.
+RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs \
     && chmod 711 /root \
-    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs
+    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs
 USER bun
 
 # Set environment variables

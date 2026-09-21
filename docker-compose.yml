@@ -61,6 +61,24 @@ services:
       # seeing a full host-started run in this container's UI requires both
       # HOST_CLAUDE_DIR and HOST_AGENT_RUNS_DIR set consistently, together.
       - ${HOST_AGENT_RUNS_DIR:-agent-runs}:/root/.agent-manager/workflow-runs
+      # The run RECORDS — one JSON per run, the thing /runs lists. They sit
+      # under CLAUDE_DIR because that is where workflowRunStore.ts puts them,
+      # and that is the problem: the redeploy sequence documented above DELETES
+      # the claude-config volume to reseed baked config, and took the run
+      # history with it. Six runs on this machine still have a full artifacts
+      # directory and no record — invisible in the UI, with the evidence
+      # sitting on disk.
+      #
+      # A volume mounted INSIDE another volume's path wins for that subtree, so
+      # the records now live in their own volume and survive the reseed. The
+      # image creates this directory bun-owned so a fresh volume seeds with the
+      # right ownership; an EXISTING deployment's records must be copied in
+      # once, or they stay hidden under the mount:
+      #   docker compose down
+      #   docker run --rm -v agent-manager_claude-config:/old \
+      #     -v agent-manager_workflow-records:/new alpine \
+      #     sh -c 'cp -a /old/workflow-runs/. /new/ 2>/dev/null || true'
+      - workflow-records:/root/.claude/workflow-runs
     environment:
       - CLAUDE_DIR=/root/.claude
       - AGENT_RUNS_DIR=/root/.agent-manager/workflow-runs
@@ -88,3 +106,4 @@ services:
 volumes:
   claude-config:
   agent-runs:
+  workflow-records:
