@@ -117,7 +117,17 @@ if (!found.length) {
 
 for (const f of found) {
   console.log(`${f.ticket.padEnd(12)} ${f.id}  ${f.steps} steps  ${f.record.status}`)
-  if (write) writeFileSync(join(recordsDir, `${f.id}.json`), JSON.stringify(f.record, null, 2))
+  if (!write) continue
+  writeFileSync(join(recordsDir, `${f.id}.json`), JSON.stringify(f.record, null, 2))
+  // A recovered record is a run the finalizer never saw: without this its meta
+  // stays frozen at whatever the dead process last wrote, so it carries no
+  // contract report, no provenance and no index row — the very reports that
+  // exist to say an old run's evidence is incomplete.
+  try {
+    await finalizeRunArtifacts(f.record)
+  } catch (e) {
+    console.error(`  (artifacts not finalized for ${f.id}: ${e.message})`)
+  }
 }
 console.log(write
   ? `\n${found.length} record(s) written to ${recordsDir}`

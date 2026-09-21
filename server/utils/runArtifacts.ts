@@ -1,6 +1,6 @@
 import { workspaceRootFor, browserSurface, nestedRepos } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
-import { mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +10,10 @@ import { resolveClaudePath } from './claudeDir.ts'
 import { createLogger } from './log.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep, ProductMatch } from '~~/shared/types/run'
+import {
+  missingContractFiles, owesAdversarialReport, missingCore,
+  appBuildSha, stepGraphHash, perStepModels, priorRunsFor, measureArtifacts,
+} from './evidenceContract.ts'
 
 /**
  * The literal the fix-implementer writes into `meta.json`'s `fix.repos[].pr`
@@ -422,79 +426,29 @@ export async function writeStepArtifact(
  * Re-assert the runner's facts over whatever the agents merged in, and
  * survive a meta.json an agent corrupted: the runner's own record is the
  * floor this whole design rests on, so it must not be lost to a bad write.
+ *
+ * The bundle contract (which files a run owes) and the meta.json core schema
+ * are defined in evidenceContract.ts, not here — this file is one of its
+ * callers, kept for the read-merge-write it already owns.
+ *
+ * Why the contract check used to look honoured on far fewer runs than it
+ * should have, found while moving it here: `contract_missing` is only ever
+ * written by THIS function, called from workflowRunner.ts's `publish()` only
+ * when `run.status` is in `TERMINAL_STATUSES` — `completed`, `failed`,
+ * `stopped`. `interrupted` (workflowRunStore.ts, set on a run whose process
+ * died mid-step) is a real `WorkflowRunStatus` but is NOT in that list; a run
+ * that never gets resumed back to a real terminal status stays `interrupted`
+ * forever and this function never runs for it, so it never gets a
+ * `contract_missing` key at all — not `[]`, absent, indistinguishable from a
+ * run that predates this check. `scripts/recover-run-records.mjs` is the
+ * other gap: it rebuilds a lost RUN RECORD from a run's surviving artifacts
+ * but never calls this function, so a recovered run's meta.json is frozen at
+ * whatever it held when the original process died, before finalize ever ran
+ * — recovering the record does not retroactively grade the evidence. Neither
+ * is fixable from this file (`TERMINAL_STATUSES` and the recovery script are
+ * both outside its ownership on this change); both are reported here so the
+ * gap is at least named where the next reader will look for it.
  */
-/**
- * The filenames the evidence bundle is assembled from.
- *
- * `engineering/scripts/assemble-bundle.mjs` reads exactly these and is
- * deliberately built never to invent a field, so a run that wrote
- * `implementation-plan.md` instead of `plan.md` produces a bundle missing
- * `plan_sha` - and that surfaces much later, in CI, as a validation failure
- * about a field nobody remembers choosing. The artifact header tells agents
- * WHERE to write but never names these files, which makes the mistake easy to
- * make and impossible to notice.
- *
- * Kept in step with the assembler by name. If a file is added there and not
- * here, the only cost is that its absence goes unreported - never a false
- * alarm - which is the safe direction for a check that nobody asked for.
- */
-const BUNDLE_CONTRACT_FILES = [
-  'context-packet.json',
-  'intent.md',
-  'plan.md',
-  'summary.md',
-  'oracle-before.xml',
-  'oracle-after.xml',
-  'regression.xml',
-] as const
-
-/**
- * Which contract files this run never wrote.
- *
- * Returns `[]` rather than nothing when all are present: "checked, nothing
- * missing" has to be distinguishable from "never checked", or a reader cannot
- * tell a complete run from one that predates this check.
- */
-async function missingContractFiles(dir: string): Promise<string[]> {
-  let present: Set<string>
-  try {
-    present = new Set(await readdir(dir))
-  } catch {
-    // The directory itself is unreadable, which finalize already reports
-    // elsewhere; claiming every file is missing would be a second, louder
-    // complaint about the same fault.
-    return []
-  }
-  return BUNDLE_CONTRACT_FILES.filter(f => !present.has(f))
-}
-
-/** Blast radii the bundle schema demands an adversarial report for. */
-const ADVERSARIAL_REQUIRED_FOR = new Set(['money', 'protocol'])
-
-/**
- * Whether this run owes an adversarial report it has not produced.
- *
- * The schema has always required one for money and protocol changes
- * (evidence-bundle.v0.1.schema.json), and the conditional could never fire
- * while `blast_radius` was empty. Classification populates it now, so the first
- * real money-path run would otherwise meet that requirement as a CI validation
- * failure about a field nobody had been asked for.
- *
- * Reported, NEVER written. The schema asks for a two-node rerun, an adversarial
- * pattern search and a mutation score - verification work an agent performs -
- * and a runner inventing a plausible object would be manufacturing evidence,
- * which is worse than the failed validation it would hide.
- *
- * Silent for every other class. A false demand is not harmless: it teaches an
- * agent to ignore the real ones.
- */
-function owesAdversarialReport(run: WorkflowRun, meta: Record<string, unknown>): boolean {
-  const cls = run.blastRadius ?? (typeof meta.blast_radius === 'string' ? meta.blast_radius : undefined)
-  if (!cls || !ADVERSARIAL_REQUIRED_FOR.has(cls)) return false
-  const report = meta.adversarial
-  return !report || typeof report !== 'object' || Array.isArray(report)
-}
-
 export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   const dir = runArtifactsDir(run.id)
   const path = join(dir, 'meta.json')
@@ -520,6 +474,35 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   // reported in the same place a reader already looks.
   if (owesAdversarialReport(run, merged)) contractMissing.push('adversarial')
   merged.contract_missing = contractMissing
+  // The wider schema floor every run should meet, regardless of workflow —
+  // see evidenceContract.ts's REQUIRED_CORE_KEYS doc comment for why this is
+  // deliberately a different, smaller list than the bundle contract above.
+  merged.core_missing = missingCore(run, merged)
+
+  // Provenance: which workflow, which exact step graph, which app build, and
+  // which model each step actually ran — a run's aggregate `model` string
+  // (above, in runnerOwned) had already disagreed with a per-step reality in
+  // at least one real run once two models both touched the same fix.
+  merged.workflow_slug = run.workflowSlug
+  merged.step_graph_sha256 = stepGraphHash(run)
+  const buildSha = appBuildSha()
+  if (buildSha) merged.build_sha = buildSha
+  else delete merged.build_sha
+  const stepModels = perStepModels(run)
+  if (stepModels) merged.step_models = stepModels
+  else delete merged.step_models
+
+  // Read BEFORE this run's own row is appended to the index below, so a
+  // run's own first appearance never lists itself.
+  const priorRuns = await priorRunsFor(run.ticketKey, run.id)
+  if (priorRuns) merged.prior_runs = priorRuns
+  else delete merged.prior_runs
+
+  // Measured, not estimated — see measureArtifacts's doc comment. Taken
+  // before this write so the number reflects what a pruner/reviewer actually
+  // finds on disk; this write's own bytes are the one thing it cannot count
+  // itself, the same self-reference every "size of this file" figure has.
+  merged.artifacts = await measureArtifacts(dir)
 
   await writeFile(path, JSON.stringify(merged, null, 2))
   // The one file in here a person reads. Written last, from the reconciled
