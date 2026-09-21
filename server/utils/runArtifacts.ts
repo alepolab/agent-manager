@@ -1,10 +1,10 @@
-import { workspaceRootFor, browserSurface } from './workspace.ts'
+import { workspaceRootFor, browserSurface, nestedRepos } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { computeFixFacts } from './gitFacts.ts'
+import { computeFixFacts, type ComputedFix } from './gitFacts.ts'
 import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import { resolveClaudePath } from './claudeDir.ts'
 import { createLogger } from './log.ts'
@@ -220,6 +220,11 @@ function runnerOwned(run: WorkflowRun) {
     // resolveInstalledPluginVersion's doc comment for why the agent could
     // never compute this correctly itself.
     plugin_version: resolveInstalledPluginVersion(),
+    // What the run said it left undone, and what the runner could not reach.
+    // Both are runner-owned for the same reason identity and cost are: an
+    // agent's prose is where they used to live, and prose is not a record.
+    ...(run.notDone?.length ? { not_done: run.notDone } : {}),
+    ...(run.shipIntegrity ? { ship_integrity: run.shipIntegrity } : {}),
     cost: {
       ...tokenTotals(run),
       attempts: Math.max(1, ...run.steps.map(s => s.visits ?? 1)),
@@ -280,6 +285,18 @@ async function reconcileFix(
   const { repos: _repos, files_changed: _fc, lines_changed: _lc, merge_order: _mo, ...restFix } = existingFix ?? {}
 
   const computed = await computeFixFacts(run.projectDir, run.baseCommit).catch(() => null)
+  // Every OTHER checkout under the run's own — the module repos of a multi-repo
+  // product — measured the same way and by the same rule: git or nothing.
+  //
+  // Without this, `files_changed` was the projectDir's alone while `repos`
+  // listed three. CSUP-7509's meta reported one file and 244 lines, and that
+  // one file was `.agent/plan.md`: the real change lived in two repositories
+  // nothing measured. Three other runs are the same shape.
+  const nested: ComputedFix[] = []
+  for (const dir of run.projectDir ? nestedRepos(run.projectDir) : []) {
+    const one = await computeFixFacts(dir, run.baseCommit).catch(() => null)
+    if (one && one.repo !== computed?.repo) nested.push(one)
+  }
 
   if (computed) {
     log.debug('fix facts computed from git', {
@@ -296,8 +313,17 @@ async function reconcileFix(
     // Every OTHER repo the agent reported (not the one git just computed)
     // is outside what this run's projectDir can verify — kept as-is rather
     // than discarded, the same way a matching entry's `pr` already is.
-    const otherRepos = priorRepos.filter(r => !(r && r.repo === computed.repo))
-    const repos = [...otherRepos, repoEntry]
+    // A nested repo git COULD measure replaces the agent's entry for it; one it
+    // could not is still the agent's self-report, unchanged.
+    const measuredNames = new Set(nested.map(n => n.repo))
+    const otherRepos = priorRepos.filter(r => !(r && (r.repo === computed.repo || measuredNames.has(r.repo as string))))
+    const nestedEntries = nested.map((n) => {
+      const prior = priorRepos.find(r => r && r.repo === n.repo)
+      const entry: Record<string, unknown> = { repo: n.repo, commits: n.commits }
+      if (prior && typeof prior.pr === 'string') entry.pr = prior.pr
+      return entry
+    })
+    const repos = [...otherRepos, repoEntry, ...nestedEntries]
 
     const repoNames = new Set(repos.map(r => r.repo))
     const priorMergeOrder = Array.isArray(existingFix?.merge_order)
@@ -316,8 +342,10 @@ async function reconcileFix(
       ...restFix,
       ...(mergeOrderCoherent ? { merge_order: priorMergeOrder } : {}),
       repos,
-      files_changed: computed.files_changed,
-      lines_changed: computed.lines_changed,
+      // Summed across every repository the runner measured, so the number a
+      // reviewer sizes the change by is the whole change.
+      files_changed: computed.files_changed + nested.reduce((n, x) => n + x.files_changed, 0),
+      lines_changed: computed.lines_changed + nested.reduce((n, x) => n + x.lines_changed, 0),
     }
   }
 
@@ -502,6 +530,15 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
     await writeRunSummary(run)
   } catch (e) {
     log.warn('run summary not written', { runId: run.id, error: String(e) })
+  }
+  // One row per run, so "which run touched this repo?" is a query rather than
+  // thirteen files opened by hand. Same best-effort rule as the summary: an
+  // index is a convenience, the artifacts are the record.
+  try {
+    const { updateRunIndex } = await import('./runIndex.ts')
+    await updateRunIndex(run, merged)
+  } catch (e) {
+    log.warn('run index not updated', { runId: run.id, error: String(e) })
   }
   if (contractMissing.length) {
     log.warn('run is missing evidence-bundle contract files', { runId: run.id, missing: contractMissing })
@@ -714,6 +751,22 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     )
   }
   if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
+  // The scope boundary, asked for where the step can still answer it. Every
+  // marker the runner reads is documented at the point of use except this one,
+  // which is new — and a marker no agent is told about is a marker nothing
+  // emits. CSUP-7524 ended "two blockers remain" and named neither.
+  lines.push(
+    '',
+    '## What you did not do',
+    '',
+    'Anything you deliberately left undone goes on its own line, exactly:',
+    '',
+    '    PIPELINE-NOT-DONE: <what> — <why>',
+    '',
+    'One line per item. The runner records them on the run, the summary prints',
+    'them and the pull request body carries them. "Out of scope for this lane"',
+    'is a reason; leaving it in prose where nobody can read it is not.',
+  )
   lines.push('', '---', '')
   return lines.join('\n')
 }
