@@ -246,7 +246,24 @@ try {
     // First visit in a lane (it shared the wave with the frontend step), second
     // in the run worktree (it had that wave to itself).
     assert.notEqual(visits[0], done.projectDir, 'the first visit ran in a lane')
-    assert.equal(visits[1], done.projectDir, 'the retry ran in the run worktree, its lane having merged with the wave')
+
+    // What must be true, pinned on the work rather than on the directory.
+    //
+    // The old assertion was `visits[1] === done.projectDir`, which holds only
+    // when the retry has its wave to itself - and whether it does depends on
+    // when the SIBLING step settles. On a slower machine the retry can share a
+    // wave and be given a lane, which is correct behaviour and failed the test:
+    // it went red in CI on a commit that changed nothing but the product
+    // registry, while passing four times locally including under load.
+    //
+    // The behaviour the comment above says is being pinned is that the work
+    // must survive the lane it was made in. That is what is asserted now, and
+    // it holds whichever wave the retry lands in.
+    assert.ok(existsSync(join(visits[1], 'backend-visit-1.txt')),
+      `the retry sees the first attempt's commits, so the work survived its lane; ${visits[1]} does not have them`)
+    assert.notEqual(visits[1], visits[0], 'and it is not the first attempt\'s lane, which was merged and removed')
+    assert.ok(existsSync(join(done.projectDir, 'backend-visit-1.txt')), 'both attempts are on the run branch at the end')
+    assert.ok(existsSync(join(done.projectDir, 'backend-visit-2.txt')))
     // Both attempts' commits are on the run branch: the lane did not take the
     // first attempt's work with it when it was removed.
     assert.ok(existsSync(join(done.projectDir, 'backend-visit-1.txt')), "the first attempt's commit survived its lane")
