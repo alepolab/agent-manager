@@ -111,7 +111,12 @@ export interface RunCi {
 export interface RunRecovery { at: number, from: string, note: string }
 
 export interface RunUsage { input_tokens: number, output_tokens: number, /** Of input_tokens, the ones read back from the prompt cache. */ cached_tokens?: number, usd: number }
-export interface RunBudget { maxMinutes: number, maxTokens: number }
+export interface RunBudget {
+  maxMinutes: number
+  maxTokens: number
+  /** Dollars. Absent on runs recorded before money was a cap; see defaultBudget. */
+  maxUsd?: number
+}
 
 /** The registry entry a run resolved to at start, or absent when nothing matched. */
 export interface ProductMatch {
@@ -257,6 +262,14 @@ export interface WorkflowRun {
    * rather than being resumed into the same wall again.
    */
   interruptions?: number
+  /**
+   * Every time this run was picked up again after the process that owned it
+   * died, appended and never reset — unlike `interruptions`, which is a
+   * consecutive counter for deciding whether to keep trying. Ten real runs
+   * carried 28 retry/restart/abort artifacts between them while every record
+   * said zero, so rework rate and first-pass yield could not be computed.
+   */
+  restarts?: { at: number, bootId: string, stepId: string, reason: string }[]
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   /**
    * Why the run is paused, and — for an approval — whose decision it is.
@@ -289,6 +302,28 @@ export interface WorkflowRun {
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
   ci?: RunCi
+  /**
+   * Whether this run's workflow declares a step that opens a pull request,
+   * copied from the workflow at creation. A research or review workflow that
+   * was never meant to ship must not be failed for not shipping, and after a
+   * restart the workflow definition may have changed under the run.
+   */
+  expectsPr?: boolean
+  /** Why this ticket was run again although a completed run already existed. */
+  rerunReason?: string
+  /**
+   * What the run's steps said they deliberately did not do, each with the step
+   * that said it. See parseNotDone: the scope boundary used to exist only as a
+   * sentence inside one step's prose, if at all.
+   */
+  notDone?: { stepId: string, label: string, what: string, why: string }[]
+  /**
+   * What the runner could not reach when the run finished: commits that were
+   * never pushed, lane branches nobody merged, a diff with no pull request.
+   * An empty array means the checks ran and found nothing; absent means they
+   * never ran (an older run, or a run that ended some other way).
+   */
+  shipIntegrity?: { problem: 'unpushed' | 'lane-orphan' | 'no-pr' | 'dirty', repo: string, detail: string }[]
   /** Present only on a record rebuilt from artifacts; see RunRecovery. */
   recovered?: RunRecovery
   /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
@@ -420,5 +455,10 @@ export interface NewRunInput {
    *  gitFacts.ts's captureBaseline and passes it straight through; createRun
    *  carries it onto the persisted run, unmodified. */
   baseCommit?: string
+  /** See WorkflowRun.expectsPr — read off the workflow at creation, so a later
+   *  template edit cannot change what this run was meant to produce. */
+  expectsPr?: boolean
+  /** See WorkflowRun.rerunReason. */
+  rerunReason?: string
   steps: { stepId: string, label: string, agentSlug: string }[]
 }

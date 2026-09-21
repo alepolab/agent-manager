@@ -55,6 +55,35 @@ export function runWorkspace(run: { projectDir?: string, startedBy?: string }): 
 }
 
 /**
+ * The lock identity for a run: the clone it will write, not the path string it
+ * was handed.
+ *
+ * Two SBN-4091 runs overlapped by 43 minutes on the same repository and the
+ * guard never fired, because the second run's `projectDir` was the FIRST run's
+ * worktree - two different strings, one clone. The proof is still on disk:
+ * `pc@fix-SBN-4091-543dbc88@fix-SBN-4091-644a961b`, a worktree inside a
+ * worktree, with a lane cut inside that.
+ *
+ * `--git-common-dir` is the answer git itself gives: every worktree of one
+ * clone resolves to the same `.git` directory, so nesting cannot hide it.
+ * Falls back to the path when the directory is not a checkout at all, which is
+ * the ordinary case for a run whose product was never cloned here.
+ */
+export async function runLockKey(run: { projectDir?: string, startedBy?: string }): Promise<string> {
+  const dir = runWorkspace(run)
+  if (!existsSync(dir)) return dir
+  try {
+    // Async on purpose: this is called once per live run on every start and
+    // restart request, and a synchronous git call measured 2.35 ms each — on an
+    // instance with twenty live runs that is a 50 ms event-loop stall per
+    // request, growing with the number of runs.
+    return (await gitRaw(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim() || dir
+  } catch {
+    return dir
+  }
+}
+
+/**
  * Whether a workspace holds a git checkout — the side effect a restart cannot
  * recreate on its own.
  *

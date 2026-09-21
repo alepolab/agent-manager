@@ -22,6 +22,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'tiers-'))
+// This harness starts many runs on the same ticket key on purpose; the
+// duplicate-ticket guard (workflowRunner.startRun) is a product rule about
+// operators, not about fixtures.
+process.env.AGENT_ALLOW_DUPLICATE_TICKET_RUNS = '1'
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'tiers-artifacts-'))
 
 const runner = await import('../server/utils/workflowRunner.ts')

@@ -5,7 +5,7 @@ import { resolveClaudePath } from './claudeDir.ts'
 export interface AgentManagerSettings {
   labs?: boolean
   /** Per-run caps for new runs; an instance env var overrides them (see defaultBudget). */
-  runBudget?: { maxTokens?: number, maxMinutes?: number }
+  runBudget?: { maxTokens?: number, maxMinutes?: number, /** Dollars per run; the cap an operator actually budgets in. */ maxUsd?: number }
   /** A model alias every pipeline agent runs on, whatever its own file declares. Absent: each agent's own choice. */
   agentModel?: string
 }

@@ -12,7 +12,7 @@ export default defineEventHandler(async (event) => {
   // answers the verification gate on work someone else began.
   await requireCapability(event, 'startRun')
   const slug = getRouterParam(event, 'slug')!
-  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string }>(event)
+  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string, rerunReason?: string }>(event)
   if (!body?.initialPrompt?.trim()) {
     throw createError({ statusCode: 400, message: 'initialPrompt is required' })
   }
@@ -77,6 +77,9 @@ export default defineEventHandler(async (event) => {
     autoRun: body.autoRun === true,
     projectDir: body.projectDir,
     startedBy: user?.login,
+    // Starting a second run on a ticket that already completed one needs a
+    // stated reason; startRun refuses without it.
+    ...(body.rerunReason ? { rerunReason: body.rerunReason } : {}),
   })
   return run
 })

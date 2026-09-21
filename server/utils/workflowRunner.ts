@@ -1,6 +1,6 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseReviewVerdict, parseHalt, parseSkip, parseWiden, parseRework,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseReviewVerdict, parseHalt, parseSkip, parseWiden, parseRework, parseNotDone,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
@@ -8,7 +8,7 @@ import {
                                                // directly and cannot resolve ~~/
 import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } from '../../shared/utils/runClock.ts'
 import type { Role } from '../../shared/types/role.ts'
-import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
+import { defaultBudget, absoluteUsdCeiling, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, findActiveRun, findRunInWorkspace, findRunForTicket, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
@@ -17,6 +17,7 @@ import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline, workingTreeDirty, uncommittedPatch } from './gitFacts.ts'
+import { shipIntegrity, describeShipFindings, type ShipFinding } from './shipIntegrity.ts'
 import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
 import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
@@ -109,6 +110,12 @@ export interface StartRunOpts {
   autoRun: boolean
   projectDir?: string
   startedBy?: string
+  /**
+   * Why this ticket is being run again although a completed run already did it.
+   * Required to start a second run on the same ticket — see findRunForTicket:
+   * CSUP-7514 was solved twice in two codebases because nothing asked.
+   */
+  rerunReason?: string
 }
 
 /** In-memory scheduling state, keyed by run id. Lost on restart — which is
@@ -263,8 +270,20 @@ function extendBudget(run: WorkflowRun): void {
   const extended = {
     maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil(runElapsedMinutes(run)) + fresh.maxMinutes),
     maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens - (spent.cached_tokens ?? 0) + spent.output_tokens + fresh.maxTokens),
+    // Money is extended like the rest, and then clamped: continuing a gate
+    // grants another allowance, it does not grant an unlimited one. Four real
+    // runs had their caps ratcheted this way with nothing watching the total.
+    // The ceiling caps the EXTENSION, never the budget a run is already
+    // operating under: clamping downward would strand a run mid-flight the
+    // moment someone clicked continue, on an instance whose configured cap is
+    // above the ceiling. Raise-only, bounded.
+    maxUsd: Math.max(
+      run.budget.maxUsd ?? 0,
+      Math.min(absoluteUsdCeiling(), (spent.usd ?? 0) + (fresh.maxUsd ?? 0)),
+    ),
   }
-  if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes) {
+  if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes
+    || extended.maxUsd !== run.budget.maxUsd) {
     log.info('operator extends the run budget', { runId: run.id, from: run.budget, to: extended })
     run.budget = extended
   }
@@ -315,6 +334,11 @@ function budgetExceeded(run: WorkflowRun): string | null {
   const u = computeUsage(run)
   const tokens = u.input_tokens - (u.cached_tokens ?? 0) + u.output_tokens
   if (tokens > b.maxTokens) return `Budget exceeded: ${tokens.toLocaleString()} uncached tokens over the ${b.maxTokens.toLocaleString()} token cap.`
+  // Money last because it is the cap an operator set in the units they think
+  // in; the two above are proxies for it that have never once fired first.
+  if (b.maxUsd && (u.usd ?? 0) > b.maxUsd) {
+    return `Budget exceeded: $${(u.usd ?? 0).toFixed(2)} spent over the $${b.maxUsd.toFixed(2)} cap.`
+  }
   return null
 }
 
@@ -401,7 +425,49 @@ export async function completePendingTicketNotifications(): Promise<{ notified: 
   return out
 }
 
+/**
+ * A run that says it shipped must be able to show the work.
+ *
+ * Checked here, in publish, for the same reason finalize is: there are
+ * six-plus places a run reaches a terminal status and a check at each site is
+ * one that gets forgotten. Only a run about to be recorded `completed` is
+ * asked — a failed or stopped run is already telling the truth.
+ *
+ * The downgrade is deliberate and is the whole point: three real runs finished
+ * `completed` while their fix sat on an unmerged lane branch, two commits ahead
+ * of the pushed branch, or on no branch with a pull request at all. Every one
+ * of them read as success on the runs page and in its Jira comment.
+ */
+async function enforceShipIntegrity(run: WorkflowRun): Promise<void> {
+  if (run.status !== 'completed' || run.shipIntegrity) return
+  // Read from the RECORD, not from live state: a run resumed after a restart
+  // has no Live object here, and "was this workflow meant to ship?" must not
+  // depend on whether the process that started it is still alive.
+  const expectPr = run.expectsPr === true
+  let meta: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) meta = parsed
+  } catch { /* no meta yet: the git checks below still answer */ }
+  let findings: ShipFinding[]
+  try {
+    findings = await shipIntegrity(run, expectPr, meta)
+  } catch (err) {
+    // A check that cannot run must not invent a verdict in either direction.
+    log.warn('ship integrity could not be checked', { runId: run.id, error: String(err) })
+    return
+  }
+  run.shipIntegrity = findings
+  if (!findings.length) return
+  run.status = 'failed'
+  run.error = `The work this run reports is not reachable. ${describeShipFindings(findings)}`
+  log.warn('run downgraded from completed: its work is not reachable', {
+    runId: run.id, problems: findings.map(f => f.problem),
+  })
+}
+
 async function publish(run: WorkflowRun) {
+  if (TERMINAL_STATUSES.includes(run.status)) await enforceShipIntegrity(run)
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
   // and there are too many terminal branches for per-site bookkeeping to stay
@@ -1175,6 +1241,17 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
   const ac = new AbortController()
   l.aborts.set(id, ac)
+  // A step that hangs used to run until the process died. SBN-4091 spent 19.8
+  // hours against a 180-minute cap with 23 minutes of agent work inside it,
+  // because the budget is only read BETWEEN steps and this step never returned
+  // to be between anything. The watchdog is the run's own remaining time, armed
+  // on the controller stopRun already uses, so a hung step ends the way an
+  // operator stop does rather than by outliving everyone's attention.
+  const leftMs = Math.max(60_000, (run.budget.maxMinutes - runElapsedMinutes(run)) * 60_000)
+  let watchdogFired = false
+  const watchdog = setTimeout(() => { watchdogFired = true; ac.abort() }, leftMs)
+  // Never hold the process open on this timer alone.
+  if (typeof watchdog.unref === 'function') watchdog.unref()
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
@@ -1344,6 +1421,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
           await writeStepArtifact(run, rec, run.steps.indexOf(rec), `no-verdict-${rec.visits}`)
         } catch { /* best effort */ }
         l.retryFeedback[id] = 'You did not state a verdict. Reply again, and open with exactly one line: `Review Result: PASS`, `Review Result: WARNING` or `Review Result: FAIL`.'
+        run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: 'the review step stated no verdict and was asked again' }]
         l.state.status[id] = 'completed'
         armNode(l.state, id)
         log.warn('review step stated no verdict; asking again', { runId: run.id, stepId: id, visits: rec.visits })
@@ -1408,6 +1486,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       recorded = `${recorded}\n\n${note}`
     }
 
+    // What this step says it left undone, carried on the record where the
+    // summary, the evidence and a reviewer can all read it.
+    const notDone = parseNotDone(output)
+    if (notDone.length) {
+      run.notDone = [...(run.notDone ?? []).filter(e => e.stepId !== id), ...notDone.map(e => ({ ...e, stepId: id, label: rec.label }))]
+      for (const e of notDone) logLine(l, run, rec, `not done: ${e.what} — ${e.why}`)
+    }
     l.outputs[id] = recorded
     Object.assign(rec, {
       status: skip ? 'skipped' : 'completed',
@@ -1471,6 +1556,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id))
       if (verdict === 'ABORT') {
         markFailed(l.state, id)
+        run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: `monitor aborted the step: ${preview(review)}` }]
         Object.assign(rec, { status: 'failed', model, error: 'Monitor aborted the workflow' })
         try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
         return false
@@ -1487,6 +1573,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
           await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`)
         } catch { /* best effort */ }
         l.retryFeedback[id] = review
+        run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: `monitor asked for another attempt: ${preview(review)}` }]
         l.state.status[id] = 'completed'
         armNode(l.state, id)
         return true
@@ -1513,11 +1600,25 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
     markCompleted(l.graph, l.state, id)
     // Progress clears the interruption count: only CONSECUTIVE restarts with
-    // nothing achieved in between are the loop worth pausing on.
+    // nothing achieved in between are the loop worth pausing on. `restarts`
+    // above is the durable record and is never cleared here.
     run.interruptions = 0
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
+    if (watchdogFired) {
+      markFailed(l.state, id)
+      const spent = Math.round(runElapsedMinutes(run))
+      Object.assign(rec, {
+        status: 'failed',
+        error: `The step was stopped after the run's ${run.budget.maxMinutes}-minute budget ran out (${spent} min elapsed). It produced no result.`,
+        completedAt: Date.now(),
+      })
+      run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: 'watchdog: the run ran out of time while this step was in flight' }]
+      log.warn('step aborted by the run watchdog', { runId: run.id, stepId: id, minutes: spent })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return false
+    }
     // A step that ran out of either budget - turns or wall-clock - has usually
     // done most of its work, and its log tail says how far it got. One retry
     // that starts from there is cheaper than a dead run: the budget becomes a
@@ -1542,6 +1643,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         : `Your previous attempt ran out of its ${spent} before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.`
       l.state.status[id] = 'completed'
       armNode(l.state, id)
+      run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: `the step hit its own ${err.subtype === 'error_max_turns' ? 'turn' : 'duration'} limit and was retried from its log tail` }]
       log.warn('step ran out of its budget; retrying from its log tail', { runId: run.id, stepId: id, agentSlug: step.agentSlug, subtype: err.subtype, visits: rec.visits })
       return true
     }
@@ -1571,6 +1673,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return false
   } finally {
+    clearTimeout(watchdog)
     l.aborts.delete(id)
     l.steer.delete(id)
   }
@@ -2078,6 +2181,27 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const firstRepo = product?.repos?.[0]
   const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo, opts.startedBy)) ? checkoutDirFor(firstRepo, opts.startedBy) : undefined)
   const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
+  // A ticket that already has a COMPLETED run is done until someone says
+  // otherwise. A failed one is the ordinary retry path and is not blocked.
+  // The escape hatch is an env var rather than a parameter because every entry
+  // point - the API, a watch dispatch, the CLI, a test harness - reaches this
+  // one function, and a per-caller flag is a flag somebody forgets to set.
+  if (ticketKey && process.env.AGENT_ALLOW_DUPLICATE_TICKET_RUNS === '1') {
+    // Loud, because an escape hatch nobody can see in the logs is how a test
+    // setting ends up in a production environment and nothing says so.
+    log.warn('duplicate-ticket guard bypassed by AGENT_ALLOW_DUPLICATE_TICKET_RUNS', { ticketKey })
+  }
+  if (ticketKey && !opts.rerunReason && process.env.AGENT_ALLOW_DUPLICATE_TICKET_RUNS !== '1') {
+    const prior = await findRunForTicket(ticketKey)
+    if (prior?.status === 'completed') {
+      throw new Error(
+        `${ticketKey} already has a completed run (${prior.id}${prior.branch ? `, branch ${prior.branch}` : ''}`
+        + `${prior.endedAt ? `, finished ${new Date(prior.endedAt).toISOString().slice(0, 10)}` : ''}). `
+        + 'Read what it produced before starting another: two runs on one ticket have already shipped two independent fixes in two codebases. '
+        + 'Pass a rerun reason to start anyway, or set AGENT_ALLOW_DUPLICATE_TICKET_RUNS=1 on an instance that runs tickets repeatedly by design.',
+      )
+    }
+  }
   // Captured BEFORE createRun, so the baseline is the project directory's
   // HEAD at the true moment execution begins — before any step, and so any
   // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
@@ -2097,6 +2221,12 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     ticketKey,
     projectDir,
     baseCommit,
+    // Whether this workflow ships at all, snapshotted like the steps below: the
+    // ship-integrity check must not fail a research workflow for opening no
+    // pull request, and must not be talked out of failing one that does ship by
+    // a template edited after the run started.
+    expectsPr: opts.workflow.steps.some(s => s.pr === true),
+    ...(opts.rerunReason ? { rerunReason: opts.rerunReason } : {}),
     // `ownerRole` is snapshotted with the rest: the run page must render whose
     // work a step is without loading the workflow, and a template edited after
     // this run started must not rewrite what this run's history says.
@@ -2166,6 +2296,14 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
     if (!frozen) { out.skipped.push(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
+    // The counter resets on progress, which is right for deciding whether to
+    // keep resuming and wrong as a record: 28 retries, restarts and aborts
+    // happened across ten real runs and every one of their records reported
+    // zero. The log below is append-only and never reset, so first-pass yield
+    // and rework rate are answerable afterwards.
+    run.restarts = [...(run.restarts ?? []), {
+      at: Date.now(), bootId: BOOT_ID, stepId: frozen.stepId, reason: 'the previous process died mid-step',
+    }]
     if (run.interruptions > MAX_INTERRUPTIONS) {
       frozen.status = 'pending'
       run.status = 'paused'
