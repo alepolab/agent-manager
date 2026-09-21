@@ -358,6 +358,57 @@ export function parseSkip(text: string | undefined | null): string | null {
   return last ? last[1]!.trim() : null
 }
 
+/**
+ * A review step's own answer: did the work it judged pass or not.
+ *
+ * This exists because five consecutive runs shipped a pull request over their
+ * reviewer's explicit refusal. CSUP-7524's QA step opened with
+ * "## Review Result: **FAIL** — 2 CRITICAL, 3 HIGH" and said "the client commit
+ * doesn't exist"; the pipeline then ran three more steps and opened three pull
+ * requests. Same in CSUP-7526, CSUP-7514, CSUP-7519 and SBN-4091. The verdict
+ * was never hidden — it was the first line of the step's output — and the
+ * runner had no way to read it, because a review step's judgement lived only in
+ * prose while every enforceable outcome (halt, skip, rework, monitor verdict)
+ * needed a marker the reviewers do not emit.
+ *
+ * So the convention the reviewers ALREADY write is the machine channel:
+ * `Review Result: FAIL`, with `VERDICT:`/`PIPELINE-VERDICT:` accepted as
+ * synonyms, at the start of a line and through any markdown decoration around
+ * it (`## `, `**`). WARNING is a third real answer and is not a refusal — it
+ * reads as PASS with a note, which is what it meant in CSUP-7495.
+ *
+ * `null` means the step never stated one. The runner treats that as a failure
+ * for a step that was asked for a verdict, deliberately: "unreadable counts as
+ * pass" is the exact reasoning that let a FAIL ship.
+ */
+export type ReviewVerdict = 'PASS' | 'WARNING' | 'FAIL'
+
+const VERDICT_LINE = /^[#>\s]*\**\s*(?:PIPELINE-)?(?:REVIEW\s+RESULT|VERDICT)\s*\**\s*[::]\s*\**\s*(PASS|FAIL|WARNING)\b/gim
+/** The same marker anywhere in a line, not only at its start. Used for FAIL only — see below. */
+const VERDICT_ANYWHERE = /\**\s*(?:PIPELINE-)?(?:REVIEW\s+RESULT|VERDICT)\s*\**\s*[::]\s*\**\s*FAIL\b/gi
+
+export function parseReviewVerdict(text: string | undefined | null): ReviewVerdict | null {
+  // Quoted text is not a statement. A reviewer that pastes the required format
+  // back as an example — a fenced block showing `Review Result: FAIL` — is
+  // demonstrating the contract, not invoking it, and the unanchored FAIL scan
+  // below would otherwise stop the run over its own instructions.
+  const body = (text ?? '').replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+  // A FAIL counts wherever it appears, and outranks a PASS on any other line.
+  //
+  // The anchored form alone lost a reviewer that changed its mind: "Review
+  // Result: PASS … Actually wait, Review Result: FAIL" parsed as PASS, because
+  // the second statement had prose in front of it. Self-correction mid-answer
+  // is ordinary model behaviour, and this whole mechanism exists because a FAIL
+  // went unheard — so the two readings are not weighed evenly. A false FAIL
+  // stops a run a person can restart; a missed FAIL opens a pull request over a
+  // refusal, which is the defect this file is fixing.
+  if (VERDICT_ANYWHERE.test(body)) { VERDICT_ANYWHERE.lastIndex = 0; return 'FAIL' }
+  VERDICT_ANYWHERE.lastIndex = 0
+  const matches = [...body.matchAll(VERDICT_LINE)]
+  const last = matches[matches.length - 1]
+  return last ? (last[1]!.toUpperCase() as ReviewVerdict) : null
+}
+
 const CLIP = 4000
 const clip = (text: string): string =>
   text.length > CLIP ? `${text.slice(0, CLIP)}\n...[truncated]` : text

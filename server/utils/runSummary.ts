@@ -157,6 +157,9 @@ export function renderRunSummary(run: WorkflowRun, meta: Record<string, unknown>
     const g = gist(s)
     if (g) lines.push(`> ${g}`)
     if (s.status === 'skipped' && s.skipReason) lines.push(`> Skipped because: ${firstSentence(s.skipReason)}`)
+    // Work that is on nobody's branch. It reads as an ordinary completed step
+    // everywhere else, which is how a3cb9d37's client fix went missing.
+    if (s.laneKept) lines.push(`> **Uncommitted work left behind:** ${firstSentence(s.laneKept)}`)
     lines.push('')
   })
 

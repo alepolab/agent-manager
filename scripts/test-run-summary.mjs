@@ -57,6 +57,16 @@ assert.ok(shipped.includes('**3. Deploy to prod** — not needed'), '"skipped" m
 assert.ok(shipped.includes('Skipped because: no deployable change'))
 assert.ok(!/\bsdlc-worker\b/.test(shipped), 'agent slugs are internal vocabulary and must not leak into the page')
 
+// Work that is on nobody's branch is named, not buried: a lane kept because it
+// still held uncommitted changes reads as an ordinary completed step everywhere
+// else, which is how run a3cb9d37's client fix went missing.
+const kept = renderRunSummary(
+  { ...base, steps: [step('Implement Client Change', 'completed', 'done', { laneKept: 'fix/x--lane-client: 5 uncommitted file(s) left in /w/lane. They are NOT in the run branch.' })] },
+  {},
+)
+assert.ok(kept.includes('**Uncommitted work left behind:**'), 'a kept lane must be visible on the page a person reads')
+assert.ok(kept.includes('NOT in the run branch'))
+
 // A failure names the step it died on.
 const failed = renderRunSummary(
   { ...base, status: 'failed', steps: [step('Write the fix', 'failed', '', { error: 'the build never compiled' })] },

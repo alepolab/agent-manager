@@ -1,6 +1,6 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseReviewVerdict, parseHalt, parseSkip, parseWiden, parseRework,
   monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
   type WorkflowGraph, type RunState,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
@@ -16,7 +16,7 @@ import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
-import { captureBaseline } from './gitFacts.ts'
+import { captureBaseline, workingTreeDirty } from './gitFacts.ts'
 import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
 import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
@@ -91,7 +91,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, verdict?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -1091,13 +1091,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // where the header is skipped but the stack may have changed since.
   const stackContext = stackNote ? `\n\nSTACK: ${stackNote}\n` : ''
   const testsContext = testOwnershipNote(l, step) ? `\n\nTESTS: ${testOwnershipNote(l, step)}\n` : ''
+  // A verdict step is told the contract it is held to. Enforcing a format the
+  // agent was never given would be a trap; every reviewer in the estate already
+  // opens with this line, and now it decides whether the run continues.
+  const verdictContext = step.verdict
+    ? '\n\nVERDICT: this step owns the decision. Open your output with exactly one line — `Review Result: PASS`, `Review Result: WARNING` or `Review Result: FAIL` — before anything else. FAIL stops the run and nothing is shipped; WARNING continues and is recorded. State no verdict and the run stops: silence is not approval.\n'
+    : ''
   const deployContext = deployNote ? `\n\nDEPLOY: ${deployNote}\n` : ''
   // What this run's risk class obliges it to produce. Told while the step can
   // still do the work: finding out at finalize, or from a CI validation
   // failure, is finding out too late - a two-node rerun and a pattern search
   // cannot be done retroactively.
   const classContext = adversarialDemand(run)
-  const input = stackContext + testsContext + deployContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+  const input = stackContext + testsContext + verdictContext + deployContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
     dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined) + body)
@@ -1306,6 +1312,59 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // from "it was fixed". See parseSkip for why this outcome exists.
     const skip = parseSkip(output)
 
+    // A REVIEW step's own answer, enforced.
+    //
+    // Five consecutive runs opened a pull request over their reviewer's
+    // explicit refusal. CSUP-7524's QA step said "Review Result: FAIL — 2
+    // CRITICAL" and "the client commit doesn't exist"; three steps later the
+    // run opened three pull requests and finished `completed`. CSUP-7526,
+    // CSUP-7514, CSUP-7519 and SBN-4091 are the same shape. The verdict was
+    // never hidden — it was the first line of the step's output — but the only
+    // enforceable outcomes were markers (halt, rework) the reviewers do not
+    // emit, and an `approval` gate, which asks a PERSON and therefore does
+    // nothing on a run classified `auto` or approved in a hurry.
+    //
+    // So the step's stated verdict IS the gate, checked before `step.pr` below:
+    // a refused change must not reach the code that opens a pull request.
+    //
+    // A missing verdict fails too, and that asymmetry is deliberate. The
+    // monitor path already defaults an unreadable answer to CONTINUE
+    // (parseVerdict), and treating silence as consent is exactly how a FAIL
+    // came to ship. A step that declared PIPELINE-SKIP is exempt: it examined
+    // its job and found nothing to judge.
+    if (step.verdict && !skip) {
+      const verdict = parseReviewVerdict(output)
+      // Stating nothing is a format slip, not a refusal, so it gets the same
+      // second chance the monitor gives a RETRY: ask again, with the contract
+      // repeated, while the step still has a visit. Only then does silence
+      // stop the run. An explicit FAIL is never retried — the reviewer said
+      // what it meant, and re-asking until it relents is not oversight.
+      if (!verdict && canRevisit(l.graph, l.state, id)) {
+        try {
+          await writeStepArtifact(run, rec, run.steps.indexOf(rec), `no-verdict-${rec.visits}`)
+        } catch { /* best effort */ }
+        l.retryFeedback[id] = 'You did not state a verdict. Reply again, and open with exactly one line: `Review Result: PASS`, `Review Result: WARNING` or `Review Result: FAIL`.'
+        l.state.status[id] = 'completed'
+        armNode(l.state, id)
+        log.warn('review step stated no verdict; asking again', { runId: run.id, stepId: id, visits: rec.visits })
+        return true
+      }
+      if (verdict !== 'PASS' && verdict !== 'WARNING') {
+        const reason = verdict === 'FAIL'
+          ? `Review verdict FAIL — ${preview(output)}`
+          : `This step owns a verdict and stated none. It must open with "Review Result: PASS", "WARNING" or "FAIL"; the run stops rather than read silence as approval.`
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', output, model, usage, error: reason, completedAt: Date.now() })
+        log.warn('review step refused the work', () => ({
+          runId: run.id, stepId: id, agentSlug: step.agentSlug, verdict: verdict ?? 'none', durationMs,
+        }))
+        logLine(l, run, rec, reason)
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+      logLine(l, run, rec, `review verdict: ${verdict}`)
+    }
+
     // The pull request, BEFORE the Jira half below, so the outcome comment can
     // carry a URL the runner has actually got. A step declaring `pr` gets this
     // whether or not its agent mentioned a pull request - which is the point:
@@ -1431,6 +1490,24 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         l.state.status[id] = 'completed'
         armNode(l.state, id)
         return true
+      }
+      // RETRY with no visit left. This used to fall through to markCompleted:
+      // the step was recorded `monitorVerdict: 'RETRY'` and `status:
+      // 'completed'` at the same time, its deficient output was published
+      // downstream, and nothing said so — a reviewer's "do this again" read as
+      // approval because the budget ran out. A monitor that refuses is a
+      // refusal at the last visit exactly as much as at the first.
+      if (verdict === 'RETRY') {
+        markFailed(l.state, id)
+        const node = l.graph.nodes.find(n => n.id === id)
+        const spent = `after ${rec.visits} of ${node ? maxVisitsOf(node) : rec.visits} visit(s)`
+        Object.assign(rec, {
+          status: 'failed', model,
+          error: `Monitor asked for another attempt ${spent} and there is none left: ${preview(review)}`,
+        })
+        log.warn('monitor retry had no visit left', { runId: run.id, stepId: id, visits: rec.visits })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
       }
     }
 
@@ -1840,6 +1917,7 @@ async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<st
     const laneBranch = l.laneBranches[id]
     if (!laneBranch) continue
     const rec = recOf(run, id)
+    const laneDir = l.laneDirs[id]
     delete l.laneDirs[id]
     delete l.laneBranches[id]
     if (rec?.status !== 'completed') {
@@ -1849,6 +1927,30 @@ async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<st
     try {
       const said = await mergeLane(run.projectDir, laneBranch)
       log.info('lane merged', { runId: run.id, stepId: id, result: said })
+      // `mergeLane` merges COMMITS. `removeLane` then runs `worktree remove
+      // --force`, which deletes everything that was not one — and run a3cb9d37
+      // lost its client fix exactly here, "staged and uncommitted", 566
+      // insertions across 5 files, with no error and no log line. So the lane
+      // is measured before it is destroyed, and a dirty one is kept: a
+      // worktree left behind is noise, and the alternative is deleting work
+      // nobody can recover.
+      // `null` is NOT "clean": workingTreeDirty answers null when it could not
+      // measure at all — no directory, not a worktree, or `git status` itself
+      // failed (a locked or corrupted index, a permission error). Reading that
+      // as clean would delete an unmeasured worktree, which is the same loss
+      // through a different door, so only a positive measurement of nothing
+      // permits the removal.
+      const left = await workingTreeDirty(laneDir)
+      if (left === null || left.length) {
+        rec.laneKept = left === null
+          ? `${laneBranch}: its worktree at ${laneDir} could not be checked for uncommitted work, so it was kept. Look before you remove it: git -C ${run.projectDir} worktree remove ${laneDir}`
+          : `${laneBranch}: ${left.length} uncommitted file(s) left in ${laneDir}. They are NOT in the run branch — commit them there or copy them out, then: git -C ${run.projectDir} worktree remove --force ${laneDir}`
+        log.warn('lane kept: its worktree still holds uncommitted work', {
+          runId: run.id, stepId: id, laneBranch, uncommitted: left?.length ?? 'unmeasurable', laneDir,
+        })
+        logLine(l, run, rec, rec.laneKept)
+        continue
+      }
       await removeLane(run.projectDir, laneBranch)
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err)

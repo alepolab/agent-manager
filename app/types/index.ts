@@ -258,6 +258,8 @@ export interface WorkflowStep {
   maxVisits?: number
   /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
   approval?: boolean
+  /** A review step whose stated `Review Result:` the runner enforces. */
+  verdict?: boolean
   /**
    * Hand this step the review a GitHub Actions run left on the run's pull
    * request. The runner writes `review-comments.json` into the run's artifacts

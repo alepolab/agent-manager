@@ -79,6 +79,12 @@ export interface RunStep {
    *  the scheduler skipped after an upstream failure - those two are very
    *  different events and the bundle must not conflate them. */
   skipReason?: string
+  /**
+   * Set when this step's lane worktree was kept instead of deleted, because it
+   * still held uncommitted work. The run branch does NOT contain it — see
+   * closeLanes. Absent on every step whose lane merged and was removed cleanly.
+   */
+  laneKept?: string
   assistantMessages?: number
   lastTool?: string
   lastActivityAt?: number

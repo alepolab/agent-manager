@@ -16,6 +16,8 @@ export interface WorkflowTemplateStep {
   maxVisits?: number
   /** See WorkflowStep.approval. */
   approval?: boolean
+  /** The runner enforces this step's stated Review Result; see parseReviewVerdict. */
+  verdict?: boolean
   /** See WorkflowStep.gateRole. */
   gateRole?: Role
   /** See WorkflowStep.ownerRole. Whose work the step is; grants nothing. */
@@ -93,6 +95,10 @@ export function materializeTemplateSteps(
       agentSlug: agentSlugByTemplateId[step.agentTemplateId]!,
       label: step.label,
       ...(step.approval ? { approval: true } : {}),
+      // A review step's stated verdict is enforced by the runner. Carried like
+      // the flags below: dropping it here would disarm the gate silently, which
+      // is how a `FAIL` came to ship five runs in a row.
+      ...(step.verdict ? { verdict: true } : {}),
       // Only meaningful alongside `approval`, but carried whenever the template
       // sets it: a step that declares whose gate it is should not silently lose
       // that when someone later toggles `approval` back on.
@@ -220,6 +226,11 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'qa-reviewer',
         label: 'Verify',
+        // Its stated Review Result is enforced by the runner, like the csup
+        // Verify step: SBN-4091's verification found "the branch the PR step
+        // would push contains only failing tests and zero production code" and
+        // the run carried on to Refine and Docs regardless.
+        verdict: true,
         next: ['refactor-engineer'],
         contextMode: 'ancestors',
         approval: true,
@@ -406,6 +417,10 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'qa-reviewer',
         label: 'Verify, Security & Regression',
         ownerRole: 'qa',
+        // Its FAIL is the gate. Five runs opened a pull request over exactly
+        // this step's "Review Result: FAIL"; the approval flag below only ever
+        // asked a PERSON, and a run classified `auto` asks nobody.
+        verdict: true,
         next: ['docs-curator'],
         contextMode: 'ancestors',
         approval: true,
@@ -414,6 +429,14 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'db-engineer',
         label: 'Data & Migration Review',
+        // NOT `verdict: true`, though CSUP-7514's data review reported "Two
+        // hard blockers I could not clear" and the run shipped regardless.
+        // Enforcement needs the agent to state a verdict, and `qa-reviewer`'s
+        // own definition bakes in "## Review Result: {PASS | WARNING | FAIL}"
+        // while `db-engineer`'s does not mention it at all. Holding a step to a
+        // contract its agent never agreed to turns a sound review into a failed
+        // run. The agent definitions are the estate's SSOT and not this repo's
+        // to edit; when db-engineer carries that output contract, add the flag.
         // Schema and migration cost lands on other teams and on future runs,
         // which is the architect's business even though no gate fires here yet.
         ownerRole: 'architect',
