@@ -15,6 +15,22 @@ Follow the vendor-specific execution protocol:
 
 Follow the shared execution policy for authorization and clarification. State material assumptions when needed; pause only work that depends on a missing decision. No fixed preflight output is required.
 
+## Output Format
+
+When this agent runs as a REVIEW step (a workflow step flagged `verdict`), the
+runner reads the first line and stops the run on a FAIL. Open with exactly one:
+
+```
+## Review Result: {PASS | WARNING | FAIL}
+```
+
+FAIL means the change must not ship as it stands. WARNING means it may, with
+the note recorded. State the verdict even when the work is fine: silence is
+read as a refusal, because a review that shipped over its own "two hard
+blockers I could not clear" (CSUP-7514) is what this contract exists to stop.
+
+Findings follow it, most severe first, as `file:line — problem — remediation`.
+
 ## Rules
 
 1. Stay in scope — only work on assigned database tasks

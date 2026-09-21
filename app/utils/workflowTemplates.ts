@@ -429,14 +429,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'db-engineer',
         label: 'Data & Migration Review',
-        // NOT `verdict: true`, though CSUP-7514's data review reported "Two
-        // hard blockers I could not clear" and the run shipped regardless.
-        // Enforcement needs the agent to state a verdict, and `qa-reviewer`'s
-        // own definition bakes in "## Review Result: {PASS | WARNING | FAIL}"
-        // while `db-engineer`'s does not mention it at all. Holding a step to a
-        // contract its agent never agreed to turns a sound review into a failed
-        // run. The agent definitions are the estate's SSOT and not this repo's
-        // to edit; when db-engineer carries that output contract, add the flag.
+        // CSUP-7514's data review reported "Two hard blockers I could not
+        // clear" and the run shipped regardless. Enforced now that
+        // `db-engineer` carries the same `## Review Result:` output contract
+        // `qa-reviewer` does — a step must not be held to a format its agent
+        // never declares, which is why the two landed together.
+        verdict: true,
         // Schema and migration cost lands on other teams and on future runs,
         // which is the architect's business even though no gate fires here yet.
         ownerRole: 'architect',
