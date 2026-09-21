@@ -158,9 +158,13 @@ assert.equal(await routes('Nothing in particular about anything'), undefined)
     `the subject decides; the Keycloak in the Environment block must not route a Selfcare bug elsewhere - got ${got}`)
   assert.notEqual(got, 'infra', 'a Selfcare billing bug is never devops work')
 
-  // The same ticket without the boilerplate routes the same way, which is what
-  // makes the boilerplate the cause rather than the subject.
-  assert.equal(await routes(csup7526.split('\nEnvironment\n')[0]), got,
+  // The same ticket with the Environment BLOCK removed routes the same way,
+  // which is what makes that block the cause rather than the subject. Only
+  // those lines are dropped: the Background stays, because it is the ticket
+  // talking about its own subject rather than about the estate.
+  const withoutEstate = csup7526.split('\n').filter(l =>
+    !/Load Balancers|Keycloak \/ CRM Nodes|Database Instance|Target Environment/.test(l)).join('\n')
+  assert.equal(await routes(withoutEstate), got,
     'the Environment block changes nothing about where this ticket goes')
 }
 
@@ -196,6 +200,45 @@ assert.equal(await routes('Nothing in particular about anything'), undefined)
     'Liquibase ran at 03:00; SSO nodes DC-CRM1-KC1',
   ].join('\n')), 'lum-selfcare',
   'a Component naming LUM Selfcare still outranks the estate vocabulary in the Environment block')
+}
+
+// ── the customer decides: SaskTel and Lüm always mean lum-selfcare ──────
+// Sandeep's rule, after two runs went to the wrong repo: "if i specifically
+// say selfcare now then only go to new selfcare, and whenever sasktel, or lum
+// comes in then always use lum selfcare repo".
+//
+// The customer's name is a stronger claim than any product vocabulary: a
+// ticket that says SaskTel is about SaskTel's estate whatever else it mentions.
+// CSUP-7524 proved the cost of the alternative - "Selfcare" appearing once in
+// an analysis sentence outranked the customer named in the title.
+{
+  assert.equal(await routes('CSUP-7524: SaskTel | One-time SIM/eSIM fee transactions are never closed after the fee is charged'), 'lum-selfcare',
+    'SaskTel in the subject means the LUM Selfcare repo')
+  assert.equal(await routes('CSUP-7522: Sasktel || myLüm Android app uses deprecated APIs'), 'lum-selfcare',
+    'the customer spelled Lüm, which the registry could not match before')
+  assert.equal(await routes('CSUP-7527: Lum Mobile payment endpoint migration'), 'lum-selfcare')
+
+  // The umlaut spelling ALONE, with no SaskTel and no bare "Lum" anywhere:
+  // "myLüm" never matched the registry's LUM term, because the L is preceded
+  // by a word character and the umlaut is not in it at all. Four open tickets
+  // spell the app this way.
+  assert.equal(await routes('CSUP-7530: myLüm checkout crashes on the review step'), 'lum-selfcare',
+    'the app name as the tickets actually spell it')
+
+  // Even when Selfcare vocabulary appears elsewhere in the ticket: the
+  // customer wins, which is the whole point of the rule.
+  assert.equal(await routes([
+    'CSUP-7524: SaskTel | fee transactions are never closed',
+    '',
+    'Background',
+    '',
+    'billing only exposes the lifecycle events, CRM/Selfcare create the transactions',
+  ].join('\n')), 'lum-selfcare',
+  'a Selfcare mention in the body does not outrank the customer in the title')
+
+  // And the explicit product name still reaches the other repo.
+  assert.equal(await routes('SCN-500: SelfcareNow dashboard fails to load'), 'selfcarenow',
+    'naming SelfcareNow explicitly is how a ticket reaches the new selfcare repo')
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })

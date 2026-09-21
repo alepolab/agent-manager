@@ -355,6 +355,16 @@ products:
       # "LUM Selfcare" outweighs selfcarenow's "Selfcare" when a ticket says both;
       # the longest matching component word decides within a shared project.
       components: [LUM, LUM Selfcare]
+      # The customer's own name, which outranks every product word anywhere in
+      # the ticket. A ticket that says SaskTel is about SaskTel's estate
+      # whatever else it mentions, and two runs went to the wrong repository
+      # learning that: CSUP-7524 resolved to `crm` because "CRM" appeared once
+      # in an analysis sentence, and CSUP-7526 to `infra` because its
+      # Environment block names Keycloak. Both name SaskTel or Lüm in the title.
+      #
+      # Lüm is spelled with the umlaut on the tickets and in the app name; LUM
+      # alone never matched it.
+      customers: [SaskTel, Sasktel, SASKUP, "Lüm", "myLüm", Lum]
     repos: [alepolab/lum-selfcare-v1]
     branches:
       bug: develop

@@ -145,6 +145,21 @@ export async function resolveProduct(text: string): Promise<ProductMatch | undef
     return scored[0]?.[0]
   }
 
+  // The customer's name outranks everything.
+  //
+  // A ticket that says SaskTel is about SaskTel's estate whatever else it
+  // mentions, and two runs cost real money learning that: CSUP-7526 resolved
+  // to `infra` because its Environment block names Keycloak, and CSUP-7524 to
+  // `crm` because "CRM" appears once in an analysis sentence - while both name
+  // the customer in their title. Product vocabulary describes what a ticket
+  // talks about; the customer says whose estate it is.
+  //
+  // Matched against the whole text, including the Labels line, because the
+  // customer is named wherever the reporter happened to put it.
+  const customerHit = entries.find(([, p]) =>
+    ((p?.match ?? {}).customers ?? []).some((c: string) => word(c).test(text)))
+  if (customerHit) return productMatchFrom(reg.path, customerHit[0], customerHit[1])
+
   const byProject = key ? entries.filter(([, p]) => ((p?.match ?? {}).projects ?? []).includes(key)) : []
   // Specificity is measured on the focus when the ticket has one: a product
   // named in the subject beats one named only in the estate description.
