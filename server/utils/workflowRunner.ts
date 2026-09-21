@@ -837,6 +837,33 @@ async function withdrawTestUnlocks(run: WorkflowRun): Promise<void> {
 }
 
 /**
+ * What this step is allowed to do with tests, in its own input.
+ *
+ * Exactly one step of a workflow owns the tests, and the plugin's lock enforces
+ * that - but nothing ever TOLD the other steps. Run a3cb9d37 died of it: the
+ * client lane's agent wrote a new spec file in a step that does not own tests,
+ * the lock fired correctly, and its finished work sat staged and uncommitted
+ * while the run spent another twenty minutes reaching a monitor that aborted.
+ *
+ * A rule an agent is not told is a rule it discovers by being stopped halfway
+ * through committing. So the step that owns the tests is told it does, and
+ * every other step is told which step does and what to do instead - report the
+ * gap, never write the test. Silent when no step owns them, because then there
+ * is no rule to state and a false prohibition teaches agents to ignore the
+ * real ones.
+ */
+function testOwnershipNote(l: Live, step: { label: string, testsUnlocked?: boolean }): string {
+  const owner = l.workflow.steps.find(s => s.testsUnlocked === true)
+  if (!owner) return ''
+  if (step.testsUnlocked === true) {
+    return `This step owns the tests for this run: you may add and edit test files here, and the runner has written the unlock that permits it. No other step may.`
+  }
+  return `"${owner.label}" owns the tests for this run; this step does not. Do not add or edit any test file here - `
+    + 'the lock will stop the commit, and work that cannot be committed is work nobody gets. '
+    + `If you find a case that needs covering, say so in your result and name it, so "${owner.label}" or a person can add it.`
+}
+
+/**
  * Drive deploy.sh for a step that declared a deploy.
  *
  * The gate is the step's own: only `dev` runs unattended, and any other
@@ -1063,13 +1090,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // the agent rather than only into the run log - including on a resumed visit,
   // where the header is skipped but the stack may have changed since.
   const stackContext = stackNote ? `\n\nSTACK: ${stackNote}\n` : ''
+  const testsContext = testOwnershipNote(l, step) ? `\n\nTESTS: ${testOwnershipNote(l, step)}\n` : ''
   const deployContext = deployNote ? `\n\nDEPLOY: ${deployNote}\n` : ''
   // What this run's risk class obliges it to produce. Told while the step can
   // still do the work: finding out at finalize, or from a CI validation
   // failure, is finding out too late - a two-node rerun and a pattern search
   // cannot be done retroactively.
   const classContext = adversarialDemand(run)
-  const input = stackContext + deployContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+  const input = stackContext + testsContext + deployContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
     dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined) + body)

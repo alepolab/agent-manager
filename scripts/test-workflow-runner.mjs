@@ -1967,6 +1967,94 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
     'the unlock is removed when the run that granted it finishes, or the next agent in this checkout inherits it')
 }
 
+// -- a step is told whether it owns the tests, before it writes one -------
+// Run a3cb9d37 died here. Exactly one step of the CSUP workflow owns the tests
+// ("Reproduce & Failing Test", testsUnlocked); "Implement Client Change" does
+// not. Its agent wrote a new spec file anyway, the plugin's test lock fired
+// correctly - the monitor confirmed it was not a false positive - and the
+// lane's 5 files / 566 insertions were left staged and uncommitted while the
+// run burned another twenty minutes before a monitor aborted it.
+//
+// The lock was enforced but never announced. A rule an agent is not told is a
+// rule it discovers by being stopped halfway through committing.
+{
+  const inputs = {}
+  runner.setAgentCaller(async (slug, input) => { inputs[slug] = input; return 'done' })
+
+  const wf = {
+    slug: 'tests-owned', name: 'Tests owned',
+    steps: [
+      { id: 'red', agentSlug: 'agent-a', label: 'Reproduce & Failing Test', next: ['impl'], testsUnlocked: true },
+      { id: 'impl', agentSlug: 'agent-b', label: 'Implement Client Change', next: [] },
+    ],
+  }
+  const run = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'T-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(run.status, 'completed', `the run finished: ${run.status}`)
+
+  // The step that does not own the tests is told so, and told which step does,
+  // so it can report a missing case instead of writing one and being stopped.
+  assert.match(inputs['agent-b'] ?? '', /TESTS:/,
+    'a step that does not own the tests gets the rule in its input')
+  assert.match(inputs['agent-b'] ?? '', /Reproduce & Failing Test/,
+    'naming the step that does own them')
+  assert.match(inputs['agent-b'] ?? '', /do not (add|write)/i,
+    'and saying plainly not to write one')
+
+  // The step that DOES own them is not told it may not write tests - a false
+  // prohibition teaches agents to ignore the real ones.
+  assert.ok(!/Do not add or edit any test file/i.test(inputs['agent-a'] ?? ''),
+    `the owning step is never forbidden its own job; it got ${JSON.stringify((inputs['agent-a'] ?? '').slice(0, 300))}`)
+  assert.match(inputs['agent-a'] ?? '', /owns the tests for this run: you may add/,
+    'it is told the opposite: that the unlock is written and the tests are its job')
+}
+
+// -- scoping the unlock to a lane does not weaken the lock inside one -----
+// The other half of the a3cb9d37 fix. A lane's unlock is no longer copied
+// anywhere a sibling can see it - but the lock itself must still stop a step
+// that edits source and writes tests together in its OWN lane, because a
+// modified test is never a pass.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'lock-bites-'))
+  const g = (args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim()
+  g(['init', '-q', '-b', 'develop'])
+  g(['config', 'user.email', 't@example.invalid']); g(['config', 'user.name', 'T'])
+  writeFileSync(join(dir, 'app.ts'), 'export const a = 1\n')
+  g(['add', '.']); g(['commit', '-q', '-m', 'init'])
+
+  // Writes where the RUNNER put it, not where the fixture was created: the
+  // step may be given a worktree, and a test that edits the original clone
+  // proves nothing about what the lock sees.
+  runner.setAgentCaller(async (_slug, _input, workdir) => {
+    const at = workdir ?? dir
+    // What the client lane did: source AND a new spec, in a step that does not
+    // own the tests.
+    writeFileSync(join(at, 'app.ts'), 'export const a = 2\n')
+    writeFileSync(join(at, 'app.spec.ts'), 'it("passes", () => {})\n')
+    execFileSync('git', ['add', '.'], { cwd: at })
+    execFileSync('git', ['-c', 'user.email=t@example.invalid', '-c', 'user.name=T', 'commit', '-q', '-m', 'fix and test'], { cwd: at })
+    return 'did the work'
+  })
+
+  const wf = {
+    slug: 'lock-bites', name: 'Lock bites',
+    steps: [{ id: 'impl', agentSlug: 'agent-check', label: 'Implement', next: [] }],
+  }
+  const run = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'K-1', watch: 'direct-invocation', autoRun: true, projectDir: dir })).id,
+    TIMEOUT,
+  )
+  const step = run.steps.find(s => s.stepId === 'impl')
+  assert.equal(step.status, 'failed',
+    `a step that writes a test it does not own is stopped; it was ${step.status}`)
+  assert.match(step.error ?? '', /app\.spec\.ts/, 'and the test file it touched is named')
+  assert.match(step.error ?? '', /does not own/, 'with the reason')
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('workflowRunner: all assertions passed')
