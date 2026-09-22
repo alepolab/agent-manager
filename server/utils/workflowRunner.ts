@@ -8,7 +8,7 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } from '../../shared/utils/runClock.ts'
-import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
+import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, toWorkflowLike, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
@@ -31,7 +31,7 @@ export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { getClaudeDir } from './claudeDir.ts'
+import { getClaudeDir, safeSegment } from './claudeDir.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -1383,9 +1383,10 @@ async function dispatchAncestry(run: WorkflowRun): Promise<string[]> {
 
 /** One path segment, from a key that came out of an artifact a person wrote.
  *  Rejecting is not an option here - every entry must get a workspace - so
- *  this rewrites, and the result is only ever a directory name. */
-export const workspaceSegment = (key: string) =>
-  key.replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^\.+/, '_').slice(0, 80) || 'entry'
+ *  this rewrites, and the result is only ever a directory name. The rule lives
+ *  in claudeDir beside the containment check that depends on it; two copies of
+ *  it is how one of them ends up laxer than the other. */
+export const workspaceSegment = safeSegment
 
 /**
  * The child's opening prompt: the entry it was dispatched for.
@@ -1437,7 +1438,7 @@ async function startChild(item: DispatchItem): Promise<{ run: WorkflowRun, queue
   if (!wf) throw new Error(`there is no workflow "${item.slug}" on this instance`)
   if (!wf.steps.length) throw new Error(`workflow "${item.slug}" has no steps`)
   return startOrQueue({
-    workflow: { slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, steps: wf.steps },
+    workflow: toWorkflowLike(wf),
     initialPrompt: item.initialPrompt,
     // An honest third answer to "what triggered this?", carrying the run that
     // did. `watch` is a free string in the evidence bundle schema - only
@@ -2375,7 +2376,7 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   }))
 
   try {
-    await beginRun({ slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, steps: wf.steps }, {
+    await beginRun(toWorkflowLike(wf), {
       product: run.product, projectDir: run.projectDir, ticketKey: run.ticketKey, workspace,
     }, async (baseCommit) => {
       run.baseCommit = baseCommit

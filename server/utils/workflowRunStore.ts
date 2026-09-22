@@ -281,3 +281,17 @@ export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, n
     return null
   }
 }
+
+/** The `workflow:` argument every starter hands startRun or startOrQueue.
+ *
+ *  It exists because writing that object literal by hand is how `group` and
+ *  `notifyChannel` went missing from four of the five start paths. Both fields
+ *  decide something the run cannot recover later: `group` is the cap the run
+ *  counts against, and `notifyChannel` is who hears about it - absent, it falls
+ *  through to a channel literally named `default`. newRunInput threads both
+ *  correctly, so the only way to lose them is at the call site. */
+export function toWorkflowLike<T extends { slug: string, name: string, group?: string, notifyChannel?: string, steps: any[] }>(
+  wf: T,
+): { slug: string, name: string, group?: string, notifyChannel?: string, steps: any[] } {
+  return { slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, steps: wf.steps }
+}

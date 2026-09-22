@@ -8,7 +8,7 @@
  * scripts/test-schedule-runner.mjs has to import this under plain node.
  */
 import { workspaceRootFor } from './workspace.ts'
-import { findRunInWorkspace, loadWorkflowSteps } from './workflowRunStore.ts'
+import { findRunInWorkspace, loadWorkflowSteps, toWorkflowLike } from './workflowRunStore.ts'
 import { startOrQueue, workspaceSegment, WorkspaceBusyError } from './workflowRunner.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../shared/utils/workflowParameters.ts'
 import { join } from 'node:path'
@@ -102,7 +102,7 @@ export async function realScheduleStarter(schedule: Schedule): Promise<ScheduleS
 
   try {
     const { run, queued } = await startOrQueue({
-      workflow: { slug: workflow.slug, name: workflow.name, group: workflow.group, steps: workflow.steps },
+      workflow: toWorkflowLike(workflow),
       initialPrompt: schedule.initialPrompt,
       parameters: values,
       projectDir,

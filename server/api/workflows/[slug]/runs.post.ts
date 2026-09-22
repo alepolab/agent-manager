@@ -1,7 +1,7 @@
 import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
-import { findRunInWorkspace } from '../../../utils/workflowRunStore'
+import { findRunInWorkspace, toWorkflowLike } from '../../../utils/workflowRunStore'
 import { canonicalProjectDir, runWorkspace } from '../../../utils/workspace'
 import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
@@ -100,7 +100,13 @@ export default defineEventHandler(async (event) => {
 
   try {
     return await startRun({
-      workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
+      // toWorkflowLike, not a literal: a manual start ignores the cap on
+      // purpose, but it still OCCUPIES a slot - see startOrQueue. Dropping
+      // `group` here filed the run under `default`, so inFlightForGroup read 0
+      // for the group it was really working in and the drain launched two more
+      // beside it. `notifyChannel` went the same way, to a channel named
+      // `default`.
+      workflow: toWorkflowLike(workflow),
       initialPrompt,
       ...(body.productKey ? { productKey: body.productKey } : {}),
       // This route is the manual/API start path, never a watch dispatch — the
