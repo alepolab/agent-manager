@@ -26,6 +26,7 @@
  * nothing", the same tolerance it already gives the file-backed stub.
  */
 import { adfToPlainText } from './adf.ts'
+import { planBriefFor } from './planBrief.ts'
 import { resolveJiraCredentials, jiraAuthHeader } from './jiraCredentials.ts'
 import type { TicketSource } from './ticketSource.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
@@ -186,14 +187,25 @@ export async function viewIssue(key: string, env: Record<string, string> = {}, f
   }
 }
 
-/** The text a run should start from for one ticket: key, summary, labels and description. */
+/**
+ * The text a run should start from for one ticket: key, summary, labels and
+ * description — plus the implementation brief, where a plan has one.
+ *
+ * The brief is appended here rather than written back to Jira. The ticket
+ * belongs to the customer and states the outcome they want; the sequencing,
+ * the dependencies, what closes each task and which pairs must ship together
+ * are ours, change once a sprint, and are exactly what a run otherwise has to
+ * rediscover from a summary and a description.
+ */
 export function ticketText(issue: JiraIssueView): string {
+  const brief = planBriefFor(issue.key)
   return [
     `${issue.key}: ${issue.summary}`,
     `URL: ${issue.url}`,
     issue.labels.length ? `Labels: ${issue.labels.join(', ')}` : '',
     '',
     issue.description,
+    ...(brief ? [brief] : []),
   ].filter((l, i) => l !== '' || i === 3).join('\n')
 }
 
