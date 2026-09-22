@@ -97,19 +97,38 @@ const { settings, load: loadSettings } = useSettings()
 const { me, signOut, can, role, viewingAs, viewAs } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
 const labs = computed(() => settings.value?.agentManager?.labs === true)
+/**
+ * Ordered by how often a person goes there, not by the order the app was
+ * built in.
+ *
+ * It was Dashboard, Agents, Workflows, Runs, Board… — which is the build
+ * order, and CLAUDE.md records why: this began as "a GUI layer on top of the
+ * ~/.claude directory" and the pipeline was added later. So the six file-type
+ * browsers outranked the three screens the job actually uses, and Runs, Board
+ * and Watches — daily, daily, weekly — sat at positions 4, 5 and 6, the
+ * serial-position trough where recall is worst and where primacy and recency
+ * protect nothing.
+ *
+ * The groups are the job, in order: decide, then supervise, then author.
+ * `navSections` below draws a rule between them, so the grouping is legible
+ * rather than implied by adjacency.
+ */
 const navTopAll = [
-  { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
-  { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
-  { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
-  { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
-  { label: 'Board', icon: 'i-lucide-gauge', to: '/board' },
-  { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
-  { label: 'Team', icon: 'i-lucide-users', to: '/team' },
-  { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
-  { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },
-  { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins' },
-  { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp' },
-  { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
+  // Decide — many times a day.
+  { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/', group: 'decide' },
+  { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs', group: 'decide' },
+  { label: 'Board', icon: 'i-lucide-gauge', to: '/board', group: 'decide' },
+  // Supervise — weekly to monthly.
+  { label: 'Watches', icon: 'i-lucide-radio', to: '/watches', group: 'supervise' },
+  { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows', group: 'supervise' },
+  { label: 'Team', icon: 'i-lucide-users', to: '/team', group: 'supervise' },
+  // Author — rarely, and never in the middle of a decision.
+  { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents', group: 'author' },
+  { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills', group: 'author' },
+  { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands', group: 'author' },
+  { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins', group: 'author' },
+  { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp', group: 'author' },
+  { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles', group: 'author' },
 ]
 
 /**
@@ -328,9 +347,17 @@ watch(role, refreshWaiting)
         <!-- Primary Nav -->
         <nav class="flex-1 pt-1 space-y-0.5 overflow-y-auto" :class="sidebarCollapsed ? 'px-1.5' : 'px-2.5'">
           <!-- Top Section -->
+          <template v-for="(link, i) in navTop" :key="link.to">
+            <!-- A rule where the job changes, so the grouping is a fact on
+                 screen rather than an inference from adjacency. Drawn from
+                 the data, so it cannot drift out of step with the order. -->
+            <div
+              v-if="i > 0 && link.group !== navTop[i - 1]?.group"
+              class="my-1.5" :class="sidebarCollapsed ? 'mx-1' : 'mx-2'"
+              style="border-top: 1px solid var(--border-subtle);"
+              aria-hidden="true"
+            />
           <NuxtLink
-            v-for="link in navTop"
-            :key="link.to"
             :to="link.to"
             class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
@@ -362,6 +389,7 @@ watch(role, refreshWaiting)
               </span>
             </template>
           </NuxtLink>
+          </template>
 
           <!-- Separator 1 -->
           <div class="my-3" :class="sidebarCollapsed ? 'mx-1' : 'mx-2'" style="border-top: 1px solid var(--border-subtle);" />
