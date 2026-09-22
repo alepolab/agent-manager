@@ -518,6 +518,7 @@ rather than intent.
 | BR | What is missing |
 |---|---|
 | BR-05 | Role ownership is enforced; **actor identity is not** — the same person may answer IMPL and VERIFY |
+| BR-06 | Mostly built, and better than this document first claimed: `classification.ts` takes an agent's proposal, derives a floor from the paths actually touched, adds a light model read of those files for the risk no path rule can see, and lets the floor only ever RAISE. The residual — an unavailable risk read reading as a clean one — is now closed. What remains is that a low class still rests on a proposal when the read succeeds and finds nothing, which is the honest limit of the evidence |
 | BR-11, BR-33, BR-34, BR-35, BR-36 | The review personas are written as definitions but **are not seeded**, so nothing runs them |
 | BR-15, BR-38 | The registry can now record per-class commands and report locations, and reports eligibility — but 16 products still read `CONFIRM` and 22 of 23 declare no report location |
 | BR-17 | A security gate exists in the template; **no scanner is wired behind it** |
@@ -527,7 +528,7 @@ rather than intent.
 | BR | Why it matters |
 |---|---|
 | BR-01 – BR-04 | The fact-provenance substrate. Without it a gate still shows prose |
-| BR-06 | Blast radius is still agent-authored, and it still decides whether any human is asked — **a live defect, not a future one** |
+
 | BR-10, BR-12, BR-13, BR-14 | The acceptance-spec pipeline |
 | BR-16 | Visual baselines: no capture, no comparison |
 | BR-18 | Multi-repo as one unit; the registry flag still has zero readers |
@@ -538,8 +539,8 @@ rather than intent.
 | BR-31, BR-32 | Environment as a property of a verdict |
 | BR-39, BR-40 | Rollback, post-deploy verification, production feedback |
 
-**Count: 7 satisfied with a check or a pre-existing control that this session
-verified, 4 more resting on controls that predate it, 8 partial, 21 not built.**
+**Count: 8 satisfied with a runnable check, 4 more resting on controls that
+predate this work, 8 partial, 20 not built.**
 The requirements are complete as a specification. They are roughly a quarter
 implemented, and the largest single gap — BR-01 to BR-04 — is the substrate
 everything in the "not built" column sits on.
@@ -965,11 +966,21 @@ these can express up-front executable rows, and no mitigation is proposed:
 
 Independent of whether this design is built.
 
-1. **An agent-written string decides whether any human is asked.** Blast radius
-   is read from agent-written `meta.json` (`workflowRunner.ts:2060-2076`), and
-   `docs`/`ui_parsing` map to `auto`, which skips the gate entirely
-   (`oversight.ts:42-43`, `workflowRunner.ts:1877-1878`). An ordinary intake
-   misclassification removes every human gate from a run. Live now.
+1. ~~**An agent-written string decides whether any human is asked.**~~
+   **Corrected.** This document asserted it twice and it was wrong.
+   `shared/utils/classification.ts` already implements proposal-plus-floor: the
+   runner derives a floor from the paths the change actually touched, adds a
+   light model read of those files for the danger no path rule can see, and
+   `adopt` lets the floor only ever RAISE the class. It ratchets, so no later
+   step can lower what evidence established.
+
+   The real residual was narrower and is now fixed: `agentFloorFrom` returned
+   `string | null`, so an unavailable model was indistinguishable from a clean
+   read — and since a LOW class rests entirely on the proposal (the floor never
+   asserts one), a light-agent outage silently switched every gate off for any
+   run claiming `docs` or `ui_parsing`. The read now reports whether it
+   happened, and an uncorroborated low claim leaves the run unclassified, which
+   stops. See `scripts/test-risk-read-failure.mjs`.
 2. **`engineering/registry/watches.yaml` is not read at runtime**
    (`teamSync.ts:467`). Whatever safety its `max_blast_radius`,
    `daily_dispatch_cap` and `mode: shadow` entries appear to provide, the
