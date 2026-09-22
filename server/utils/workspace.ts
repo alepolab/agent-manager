@@ -290,6 +290,14 @@ export const worktreeDirFor = (checkout: string, branch: string) => `${checkout}
  * recorded it) is reused, never rebuilt over work.
  */
 export async function ensureRunBranch(path: string, branch: string, base?: string): Promise<string[]> {
+  // Serialised with every other worktree mutation on this clone: git locks the
+  // repository for add/remove/prune, so a settled run handing its worktree
+  // back while this one cuts its own made one of them fail — from a run that
+  // did nothing wrong.
+  return onClone(path, () => ensureRunBranchNow(path, branch, base))
+}
+
+async function ensureRunBranchNow(path: string, branch: string, base?: string): Promise<string[]> {
   const root = worktreeDirFor(path, branch)
   const out: string[] = []
   for (const r of [path, ...nestedRepos(path)]) {
@@ -488,6 +496,28 @@ export async function artifactsWritable(): Promise<{ ok: boolean, path: string, 
   }
 }
 
+/**
+ * Worktree mutations on one clone, serialised.
+ *
+ * git takes a lock per repository for `worktree add`, `remove` and `prune`, so
+ * two of them at once means one fails — and with groups running in parallel
+ * and a settled run handing its worktree back, that is now the ordinary case
+ * rather than a rarity. The failure is the worst kind: "could not create the
+ * run worktree", from a run that did nothing wrong.
+ *
+ * Per clone, not global: two repositories have nothing to contend over, and
+ * serialising them would make every parallel group wait on every other.
+ */
+const worktreeLocks = new Map<string, Promise<unknown>>()
+
+function onClone<T>(clone: string, work: () => Promise<T>): Promise<T> {
+  const prev = worktreeLocks.get(clone) ?? Promise.resolve()
+  const next = prev.then(work, work)
+  // Keep the chain alive but never let a rejection poison the next caller.
+  worktreeLocks.set(clone, next.then(() => {}, () => {}))
+  return next
+}
+
 export interface WorktreeCleanup { removed: boolean, reason: string }
 
 /**
@@ -517,6 +547,10 @@ export async function cleanupRunWorktree(worktree: string | undefined): Promise<
   if (!worktree || !worktree.includes('@')) return { removed: false, reason: 'not a run worktree' }
   const clone = worktree.split('@')[0]!
   if (!existsSync(clone)) return { removed: false, reason: 'its clone is gone' }
+  return onClone(clone, () => cleanupNow(clone, worktree))
+}
+
+async function cleanupNow(clone: string, worktree: string): Promise<WorktreeCleanup> {
 
   // Prune first: a registration whose directory has already been removed is
   // the thing that blocks the next run, and it costs nothing to clear.
