@@ -6,13 +6,44 @@
  * can import it under plain node.
  */
 
+/**
+ * What has to be true of a step's outcome for one of its edges to be taken.
+ *
+ * Drawn only from outcomes this engine ALREADY computes, so a conditional edge
+ * needs no new vocabulary from an agent:
+ *
+ * - `pass` / `fail`  the step's own stated Review Result (parseReviewVerdict)
+ * - `approved` / `rejected`  how a person answered the step's gate
+ * - `default`  taken only when no conditional sibling matched — the else arm
+ *
+ * An edge with no condition is unconditional and always taken, which is every
+ * edge that existed before this type did.
+ */
+export type EdgeCondition = 'pass' | 'fail' | 'approved' | 'rejected' | 'default'
+
+/** The outcome a completing step reports, against which its edges are judged. */
+export type StepOutcome = 'pass' | 'fail' | 'approved' | 'rejected'
+
+export interface GraphEdge {
+  to: string
+  when?: EdgeCondition
+}
+
 export interface GraphNode {
   id: string
-  /** Explicit successors. Undefined (legacy workflows) means "the next node in array order". */
-  next?: string[]
+  /**
+   * Explicit successors. Undefined (legacy workflows) means "the next node in
+   * array order". A bare string is an unconditional edge; `{ to, when }` is
+   * taken only when the source's outcome matches.
+   */
+  next?: (string | GraphEdge)[]
   /** How many times this node may run in one execution. Guards cycles. */
   maxVisits?: number
 }
+
+/** The target of an edge, however it was written. */
+export const edgeTarget = (e: string | GraphEdge): string => (typeof e === 'string' ? e : e.to)
+const edgeWhen = (e: string | GraphEdge): EdgeCondition | undefined => (typeof e === 'string' ? undefined : e.when)
 
 export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
 
@@ -25,6 +56,15 @@ export interface RunState {
   armed: Record<string, boolean>
   /** Set when a node was armed over a back edge - names the node that fired it. */
   triggeredBy: Record<string, string>
+  /**
+   * Every edge whose source has completed, and whether that edge was taken.
+   *
+   * A conditional edge is only decided once its source reports an outcome, so
+   * "not in this map" and "decided false" are different facts and a join has to
+   * tell them apart: the first means still waiting, the second means this path
+   * is dead and the target may be settled without it.
+   */
+  edges: Record<string, boolean>
   totalRuns: number
 }
 
@@ -35,6 +75,13 @@ export interface WorkflowGraph {
   forwardPreds: Record<string, string[]>
   backEdges: Set<string>
   entries: string[]
+  /**
+   * The condition on each edge, by `edgeKey`. An edge absent from this map is
+   * unconditional — which is every edge in every workflow written before
+   * conditions existed, so layout, back-edge classification and join semantics
+   * are untouched for them.
+   */
+  conditions: Record<string, EdgeCondition>
 }
 
 export const DEFAULT_MAX_VISITS = 3
@@ -150,13 +197,23 @@ function findBackEdges(nodes: GraphNode[], succ: Record<string, string[]>): Set<
 export function buildGraph(nodes: GraphNode[]): WorkflowGraph {
   const ids = new Set(nodes.map(n => n.id))
   const succ: Record<string, string[]> = {}
+  const conditions: Record<string, EdgeCondition> = {}
 
   nodes.forEach((node, i) => {
     if (node.next === undefined) {
       const following = nodes[i + 1]
       succ[node.id] = following ? [following.id] : []
     } else {
-      succ[node.id] = node.next.filter(id => ids.has(id))
+      // Conditions are recorded beside the shape, not inside it: every existing
+      // reader of `succ` — layout, back-edge classification, ancestorsOf — asks
+      // "where can this go", which a condition does not change. Only arming
+      // consults `conditions`.
+      const kept = node.next.filter(e => ids.has(edgeTarget(e)))
+      succ[node.id] = kept.map(edgeTarget)
+      for (const e of kept) {
+        const when = edgeWhen(e)
+        if (when) conditions[edgeKey(node.id, edgeTarget(e))] = when
+      }
     }
   })
 
@@ -174,7 +231,12 @@ export function buildGraph(nodes: GraphNode[]): WorkflowGraph {
   // A graph that is one closed loop has no natural entry - start at the first node.
   if (!entries.length && nodes.length) entries = [nodes[0]!.id]
 
-  return { nodes, succ, forwardPreds, backEdges, entries }
+  return { nodes, succ, forwardPreds, backEdges, entries, conditions }
+}
+
+/** Does an outcome satisfy a condition? `default` is resolved by the caller. */
+function matches(when: EdgeCondition, outcome: StepOutcome | undefined): boolean {
+  return when !== 'default' && when === outcome
 }
 
 /**
@@ -203,7 +265,7 @@ export function ancestorsOf(graph: WorkflowGraph, id: string): string[] {
 }
 
 export function initRunState(graph: WorkflowGraph): RunState {
-  const state: RunState = { status: {}, visits: {}, armed: {}, triggeredBy: {}, totalRuns: 0 }
+  const state: RunState = { status: {}, visits: {}, armed: {}, triggeredBy: {}, edges: {}, totalRuns: 0 }
   for (const node of graph.nodes) {
     state.status[node.id] = 'pending'
     state.visits[node.id] = 0
@@ -247,14 +309,119 @@ export function markRunning(state: RunState, id: string): void {
  * a forward edge arms only once every forward predecessor of the target has completed,
  * which is what makes a join wait for all of its branches.
  */
-export function markCompleted(graph: WorkflowGraph, state: RunState, id: string): void {
+export function markCompleted(
+  graph: WorkflowGraph,
+  state: RunState,
+  id: string,
+  outcome?: StepOutcome,
+): void {
   state.status[id] = 'completed'
-  for (const target of graph.succ[id] ?? []) {
-    if (graph.backEdges.has(edgeKey(id, target))) {
+
+  // Decide every out-edge before arming anything. `default` means "no
+  // conditional sibling matched", so it cannot be judged one edge at a time.
+  const out = graph.succ[id] ?? []
+  const anyConditionalMatched = out.some((t) => {
+    const when = graph.conditions[edgeKey(id, t)]
+    return when !== undefined && matches(when, outcome)
+  })
+
+  for (const target of out) {
+    const key = edgeKey(id, target)
+    const when = graph.conditions[key]
+    const taken = when === undefined
+      ? true
+      : when === 'default'
+        ? !anyConditionalMatched
+        : matches(when, outcome)
+    state.edges[key] = taken
+    if (!taken) continue
+    if (graph.backEdges.has(key)) {
       armNode(state, target, id)
-    } else if ((graph.forwardPreds[target] ?? []).every(p => state.status[p] === 'completed')) {
+    } else if ((graph.forwardPreds[target] ?? []).every(p => settled(state, p))) {
+      // The original rule, with one widening: a SKIPPED predecessor counts as
+      // settled. Without that, a node downstream of a branch would wait forever
+      // on the arm the run did not take. `failed` is still not settled — a
+      // failed predecessor blocks its target exactly as it always has.
       armNode(state, target)
     }
+  }
+
+  settleForward(graph, state)
+}
+
+const settled = (state: RunState, id: string) => state.status[id] === 'completed' || state.status[id] === 'skipped'
+
+/**
+ * Everything a still-runnable node could still reach.
+ *
+ * Deliberately ignores conditions: this asks "could the run arrive here at
+ * all", and a condition that is false now may be true on the next lap of a
+ * loop. Being conservative in this direction leaves a node `pending` a little
+ * longer than strictly necessary, which costs nothing; being conservative the
+ * other way would skip a step the run was still going to need.
+ */
+function reachableFromRunnable(graph: WorkflowGraph, state: RunState): Set<string> {
+  const seen = new Set<string>()
+  const queue = graph.nodes
+    .filter(n => state.armed[n.id] || state.status[n.id] === 'running')
+    .map(n => n.id)
+  while (queue.length) {
+    const id = queue.shift()!
+    for (const target of graph.succ[id] ?? []) {
+      if (seen.has(target)) continue
+      seen.add(target)
+      queue.push(target)
+    }
+  }
+  return seen
+}
+
+/**
+ * Skip what this run can no longer reach.
+ *
+ * Arming is done above, by the same rule as always. This pass exists only for
+ * the case conditions introduce: a branch the run did NOT take leaves its
+ * target with a forward predecessor that is never going to complete, so the
+ * target would sit `pending` forever and any join below it would wait on a step
+ * that will never run.
+ *
+ * A pending node whose every forward in-edge has been decided false is
+ * unreachable on this run. It becomes `skipped`, its own out-edges are marked
+ * dead, and the loop repeats — because skipping one node is what settles the
+ * next. Nothing here ever arms, and nothing here touches a node whose edges are
+ * still undecided, so a graph with no conditions never enters this branch at
+ * all: its edges are all taken.
+ */
+function settleForward(graph: WorkflowGraph, state: RunState): void {
+  // Bounded by node count: each pass must skip at least one node to continue,
+  // so this cannot spin even on a cyclic graph.
+  for (let pass = 0; pass <= graph.nodes.length; pass++) {
+    let changed = false
+    const live = reachableFromRunnable(graph, state)
+    for (const node of graph.nodes) {
+      const id = node.id
+      if (state.status[id] !== 'pending' || state.armed[id]) continue
+      const preds = graph.forwardPreds[id] ?? []
+      if (!preds.length) continue // an entry; never skipped for want of a parent
+
+      const allDecided = preds.every(p => state.edges[edgeKey(p, id)] !== undefined)
+      if (!allDecided) continue
+      if (preds.some(p => state.edges[edgeKey(p, id)] === true)) continue
+      // Decided against on every arm — but a LOOP can change that answer. A
+      // conditional back edge means the step that judged this may run again
+      // and judge differently, so the exit of a retry loop is not dead while
+      // the loop still has a lap left. Skipping it here is how the exit of
+      // `work -> check -(fail)-> work` disappeared the first time round.
+      if (live.has(id)) continue
+
+      state.status[id] = 'skipped'
+      state.armed[id] = false
+      for (const target of graph.succ[id] ?? []) {
+        if (state.edges[edgeKey(id, target)] === undefined) state.edges[edgeKey(id, target)] = false
+      }
+      changed = true
+    }
+    if (!changed) return
   }
 }
 

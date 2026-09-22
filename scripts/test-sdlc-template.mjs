@@ -20,6 +20,7 @@
 import assert from 'node:assert/strict'
 import { workflowTemplates, materializeTemplateSteps } from '../app/utils/workflowTemplates.ts'
 import { oversightForGate } from '../shared/utils/oversight.ts'
+import { edgeTarget } from '../shared/utils/workflowGraph.ts'
 
 const t = workflowTemplates.find(x => x.id === 'oma-sdlc-jira-to-pr')
 assert.ok(t, 'the full-lifecycle template must be registered')
@@ -31,7 +32,8 @@ assert.deepEqual(dupes, [], `repeated agentTemplateId makes next routing ambiguo
 
 // Every `next` target exists in the template.
 for (const step of t.steps) {
-  for (const target of step.next ?? []) {
+  for (const e of step.next ?? []) {
+    const target = edgeTarget(e)
     assert.ok(ids.includes(target), `${step.agentTemplateId} points next at "${target}", which is not a step in this template`)
   }
 }
@@ -91,4 +93,25 @@ for (const l of unlocked) {
   assert.ok(!/^Implement /.test(l), `an implementation step must never hold the test unlock: ${l}`)
 }
 
-console.log(`sdlc template: ${steps.length} steps, ${gates.length} gates, story+spec before implementation, floored gates survive materialization, release stays out of the run`)
+// The verify step BRANCHES rather than ending the run on a refusal. This is
+// the property the whole conditional-edge change exists for: a FAIL goes back
+// to the step that can fix it, a PASS carries on, and exactly one arm is
+// taken. A verdict step with a fail arm must also declare `verdict`, or the
+// runner has no stated outcome to route on.
+{
+  const verify = t.steps.find(s => s.gateKind === 'verify')
+  assert.ok(verify, 'template must carry a verify gate')
+  const arms = (verify.next ?? []).filter(e => typeof e !== 'string' && e.when)
+  assert.ok(arms.length >= 2, 'the verify step must branch, not fan out')
+  const whens = arms.map(a => a.when).sort()
+  assert.deepEqual(whens, ['fail', 'pass'], 'verify must route both a pass and a fail')
+  assert.equal(verify.verdict, true, 'a step that routes on its verdict must declare one')
+  const failArm = arms.find(a => a.when === 'fail')
+  const failTarget = t.steps.find(s => s.agentTemplateId === failArm.to)
+  assert.ok(failTarget, 'the fail arm must point at a real step')
+  assert.ok(/^Implement /.test(failTarget.label),
+    `a FAIL should go back to something that can fix it, not to ${failTarget.label}`)
+  assert.ok(failTarget.maxVisits >= 1, 'the step a FAIL returns to must bound its revisits')
+}
+
+console.log(`sdlc template: ${steps.length} steps, ${gates.length} gates, story+spec before implementation, floored gates survive materialization, verify branches on FAIL, release stays out of the run`)

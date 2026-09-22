@@ -1,5 +1,6 @@
 import type { Role } from '~~/shared/types/role'
 import type { GateKind } from '~~/shared/utils/oversight'
+import type { GraphEdge } from '~~/shared/utils/workflowGraph'
 
 export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
@@ -251,8 +252,17 @@ export interface WorkflowStep {
   id: string
   agentSlug: string
   label: string
-  /** Explicit successors. Absent means "the next step in array order" (legacy workflows). */
-  next?: string[]
+  /**
+   * Explicit successors. Absent means "the next step in array order" (legacy
+   * workflows).
+   *
+   * A bare string is an unconditional edge — several of them out of one step
+   * run in parallel, which is what every workflow written before conditions
+   * did. `{ to, when }` is taken only when this step's outcome matches, which
+   * is how a run branches: a review that FAILs can route back to the step that
+   * can fix it instead of ending the run. See shared/utils/workflowGraph.ts.
+   */
+  next?: (string | GraphEdge)[]
   /** Agent that reviews this step's output and returns CONTINUE / RETRY / ABORT. */
   monitorSlug?: string
   /** How many times this step may run in one execution. Guards cycles. Default 3. */

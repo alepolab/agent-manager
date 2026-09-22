@@ -1,6 +1,7 @@
 import type { WorkflowStep } from '~/types'
 import type { Role } from '~~/shared/types/role'
 import type { GateKind } from '~~/shared/utils/oversight'
+import type { EdgeCondition } from '~~/shared/utils/workflowGraph'
 
 export interface WorkflowTemplateStep {
   agentTemplateId: string
@@ -10,7 +11,7 @@ export interface WorkflowTemplateStep {
    * Absent means "the next step in array order", which is how every template
    * behaved before graphs were expressible here.
    */
-  next?: string[]
+  next?: (string | { to: string, when?: EdgeCondition })[]
   /** `agentTemplateId` of the agent that reviews this step's output. */
   monitorSlug?: string
   /** How many times this step may run in one execution. */
@@ -118,9 +119,19 @@ export function materializeTemplateSteps(
       ...(step.ownerRole ? { ownerRole: step.ownerRole } : {}),
     }
     if (step.next) {
+      // A conditional edge names its target by agentTemplateId exactly as a
+      // bare one does; only the `when` rides along. Translating the target and
+      // dropping the condition would silently turn a branch back into an
+      // unconditional fan-out, which is the failure this whole whitelist is
+      // written to prevent.
       const resolved = step.next
-        .map(target => stepIdByTemplateId[target])
-        .filter((id): id is string => id !== undefined)
+        .map((target) => {
+          const to = typeof target === 'string' ? target : target.to
+          const id = stepIdByTemplateId[to]
+          if (id === undefined) return undefined
+          return typeof target === 'string' || !target.when ? id : { to: id, when: target.when }
+        })
+        .filter((e): e is string | { to: string, when: EdgeCondition } => e !== undefined)
 
       // If every declared target was filtered out, this step's `next` becoming `[]`
       // would silently truncate the workflow here (buildGraph treats an explicit
@@ -665,8 +676,23 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'qa-reviewer',
         label: 'Verify: Unit, Integration, Negative & Regression',
-        next: ['cto-reviewer'],
+        // The first conditional branch in a shipped template, and the reason
+        // conditional edges exist. A verdict step that FAILs used to end the
+        // run: correct when a refusal has nowhere to go, wasteful when the
+        // step that can fix it is right there. On FAIL the work goes back to
+        // the backend implementation, bounded by that step's maxVisits; on
+        // PASS it carries on. Only one arm is ever taken, and the arm not
+        // taken is skipped rather than left pending, so nothing downstream
+        // waits on a step that will not run.
+        next: [
+          { to: 'backend-engineer', when: 'fail' },
+          { to: 'cto-reviewer', when: 'pass' },
+        ],
         contextMode: 'ancestors',
+        // `verdict` is what makes the branch legible: the step must open with
+        // Review Result: PASS / WARNING / FAIL, and the runner routes on it
+        // rather than on prose a regex has to guess at.
+        verdict: true,
         // QA, and never the actor who answered the implementation gate.
         approval: true,
         gateRole: 'qa',
