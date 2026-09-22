@@ -1552,6 +1552,43 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(g3.status, 'completed')
   assert.ok(calls.includes('agent-esc'), 'the approved branch runs once a person says yes')
 
+  // ── 27e. More gates in one wave than MAX_CONCURRENCY still runs the rest ─
+  // 27c splits a wave of two. The split used to be applied to
+  // readyNodes().slice(0, MAX_CONCURRENCY), so once MAX_CONCURRENCY gated
+  // steps were ready together they filled the slice, `runnable` came out
+  // empty, and the run raised its gate with an ungated step sitting just past
+  // the cut - waiting on a person for no reason, which is exactly what the
+  // split exists to prevent.
+  {
+    const manyGates = {
+      slug: 'many-gates', name: 'Many Gates',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Fan', next: ['q1', 'q2', 'q3', 'q4', 'free'] },
+        { id: 'q1', agentSlug: 'agent-q1', label: 'Gate 1', next: [], approval: true },
+        { id: 'q2', agentSlug: 'agent-q2', label: 'Gate 2', next: [], approval: true },
+        { id: 'q3', agentSlug: 'agent-q3', label: 'Gate 3', next: [], approval: true },
+        { id: 'q4', agentSlug: 'agent-q4', label: 'Gate 4', next: [], approval: true },
+        { id: 'free', agentSlug: 'agent-free', label: 'Needs nobody', next: [] },
+      ],
+    }
+    runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `output of ${agentSlug}` })
+    calls.length = 0
+    let m = await runner.startRun({ workflow: manyGates, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    m = await runner.waitForSettled(m.id, TIMEOUT)
+
+    assert.equal(m.status, 'paused', 'four gates and one free step: the run ends up asking, once there is nothing else to run')
+    assert.ok(calls.includes('agent-free'),
+      'THE REGRESSION: the ungated step ran. Slicing before the gate split left it behind the four gates and the run asked a person while real work was still schedulable')
+    assert.equal(m.steps.find(s => s.stepId === 'free').status, 'completed')
+    // Every gate is still offered, not just the first MAX_CONCURRENCY of them.
+    assert.deepEqual([...m.nextStepIds].sort(), ['q1', 'q2', 'q3', 'q4'],
+      'nextStepIds names every gated step; truncating it to the concurrency cap would lose steps from the run page')
+    for (const id of ['q1', 'q2', 'q3', 'q4']) {
+      assert.equal(m.steps.find(s => s.stepId === id).status, 'pending', `${id} is deferred, not skipped`)
+    }
+    assert.equal((await runner.stopRun(m.id)).status, 'stopped')
+  }
+
   // ── 27d. A missing artifact skips; the run does not silently look normal ─
   runner.setAgentCaller(gateWriting(null, null))
   calls.length = 0

@@ -1824,8 +1824,14 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   const conditions = await resolveConditions(l, run)
   if (conditions.failed) return failRunAfterWave(l, run, run.currentStepIds)
 
-  const wave = readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
-  if (!wave.length && l.waiting) {
+  // The FULL ready set, not the MAX_CONCURRENCY slice: which of these are
+  // gated has to be known before anything is dropped. Slicing first meant
+  // that if the first MAX_CONCURRENCY ready nodes happened to all be gated,
+  // `runnable` came out empty and the run raised its gate even though a
+  // perfectly runnable node was sitting just past the cut - the stall the
+  // split below exists to avoid, reappearing at three concurrent gates.
+  const ready = readyNodes(l.graph, l.state)
+  if (!ready.length && l.waiting) {
     // Nothing can run because a step is waiting on the operator: that is a
     // pause with a question, never a stuck run.
     run.status = 'paused'
@@ -1835,7 +1841,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     await publish(run)
     return run
   }
-  if (!wave.length) {
+  if (!ready.length) {
     // Nothing can run but steps remain: that is a stuck run, never a finished one.
     const stuck = run.steps.filter(s => s.status === 'pending')
     if (stuck.length) {
@@ -1873,8 +1879,14 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // armed and readyNodes offers it again on every wave until it is the only
   // thing standing - which is exactly the moment the question is worth asking,
   // because by then the answer is all that the run is waiting on.
-  const gated = wave.filter(id => stepOf(l, id)?.approval && !l.approved.has(id))
-  const runnable = wave.filter(id => !gated.includes(id))
+  //
+  // Gated-ness is decided over the whole ready set; only the RUNNABLE half is
+  // then capped at MAX_CONCURRENCY. `gated` deliberately keeps every gated
+  // node, because it is published verbatim as run.nextStepIds below and
+  // truncating it would drop steps from the run page.
+  const gatedSet = new Set(ready.filter(id => stepOf(l, id)?.approval && !l.approved.has(id)))
+  const gated = [...gatedSet]
+  const runnable = ready.filter(id => !gatedSet.has(id)).slice(0, MAX_CONCURRENCY)
   const gate = runnable.length ? undefined : gated[0]
   if (gate) {
     const step = stepOf(l, gate)
