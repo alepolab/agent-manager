@@ -117,10 +117,29 @@ async function onCheckUpdates() {
   }
 }
 
+/** The last text this page put in the box. Anything else in there is typed. */
+const rawSynced = ref('')
+const rawDirty = computed(() => rawJson.value !== rawSynced.value)
+/** A draft exists AND the saved file has moved on underneath it. */
+const rawStale = computed(() => rawDirty.value && !!settings.value
+  && JSON.stringify(settings.value, null, 2) !== rawSynced.value)
+
 watch(settings, () => syncRawJson())
 
-function syncRawJson() {
-  if (settings.value) rawJson.value = JSON.stringify(settings.value, null, 2)
+/**
+ * Put the saved settings in the editor — unless someone is mid-edit.
+ *
+ * Every structured control writes `settings`, and that write lands here. With
+ * no guard the textarea is replaced under the cursor: no warning, no undo, and
+ * nothing on screen that says a draft ever existed. Keeping the draft instead
+ * means the two can disagree, so the page says so rather than picking a
+ * winner silently.
+ */
+function syncRawJson(force = false) {
+  if (!settings.value) return
+  if (!force && rawDirty.value) return
+  rawJson.value = JSON.stringify(settings.value, null, 2)
+  rawSynced.value = rawJson.value
 }
 
 // ---- Structured field helpers ----
@@ -274,6 +293,9 @@ async function saveRaw() {
   try {
     const parsed = JSON.parse(rawJson.value)
     await save(parsed)
+    // Re-read from what was actually stored, not from what was typed: the
+    // draft is only settled once the server has agreed to it.
+    syncRawJson(true)
     toast.add({ title: 'Settings saved', color: 'success' })
   } catch (e: any) {
     toast.add({ title: 'Invalid JSON', description: e.message, color: 'error' })
@@ -341,7 +363,18 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         >
           {{ viewMode === 'structured' ? 'Raw JSON' : 'Structured' }}
         </button>
-        <UButton v-if="viewMode === 'raw'" label="Save" icon="i-lucide-save" size="sm" :loading="saving" @click="saveRaw" />
+        <!-- A draft survives a mode switch now, so the header has to admit one
+             exists: otherwise "Structured" looks like it discarded the edit. -->
+        <UButton
+          v-if="viewMode === 'raw'"
+          :label="rawDirty ? 'Save changes' : 'Save'"
+          icon="i-lucide-save"
+          size="sm"
+          :variant="rawDirty ? 'solid' : 'ghost'"
+          :loading="saving"
+          @click="saveRaw"
+        />
+        <span v-else-if="rawDirty" class="t-small text-meta">unsaved JSON draft</span>
       </template>
     </PageHeader>
 
@@ -651,6 +684,18 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
     <!-- Raw JSON editor -->
     <div v-else class="px-6 py-4">
+      <!-- The draft used to be replaced under the cursor whenever anything
+           else wrote settings. It is kept now, which means it can be out of
+           date — so say which is which and let the person choose. -->
+      <div
+        v-if="rawStale"
+        class="mb-3 rounded-lg px-3 py-2 t-small flex items-center justify-between gap-3"
+        style="background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.25);"
+        role="status"
+      >
+        <span>settings.json changed while you were editing. Saving replaces it with what is in this box.</span>
+        <UButton label="Discard my edits" size="xs" variant="ghost" color="neutral" @click="syncRawJson(true)" />
+      </div>
       <div
         class="rounded-xl overflow-hidden"
         style="border: 1px solid var(--border-subtle);"
