@@ -135,6 +135,17 @@ export interface ProductMatch {
   stack: { compose: string, topology_default: string, liquibase?: boolean }
   tests: Record<string, string>
   /**
+   * Where each test class writes its MACHINE-READABLE report, and in what
+   * format, from the registry.
+   *
+   * A command alone can only ever yield a whole-suite pass/fail, which is why
+   * an acceptance row could not be scored individually. Absent for a product
+   * that has not declared one — and absent means this product cannot be
+   * scored per case, which is a registry fact rather than a per-run
+   * discovery. See engineering/registry/schemas/products.schema.json.
+   */
+  reports?: Record<string, { glob: string, format: string }>
+  /**
    * The versions this product's build actually needs, as environment variables
    * the agent inherits (JAVA_HOME, NODE_VERSION, …).
    *

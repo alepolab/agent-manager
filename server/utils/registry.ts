@@ -191,6 +191,7 @@ function productMatchFrom(registryPath: string, name: string, p: any): ProductMa
     branches: p.branches ?? {},
     stack: p.stack,
     tests: p.tests ?? {},
+    ...(p.reports && Object.keys(p.reports).length ? { reports: p.reports } : {}),
     ...(p.toolchain && Object.keys(p.toolchain).length ? { toolchain: p.toolchain } : {}),
     ...(existsSync(recipe) ? { recipe } : {}),
   }

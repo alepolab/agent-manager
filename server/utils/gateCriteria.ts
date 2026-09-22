@@ -1,4 +1,6 @@
 import { checkTestLock } from './testLock.ts'
+import { readCapture, caseFactsFrom } from './reportFacts.ts'
+import type { ReportFormat } from '../../shared/utils/testReport.ts'
 import { worldStateOf } from './worldState.ts'
 import { derived, indeterminate, scoreGate, type Criterion, type CriterionResult } from '../../shared/utils/facts.ts'
 import type { WorkflowRun } from '../../shared/types/run'
@@ -109,6 +111,51 @@ export async function criteriaForGate(run: WorkflowRun, dir: string | undefined)
         }),
     bar: { minRuns: 1 },
   })
+
+  // 3. What the product's own test reports actually say, per case.
+  //
+  // Only for a product that declares where its reports land. Twenty-two of
+  // twenty-three declare nothing today, so for those this adds no criterion
+  // at all — which is the honest state. A gate that listed "tests pass" for a
+  // product whose report location nobody has recorded would be asserting
+  // something it cannot read, and that is the failure this whole module
+  // exists to remove.
+  for (const [cls, spec] of Object.entries(run.product?.reports ?? {})) {
+    if (!dir) break
+    const id = `report_${cls}`
+    const question = `every case in the ${cls} suite passes`
+    try {
+      const capture = await readCapture(dir, spec.glob, spec.format as ReportFormat)
+      if (!capture.ok) {
+        criteria.push({ id, question, fact: indeterminate<boolean>(capture.why) })
+        continue
+      }
+      // One capture is one run of the suite. The run count travels with the
+      // fact so meetsBar can apply the schema's three-run floor rather than
+      // this code quietly deciding one is enough.
+      const { cases, facts } = caseFactsFrom([capture], now, spec.glob)
+      const bad = [...cases.entries()].filter(([, a]) => a.verdict !== 'pass')
+      const anyUnproven = [...facts.values()].some(f => f.confidence !== 'derived')
+      criteria.push({
+        id,
+        question: bad.length
+          ? `${question} (${bad.length} of ${cases.size} did not: ${bad.slice(0, 4).map(([k]) => k).join(', ')})`
+          : `${question} (${cases.size} cases)`,
+        fact: anyUnproven && !bad.some(([, a]) => a.verdict === 'fail')
+          // Nothing failed outright, but something could not be judged. That
+          // is not a pass, and saying so is the point.
+          ? indeterminate<boolean>('some cases disagreed across runs or were never observed, so the suite has no verdict')
+          : [...facts.values()].find(f => f.provenance)
+            ? derived(bad.length === 0, {
+                ...[...facts.values()].find(f => f.provenance)!.provenance!,
+                source: spec.glob,
+              })
+            : indeterminate<boolean>('the report parsed but produced no case this gate could pin to a commit'),
+      })
+    } catch (err) {
+      criteria.push({ id, question, fact: indeterminate<boolean>(`could not be read: ${err instanceof Error ? err.message : String(err)}`) })
+    }
+  }
 
   return scoreGate(criteria, now).results
 }

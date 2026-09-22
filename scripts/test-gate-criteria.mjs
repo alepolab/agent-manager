@@ -95,6 +95,43 @@ const run = { id: 'r1', baseCommit: baseline, projectDir: dir }
     'and that is a different problem from a dirty tree, so it reads differently')
 }
 
+// ---- A product that declares its reports gets per-case criteria ---------
+// Twenty-two of twenty-three declare nothing, so for those this adds no
+// criterion at all — a gate must not list a check it cannot perform.
+{
+  const noDecl = byId(await criteriaForGate(run, dir))
+  assert.ok(!Object.keys(noDecl).some(k => k.startsWith('report_')),
+    'a product with no declared report location gets no report criterion, rather than a hopeful one')
+
+  mkdirSync(join(dir, 'build', 'test-results'), { recursive: true })
+  writeFileSync(join(dir, 'build', 'test-results', 'TEST-a.xml'),
+    '<testsuite name="s"><testcase classname="T" name="one"/><testcase classname="T" name="two"><failure message="no">x</failure></testcase></testsuite>')
+
+  const withReports = {
+    ...run,
+    product: { name: 'demo', repos: [], branches: {}, stack: { compose: '', topology_default: '' }, tests: {},
+      reports: { unit: { glob: 'build/test-results/*.xml', format: 'surefire' } } },
+  }
+  const c = byId(await criteriaForGate(withReports, dir))
+  assert.ok(c.report_unit, 'a declared report location produces a criterion')
+  // One capture is one run, and the three-run floor refuses it. That refusal
+  // is the visible form of "a verdict from a single run is not evidence".
+  assert.equal(c.report_unit.status, 'blocked')
+  assert.match(c.report_unit.reasons.join(' '), /ran 1 time/,
+    'and the reviewer is told it is single-run rather than being shown a green')
+  assert.match(c.report_unit.question, /1 of 2 did not: T::two/,
+    'the failing case is named, not counted')
+
+  // A declared location that produced nothing is blocked, never clean: it
+  // usually means the suite never ran.
+  const missing = byId(await criteriaForGate({
+    ...run,
+    product: { ...withReports.product, reports: { unit: { glob: 'no/such/*.xml', format: 'surefire' } } },
+  }, dir))
+  assert.equal(missing.report_unit.status, 'blocked')
+  assert.match(missing.report_unit.reasons.join(' '), /no file matched/)
+}
+
 // ---- worldStateOf tracks the real repository ----------------------------
 {
   const before = await worldStateOf(dir)
