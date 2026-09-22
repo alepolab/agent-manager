@@ -2,6 +2,7 @@
 import { workflowTemplates, materializeTemplateSteps } from '~/utils/workflowTemplates'
 import { agentTemplates } from '~/utils/templates'
 import { planTemplateResolution } from '~/utils/workflowInstantiation'
+import { DEFAULT_GROUP_ID } from '~~/shared/types/workflowGroup'
 
 const { workflows, loading, error, create, fetchAll } = useWorkflows()
 // Fetched once here rather than per card: schedules are not loaded app-wide,
@@ -103,9 +104,17 @@ const savingGroups = ref(false)
 
 async function loadGroups() {
   groups.value = await $fetch<GroupRow[]>('/api/workflow-groups').catch(() => [])
-  // The default group is shown for context but has no row in the file to edit.
-  groupRows.value = groups.value.filter(g => !g.implicit).map(g => ({ ...g }))
+  // The default group is editable too, and it is the only cap most instances
+  // ever need. `capFor` already prefers a saved `default` row over
+  // AGENT_MAX_CONCURRENT_PIPELINES, so this needs no server change - it was
+  // only ever missing because the row was filtered out of the editor. When
+  // nothing names it yet, its cap is prefilled from the env-derived value so
+  // saving the table does not silently change the number in force.
+  groupRows.value = groups.value.map(g => ({ id: g.implicit ? DEFAULT_GROUP_ID : g.id, name: g.name, maxConcurrent: g.maxConcurrent }))
 }
+const isDefaultRow = (row: { id: string }) => row.id === DEFAULT_GROUP_ID
+/** The env var still governs the default group until a row is saved for it. */
+const defaultRowUnsaved = computed(() => groups.value.find(g => g.implicit) !== undefined)
 onMounted(loadGroups)
 // loadGroups resets the editable rows, so it waits while the groups editor is open.
 useAutoRefresh(() => Promise.all([
@@ -127,9 +136,19 @@ async function saveGroups() {
     // The id is derived from the name for a new row and never changed for an
     // existing one: workflows reference the id, so renaming a group must not
     // orphan every workflow that named it.
+    // The default row keeps its id verbatim rather than being re-slugified:
+    // `slugifyGroupId('Ungrouped')` is `ungrouped`, an id `capFor` would never
+    // consult, so the cap would save cleanly and govern nothing. It is also
+    // dropped entirely when it is still at the env-derived value and no row
+    // existed before, so an instance nobody has touched keeps an empty file.
     const payload = groupRows.value
       .filter(g => g.name.trim())
-      .map(g => ({ id: g.id || slugifyGroupId(g.name), name: g.name.trim(), maxConcurrent: Number(g.maxConcurrent) }))
+      .filter(g => !(isDefaultRow(g) && defaultRowUnsaved.value && Number(g.maxConcurrent) === groups.value.find(x => x.implicit)?.maxConcurrent))
+      .map(g => ({
+        id: isDefaultRow(g) ? DEFAULT_GROUP_ID : (g.id || slugifyGroupId(g.name)),
+        name: g.name.trim(),
+        maxConcurrent: Number(g.maxConcurrent),
+      }))
     await $fetch('/api/workflow-groups', { method: 'PUT', body: { groups: payload } })
     await loadGroups()
     showGroups.value = false
@@ -284,6 +303,7 @@ async function saveGroups() {
               <input
                 v-model="g.name" placeholder="SDLC pipelines" class="field-input"
                 style="flex: 1 1 0%; min-width: 0;" :aria-label="`Group ${i + 1} name`"
+                :disabled="isDefaultRow(g)" :title="isDefaultRow(g) ? 'Every workflow that names no group counts here; it cannot be renamed or removed.' : undefined"
               />
               <input
                 v-model.number="g.maxConcurrent" type="number" min="1" step="1" class="field-input"
@@ -293,19 +313,27 @@ async function saveGroups() {
                 <template v-if="g.id">{{ groups.find(x => x.id === g.id)?.inFlight ?? 0 }} running, {{ groups.find(x => x.id === g.id)?.waiting ?? 0 }} waiting</template>
                 <template v-else>new</template>
               </span>
-              <UButton icon="i-lucide-x" size="xs" variant="ghost" color="neutral" class="shrink-0" :aria-label="`Remove group ${i + 1}`" @click="() => { groupRows.splice(i, 1) }" />
+              <!-- The default row has no Remove: deleting it would not delete the
+                   group, only hand its cap back to the env var, which reads as a
+                   cap that vanished. -->
+              <UButton
+                v-if="!isDefaultRow(g)" icon="i-lucide-x" size="xs" variant="ghost" color="neutral" class="shrink-0"
+                :aria-label="`Remove group ${i + 1}`" @click="() => { groupRows.splice(i, 1) }"
+              />
+              <span v-else style="flex: 0 0 1.75rem;" />
             </div>
             <UButton label="Add group" icon="i-lucide-plus" size="xs" variant="ghost" color="neutral" @click="addGroup" />
           </div>
 
-          <!-- Shown, not editable: it is where every ungrouped workflow's runs
-               count, and an operator who cannot see it cannot explain a queued
-               run belonging to no group they created. -->
-          <div v-if="groups.find(g => g.implicit)" class="text-[11px] text-meta">
-            Ungrouped workflows share the default group
-            ({{ groups.find(g => g.implicit)!.maxConcurrent }} at once,
-            {{ groups.find(g => g.implicit)!.inFlight }} running,
-            {{ groups.find(g => g.implicit)!.waiting }} waiting). Set it with AGENT_MAX_CONCURRENT_PIPELINES.
+          <div class="text-[11px] text-meta">
+            <template v-if="defaultRowUnsaved">
+              Ungrouped workflows share the default group. Its cap of
+              {{ groups.find(g => g.implicit)?.maxConcurrent }} comes from AGENT_MAX_CONCURRENT_PIPELINES on this
+              instance, or the built-in default of 2, and applies until you save a cap here.
+            </template>
+            <template v-else>
+              Ungrouped workflows share the default group, whose cap is saved here — AGENT_MAX_CONCURRENT_PIPELINES no longer applies to it.
+            </template>
           </div>
 
           <div class="flex justify-end gap-2 pt-2">

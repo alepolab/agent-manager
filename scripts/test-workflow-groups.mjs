@@ -120,6 +120,34 @@ const file = join(process.env.CLAUDE_DIR, WORKFLOW_GROUPS_FILE_NAME)
   delete process.env.AGENT_MAX_CONCURRENT_PIPELINES
 }
 
+// ══ 7b. and a SAVED default row beats the env var ═════════════════════════
+{
+  // This is why AGENT_MAX_CONCURRENT_PIPELINES does not move into
+  // settings.json: `capFor` already looks the id up in this registry first, so
+  // the group editor is the place the cap is set, and the env var is what
+  // governs an instance where nobody has set one. A second home in
+  // settings.json would give one number two rules that could disagree.
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '5'
+  await groups.replaceGroups([
+    { id: 'sdlc', name: 'SDLC', maxConcurrent: 2 },
+    { id: DEFAULT_GROUP_ID, name: 'Ungrouped', maxConcurrent: 3 },
+  ])
+  assert.equal(await groups.capFor(DEFAULT_GROUP_ID), 3,
+    'THE REQUIREMENT: a cap saved in the Groups editor beats the instance env var')
+  assert.equal(await groups.capFor(undefined), 3, 'including for a workflow that names no group at all')
+
+  await groups.replaceGroups([{ id: 'sdlc', name: 'SDLC', maxConcurrent: 2 }])
+  assert.equal(await groups.capFor(DEFAULT_GROUP_ID), 5,
+    'and removing that row hands the default group back to the env var')
+
+  await assert.rejects(
+    () => groups.replaceGroups([{ id: DEFAULT_GROUP_ID, name: 'Ungrouped', maxConcurrent: 0 }]),
+    /at least 1/,
+    'the default row is validated like any other: 0 is an invisible "never runs again"',
+  )
+  delete process.env.AGENT_MAX_CONCURRENT_PIPELINES
+}
+
 // ══ 8. the file on disk is readable by a person ════════════════════════════
 {
   await groups.replaceGroups([{ id: 'sdlc', name: '  SDLC pipelines  ', maxConcurrent: 2 }])

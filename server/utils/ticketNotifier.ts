@@ -26,6 +26,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { plainTextToAdf } from './adf.ts'
+import { agentManagerSettings, envString, settingString } from './appSettings.ts'
 import { isJiraPostingEnabled, jiraAuthHeader, resolveJiraCredentials } from './jiraCredentials.ts'
 import { PLACEHOLDER_PR, runArtifactsDir } from './runArtifacts.ts'
 import { envForUser } from './users.ts'
@@ -244,7 +245,7 @@ export async function notifyTicketOutcome(
     outcome,
     owner: looked.owner,
     ownerChecked: looked.checked,
-    forVisName: process.env.JIRA_COMMENT_FOR_VIS_NAME?.trim() || undefined,
+    forVisName: envString('JIRA_COMMENT_FOR_VIS_NAME') ?? settingString(agentManagerSettings().jira?.forVisName),
   })
 
   const dir = runArtifactsDir(run.id)

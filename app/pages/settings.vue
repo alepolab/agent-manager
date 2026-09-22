@@ -33,6 +33,44 @@ async function setAgentModel(value: string) {
   toast.add({ title: value ? `Pipeline agents will run on ${MODEL_OPTIONS.find(o => o.value === value)?.label ?? value}` : 'Each agent uses its own model again', color: 'success' })
 }
 /** Per-run caps for new runs. Blank returns to the default; a run that reaches its cap pauses and asks. */
+/**
+ * What this instance is configured to do, read-only. `pinned` is the part that
+ * changes how the form behaves: a field an env var is overriding is disabled
+ * and says so, because until now it accepted a number, toasted "Settings
+ * saved", and then every run used the variable's value instead.
+ */
+interface InstanceInfo {
+  pinned: Record<string, string>
+  automations: { name: string, envVar: string, enabled: boolean, detail?: string }[]
+  paths: { claudeDir: string, agentRunsDir: string, workspaceRoot: string, usersDir: string }
+  secrets: { name: string, set: boolean }[]
+  identity: { authDisabled: boolean, githubOrg: string | null, managerUrl: string | null, clientIdSet: boolean }
+}
+const instance = ref<InstanceInfo | null>(null)
+onMounted(async () => {
+  try { instance.value = await $fetch<InstanceInfo>('/api/instance') }
+  catch { instance.value = null }
+})
+/** The value an env var is forcing on this field, or undefined when the saved setting wins. */
+const pinnedBy = (envVar: string) => instance.value?.pinned?.[envVar]
+const pinnedNote = (envVar: string) => {
+  const value = pinnedBy(envVar)
+  return value ? `Pinned by ${envVar}=${value} on this instance; the value here is ignored until that is unset.` : ''
+}
+
+const jiraSettings = computed(() => (settings.value as any)?.agentManager?.jira ?? {})
+async function setJira(key: 'postEnabled' | 'baseUrl' | 'defaultProject' | 'forVisName', value: string | boolean) {
+  const agentManager = (settings.value as any)?.agentManager ?? {}
+  const next = typeof value === 'string' ? (value.trim() || undefined) : value || undefined
+  // A base URL that is not a URL reaches every Jira call as a broken host, so
+  // it is refused here the same silent way a bad tasks-picker window is.
+  if (key === 'baseUrl' && typeof next === 'string') {
+    try { if (new URL(next).protocol !== 'https:') return } catch { return }
+  }
+  await save({ ...(settings.value ?? {}), agentManager: { ...agentManager, jira: { ...agentManager.jira, [key]: next } } } as any)
+  toast.add({ title: 'Jira settings saved', color: 'success' })
+}
+
 async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
   const current = (settings.value as any)?.agentManager?.runBudget ?? {}
   const value = Number(raw)
@@ -486,19 +524,23 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             <div class="min-w-0 flex-1 max-w-2xl">
               <div class="text-[13px] font-medium">Run budget</div>
               <div class="text-[12px] mt-0.5 text-label leading-relaxed">
-                Caps for each new run; when one is reached the run pauses and asks whether to continue with a fresh allowance. Defaults are 8,000,000 tokens and 180 minutes, overridden by AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES on the instance.
+                Caps for each new run; when one is reached the run pauses and asks whether to continue with a fresh allowance. Defaults are 8,000,000 tokens and 180 minutes.
               </div>
+              <div v-if="pinnedBy('AGENT_RUN_MAX_TOKENS')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_TOKENS') }}</div>
+              <div v-if="pinnedBy('AGENT_RUN_MAX_MINUTES')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_MINUTES') }}</div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <input
                 type="number" min="1" step="100000" class="field-input text-[12px]" style="width: 9rem; flex: none;" placeholder="8000000" aria-label="Max tokens per run"
                 :value="settings?.agentManager?.runBudget?.maxTokens ?? ''"
+                :disabled="!!pinnedBy('AGENT_RUN_MAX_TOKENS')" :title="pinnedNote('AGENT_RUN_MAX_TOKENS')"
                 @change="setRunBudget('maxTokens', ($event.target as HTMLInputElement).value)"
               />
               <span class="text-[11px] text-label">tokens</span>
               <input
                 type="number" min="1" step="10" class="field-input text-[12px]" style="width: 6rem; flex: none;" placeholder="180" aria-label="Max minutes per run"
                 :value="settings?.agentManager?.runBudget?.maxMinutes ?? ''"
+                :disabled="!!pinnedBy('AGENT_RUN_MAX_MINUTES')" :title="pinnedNote('AGENT_RUN_MAX_MINUTES')"
                 @change="setRunBudget('maxMinutes', ($event.target as HTMLInputElement).value)"
               />
               <span class="text-[11px] text-label">min</span>
@@ -545,6 +587,135 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <span class="text-[12px] text-label">seconds</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Jira -->
+      <div class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Jira</h3>
+        <p class="text-[12px] text-meta">
+          The host and the posting gate for this instance. The API token is not here and never will be: it is
+          per-developer and stored encrypted outside the config tree — set yours on
+          <NuxtLink to="/profile" class="underline focus-ring">your profile</NuxtLink>. An environment variable
+          set on the instance overrides anything saved here.
+        </p>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="text-[13px] font-medium">Post outcomes to Jira</div>
+            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              Off by default. Every run writes the comment it would post to its own <code>jira-comment.json</code>
+              artifact either way, so this decides where that comment goes, never whether one is produced.
+              <code>JIRA_POST_ENABLED=0</code> on the instance pins it off for everyone.
+            </div>
+            <div v-if="pinnedBy('JIRA_POST_ENABLED')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_POST_ENABLED') }}</div>
+          </div>
+          <label class="field-toggle" :title="pinnedNote('JIRA_POST_ENABLED')">
+            <input
+              type="checkbox" :checked="jiraSettings.postEnabled === true" :disabled="!!pinnedBy('JIRA_POST_ENABLED')"
+              @change="setJira('postEnabled', ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="field-toggle__track"><span class="field-toggle__thumb" /></span>
+          </label>
+        </div>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="text-[13px] font-medium">Jira host</div>
+            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              The site every Jira call goes to, as an https URL. If this was the missing credential, ticket
+              polling starts at the next restart — the watcher chooses its ticket source once, at boot.
+            </div>
+            <div v-if="pinnedBy('JIRA_BASE_URL')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_BASE_URL') }}</div>
+          </div>
+          <input
+            type="url" class="field-input text-[12px]" style="width: 20rem; flex: none;" placeholder="https://your-team.atlassian.net"
+            aria-label="Jira host" :value="jiraSettings.baseUrl ?? ''"
+            :disabled="!!pinnedBy('JIRA_BASE_URL')" :title="pinnedNote('JIRA_BASE_URL')"
+            @change="setJira('baseUrl', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="text-[13px] font-medium">Default project key</div>
+            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              Written into the generated jira-cli config for new runs. Leave empty and the agents name a project explicitly.
+            </div>
+            <div v-if="pinnedBy('JIRA_DEFAULT_PROJECT')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_DEFAULT_PROJECT') }}</div>
+          </div>
+          <input
+            type="text" class="field-input text-[12px]" style="width: 10rem; flex: none;" placeholder="ASECRM"
+            aria-label="Default Jira project key" :value="jiraSettings.defaultProject ?? ''"
+            :disabled="!!pinnedBy('JIRA_DEFAULT_PROJECT')" :title="pinnedNote('JIRA_DEFAULT_PROJECT')"
+            @change="setJira('defaultProject', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="text-[13px] font-medium">"For vis:" name</div>
+            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              Appended as a last line on a posted or rendered comment. Left out entirely when empty — never filled with a placeholder.
+            </div>
+            <div v-if="pinnedBy('JIRA_COMMENT_FOR_VIS_NAME')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_COMMENT_FOR_VIS_NAME') }}</div>
+          </div>
+          <input
+            type="text" class="field-input text-[12px]" style="width: 14rem; flex: none;" placeholder="Nobody by default"
+            aria-label="For vis name" :value="jiraSettings.forVisName ?? ''"
+            :disabled="!!pinnedBy('JIRA_COMMENT_FOR_VIS_NAME')" :title="pinnedNote('JIRA_COMMENT_FOR_VIS_NAME')"
+            @change="setJira('forVisName', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+      </div>
+
+      <!-- Instance: read-only, because none of it can change without a restart -->
+      <div v-if="instance" class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Instance</h3>
+        <p class="text-[12px] text-meta">
+          What this server is actually running, as it booted. None of it is editable here: every switch below is
+          read once at startup, before the timer it controls exists, so a toggle would save cleanly and change
+          nothing until a restart. Each row names the variable to set instead.
+        </p>
+
+        <div>
+          <div class="text-[13px] font-medium mb-2">Automations</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            <div v-for="a in instance.automations" :key="a.envVar" class="flex items-center gap-2 text-[12px]">
+              <span class="size-1.5 rounded-full shrink-0" :style="{ background: a.enabled ? 'var(--success)' : 'var(--text-disabled)' }" />
+              <span>{{ a.name }}</span>
+              <span class="text-label">{{ a.enabled ? (a.detail ?? 'on') : 'off' }}</span>
+              <code class="text-[10px] text-label ml-auto">{{ a.envVar }}</code>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-[13px] font-medium mb-2">Paths</div>
+          <div class="grid grid-cols-1 gap-y-1 text-[12px]">
+            <div><span class="text-label">Config</span> <code class="ml-2">{{ instance.paths.claudeDir }}</code></div>
+            <div><span class="text-label">Run evidence</span> <code class="ml-2">{{ instance.paths.agentRunsDir }}</code></div>
+            <div><span class="text-label">Checkouts</span> <code class="ml-2">{{ instance.paths.workspaceRoot }}</code></div>
+            <div><span class="text-label">Developer profiles</span> <code class="ml-2">{{ instance.paths.usersDir }}</code></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-[13px] font-medium mb-2">Credentials</div>
+          <div class="text-[12px] text-meta mb-2">Presence only — no value is ever sent to this page.</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            <div v-for="s in instance.secrets" :key="s.name" class="flex items-center gap-2 text-[12px]">
+              <span class="size-1.5 rounded-full shrink-0" :style="{ background: s.set ? 'var(--success)' : 'var(--text-disabled)' }" />
+              <code class="text-[11px]">{{ s.name }}</code>
+              <span class="text-label ml-auto">{{ s.set ? 'set' : 'not set' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-[12px]">
+          <span class="text-label">Sign-in</span>
+          <span class="ml-2">{{ instance.identity.authDisabled ? 'disabled (every request is the local developer)' : `GitHub${instance.identity.githubOrg ? `, ${instance.identity.githubOrg}` : ''}` }}</span>
+          <code class="text-[10px] text-label ml-2">AUTH_DISABLED, GITHUB_ORG</code>
         </div>
       </div>
 

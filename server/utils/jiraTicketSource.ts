@@ -26,7 +26,7 @@
  * nothing", the same tolerance it already gives the file-backed stub.
  */
 import { adfToPlainText } from './adf.ts'
-import { resolveJiraCredentials, jiraAuthHeader } from './jiraCredentials.ts'
+import { resolveJiraCredentials, jiraAuthHeader, jiraBaseUrl } from './jiraCredentials.ts'
 import type { TicketSource } from './ticketSource.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
 
@@ -160,7 +160,7 @@ export function createJiraTicketSource(fetchImpl: FetchLike = fetch): TicketSour
  */
 function credentialsFrom(env: Record<string, string>) {
   if (env.JIRA_EMAIL && env.JIRA_API_TOKEN) {
-    const baseUrl = (env.JIRA_BASE_URL || process.env.JIRA_BASE_URL || '').replace(/\/+$/, '')
+    const baseUrl = (env.JIRA_BASE_URL?.replace(/\/+$/, '') || jiraBaseUrl() || '')
     if (baseUrl) return { baseUrl, email: env.JIRA_EMAIL, apiToken: env.JIRA_API_TOKEN }
   }
   return resolveJiraCredentials()
