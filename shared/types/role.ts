@@ -113,6 +113,25 @@ export const SHORT_ROLE: Record<Role, string> = {
   cto: 'CTO',
 }
 
+/**
+ * The role's name as a person would say it, for a control with room for words.
+ *
+ * Separate from SHORT_ROLE because that one exists for columns too narrow for
+ * the word, and separate from ROLE_LABEL because that is a sentence about the
+ * job rather than a name for it. A picker needs the name.
+ */
+export const ROLE_NAME: Record<Role, string> = {
+  operator: 'Operator',
+  'product-owner': 'Product owner',
+  developer: 'Developer',
+  qa: 'QA',
+  architect: 'Architect',
+  designer: 'Designer',
+  security: 'Security',
+  manager: 'Manager',
+  cto: 'CTO',
+}
+
 /** The one-line description of each role, for the Team page and the role picker. */
 export const ROLE_LABEL: Record<Role, string> = {
   'product-owner': 'Decides whether a story is ready and what "done" means.',

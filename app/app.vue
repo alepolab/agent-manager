@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ROLES, SHORT_ROLE, type Role } from '~~/shared/types/role'
+import { ROLES, ROLE_NAME, type Role } from '~~/shared/types/role'
 
 const route = useRoute()
 const { claudeDir, exists: claudeDirExists, load: loadConfig } = useClaudeDir()
@@ -48,7 +48,6 @@ const colorMode = useColorMode()
 // Labels come from shared/types/role.ts now, so a step's owner chip and this
 // picker cannot drift apart. `operator` is the one exception: in every other
 // surface it is the OPS role, and here it is the way back to being yourself.
-const pickerLabel = (r: Role) => (r === 'operator' ? 'You' : SHORT_ROLE[r])
 const viewAsRoles = computed<Role[]>(() => ['operator', ...ROLES.filter(r => r !== 'operator')])
 
 /** Switching to your own role clears the impersonation rather than setting one. */
@@ -524,27 +523,28 @@ watch(role, refreshWaiting)
              Lives here rather than on the dashboard because it is an occasional
              operator tool that was occupying the best line of the busiest page,
              and because a gate or a run list is often what you want to inspect. -->
+        <!-- Nine three-letter codes in a 3x3 grid cost four rows of permanent
+             sidebar, asked the reader to recall what ARCH and SEC mean, and
+             gave a screen reader nine loose buttons under a plain <div>. It is
+             an occasional tool: one labelled select, one row, full names. -->
         <div v-if="me?.realRole === 'operator' && !sidebarCollapsed" class="px-2.5 pb-1">
-          <div class="t-label mb-1" style="color: var(--text-disabled);">View as</div>
-          <!-- Three columns, two rows: six roles in a single strip would give
-               each label ~30px in a 200px sidebar and truncate every one. -->
-          <div
-            class="grid grid-cols-3 rounded-lg overflow-hidden"
-            style="border: 1px solid var(--border-subtle); gap: 1px; background: var(--border-subtle);"
+          <label for="view-as" class="t-label mb-1 block" style="color: var(--text-disabled);">View as</label>
+          <select
+            id="view-as"
+            class="w-full t-small rounded-lg px-2 py-1 focus-ring"
+            :style="{
+              background: viewingAs ? 'var(--accent-muted)' : 'var(--surface-raised)',
+              color: viewingAs ? 'var(--accent)' : 'var(--text-tertiary)',
+              border: '1px solid var(--border-subtle)',
+            }"
+            :value="role"
+            :disabled="switchingRole"
+            @change="switchRole(($event.target as HTMLSelectElement).value)"
           >
-            <button
-              v-for="r in viewAsRoles" :key="r"
-              class="py-1 t-label focus-ring transition-colors"
-              :style="{
-                background: role === r ? 'var(--accent-muted)' : 'var(--surface-raised)',
-                color: role === r ? 'var(--accent)' : 'var(--text-tertiary)',
-              }"
-              :title="r === 'operator' ? 'Your own role' : `See the app as a ${r}`"
-              :aria-pressed="role === r"
-              :disabled="switchingRole"
-              @click="switchRole(r)"
-            >{{ pickerLabel(r) }}</button>
-          </div>
+            <option v-for="r in viewAsRoles" :key="r" :value="r">
+              {{ r === 'operator' ? 'Operator (you)' : ROLE_NAME[r] }}
+            </option>
+          </select>
         </div>
 
         <!-- Theme toggle -->
