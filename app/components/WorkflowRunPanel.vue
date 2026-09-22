@@ -81,6 +81,19 @@ function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'rework') {
 /** Optional correction handed to whichever step is restarted next. */
 const note = ref('')
 
+/** Its own box, deliberately: the panel's `note` is shared by reply, reject,
+ *  rework and restart, and a half-typed instruction to a running agent must not
+ *  turn into the reason attached to a gate decision. */
+const steerNote = ref('')
+const steerSent = ref('')
+function sendSteer() {
+  const text = steerNote.value.trim()
+  if (!text) return
+  emit('note', text)
+  steerSent.value = text
+  steerNote.value = ''
+}
+
 /**
  * Where a send-back goes. The reviewer picks; the run never guesses.
  *
@@ -181,7 +194,28 @@ const progress = computed(() => {
   return { done: steps.filter(s => settled.has(s.status)).length, total: steps.length }
 })
 
+/**
+ * Which step's detail is open. A running run opens its running step by itself.
+ *
+ * The live feed — the one surface that says what the agent is doing right now —
+ * used to require a click to find, and the row showed a single truncated line
+ * instead. So a person watching a run saw eleven collapsed rows and a dot, which
+ * is why "I cannot tell what is happening" and "the gates are not readable" are
+ * the same complaint. `pinned` is set the moment somebody clicks a row: their
+ * choice then outranks the follow, or the list would snap away from whatever
+ * they opened as soon as the next step started.
+ */
 const expanded = ref<string | null>(null)
+const pinned = ref(false)
+const runningStepId = computed(() => props.run?.steps.find(s => s.status === 'running')?.stepId ?? null)
+watch(runningStepId, (id) => {
+  if (!pinned.value && id) expanded.value = id
+}, { immediate: true })
+watch(() => props.run?.id, () => { pinned.value = false })
+function toggleStep(stepId: string) {
+  pinned.value = true
+  expanded.value = expanded.value === stepId ? null : stepId
+}
 /** Live output for a step, newest last; the pre scrolls to the newest line as it arrives. */
 const liveFor = (stepId: string) => props.logs?.[stepId] ?? []
 const latest = (stepId: string) => liveFor(stepId).at(-1)?.slice(9) ?? ''
@@ -460,7 +494,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
           <button
             class="flex-1 min-w-0 flex items-center gap-2 text-left py-1"
             :aria-expanded="expanded === step.stepId"
-            @click="expanded = expanded === step.stepId ? null : step.stepId"
+            @click="toggleStep(step.stepId)"
           >
             <!-- A step's status was carried by hue and nothing else: this dot was
                  the only thing separating a completed step from a failed one, so
@@ -546,6 +580,28 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             <div class="t-small text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
             <div :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="max-h-72 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);"><LogLines :lines="liveFor(step.stepId)" /></div>
           </div>
+          <!-- Say something to THIS agent, where you are already reading what it
+               is doing. The route (POST /api/runs/:id/note) delivers into the
+               live session mid-turn and has existed all along; it was a button
+               in a row of eleven at the bottom of the panel, which is not the
+               same as being able to answer an agent you are watching. -->
+          <!-- The RUN has to be live, not just the step: a run whose process
+               died keeps its step marked running, and a box offering to reach
+               that agent would take a message nothing can deliver. -->
+          <div v-if="mayDrive && step.status === 'running' && run.status === 'running'" class="flex items-start gap-1 pt-1">
+            <textarea
+              v-model="steerNote"
+              rows="1"
+              data-testid="steer-running-step"
+              class="field-input flex-1 resize-none t-small"
+              :placeholder="`Tell ${step.agentSlug} something — it arrives mid-step`"
+              :aria-label="`Send guidance to the running step ${step.label}`"
+              @keydown.meta.enter="sendSteer"
+              @keydown.ctrl.enter="sendSteer"
+            />
+            <UButton size="xs" icon="i-lucide-send" label="Send" :disabled="!steerNote.trim()" @click="sendSteer" />
+          </div>
+          <p v-if="steerSent && step.status === 'running' && run.status === 'running'" class="t-small text-label">Delivered: "{{ steerSent }}"</p>
           <pre v-if="step.output" class="t-small whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
           <p v-else-if="!liveFor(step.stepId).length" class="t-small text-label">No output yet.</p>
         </div>
