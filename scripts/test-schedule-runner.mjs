@@ -107,6 +107,49 @@ const base = {
   assert.equal(broken.lastOutcome, 'error', 'and the broken one says so where the page will show it')
   assert.match(broken.lastDetail, /cannot be parsed/)
 
+  // ── recorded ONCE per expression, not once per supervisor tick ──────────
+  // A rejected expression leaves no `jobs` entry, so nothing else remembers
+  // that this one has already been reported - and the supervisor runs every
+  // second. This used to be an mkdir plus a writeFile per second, for ever,
+  // and because recordScheduleFire keeps the first lastFiredAt it wrote, the
+  // page showed a schedule that has never fired as "last fired: just now".
+  const statePath = join(process.env.CLAUDE_DIR, 'schedule-state', 'broken.json')
+  const { statSync, utimesSync } = await import('node:fs')
+  // Backdate the file, so any rewrite is unmistakable.
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(statePath, old, old)
+  const before = statSync(statePath).mtimeMs
+
+  for (let i = 0; i < 5; i++) await sched.reconcileSchedulesNow()
+  assert.equal(statSync(statePath).mtimeMs, before,
+    'five more reconciles rewrote the state file; one bad expression is a disk write every second for as long as the server is up')
+
+  // A DIFFERENT bad expression is a different fact, so it is recorded again.
+  sched.setScheduleSource(() => [
+    { ...base, id: 'broken', cron: 'still not a cron' },
+    { ...base, id: 'fine-1' },
+    { ...base, id: 'fine-2' },
+  ])
+  await sched.reconcileSchedulesNow()
+  assert.notEqual(statSync(statePath).mtimeMs, before, 'an edit to the expression is reported')
+  assert.match((await state.getScheduleState('broken')).lastDetail, /still not a cron/)
+
+  // And a fixed expression schedules, rather than staying suppressed.
+  sched.setScheduleSource(() => [
+    { ...base, id: 'broken', cron: '0 3 * * *' },
+    { ...base, id: 'fine-1' },
+    { ...base, id: 'fine-2' },
+  ])
+  await sched.reconcileSchedulesNow()
+  assert.ok(sched.scheduledIds().includes('broken'), 'a corrected expression is scheduled')
+
+  // Broken again after being fixed: reported, not swallowed by a stale memo.
+  sched.setScheduleSource(() => [{ ...base, id: 'broken', cron: 'not a cron' }])
+  const beforeAgain = statSync(statePath).mtimeMs
+  await sched.reconcileSchedulesNow()
+  assert.notEqual(statSync(statePath).mtimeMs, beforeAgain,
+    'an expression that breaks again is reported again, rather than matching the memo from before it was fixed')
+
   sched.stopScheduleRunner()
 }
 

@@ -31,6 +31,19 @@ interface ScheduledJob {
 }
 
 const jobs = new Map<string, ScheduledJob>()
+
+/**
+ * The expression that last failed to parse, per schedule.
+ *
+ * A schedule croner rejects never gets a `jobs` entry - the entry is built
+ * inside the try, after `new Cron` would have thrown - so `existing` is
+ * undefined on every tick and the `existing.key === key` short-circuit below
+ * can never fire for it. Without this the supervisor wrote its state file once
+ * a second, for ever, and because recordScheduleFire keeps the first
+ * `lastFiredAt` it ever wrote, the page showed a schedule that has never fired
+ * as "last fired: just now", continuously.
+ */
+const failedKeys = new Map<string, string>()
 let supervisor: ReturnType<typeof setInterval> | null = null
 
 /** How often the supervisor re-reads the schedule list. A parameter to
@@ -153,9 +166,16 @@ async function reconcileJobs(): Promise<void> {
         }),
       }
       jobs.set(schedule.id, entry)
+      failedKeys.delete(schedule.id)
     } catch (err) {
       // An expression the API accepted and a later hand-edit broke. Recorded
       // where the page will show it, rather than thrown out of the supervisor.
+      //
+      // Once per expression, not once per tick: a failure leaves no `jobs`
+      // entry, so nothing else here remembers that this exact expression has
+      // already been reported, and the supervisor runs every second.
+      if (failedKeys.get(schedule.id) === key) continue
+      failedKeys.set(schedule.id, key)
       const detail = err instanceof Error ? err.message : String(err)
       log.warn('schedule has an unusable cron expression; not scheduled', {
         scheduleId: schedule.id, cron: schedule.cron, error: detail,
@@ -175,6 +195,10 @@ async function reconcileJobs(): Promise<void> {
       jobs.delete(id)
     }
   }
+  // Pruned here too, or a deleted schedule's last bad expression would be
+  // remembered for ever - and a new schedule reusing that id would then have
+  // its first failure silently swallowed.
+  for (const id of [...failedKeys.keys()]) if (!seen.has(id)) failedKeys.delete(id)
 }
 
 /** Reconcile once, now. Exported for tests that would rather not wait a tick. */
