@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { resolveClaudeFile } from '../../utils/claudeDir'
 
 export default defineEventHandler(async (event) => {
-  const slug = getRouterParam(event, 'slug')
+  const slug = getRouterParam(event, 'slug')!
   const filePath = resolveClaudeFile('workflows', slug)
 
   if (!existsSync(filePath)) {
