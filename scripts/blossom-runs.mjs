@@ -137,7 +137,7 @@ const skipped = ids.filter(id => !MODULE[id])
 
 console.log(`${runnable.length} runnable, ${skipped.length} not a code change\n`)
 for (const id of runnable) {
-  const dir = checkoutDirFor(MODULE[id], process.env.USER || undefined)
+  const dir = checkoutDirFor(MODULE[id])
   console.log(`  ${id.padEnd(6)} ${MODULE[id].padEnd(20)} ${TICKET_FOR[id] ?? '(no ticket)'}  ${dir}`)
 }
 if (skipped.length) {
@@ -158,7 +158,7 @@ if (process.argv.includes('--queue')) {
     order: order[id],
     deps: (DEPS[id] ?? []).filter(d => order[d] !== undefined),
     workflowSlug: WORKFLOW,
-    ...(MODULE[id] ? { module: MODULE[id], projectDir: checkoutDirFor(MODULE[id], process.env.USER || undefined) } : {}),
+    ...(MODULE[id] ? { module: MODULE[id], projectDir: checkoutDirFor(MODULE[id]) } : {}),
     ...(TICKET_FOR[id] ? { ticketKey: TICKET_FOR[id] } : {}),
     ...(MODULE[id] ? { detail: promptFor(id) } : { note: NOT_CODE[id] ?? 'no module mapped' }),
   }))
@@ -181,7 +181,7 @@ for (const id of runnable) {
   const prompt = promptFor(id)
   const res = await fetch(`${BASE}/api/workflows/${WORKFLOW}/runs`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ initialPrompt: prompt, autoRun: false, projectDir: checkoutDirFor(MODULE[id], process.env.USER || undefined) }),
+    body: JSON.stringify({ initialPrompt: prompt, autoRun: false, projectDir: checkoutDirFor(MODULE[id]) }),
   })
   if (res.ok) { created++; console.log(`  created ${id}`); continue }
   const body = await res.text().catch(() => '')
