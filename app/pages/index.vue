@@ -264,11 +264,14 @@ const noteColour = (l: string) => (l === 'error' ? 'var(--error)' : l === 'warn'
 /** Per-role wording. QA holds `startRun: false`, so "no runs started by you yet"
  *  is permanently true for them and tells them nothing. */
 const queueEmpty = computed(() => ({
+  'product-owner': 'Nothing to decide. Stories appear here when they reach the readiness or acceptance gate.',
   developer: 'No decisions waiting. Start a run below when you have a ticket.',
   qa: 'Nothing to verify. Runs appear here when they reach the verification gate.',
   architect: 'Nothing to review. Runs appear here when they reach a schema, contract or migration gate.',
   designer: 'Nothing to accept. Runs appear here when they reach the design gate.',
+  security: 'Nothing to clear. Runs appear here when they touch authorization, crypto, personal data, payment or a dependency.',
   manager: 'Nothing open.',
+  cto: 'Nothing escalated. Runs appear here only when they cross the escalation threshold.',
   operator: 'No open gates, and nothing failing.',
 }[role.value ?? 'operator'] ?? 'Nothing waiting on you.'))
 /** The queue's name is the reviewer's job, so each reviewing role gets its own. */

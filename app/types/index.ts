@@ -1,4 +1,5 @@
 import type { Role } from '~~/shared/types/role'
+import type { GateKind } from '~~/shared/utils/oversight'
 
 export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
@@ -296,6 +297,18 @@ export interface WorkflowStep {
    * backstop for a role nobody on this instance holds.
    */
   gateRole?: Role
+  /**
+   * What KIND of question this gate asks, where that raises the oversight
+   * floor above the run's blast-radius tier.
+   *
+   * `story`, `spec` and `security` gates cannot be tiered by blast radius:
+   * the first two ask whether this is the right thing to build (which no
+   * classification predicts, and which are asked before the diff that would
+   * produce one exists), and the third is triggered by what the change
+   * touches rather than how hard it is to undo. A step without this field
+   * tiers exactly as before. See shared/utils/oversight.ts.
+   */
+  gateKind?: GateKind
   /**
    * Whose WORK this step is \u2014 a different question from whose decision its
    * gate is (`gateRole`) and from what the reader may do (`can()`).

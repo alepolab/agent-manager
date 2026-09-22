@@ -41,7 +41,7 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, transcriptPath } from './claudeDir.ts'
-import { oversightFor, oversightReason, needsJustification, BLAST_RADIUS_ORDER, type BlastRadius } from '../../shared/utils/oversight.ts'
+import { oversightFor, oversightForGate, oversightReason, needsJustification, BLAST_RADIUS_ORDER, type BlastRadius, type GateKind } from '../../shared/utils/oversight.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable, recordClassification,
@@ -104,7 +104,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, verdict?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, verdict?: boolean, gateRole?: Role, gateKind?: GateKind, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -1880,20 +1880,27 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // straight through the same runbook that stops hard on a money one, so
   // nobody learns to click approve without reading. See shared/utils/oversight.
   // Still-unclassified stays `stop`: absence of evidence is not evidence of safety.
+  // A step may declare what KIND of question its gate asks. Story, spec and
+  // security gates carry a floor, because the blast radius cannot answer "is
+  // this the right thing?" or "does this expose anything?" — see
+  // shared/utils/oversight.ts. A step with no `gateKind` tiers exactly as
+  // before.
   const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id)
-    && oversightFor(run.blastRadius) !== 'auto')
+    && oversightForGate(run.blastRadius, (stepOf(l, id) as { gateKind?: GateKind } | undefined)?.gateKind) !== 'auto')
   if (gate) {
     const label = stepOf(l, gate)?.label ?? gate
+    const gateKind = (stepOf(l, gate) as { gateKind?: GateKind } | undefined)?.gateKind
     // Whose decision this is, from the step that declares it. A gate with no
     // `gateRole` stays everyone's, which is the old behaviour and the honest
     // default for a workflow that never said.
     const gateRole = (stepOf(l, gate) as { gateRole?: Role } | undefined)?.gateRole
     run.question = {
       stepId: gate,
-      text: `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}`,
+      text: `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius, gateKind)}`,
       kind: 'approval',
       askedAt: Date.now(),
       ...(gateRole ? { role: gateRole } : {}),
+      ...(gateKind ? { gateKind } : {}),
     }
     run.status = 'paused'
     run.currentStepIds = []
@@ -2501,7 +2508,7 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
     // it cannot be satisfied without having read something. Reject already
     // demanded a reason; approve did not, which had it backwards — saying yes to
     // a money change is the answer that needs the justification.
-    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius) && !note?.trim()) {
+    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius, run.question.gateKind) && !note?.trim()) {
       l.running = false
       throw new ApprovalNeedsReason(
         `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)

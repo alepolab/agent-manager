@@ -1,4 +1,5 @@
 import type { Role } from './role'
+import type { GateKind } from '../utils/oversight'
 
 export type WorkflowRunStatus =
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
@@ -293,7 +294,7 @@ export interface WorkflowRun {
    * answer, which is the old behaviour and the right default for a workflow that
    * never said.
    */
-  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
+  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** What the gate is asking, where that raises the oversight floor above the run's tier. See shared/utils/oversight.ts. */ gateKind?: GateKind, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
