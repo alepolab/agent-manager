@@ -112,6 +112,22 @@
             },
             "docs": {
               "type": "string"
+            },
+            "release": {
+              "type": "string",
+              "description": "The release candidate branch. A bug or infra change found by QA or CI on it is a hotfix cut from here, merged back into the development branch afterwards. Default ci-release."
+            },
+            "qa": {
+              "type": "string",
+              "description": "Alias for release, used where the team calls it the QA branch. release wins when both are set."
+            },
+            "hotfix": {
+              "type": "string",
+              "description": "The production branch. A bug, security or infra change found in production is a hotfix cut from here, merged back into release and then development. Default main."
+            },
+            "production": {
+              "type": "string",
+              "description": "Alias for hotfix. hotfix wins when both are set."
             }
           }
         },
