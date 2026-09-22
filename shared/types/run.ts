@@ -1,5 +1,6 @@
 import type { Role } from './role'
 import type { GateKind } from '../utils/oversight'
+import type { CriterionResult } from '../utils/facts'
 
 export type WorkflowRunStatus =
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
@@ -302,7 +303,7 @@ export interface WorkflowRun {
    * answer, which is the old behaviour and the right default for a workflow that
    * never said.
    */
-  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** What the gate is asking, where that raises the oversight floor above the run's tier. See shared/utils/oversight.ts. */ gateKind?: GateKind, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
+  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** What the gate is asking, where that raises the oversight floor above the run's tier. See shared/utils/oversight.ts. */ gateKind?: GateKind, /** Machine-derived criteria for the person answering, each carrying the source it came from. A criterion that could not be derived is `blocked`, never silently passed. See shared/utils/facts.ts. */ criteria?: CriterionResult[], /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
   product?: ProductMatch
   /** A person has already been asked about work landing outside this run's own

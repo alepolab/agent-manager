@@ -29,6 +29,7 @@ import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+import { criteriaForGate } from './gateCriteria.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -2019,9 +2020,21 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // `gateRole` stays everyone's, which is the old behaviour and the honest
     // default for a workflow that never said.
     const gateRole = (stepOf(l, gate) as { gateRole?: Role } | undefined)?.gateRole
+    // What the gate can actually PROVE, resolved before the person is asked.
+    // A gate screen that shows only the step's prose asks the reviewer to
+    // re-derive trust in the diff, which is the work the pipeline was supposed
+    // to remove. Never throws: a criterion that cannot be derived comes back
+    // `blocked`, which is a refusal, not a pass.
+    let criteria: Awaited<ReturnType<typeof criteriaForGate>> = []
+    try {
+      criteria = await criteriaForGate(run, run.projectDir)
+    } catch (err) {
+      log.warn('could not resolve gate criteria', { runId: run.id, error: String(err) })
+    }
     run.question = {
       stepId: gate,
       text: `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius, gateKind)}`,
+      ...(criteria.length ? { criteria } : {}),
       kind: 'approval',
       askedAt: Date.now(),
       ...(gateRole ? { role: gateRole } : {}),

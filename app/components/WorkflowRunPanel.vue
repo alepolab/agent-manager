@@ -389,6 +389,42 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <p class="t-small text-label">
         Waiting {{ waitingLabel }}<template v-if="(run.reworks ?? 0) > 0"> · sent back {{ run.reworks }} of 2 times already</template>
       </p>
+      <!-- What the gate could actually PROVE, before it asks for a judgement.
+           This box used to show the step's prose and a Continue button, so the
+           reviewer's only way to check anything was to go and re-derive it from
+           the diff — the work the pipeline exists to remove. Each line names
+           its source, so a claim and a fact are visibly different things.
+
+           `blocked` is rendered apart from `fail` on purpose: a reviewer told
+           "failed" re-runs the fix, a reviewer told "blocked" goes and writes
+           the provider, and reporting one as the other sends them to do the
+           wrong work. -->
+      <div v-if="run.question.criteria?.length" class="mt-2 space-y-1">
+        <div class="t-label" style="color: var(--text-secondary);">What was checked</div>
+        <div
+          v-for="c in run.question.criteria"
+          :key="c.id"
+          class="flex items-start gap-2 t-small"
+        >
+          <span
+            class="font-mono shrink-0 px-1 rounded"
+            :style="{
+              color: c.status === 'pass' ? 'var(--success)' : c.status === 'fail' ? 'var(--error)' : 'var(--warning)',
+              border: `1px solid ${c.status === 'pass' ? 'var(--success)' : c.status === 'fail' ? 'var(--error)' : 'var(--warning)'}`,
+            }"
+          >{{ c.status === 'blocked' ? 'UNKNOWN' : c.status.toUpperCase() }}</span>
+          <span style="color: var(--text-primary);">
+            {{ c.question }}
+            <span v-if="c.reasons.length" style="color: var(--warning);"> — {{ c.reasons.join('; ') }}</span>
+            <span v-if="c.provenance" class="font-mono t-small" style="color: var(--text-tertiary);">
+              ({{ c.provenance.source }}<template v-if="c.provenance.head">, HEAD {{ c.provenance.head.slice(0, 8) }}</template>)
+            </span>
+          </span>
+        </div>
+        <p v-if="run.question.criteria.some(c => c.status === 'blocked')" class="t-small" style="color: var(--warning);">
+          Something here could not be checked. That is not the same as it being fine.
+        </p>
+      </div>
       <!-- Whose decision this is. Said out loud when it is not yours, because a
            panel with the controls quietly removed is indistinguishable from a
            broken one. -->
