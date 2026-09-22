@@ -212,15 +212,43 @@ function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + '/')
 }
 
-function badgeFor(to: string) {
-  if (to === '/agents') return agents.value.length || null
-  if (to === '/commands') return commands.value.length || null
-  if (to === '/skills') return skills.value.length || null
-  if (to === '/plugins') return plugins.value.length || null
-  if (to === '/workflows') return workflows.value.length || null
-  if (to === '/mcp') return mcpServers.value.length || null
-  return null
+/**
+ * One badge, on the only number that changes and the only one that asks for
+ * an act: how many decisions are waiting on you.
+ *
+ * There were six, all counting files in a directory — Agents 32, Commands 39,
+ * Skills, Plugins, Workflows, MCP — fetched once at mount and never refreshed.
+ * A signal with no variance carries no information: Agents was 32 yesterday
+ * and will be 32 tomorrow, and no one opens Agents *because* there are 32.
+ *
+ * The damage was not the six wasted rows, it was the channel. Habituation
+ * generalises across a class of signal, so six permanently-static numbers
+ * teach the eye that a small number on the right of a nav row means nothing —
+ * and then the one that does mean something is invisible when it arrives.
+ * Deleting them is what makes this one work.
+ */
+const waitingOnMe = ref(0)
+async function refreshWaiting() {
+  try {
+    const runs = await $fetch<{ status: string, dismissed?: boolean, question?: { role?: string } }[]>('/api/runs')
+    waitingOnMe.value = runs.filter(r => !r.dismissed && r.status === 'paused'
+      && (!r.question?.role || !role.value || role.value === 'operator' || role.value === r.question.role)).length
+  } catch { /* the dashboard reports the failure; a badge must not */ }
 }
+
+function badgeFor(to: string) {
+  return to === '/' && waitingOnMe.value ? waitingOnMe.value : null
+}
+onMounted(() => {
+  refreshWaiting()
+  // Ten seconds, matching the dashboard's own poll: a badge that updates less
+  // often than the page it points at would send someone to an empty queue.
+  const t = setInterval(refreshWaiting, 10_000)
+  onUnmounted(() => clearInterval(t))
+})
+// A role change narrows or widens which gates are yours, so the count has to
+// move with it — otherwise viewing-as shows another role's backlog as your own.
+watch(role, refreshWaiting)
 </script>
 
 <template>
@@ -328,7 +356,7 @@ function badgeFor(to: string) {
               <span
                 v-if="badgeFor(link.to)"
                 class="font-mono t-small tabular-nums transition-colors duration-150"
-                :style="{ color: isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
+                :style="{ color: 'var(--accent)', fontWeight: 700 }"
               >
                 {{ badgeFor(link.to) }}
               </span>

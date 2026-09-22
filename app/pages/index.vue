@@ -404,7 +404,7 @@ const minedEmpty = computed(() => (can('startRun')
           <li
             v-for="r in attention" :key="r.id"
             class="attn-row t-ui"
-            :class="[`attn-row--${waitTier(r)}`, { 'attn-row--mine': r.status === 'paused' && mineToAnswer(r) }]"
+            :class="[`attn-row--${waitTier(r)}`, { 'attn-row--mine': r.status === 'paused' && mineToAnswer(r), 'attn-row--gated': riskOf(r) === 'justify' }]"
             :style="{ '--rail': friction(r) ? (riskOf(r) === 'justify' ? 'var(--error)' : 'var(--warning)') : 'var(--border-emphasis)' }"
           >
             <!-- The rail carries CONSEQUENCE, not status. It used to carry
@@ -436,7 +436,13 @@ const minedEmpty = computed(() => (can('startRun')
             <span v-else />
             <span class="attn-wait tabular" :title="`Waiting ${shortWait(waitedMs(r))}`">{{ shortWait(waitedMs(r)) }}</span>
             <span class="attn-act">
-              <UButton v-if="r.status === 'paused' && mineToAnswer(r)" size="xs" variant="soft" label="Answer" :to="`/runs/${r.id}`" />
+              <!-- "Decide" on an owner-gated row, because approving there
+                   requires a written reason: a button labelled Approve
+                   promises an action the next screen refuses. -->
+              <UButton
+                v-if="r.status === 'paused' && mineToAnswer(r)" size="xs" variant="soft"
+                :label="riskOf(r) === 'justify' ? 'Decide' : 'Answer'" :to="`/runs/${r.id}`"
+              />
               <button
                 v-else-if="r.status !== 'paused'" class="attn-dismiss focus-ring" :disabled="dismissing"
                 title="Remove this run from your queue"

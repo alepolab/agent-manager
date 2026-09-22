@@ -317,6 +317,9 @@ body {
    turning any one of them up could not make the dangerous row stand out.
    The rare item pops by making the routine one RECEDE, which means most of
    these channels had to be given back. */
+:root { --danger-wash: color-mix(in srgb, var(--error) 6%, var(--surface-raised)); }
+.dark { --danger-wash: color-mix(in srgb, var(--error) 14%, var(--surface-raised)); }
+
 .attn-row {
   display: grid;
   /* 4px rail · icon · key · consequence · provability · class · wait · action.
@@ -329,6 +332,10 @@ body {
   padding-right: 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
+/* Size is a channel, and it was not being spent. Hue does not survive
+   greyscale, glare or peripheral vision; height does. An owner-gated row is
+   visibly taller before any colour is read. */
+.attn-row--gated { min-height: 58px; background: var(--danger-wash); }
 @media (max-width: 720px) {
   /* A table of eight tracks does not survive a phone. Card, not grid: the
      short fixed-width facts share a line, the consequence gets its own. */
