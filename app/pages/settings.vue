@@ -278,7 +278,40 @@ async function addHook() {
  * sections up gets a full dialog for something far easier to redo, so this is
  * the page contradicting its own standard rather than a missing nicety.
  */
-const hookToRemove = ref<{ event: string; index: number; command: string } | null>(null)
+/**
+ * The one confirmation this page raises before an irreversible act.
+ *
+ * Generic rather than per-control because the two callers ask the identical
+ * question — "this thing will stop, here is exactly which one" — and two
+ * near-identical dialogs are how the wording drifts until one of them stops
+ * naming what it is about to remove.
+ */
+const pendingRemoval = ref<{ title: string; stops: string; subject: string; run: () => Promise<void> } | null>(null)
+
+async function confirmRemoval() {
+  const target = pendingRemoval.value
+  if (!target) return
+  pendingRemoval.value = null
+  await target.run()
+}
+
+function askRemoveHook(event: string, index: number, command: string) {
+  pendingRemoval.value = {
+    title: 'Delete this automation?',
+    stops: `${hookEventLabels[event] || event} will stop running:`,
+    subject: command,
+    run: () => removeHook(event, index),
+  }
+}
+
+function askRemovePlugin(name: string) {
+  pendingRemoval.value = {
+    title: 'Remove this plugin?',
+    stops: 'This plugin will no longer be listed here, enabled or not:',
+    subject: name,
+    run: () => removePlugin(name),
+  }
+}
 
 /**
  * The shell command a hook entry runs.
@@ -296,17 +329,6 @@ function hookCommandText(cmd: unknown): string {
   if (entry?.command) return entry.command
   const nested = (entry?.hooks ?? []).map(h => h?.command).filter(Boolean) as string[]
   return nested.length ? nested.join(' ; ') : JSON.stringify(cmd)
-}
-
-function askRemoveHook(event: string, index: number, command: string) {
-  hookToRemove.value = { event, index, command }
-}
-
-async function confirmRemoveHook() {
-  const target = hookToRemove.value
-  if (!target) return
-  hookToRemove.value = null
-  await removeHook(target.event, target.index)
 }
 
 async function removeHook(event: string, index: number) {
@@ -587,12 +609,16 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                   <span class="field-toggle__thumb" />
                 </span>
               </label>
+              <!-- Sat 12px from the toggle in the same muted grey: one is
+                   reversible with a second click, the other deletes the entry.
+                   Separated and coloured for what it does. -->
+              <span class="w-px self-stretch" style="background: var(--border-subtle);" />
               <button
-                class="p-1.5 -m-0.5 rounded focus-ring text-meta"
-                aria-label="Remove plugin from settings"
-                @click="removePlugin(plugin.name)"
+                class="p-1.5 -m-0.5 rounded focus-ring btn-danger-quiet"
+                :aria-label="`Remove ${plugin.name} from settings`"
+                @click="askRemovePlugin(plugin.name)"
               >
-                <UIcon name="i-lucide-x" class="size-3.5" />
+                <UIcon name="i-lucide-trash-2" class="size-3.5" />
               </button>
             </div>
           </div>
@@ -761,10 +787,10 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
     <!-- Deleting a hook removes a shell command with no undo. It gets the same
          confirmation the repository remover on this page already gets. -->
     <UModal
-      :open="!!hookToRemove"
-      title="Delete this automation?"
-      description="The hook and its command are removed from settings.json. This cannot be undone."
-      @update:open="(v: boolean) => { if (!v) hookToRemove = null }"
+      :open="!!pendingRemoval"
+      :title="pendingRemoval?.title ?? 'Remove?'"
+      description="This is written to settings.json immediately and cannot be undone."
+      @update:open="(v: boolean) => { if (!v) pendingRemoval = null }"
     >
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
@@ -773,17 +799,17 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <UIcon name="i-lucide-alert-triangle" class="size-6 text-error" />
             </div>
             <div>
-              <h3 class="t-body font-semibold text-primary">Delete this automation?</h3>
+              <h3 class="t-body font-semibold text-primary">{{ pendingRemoval?.title }}</h3>
               <p class="t-small text-label mt-1">This action cannot be undone.</p>
             </div>
           </div>
           <div class="rounded-lg p-3 border" style="background: var(--surface-base); border-color: var(--border-subtle);">
-            <p class="t-small text-label mb-1">{{ hookEventLabels[hookToRemove?.event ?? ''] || hookToRemove?.event }} will stop running:</p>
-            <p class="font-mono t-small break-all text-body">{{ hookToRemove?.command }}</p>
+            <p class="t-small text-label mb-1">{{ pendingRemoval?.stops }}</p>
+            <p class="font-mono t-small break-all text-body">{{ pendingRemoval?.subject }}</p>
           </div>
           <div class="flex justify-end gap-2">
-            <UButton label="Keep it" variant="ghost" color="neutral" size="sm" @click="() => { hookToRemove = null }" />
-            <UButton label="Delete" color="error" size="sm" @click="confirmRemoveHook" />
+            <UButton label="Keep it" variant="ghost" color="neutral" size="sm" @click="() => { pendingRemoval = null }" />
+            <UButton label="Remove" color="error" size="sm" @click="confirmRemoval" />
           </div>
         </div>
       </template>

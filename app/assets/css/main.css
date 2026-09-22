@@ -320,6 +320,18 @@ body {
 :root { --danger-wash: color-mix(in srgb, var(--error) 6%, var(--surface-raised)); }
 .dark { --danger-wash: color-mix(in srgb, var(--error) 14%, var(--surface-raised)); }
 
+/* A destructive control sitting beside a routine one: quiet at rest so it does
+   not compete, unmistakable the moment a pointer or the keyboard reaches it.
+   Same rule as above — the rare item pops because the routine one recedes. */
+.btn-danger-quiet {
+  color: var(--text-tertiary);
+  transition: color 150ms ease;
+}
+.btn-danger-quiet:hover,
+.btn-danger-quiet:focus-visible {
+  color: var(--error);
+}
+
 .attn-row {
   display: grid;
   /* 4px rail · icon · key · consequence · provability · class · wait · action.
