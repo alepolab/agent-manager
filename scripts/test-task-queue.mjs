@@ -54,7 +54,7 @@ const task = (id, over = {}) => ({
 {
   await Q.setQueue('P', [task('1'), task('2'), task('3')])
   const started = []
-  const r = await Q.dispatch(async (t) => {
+  const r = await Q.dispatch(async ([t]) => {
     const run = await store.createRun({
       workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: t.detail,
       watch: 'direct-invocation', projectDir: t.projectDir,
@@ -84,7 +84,7 @@ const task = (id, over = {}) => ({
   assert.equal(q.tasks.find(t => t.id === running.id).status, 'done',
     'a task is done because its run is, not because anything told the queue')
 
-  const r = await Q.dispatch(async (t) => {
+  const r = await Q.dispatch(async ([t]) => {
     const nr = await store.createRun({
       workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: t.detail,
       watch: 'direct-invocation', projectDir: t.projectDir,
@@ -124,7 +124,7 @@ const task = (id, over = {}) => ({
     { ...task('2'), projectDir: '/tmp/same', module: 'same' },
     { ...task('3'), projectDir: '/tmp/other', module: 'other' },
   ])
-  const r = await Q.dispatch(async (t) => {
+  const r = await Q.dispatch(async ([t]) => {
     const nr = await store.createRun({
       workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: t.detail,
       watch: 'direct-invocation', projectDir: t.projectDir,
@@ -133,9 +133,60 @@ const task = (id, over = {}) => ({
     await store.saveRun({ ...nr, status: 'running' })
     return nr
   })
-  assert.deepEqual(r.started.sort(), ['1', '3'],
-    'one per checkout — and the task on a free checkout is NOT blocked behind the busy one')
-  assert.match(r.held['2'], /busy with run/, 'and the one that yielded says which repository')
+  // Both tasks on `same` go in ONE run (they share a checkout, so they could
+  // never have been concurrent), and `other` goes at the same time in its own.
+  assert.deepEqual(r.started.sort(), ['1', '2', '3'],
+    'a shared checkout is one run for all of its tasks, and another repository runs in parallel')
+  const q2 = await Q.readQueue()
+  assert.equal(new Set(q2.tasks.filter(t => t.module === 'same').map(t => t.runId)).size, 1,
+    'the two on one checkout share a run')
+  assert.notEqual(q2.tasks.find(t => t.id === '3').runId, q2.tasks.find(t => t.id === '1').runId,
+    'and the other repository has a run of its own')
+}
+
+// ---- A group is one run, and groups go in parallel ---------------------
+// Twelve tasks against one repository could only ever be twelve runs one after
+// another, because the workspace lock allows one run per checkout. That was
+// not a policy, it was the lock — and it made the queue as slow as its busiest
+// repository.
+{
+  for (const prev of (await Q.readQueue()).tasks.filter(x => x.status === 'running')) {
+    const r = await store.getRun(prev.runId)
+    await store.saveRun({ ...r, status: 'completed', endedAt: Date.now() })
+  }
+  await Q.reconcile()
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({ agentManager: { maxConcurrentRuns: 5 } }))
+  await Q.setQueue('P', [
+    { ...task('1'), projectDir: '/tmp/repoA', module: 'A' },
+    { ...task('2'), projectDir: '/tmp/repoA', module: 'A' },
+    { ...task('3'), projectDir: '/tmp/repoA', module: 'A' },
+    { ...task('4'), projectDir: '/tmp/repoB', module: 'B' },
+  ])
+  const batches = []
+  const r = await Q.dispatch(async (group) => {
+    batches.push(group.map(g => g.id))
+    const nr = await store.createRun({
+      workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: 'x',
+      watch: 'direct-invocation', projectDir: group[0].projectDir,
+      steps: [{ stepId: 'a', label: 'A', agentSlug: 'x' }],
+    })
+    await store.saveRun({ ...nr, status: 'running' })
+    return nr
+  })
+  assert.deepEqual(batches, [['1', '2', '3'], ['4']],
+    'the three sharing a checkout are ONE run; the other repository goes at the same time')
+  assert.deepEqual(r.started.sort(), ['1', '2', '3', '4'], 'all four are started, in two runs')
+
+  const q = await Q.readQueue()
+  const ids = new Set(q.tasks.filter(t => t.module === 'A').map(t => t.runId))
+  assert.equal(ids.size, 1, 'and the group shares one run id')
+
+  // Settling that one run settles the whole group.
+  const run = await store.getRun([...ids][0])
+  await store.saveRun({ ...run, status: 'completed', endedAt: Date.now() })
+  const after = await Q.reconcile()
+  assert.deepEqual(after.tasks.filter(t => t.module === 'A').map(t => t.status), ['done', 'done', 'done'],
+    'a group settles together, because a group is one run')
 }
 
 // ---- The lock must survive the runner rewriting projectDir --------------
@@ -188,7 +239,7 @@ const task = (id, over = {}) => ({
 // nothing would ever reconcile it back.
 {
   await Q.setQueue('P', [task('7')])
-  await Q.dispatch(async (tk) => {
+  await Q.dispatch(async ([tk]) => {
     const nr = await store.createRun({
       workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: tk.detail,
       watch: 'direct-invocation', projectDir: tk.projectDir,

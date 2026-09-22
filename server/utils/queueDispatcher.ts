@@ -34,28 +34,43 @@ async function run(event?: H3Event): Promise<DispatchResult> {
   const login = signedIn?.login ?? (await readQueue()).owner
   const env = await envForUser(login)
 
-  return dispatch(async (task) => {
-    const workflow = await readWorkflow(task.workflowSlug)
-    if (!workflow?.steps?.length) throw new Error(`workflow ${task.workflowSlug} is missing or has no steps`)
+  return dispatch(async (tasks) => {
+    const lead = tasks[0]!
+    const workflow = await readWorkflow(lead.workflowSlug)
+    if (!workflow?.steps?.length) throw new Error(`workflow ${lead.workflowSlug} is missing or has no steps`)
 
-    // The ticket is fetched here, exactly as the manual start path does it, so
-    // a queued run carries the same enriched prompt a hand-started one gets —
-    // including the implementation brief from planBrief.ts.
-    const typed = task.detail ?? task.title
-    const ticket = await fetchTicketForPrompt(typed, env)
-    const initialPrompt = ticket.text ? `${ticket.text}\n\n---\n${typed}` : typed
+    // One prompt covering the whole group, in dependency order. Each task keeps
+    // its own id and its own done-when, so a run working four of them is still
+    // accountable for four outcomes rather than one vague "did the group".
+    const body = tasks.length === 1
+      ? (lead.detail ?? lead.title)
+      : [
+          `${lead.ticketKey ?? 'Queue'} — ${tasks.length} tasks in ${lead.module ?? 'this repository'}, in this order:`,
+          '',
+          ...tasks.map((t, i) => `${i + 1}. ${t.id}: ${t.title}`),
+          '',
+          'They share one checkout, which is why they are one run. Finish each before',
+          'starting the next, and say which you completed. The detail for each follows.',
+          '',
+          ...tasks.map(t => `--- ${t.id} ---\n${t.detail ?? t.title}`),
+        ].join('\n')
+
+    // The ticket is fetched exactly as the manual start path does it, so a
+    // queued run carries the same enriched prompt a hand-started one gets.
+    const ticket = await fetchTicketForPrompt(body, env)
+    const initialPrompt = ticket.text ? `${ticket.text}\n\n---\n${body}` : body
 
     return startRun({
       workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
       initialPrompt,
       watch: 'direct-invocation',
-      ticketKey: task.ticketKey,
-      ...(task.productKey ? { productKey: task.productKey } : {}),
-      // Never autoRun from a queue: the whole point is one at a time under a
-      // person's eye, and a queue that also ran every gate unattended would be
-      // the opposite of the control it was asked for.
+      ticketKey: lead.ticketKey,
+      ...(lead.productKey ? { productKey: lead.productKey } : {}),
+      // Never autoRun from a queue: the whole point is work a person can see
+      // and stop, and a queue that also ran every gate unattended would be the
+      // opposite of the control it was asked for.
       autoRun: false,
-      projectDir: task.projectDir,
+      projectDir: lead.projectDir,
       startedBy: login,
     })
   })

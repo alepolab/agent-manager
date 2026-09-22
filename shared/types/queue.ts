@@ -44,6 +44,18 @@ export interface QueueTask {
   projectDir?: string
   /** For display and for grouping; the repository name behind projectDir. */
   module?: string
+  /**
+   * Tasks sharing a group are worked by ONE run, together.
+   *
+   * The workspace lock allows one run per checkout, so twelve tasks against
+   * ase_lbss could only ever be twelve runs one after another — that was not
+   * a policy choice, it was the lock, and it made the queue as slow as its
+   * busiest repository. Tasks in a group share a checkout by construction, so
+   * one run does all of them and the groups go in parallel.
+   *
+   * Absent means the task is its own group.
+   */
+  group?: string
   ticketKey?: string
   /**
    * The registry product this task's module belongs to.

@@ -99,6 +99,9 @@ export async function reconcile(): Promise<TaskQueue> {
   return q
 }
 
+/** The group a task belongs to. Its own id when it names none. */
+export const groupOf = (t: QueueTask): string => t.group || t.module || t.id
+
 /** The next tasks that could start, in pull order. */
 export function eligible(q: TaskQueue): QueueTask[] {
   const doneIds = new Set(q.tasks.filter(t => t.status === 'done').map(t => t.id))
@@ -107,7 +110,7 @@ export function eligible(q: TaskQueue): QueueTask[] {
     .sort((a, b) => a.order - b.order)
 }
 
-export type StartRunFn = (task: QueueTask) => Promise<{ id: string }>
+export type StartRunFn = (tasks: QueueTask[]) => Promise<{ id: string }>
 
 /**
  * Start as many eligible tasks as the instance will carry, in order.
@@ -147,13 +150,20 @@ export async function dispatch(startRun: StartRunFn): Promise<DispatchResult> {
       continue
     }
 
+    // Everything eligible in the same group goes in one run. They share a
+    // checkout by construction, so they could never have run concurrently
+    // anyway — one run doing all of them is the difference between the
+    // group's total time and the sum of its parts.
+    const group = eligible(q).filter(t => groupOf(t) === groupOf(task))
     try {
-      const run = await startRun(task)
-      task.status = 'running'
-      task.runId = run.id
-      task.startedAt = Date.now()
-      task.note = undefined
-      result.started.push(task.id)
+      const run = await startRun(group)
+      for (const member of group) {
+        member.status = 'running'
+        member.runId = run.id
+        member.startedAt = Date.now()
+        member.note = undefined
+        result.started.push(member.id)
+      }
       await writeQueue(q)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
