@@ -35,15 +35,25 @@ export function useProducts() {
   const loading = useState('registry-loading', () => false)
   const error = useState<string | null>('registry-error', () => null)
 
-  async function load(opts: { silent?: boolean } = {}) {
-    if (!opts.silent) loading.value = true
+  async function load({ silent = false } = {}) {
+    if (!silent) {
+      loading.value = true
+      error.value = null
+    }
     try {
-      registry.value = await $fetch<RegistryRead>('/api/registry/products')
+      const next = await $fetch<RegistryRead>('/api/registry/products')
+      // An unchanged background refresh must not hand consumers a new object:
+      // /registry/[key] reads the same `registry` state this poll reassigns.
+      if (silent && JSON.stringify(next) === JSON.stringify(registry.value)) return
+      registry.value = next
       error.value = null
     } catch (e: any) {
+      // The 30s poll fires unprompted — see useAutoRefresh. A transient failure
+      // there must not paint an error banner over data that is still on screen.
+      if (silent) return
       error.value = e?.data?.message || e?.message || 'Could not read the registry'
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 
