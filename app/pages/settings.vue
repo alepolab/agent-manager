@@ -2,7 +2,19 @@
 import type { Settings, AgentModel } from '~/types'
 import { MODEL_OPTIONS } from '~/utils/models'
 
-const { settings, loading, load, save } = useSettings()
+const { settings, loading, error: loadError, load, save } = useSettings()
+// `error` was destructured off and dropped, so a failed load rendered as a
+// VALID EMPTY CONFIG: "No plugins configured", every toggle off. A reader
+// cannot tell that from a real instance with nothing set up, and the two call
+// for opposite actions.
+const { can } = useUser()
+/**
+ * GET /api/settings is unguarded; PUT requires `configure`. So a developer or
+ * QA saw every toggle and every field live, and got "Failed to save" on each
+ * one — a page that looks operable and refuses every act teaches that the app
+ * is broken rather than that this is not their screen.
+ */
+const readOnly = computed(() => !can('configure'))
 const {
   skillImports,
   agentImports,
@@ -296,6 +308,30 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
 <template>
   <div>
+    <!-- Two facts the page refused to state: that it could not load, and that
+         you cannot change it. Both used to render as an ordinary, operable,
+         empty settings page. -->
+    <div
+      v-if="loadError"
+      class="mx-4 mt-3 rounded-lg px-3 py-2 t-small flex items-center gap-2"
+      style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.2);"
+      role="alert"
+    >
+      <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
+      <span style="color: var(--error);">Settings could not be loaded, so nothing below reflects this instance.</span>
+      <span class="text-label truncate">{{ loadError }}</span>
+      <button class="ml-auto underline focus-ring shrink-0" style="color: var(--error);" @click="load()">Retry</button>
+    </div>
+    <div
+      v-else-if="readOnly"
+      class="mx-4 mt-3 rounded-lg px-3 py-2 t-small flex items-center gap-2"
+      style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+      role="status"
+    >
+      <UIcon name="i-lucide-lock" class="size-4 shrink-0" style="color: var(--text-tertiary);" />
+      <span style="color: var(--text-secondary);">These are the instance's settings, shown read-only. Only an operator can change them.</span>
+    </div>
+    <fieldset :disabled="readOnly" class="contents">
     <PageHeader title="Settings">
       <template #right>
         <button
@@ -717,5 +753,6 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         </div>
       </template>
     </UModal>
+      </fieldset>
   </div>
 </template>
