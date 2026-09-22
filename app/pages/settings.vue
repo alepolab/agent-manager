@@ -271,6 +271,44 @@ async function addHook() {
   showAddHookModal.value = false
 }
 
+/**
+ * A hook runs a shell command on this machine, and deleting one used to take
+ * a single click on a control that appeared only on hover — no confirmation,
+ * no undo, and the command text gone with it. The repository remover two
+ * sections up gets a full dialog for something far easier to redo, so this is
+ * the page contradicting its own standard rather than a missing nicety.
+ */
+const hookToRemove = ref<{ event: string; index: number; command: string } | null>(null)
+
+/**
+ * The shell command a hook entry runs.
+ *
+ * settings.json stores `{ matcher?, hooks: [{ type, command }] }`, not a bare
+ * `{ command }`. The page read `cmd.command` and fell back to
+ * `JSON.stringify(cmd)`, so the fallback fired on every real hook and each
+ * row rendered a line of escaped JSON — the one thing a reader needs from
+ * this list, the command about to run on their machine, was the hardest part
+ * of it to find.
+ */
+function hookCommandText(cmd: unknown): string {
+  if (typeof cmd === 'string') return cmd
+  const entry = cmd as { command?: string; hooks?: { command?: string }[] } | null
+  if (entry?.command) return entry.command
+  const nested = (entry?.hooks ?? []).map(h => h?.command).filter(Boolean) as string[]
+  return nested.length ? nested.join(' ; ') : JSON.stringify(cmd)
+}
+
+function askRemoveHook(event: string, index: number, command: string) {
+  hookToRemove.value = { event, index, command }
+}
+
+async function confirmRemoveHook() {
+  const target = hookToRemove.value
+  if (!target) return
+  hookToRemove.value = null
+  await removeHook(target.event, target.index)
+}
+
 async function removeHook(event: string, index: number) {
   const currentHooks = (settings.value?.hooks || {}) as Record<string, unknown[]>
   const eventHooks = [...(currentHooks[event] || [])]
@@ -657,8 +695,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                 style="background: var(--input-bg);"
               >
                 <div class="flex-1 min-w-0">
-                  <span class="font-mono t-small truncate block text-label">
-                    {{ typeof cmd === 'string' ? cmd : (cmd as any).command || JSON.stringify(cmd) }}
+                  <span class="font-mono t-small truncate block text-label" :title="hookCommandText(cmd)">
+                    {{ hookCommandText(cmd) }}
                   </span>
                   <span
                     v-if="typeof cmd === 'object' && (cmd as any).matcher"
@@ -670,8 +708,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                 <button
                   class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1.5 -m-0.5 rounded focus-ring"
                   style="color: var(--error);"
-                  aria-label="Delete hook"
-                  @click="removeHook(hook.event, idx)"
+                  :aria-label="`Delete the ${hookEventLabels[hook.event] || hook.event} hook that runs ${hookCommandText(cmd)}`"
+                  @click="askRemoveHook(hook.event, idx, hookCommandText(cmd))"
                 >
                   <UIcon name="i-lucide-trash-2" class="size-3.5" />
                 </button>
@@ -719,6 +757,37 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         />
       </div>
     </div>
+
+    <!-- Deleting a hook removes a shell command with no undo. It gets the same
+         confirmation the repository remover on this page already gets. -->
+    <UModal
+      :open="!!hookToRemove"
+      title="Delete this automation?"
+      description="The hook and its command are removed from settings.json. This cannot be undone."
+      @update:open="(v: boolean) => { if (!v) hookToRemove = null }"
+    >
+      <template #content>
+        <div class="p-6 space-y-4 bg-overlay">
+          <div class="flex items-center gap-3">
+            <div class="size-10 rounded-full flex items-center justify-center shrink-0" style="background: rgba(239, 68, 68, 0.1);">
+              <UIcon name="i-lucide-alert-triangle" class="size-6 text-error" />
+            </div>
+            <div>
+              <h3 class="t-body font-semibold text-primary">Delete this automation?</h3>
+              <p class="t-small text-label mt-1">This action cannot be undone.</p>
+            </div>
+          </div>
+          <div class="rounded-lg p-3 border" style="background: var(--surface-base); border-color: var(--border-subtle);">
+            <p class="t-small text-label mb-1">{{ hookEventLabels[hookToRemove?.event ?? ''] || hookToRemove?.event }} will stop running:</p>
+            <p class="font-mono t-small break-all text-body">{{ hookToRemove?.command }}</p>
+          </div>
+          <div class="flex justify-end gap-2">
+            <UButton label="Keep it" variant="ghost" color="neutral" size="sm" @click="() => { hookToRemove = null }" />
+            <UButton label="Delete" color="error" size="sm" @click="confirmRemoveHook" />
+          </div>
+        </div>
+      </template>
+    </UModal>
 
     <!-- Add Hook Modal -->
     <UModal v-model:open="showAddHookModal" title="Add Automation"
