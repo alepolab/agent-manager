@@ -203,7 +203,8 @@ function onPluginInstalled() {
       </div>
     </div>
 
-    <UModal v-model:open="showAddPluginModal">
+    <UModal v-model:open="showAddPluginModal" title="Add plugin"
+      description="Install a plugin from a marketplace or a repository.">
       <template #content>
         <AddPluginModal @installed="onPluginInstalled" @close="showAddPluginModal = false" />
       </template>

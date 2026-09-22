@@ -719,7 +719,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     />
 
     <!-- Step settings -->
-    <UModal :open="!!settingsStepId" @update:open="settingsStepId = $event ? settingsStepId : null">
+    <UModal :open="!!settingsStepId" :title="settingsStep?.label ?? 'Step settings'" description="Settings for this step: who owns it, what it runs, and whether it stops for a decision." @update:open="settingsStepId = $event ? settingsStepId : null">
       <template #content>
         <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">{{ settingsStep.label }}</h3>
@@ -790,7 +790,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     </UModal>
 
     <!-- Mobile agent picker -->
-    <UModal v-model:open="showMobileAgentPicker">
+    <UModal v-model:open="showMobileAgentPicker" title="Add agent"
+      description="Pick an agent to add as a step in this workflow.">
       <template #content>
         <div class="p-4 space-y-3 bg-overlay">
           <h3 class="text-page-title">Add Agent</h3>

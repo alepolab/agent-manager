@@ -199,7 +199,8 @@ async function createBlank() {
     </div>
 
     <!-- Create modal -->
-    <UModal v-model:open="showCreateModal">
+    <UModal v-model:open="showCreateModal" title="New workflow"
+      description="Name the workflow. You add its steps on the next screen.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">New Workflow</h3>

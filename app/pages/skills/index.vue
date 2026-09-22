@@ -191,7 +191,8 @@ onMounted(() => {
       </div>
     </div>
 
-    <UModal v-model:open="showCreateModal">
+    <UModal v-model:open="showCreateModal" title="New skill"
+      description="Create a skill. It opens for editing once saved.">
       <template #content>
         <SkillForm
           mode="create"
@@ -201,7 +202,8 @@ onMounted(() => {
       </template>
     </UModal>
 
-    <UModal v-model:open="showImportModal">
+    <UModal v-model:open="showImportModal" title="Import skill"
+      description="Import skills from a GitHub repository.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Import Skill</h3>

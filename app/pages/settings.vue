@@ -721,7 +721,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
     </div>
 
     <!-- Add Hook Modal -->
-    <UModal v-model:open="showAddHookModal">
+    <UModal v-model:open="showAddHookModal" title="Add Automation"
+      description="Run a shell command automatically when a specific event happens.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Add Automation</h3>
@@ -760,7 +761,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
     </UModal>
 
     <!-- Delete Confirmation Modal -->
-    <UModal v-model:open="showRemoveConfirm">
+    <UModal v-model:open="showRemoveConfirm" title="Remove repository?"
+      description="Deletes the local clone and unlinks everything it installed. This cannot be undone.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <div class="flex items-center gap-3">

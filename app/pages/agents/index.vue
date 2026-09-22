@@ -240,7 +240,8 @@ async function useTemplate(templateId: string) {
       </div>
     </div>
 
-    <UModal v-model:open="showCreateModal">
+    <UModal v-model:open="showCreateModal" title="New agent"
+      description="Create an agent. It opens for editing once saved.">
       <template #content>
         <AgentWizard
           @saved="(a) => { showCreateModal = false; router.push(`/agents/${a.slug}`) }"
@@ -249,7 +250,8 @@ async function useTemplate(templateId: string) {
       </template>
     </UModal>
 
-    <UModal v-model:open="showImportModal">
+    <UModal v-model:open="showImportModal" title="Import agent"
+      description="Import agents from a GitHub repository.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Import Agent</h3>

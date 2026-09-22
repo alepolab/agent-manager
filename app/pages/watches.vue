@@ -474,7 +474,8 @@ function relativeTime(ms: number): string {
     </div>
 
     <!-- Create modal -->
-    <UModal v-model:open="showCreateModal">
+    <UModal v-model:open="showCreateModal" :title="isEditing ? `Edit ${editing?.name || 'watch'}` : 'New watch'"
+      description="A watch polls a Jira query and starts a run for each new ticket.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">{{ isEditing ? `Edit ${editing?.name || 'watch'}` : 'New Watch' }}</h3>

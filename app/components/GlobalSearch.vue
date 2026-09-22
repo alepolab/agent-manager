@@ -154,7 +154,8 @@ if (import.meta.client) {
 </script>
 
 <template>
-  <UModal v-model:open="open">
+  <UModal v-model:open="open" title="Search"
+    description="Search agents, skills, commands, workflows and runs.">
     <template #content>
       <div style="min-height: 120px; max-height: 420px;" class="bg-overlay rounded-xl overflow-hidden flex flex-col">
         <!-- Search input -->

@@ -126,7 +126,8 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
     </div>
 
     <!-- Add/Edit Modal -->
-    <UModal v-model:open="isModalOpen">
+    <UModal v-model:open="isModalOpen" :title="editingStyle ? 'Edit output style' : 'New output style'"
+      description="An output style changes how Claude writes its replies.">
       <template #content>
         <AddOutputStyleModal
           :initial-data="editingStyle ?? undefined"
