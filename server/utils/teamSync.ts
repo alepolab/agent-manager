@@ -8,7 +8,8 @@ import { parse } from 'yaml'
 import { resolveClaudePath } from './claudeDir.ts'
 import { serializeFrontmatter } from './frontmatter.ts'
 import { invalidate, memo } from './memo.ts'
-import { loadRegistry } from './registry.ts'
+import { loadRegistry, recipePathFor } from './registry.ts'
+import { seedInfo, seedSourcePath } from './productStore.ts'
 import { listWatches, saveWatch } from './watchConfig.ts'
 import { agentRunsRoot } from './runArtifacts.ts'
 import { defaultBudget } from './workflowRunStore.ts'
@@ -52,7 +53,18 @@ export interface TeamStatus {
   reverted: { kind: 'agent' | 'skill' | 'command', name: string }[]
   /** Registry watches, seeded disabled; an operator enables them on the Watches page. */
   watches: ({ id: string } & TeamItem)[]
-  registry: { ok: boolean, products: number, path: string | null, items: { key: string, suite?: string, repos: string[], recipe: boolean }[] }
+  registry: {
+    ok: boolean
+    /** The store exists but does not parse, so routing is running on the seed. */
+    degraded: boolean
+    products: number
+    path: string | null
+    items: { key: string, suite?: string, repos: string[], recipe: boolean }[]
+    /** Where the store was first copied from, and when. Null before it is seeded. */
+    seed: { seededFrom: string, seededKind: string, seedSha256: string, seededAt: number } | null
+    /** How the store differs from the plugin's copy. Reported only - never applied. */
+    drift: { newInSource: string[], changedInSource: string[], removedInSource: string[] }
+  }
   /** Skills the sdlc-* agents declare that do not resolve here. Those agents run without them, silently. */
   unresolvedSkills: string[]
   /** Whether the plugin's hooks are actually armed on this instance, as verify-enforcement.mjs sees it. */
@@ -70,6 +82,36 @@ export interface TeamStatus {
 }
 
 const RUNBOOK_SLUG = RUNBOOK_FILES['runbook-a-jira-to-diff']!
+
+/**
+ * How the instance's registry store differs from the plugin's copy.
+ *
+ * Read-only by construction: it returns three lists of keys and writes
+ * nothing. `newInSource` is the one that matters in practice - the plugin
+ * ships a product the instance has never seen, and without this the only
+ * symptom is a ticket for that product resolving to nothing. `removedInSource`
+ * is usually a LOCAL addition rather than a deletion upstream, which is why it
+ * is named after the source rather than called "deleted".
+ */
+async function driftAgainstSeed(products: Record<string, any>): Promise<TeamStatus['registry']['drift']> {
+  const empty = { newInSource: [], changedInSource: [], removedInSource: [] }
+  const source = seedSourcePath()
+  if (!source) return empty
+  try {
+    const parsed = parse(await readFile(source.path, 'utf-8'))?.products
+    if (!parsed || typeof parsed !== 'object') return empty
+    const shape = (p: unknown) => JSON.stringify(p)
+    return {
+      newInSource: Object.keys(parsed).filter(k => !(k in products)),
+      changedInSource: Object.keys(parsed).filter(k => k in products && shape(parsed[k]) !== shape(products[k])),
+      removedInSource: Object.keys(products).filter(k => !(k in parsed)),
+    }
+  } catch {
+    // A seed source that does not parse is not this function's problem to
+    // report: the registry the instance is actually running is fine.
+    return empty
+  }
+}
 const shippedDir = () => join(process.cwd(), 'engineering')
 const appliedPath = () => resolveClaudePath('.team-applied.json')
 
@@ -377,8 +419,19 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     key,
     ...(p?.suite ? { suite: String(p.suite) } : {}),
     repos: Array.isArray(p?.repos) ? p.repos.map(String) : [],
-    recipe: existsSync(join(reg.path, '..', '..', 'recipes', `${key}.md`)),
+    recipe: !!recipePathFor(key),
   })) : []
+
+  // Registry drift is REPORTED and never applied.
+  //
+  // Every other section of this function writes on `apply`; this one cannot,
+  // and `want()` is never consulted for a product. The registry is the one
+  // seeded thing a developer edits to change how runs route, and an apply that
+  // rewrote it would hand that change back to the plugin at the next boot -
+  // the failure `reverted` exists to warn about, on the one file where it
+  // would silently cut branches from the wrong base. Importing a product the
+  // plugin has added is a button on the Team page instead.
+  const registryDrift = await driftAgainstSeed(reg?.products ?? {})
 
   // The boot log used to say "N declared skills do not resolve" and nothing
   // else did; the page is where a developer would look.
@@ -404,7 +457,15 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     workflow: { slug: wf.slug, state: wf.state, steps: wf.steps, ...(wf.diff ? { diff: wf.diff } : {}) },
     workflows,
     watches,
-    registry: { ok: !!reg, products: items.length, path: reg?.path ?? null, items },
+    registry: {
+      ok: !!reg,
+      degraded: reg?.degraded === true,
+      products: items.length,
+      path: reg?.path ?? null,
+      items,
+      seed: seedInfo(),
+      drift: registryDrift,
+    },
     unresolvedSkills,
     enforcement: await enforcement(plugin),
     lastApplied: await readJsonOr<TeamStatus['lastApplied']>(appliedPath()),

@@ -16,6 +16,14 @@
  *
  * And nothing claimed the DEVOPS project or any infrastructure vocabulary, so
  * compose and deployment work resolved to nothing even with a registry loaded.
+ *
+ * The registry now lives in a store this app owns, seeded from the plugin or
+ * from the shipped copy the first time anything reads it, so what this file
+ * asserts about the no-plugin case has moved by one step: the registry still
+ * loads, and its CONTENT still comes from the shipped copy — but it is read
+ * back from the store, and the seed sidecar is what records where it came
+ * from. Everything below this point is unchanged, and that is the point: the
+ * store moved where the file lives, not which product a ticket routes to.
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -27,10 +35,16 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'reg-'))
 delete process.env.AGENT_REGISTRY_PATH
 
 const { resolveProduct, loadRegistry } = await import('../server/utils/registry.ts')
+const { seedInfo, storePath } = await import('../server/utils/productStore.ts')
 
 const reg = await loadRegistry()
-assert.ok(reg, 'the registry must load from the shipped copy when no plugin is installed')
-assert.ok(reg.path.includes('engineering/registry'), `expected the shipped copy, got ${reg?.path}`)
+assert.ok(reg, 'the registry must still load when no plugin is installed — a null one routes every ticket to nothing')
+assert.equal(reg.path, storePath(), 'it is read back from the store this app owns')
+assert.equal(reg.degraded, false, 'and the store parses')
+const seed = seedInfo()
+assert.ok(seed, 'the seed is recorded, so where the content came from is answerable afterwards')
+assert.equal(seed.seededKind, 'shipped', 'with no plugin installed, the copy shipped in the product is the seed')
+assert.ok(seed.seededFrom.includes('engineering/registry'), `expected the shipped copy as the seed, got ${seed.seededFrom}`)
 
 const routes = async t => (await resolveProduct(t))?.name
 
