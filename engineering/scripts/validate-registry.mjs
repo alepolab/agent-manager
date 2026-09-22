@@ -21,7 +21,19 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+/**
+ * Where registry/ and registry/schemas/ are read from. `--root <dir>` points
+ * this at a fixture instead, which is what lets a test feed it a deliberately
+ * broken entry and compare its verdict with the app's own validator
+ * (server/utils/registryValidate.ts). Those two enforce the same rules from
+ * separate implementations - this script ships inside the plugin, where the
+ * app's shared/ does not exist - so the only thing keeping them honest is a
+ * test that can run both over the same input.
+ */
+const rootArg = process.argv.indexOf('--root')
+const root = rootArg > -1 && process.argv[rootArg + 1]
+  ? process.argv[rootArg + 1]
+  : join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const problems = []
 const notes = []
@@ -284,8 +296,16 @@ for (const [name, p] of Object.entries(products)) {
     note(where, 'has no atdd or compose_test suite, so only unit tests can serve as its oracle')
   }
   // Money and protocol are never auto-merged, so they must name a human group.
+  //
+  // Tested against `label in owners`, not the value's truthiness. The guard was
+  // `p.owners?.[label] && !trim()`, which short-circuits on the empty string -
+  // the commonest way to write an owner nobody has filled in - so the rule
+  // could only ever fire for whitespace, and an entry declaring `money: ''`
+  // passed. server/utils/registryValidate.ts enforces the same rule for the
+  // Products page; scripts/test-registry-validators-agree.mjs is what caught
+  // the two disagreeing.
   for (const label of ['money', 'protocol']) {
-    if (p.owners?.[label] && !String(p.owners[label]).trim()) {
+    if (label in (p.owners ?? {}) && !String(p.owners[label] ?? '').trim()) {
       fail(where, `owners.${label} is empty; a ${label} change would have no named approver`)
     }
   }
