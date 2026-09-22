@@ -128,7 +128,22 @@ const navTopAll = [
   { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands', group: 'author' },
   { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins', group: 'author' },
   { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp', group: 'author' },
-  { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles', group: 'author' },
+  // Output Styles and Graph are OFF THE SIDEBAR, not deleted — both remain
+  // reachable by URL and their code is untouched.
+  //
+  // Output Styles configures the Claude Code CLI's own output formatting from
+  // a delivery control plane: a settings field promoted to a destination, and
+  // it was the only nav entry whose data was fetched and whose badge never
+  // rendered. Graph draws agent-to-skill references from the config
+  // directory; it answers no question anyone has during a run, and the one
+  // fact it holds that no list holds — an entity nothing references — is its
+  // least visible mark, a dashed border at 55% opacity that cannot be
+  // filtered to. Both were already labs-gated, which is this codebase's own
+  // admission that neither belongs beside Runs.
+  //
+  // Removing the rows rather than the files because a nav entry costs
+  // attention on every route and a file costs nothing until someone opens it,
+  // and because deleting either is not reversible by a person reading this.
 ]
 
 /**
@@ -165,7 +180,9 @@ const NAV_BY_ROLE: Record<Role, string[]> = {
   // An architect reads across runs rather than inside one, so they are offered
   // the board and the relationship graph. Both are read-only and the API
   // refuses the writes regardless, so offering them costs nothing.
-  architect: ['/', '/runs', '/board', '/graph'],
+  // '/graph' was here and is no longer in the sidebar, so listing it granted
+  // nothing and only made this row disagree with what an architect can see.
+  architect: ['/', '/runs', '/board'],
   // A designer reviews what a run produced. Artifacts are in `navMid` for
   // everyone, which is where their evidence lives until a design surface exists.
   designer: ['/', '/runs'],
@@ -216,7 +233,7 @@ const navMid = computed(() => navMidAll.filter(l => l.key !== 'cli' || can('conf
 
 const navBottomAll = [
   { label: 'Explore', icon: 'i-lucide-compass', to: '/explore' },
-  { label: 'Graph', icon: 'i-lucide-workflow', to: '/graph' },
+
   { label: 'Settings', icon: 'i-lucide-settings', to: '/settings' },
 ]
 // Settings is configuration, so it goes with the rest of it: only an operator
