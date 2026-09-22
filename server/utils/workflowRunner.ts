@@ -27,7 +27,7 @@ import { stackUp, stackDown } from './stackLifecycle.ts'
 import { planDeploy, runDeploy, DeployError } from './deployStep.ts'
 import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
+import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane, cleanupRunWorktree } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 import { criteriaForGate } from './gateCriteria.ts'
 
@@ -659,6 +659,20 @@ async function publish(run: WorkflowRun) {
     // occupied, which is the only moment the next queued task can start. Doing
     // it here rather than on a timer means "one after another" needs nobody
     // watching; `onRunSettled` never throws and never blocks this publish.
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'stopped') {
+      // Give the worktree back. Nothing did this, so an instance accumulated
+      // one directory per run it had ever executed, and a directory someone
+      // deleted by hand left a stale registration that then refused the NEXT
+      // run on that branch. Both were live here: five leftovers on disk and
+      // two repositories registering worktrees already gone.
+      //
+      // Refuses to remove one holding uncommitted work or unpushed commits —
+      // that work exists nowhere else — and says which, so a kept worktree is
+      // a stated fact rather than litter.
+      void cleanupRunWorktree(run.projectDir)
+        .then(r => log[r.removed ? 'info' : 'warn']('run worktree', { runId: run.id, removed: r.removed, reason: r.reason }))
+        .catch(() => { /* housekeeping must never fail a finished run */ })
+    }
     if (run.status === 'completed' || run.status === 'failed' || run.status === 'stopped' || run.status === 'interrupted') {
       // Imported here rather than at module scope on purpose: the dispatcher
       // reaches the workflow store and the Jira client, and pulling that chain

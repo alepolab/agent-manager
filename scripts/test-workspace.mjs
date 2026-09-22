@@ -118,6 +118,57 @@ const bad = await W.artifactsWritable()
 assert.equal(bad.ok, false); assert.ok(bad.error, 'the reason travels with the verdict')
 
 rmSync(root, { recursive: true, force: true })
+// ---- A settled run gives its worktree back, unless work would be lost ----
+// Nothing did this, so an instance accumulated one directory per run it had
+// ever executed — and a directory removed by hand left a stale registration
+// that then refused the NEXT run on that branch.
+{
+  const clone = join(root, 'ws', 'cleanup-repo')
+  mkdirSync(clone, { recursive: true })
+  git(clone, ['init', '--quiet', '-b', 'main'])
+  git(clone, ['config', 'user.email', 't@x']); git(clone, ['config', 'user.name', 't'])
+  writeFileSync(join(clone, 'a.txt'), 'a\n'); git(clone, ['add', '.']); git(clone, ['commit', '--quiet', '-m', 'init'])
+
+  // Clean and with nothing of its own: taken back.
+  const [clean] = await W.ensureRunBranch(clone, 'fix/X-1-aaaaaaaa')
+  assert.ok(existsSync(clean))
+  let r = await W.cleanupRunWorktree(clean)
+  assert.equal(r.removed, true, 'a clean worktree is returned')
+  assert.ok(!existsSync(clean), 'and the directory is gone')
+  assert.equal(git(clone, ['worktree', 'list']).split('\n').length, 1, 'with no registration left behind')
+
+  // Uncommitted work lives nowhere else: kept, with the reason.
+  const [dirty] = await W.ensureRunBranch(clone, 'fix/X-2-bbbbbbbb')
+  writeFileSync(join(dirty, 'wip.txt'), 'half a fix\n')
+  r = await W.cleanupRunWorktree(dirty)
+  assert.equal(r.removed, false, 'a worktree holding uncommitted work is NEVER removed')
+  assert.match(r.reason, /uncommitted/)
+  assert.ok(existsSync(join(dirty, 'wip.txt')), 'and the work is still there')
+
+  // Commits that reached no remote are equally unrecoverable: kept.
+  const [committed] = await W.ensureRunBranch(clone, 'fix/X-3-cccccccc')
+  writeFileSync(join(committed, 'done.txt'), 'a fix\n')
+  git(committed, ['add', '.']); git(committed, ['commit', '--quiet', '-m', 'the fix'])
+  r = await W.cleanupRunWorktree(committed)
+  assert.equal(r.removed, false, 'a local-only commit is not thrown away either')
+  assert.match(r.reason, /not on any remote|not pushed/)
+
+  // A directory already deleted by hand: the stale registration is what blocks
+  // the next run, and clearing it is the whole job.
+  const [stale] = await W.ensureRunBranch(clone, 'fix/X-4-dddddddd')
+  rmSync(stale, { recursive: true, force: true })
+  r = await W.cleanupRunWorktree(stale)
+  assert.equal(r.removed, true)
+  assert.match(r.reason, /stale registration pruned/)
+  assert.ok(!git(clone, ['worktree', 'list']).includes('dddddddd'), 'and the registration is gone')
+
+  // Never throws, whatever it is handed.
+  for (const nonsense of [undefined, '', '/nope', join(root, 'ws', 'not-a-worktree')]) {
+    const out = await W.cleanupRunWorktree(nonsense)
+    assert.equal(typeof out.reason, 'string', `${nonsense} yields a reason, not an exception`)
+  }
+}
+
 console.log('workspace: all assertions passed')
 
 // ── A commit made in a run worktree says which run made it ──────────────────

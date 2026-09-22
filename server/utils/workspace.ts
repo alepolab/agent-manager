@@ -487,3 +487,78 @@ export async function artifactsWritable(): Promise<{ ok: boolean, path: string, 
     return { ok: false, path, error: err instanceof Error ? err.message : String(err) }
   }
 }
+
+export interface WorktreeCleanup { removed: boolean, reason: string }
+
+/**
+ * Remove a settled run's worktree, unless doing so would lose work.
+ *
+ * Nothing ever did this. `ensureRunBranch` cut a worktree per run and
+ * `removeLane` cleaned up lanes, but the run's own worktree stayed for ever —
+ * so an instance accumulated one directory per run it had ever executed, the
+ * checkout list grew without bound, and a directory someone deleted by hand
+ * left a STALE REGISTRATION that then refused the next run on that branch
+ * ("<path> exists and is on <branch>"). Both failure modes were live on this
+ * instance: five leftover worktrees on disk, and two repositories registering
+ * worktrees whose directories were already gone.
+ *
+ * The safety rule is the whole point, because a worktree is where a run's work
+ * lives until it is pushed:
+ *
+ *  - uncommitted changes    -> KEEP. That work exists nowhere else.
+ *  - commits not on a remote -> KEEP. The branch is local; removing the
+ *                              worktree leaves it unreachable in practice.
+ *  - otherwise               -> remove, and prune the registration.
+ *
+ * Never throws: cleanup is housekeeping, and a run that finished correctly
+ * must not be reported as failed because a directory would not delete.
+ */
+export async function cleanupRunWorktree(worktree: string | undefined): Promise<WorktreeCleanup> {
+  if (!worktree || !worktree.includes('@')) return { removed: false, reason: 'not a run worktree' }
+  const clone = worktree.split('@')[0]!
+  if (!existsSync(clone)) return { removed: false, reason: 'its clone is gone' }
+
+  // Prune first: a registration whose directory has already been removed is
+  // the thing that blocks the next run, and it costs nothing to clear.
+  await git(clone, ['worktree', 'prune']).catch(() => '')
+  if (!existsSync(worktree)) return { removed: true, reason: 'already gone; stale registration pruned' }
+
+  try {
+    const dirty = (await gitRaw(worktree, ['status', '--porcelain', '-uall'])).split('\n').filter(Boolean)
+    if (dirty.length) return { removed: false, reason: `${dirty.length} uncommitted change(s) live only here` }
+
+    const branch = await git(worktree, ['branch', '--show-current']).catch(() => '')
+    if (branch) {
+      // `@{u}` fails when there is no upstream, which is itself the answer:
+      // nothing has been pushed, so every commit on this branch is local.
+      const unpushed = await git(worktree, ['rev-list', '--count', `@{u}..HEAD`]).catch(() => null)
+      if (unpushed === null) {
+        const local = await git(worktree, ['rev-list', '--count', `HEAD`]).catch(() => '0')
+        const base = await git(clone, ['rev-list', '--count', 'HEAD']).catch(() => '0')
+        if (Number(local) > Number(base)) return { removed: false, reason: `${Number(local) - Number(base)} commit(s) are not on any remote` }
+      } else if (Number(unpushed) > 0) {
+        return { removed: false, reason: `${unpushed} commit(s) are not pushed` }
+      }
+    }
+
+    await git(clone, ['worktree', 'remove', '--force', worktree])
+    await git(clone, ['worktree', 'prune']).catch(() => '')
+    return { removed: true, reason: 'clean and fully pushed' }
+  } catch (err) {
+    return { removed: false, reason: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Clear registrations whose directories are gone, across every checkout. The
+ *  cheap half of the fix: a stale one refuses the next run on that branch. */
+export async function pruneAllWorktrees(): Promise<number> {
+  let pruned = 0
+  for (const c of await listCheckouts()) {
+    if (!c.git || c.name.includes('@')) continue
+    const before = (await git(c.path, ['worktree', 'list']).catch(() => '')).split('\n').length
+    await git(c.path, ['worktree', 'prune']).catch(() => '')
+    const after = (await git(c.path, ['worktree', 'list']).catch(() => '')).split('\n').length
+    pruned += Math.max(0, before - after)
+  }
+  return pruned
+}
