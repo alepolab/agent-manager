@@ -89,7 +89,7 @@ const name = ref('')
 const description = ref('')
 // Edges are deleted by a click and nodes moved by a drag; leaving discards both silently without this.
 const isDirty = computed(() => !!workflow.value && JSON.stringify({ n: name.value, d: description.value, s: workflowSteps.value }) !== JSON.stringify({ n: workflow.value.name, d: workflow.value.description, s: workflow.value.steps }))
-useUnsavedChanges(isDirty)
+// useUnsavedChanges(anyDirty) is called below, once the refs it reads exist.
 /** The concurrency group this workflow's runs count against. '' is ungrouped,
  *  which means the default group - and is sent as '' rather than omitted,
  *  because the PUT route is a shallow merge and an absent key would keep
@@ -166,17 +166,29 @@ onMounted(async () => {
 const parametersDirty = computed(() =>
   JSON.stringify(workflowParameters.value.filter(p => p.name.trim())) !== JSON.stringify(savedParameters.value))
 
+/** Everything unsaved, not just the canvas.
+ *
+ *  isDirty covers name, description and steps. It was also what guarded the
+ *  page against being left, so editing only an input, the concurrency group or
+ *  the notify channel and navigating away discarded it with no prompt - while
+ *  useExternalChange, given the full check, knew perfectly well they were
+ *  dirty. One computed now feeds both, so they cannot disagree again. */
+const anyDirty = computed(() => isDirty.value || parametersDirty.value
+  || group.value !== (workflow.value?.group ?? '')
+  || notifyChannel.value !== (workflow.value?.notifyChannel ?? ''))
+useUnsavedChanges(anyDirty)
+
 const workflowContent = (w: Workflow) => ({
   name: w.name, description: w.description, steps: w.steps,
   parameters: w.parameters ?? [], group: w.group ?? '', notifyChannel: w.notifyChannel ?? '',
 })
-// isDirty leaves out inputs, group and channel; a background reload must not drop edits to those either.
+// The same full check the leave guard uses: a background reload must not drop
+// edits to inputs, group or channel either.
 const { pending: externalPending, ...external } = useExternalChange({
   fetch: () => fetchOne(slug),
   baseline: () => workflow.value && workflowContent(workflow.value),
   content: workflowContent,
-  isDirty: () => isDirty.value || parametersDirty.value
-    || group.value !== (workflow.value?.group ?? '') || notifyChannel.value !== (workflow.value?.notifyChannel ?? ''),
+  isDirty: () => anyDirty.value,
   apply: applyWorkflow,
   paused: () => !workflow.value || saving.value,
 })
