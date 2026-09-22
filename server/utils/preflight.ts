@@ -19,6 +19,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { pipelineHooks } from './agentHooks.ts'
+import { slackWebhookUrl } from './integrations.ts'
 import { checkoutState } from './workspace.ts'
 import { checkoutDirFor, workspaceRootFor } from './workspace.ts'
 import { agentRunsRoot } from './runArtifacts.ts'
@@ -278,11 +279,16 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
         : { name, level: 'ok', detail: `${free.gb.toFixed(1)} GB free on ${free.mount} (${path}), ${free.usedPct}% used` }
     })
   }
-  add('alerting', process.env.SLACK_WEBHOOK_URL ? 'ok' : 'warn',
-    process.env.SLACK_WEBHOOK_URL
-      ? 'SLACK_WEBHOOK_URL is set; a pause, a failure or a red check reaches Slack.'
-      : 'SLACK_WEBHOOK_URL is unset, so nothing about this run reaches Slack — a run paused on its budget waits until somebody happens to look. '
-        + `Every notification is still appended to notifications.jsonl under ${agentRunsRoot()}.`)
+  // A webhook can now also be stored on the settings page, so checking the
+  // environment variable alone would report "unset" at an instance that is
+  // configured and delivering — the same class of wrong answer, pointing the
+  // other way, as the silence this check was added to expose.
+  const slack = await slackWebhookUrl().catch(() => null)
+  add('alerting', slack ? 'ok' : 'warn',
+    slack
+      ? `A Slack webhook is configured (${process.env.SLACK_WEBHOOK_URL ? 'SLACK_WEBHOOK_URL' : 'stored on the settings page'}); a pause, a failure or a red check reaches Slack.`
+      : 'No Slack webhook is configured, so nothing about this run reaches Slack — a run paused on its budget waits until somebody happens to look. '
+        + `Set one on the settings page under Notifications, or as SLACK_WEBHOOK_URL. Every notification is still appended to notifications.jsonl under ${agentRunsRoot()}.`)
 
   const report = { at: Date.now(), checks }
   const failed = checks.filter(c => c.level === 'fail').length

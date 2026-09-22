@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { agentRunsRoot } from './runArtifacts.ts'
+import { slackWebhookUrl } from './integrations.ts'
 import type { WorkflowRun, RunCi } from '~~/shared/types/run'
 
 /**
@@ -20,7 +21,13 @@ import type { WorkflowRun, RunCi } from '~~/shared/types/run'
  *    is how the next review can count what a person should have been told.
  *  - The webhook is still best-effort and still optional. Its absence is now
  *    VISIBLE instead of silent: preflight reports it as a warn-level check.
- *    No webhook is invented here — an unset variable means an unset variable.
+ *    No webhook is invented here — nothing configured means nothing configured.
+ *
+ * The other half of that six weeks was that the ONLY way to point this at a
+ * channel was a container variable. An operator can now store one on the
+ * settings page (integrations.ts, encrypted at rest); SLACK_WEBHOOK_URL still
+ * wins where it is set, so a deployment that configures one keeps both its
+ * behaviour and its timing.
  *
  * Every notification carries WHY it fired. "Runbook: PAUSED" reads the same
  * whether a person has to approve more budget, answer a gate, restart a dead
@@ -123,11 +130,60 @@ export function runMessage(run: WorkflowRun, baseUrl: string): string {
 /** Both sinks, each deduplicated on its own key. Never throws, never awaits. */
 function announce(run: WorkflowRun, reason: NotifyReason, text: string, extra: Record<string, unknown> = {}, keySuffix = ''): void {
   const key = `${run.id}:${reason}${keySuffix}`
-  const url = process.env.SLACK_WEBHOOK_URL
 
-  if (lastNotified.get(`log:${key}`) !== reason) {
-    lastNotified.set(`log:${key}`, reason)
-    void record({
+  const logFirst = lastNotified.get(`log:${key}`) !== reason
+  if (logFirst) lastNotified.set(`log:${key}`, reason)
+
+  /**
+   * Claim the right to post, and only then.
+   *
+   * Deliberately NOT hoisted above the webhook lookup. The two sinks are
+   * independent by design — "a run whose status was recorded while no webhook
+   * existed must still be messaged if one is configured later in the same
+   * process" — and marking the key before knowing there is somewhere to post
+   * would silently consume that second chance.
+   */
+  const claimPost = (): boolean => {
+    if (lastNotified.get(`post:${key}`) === reason) return false
+    lastNotified.set(`post:${key}`, reason)
+    return true
+  }
+
+  const send = (url: string) => {
+    // Fire and forget: a notification that fails must never fail a run.
+    void poster(url, { text: `${text}\n${REACTION[reason]}`, reason, runId: run.id, ...extra }).catch((err) => {
+      console.error('[notify] Slack webhook failed:', err instanceof Error ? err.message : err)
+    })
+  }
+
+  // The environment variable is posted to synchronously, exactly as before.
+  // A deployment that already configures one keeps its timing: `announce` is
+  // called from the runner's publish without being awaited, so making every
+  // delivery wait on a file read would widen the window in which a process
+  // exiting loses the post.
+  const fromEnv = process.env.SLACK_WEBHOOK_URL
+  if (fromEnv) {
+    if (logFirst) void record(entry(true))
+    if (claimPost()) send(fromEnv)
+    return
+  }
+
+  // Otherwise the webhook may be one an operator stored, which needs a read.
+  // For six weeks the only way to set one was a container variable nobody had
+  // set, and the feature reached nobody.
+  void (async () => {
+    let url: string | null = null
+    try {
+      url = await slackWebhookUrl()
+    } catch (err) {
+      console.error('[notify] could not resolve the Slack webhook:', err instanceof Error ? err.message : err)
+    }
+    if (logFirst) await record(entry(!!url))
+    if (url && claimPost()) send(url)
+  })()
+
+  function entry(delivered: boolean): Record<string, unknown> {
+    return {
       at: Date.now(),
       runId: run.id,
       workflow: run.workflowName,
@@ -137,18 +193,10 @@ function announce(run: WorkflowRun, reason: NotifyReason, text: string, extra: R
       reaction: REACTION[reason],
       text,
       url: `${baseUrlOf()}/workflows/${run.workflowSlug}?run=${run.id}`,
-      delivered: url ? 'webhook+log' : 'log-only (SLACK_WEBHOOK_URL is unset)',
+      delivered: delivered ? 'webhook+log' : 'log-only (no Slack webhook is configured)',
       ...extra,
-    })
+    }
   }
-
-  if (!url) return
-  if (lastNotified.get(`post:${key}`) === reason) return
-  lastNotified.set(`post:${key}`, reason)
-  // Fire and forget: a notification that fails must never fail a run.
-  void poster(url, { text: `${text}\n${REACTION[reason]}`, reason, runId: run.id, ...extra }).catch((err) => {
-    console.error('[notify] Slack webhook failed:', err instanceof Error ? err.message : err)
-  })
 }
 
 export function notifyRunTransition(run: WorkflowRun): void {

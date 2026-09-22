@@ -189,6 +189,54 @@ async function removePlugin(name: string) {
   await updateSetting({ enabledPlugins: rest })
 }
 
+// ---- Notifications ----
+
+interface PublicIntegrations {
+  slack: { configured: boolean, source: 'env' | 'stored' | 'none', unavailable?: string, updatedAt?: number }
+}
+const integrations = ref<PublicIntegrations | null>(null)
+const slackWebhook = ref('')
+const savingSlack = ref(false)
+const testingSlack = ref(false)
+const slackResult = ref<{ ok: boolean, message: string } | null>(null)
+
+async function loadIntegrations() {
+  try { integrations.value = await $fetch<PublicIntegrations>('/api/integrations') }
+  catch (e: any) { slackResult.value = { ok: false, message: e.data?.message || e.message } }
+}
+onMounted(loadIntegrations)
+
+async function putSlack(webhook: string, done: string) {
+  savingSlack.value = true
+  slackResult.value = null
+  try {
+    integrations.value = await $fetch<PublicIntegrations>('/api/integrations/slack', { method: 'PUT', body: { webhook } })
+    slackWebhook.value = ''
+    slackResult.value = { ok: true, message: done }
+  } catch (e: any) {
+    slackResult.value = { ok: false, message: e.data?.message || e.message }
+  } finally {
+    savingSlack.value = false
+  }
+}
+
+const saveSlack = () => putSlack(slackWebhook.value, 'Saved. Send a test message to confirm Slack accepts it.')
+const clearSlack = () => putSlack('', 'Webhook removed; notifications are written to the log only.')
+
+/** A real post, because "it is set" is the claim that was true for six weeks
+ *  while nothing arrived. Only Slack accepting a message proves delivery. */
+async function testSlack() {
+  testingSlack.value = true
+  slackResult.value = null
+  try {
+    slackResult.value = await $fetch<{ ok: boolean, message: string }>('/api/integrations/slack-test', { method: 'POST' })
+  } catch (e: any) {
+    slackResult.value = { ok: false, message: e.data?.message || e.message }
+  } finally {
+    testingSlack.value = false
+  }
+}
+
 // ---- Status line ----
 
 const statusLineType = ref('')
@@ -551,6 +599,89 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <span class="t-small text-label">seconds</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Notifications.
+           The runner and the CI poller have always announced a pause, a
+           failure, a red check and a gate left waiting. The only way to point
+           that at a channel was a container variable, so on an instance where
+           nobody set one the whole feature was off and nothing said so. -->
+      <div class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Notifications</h3>
+        <p class="t-small text-meta">
+          Where this instance tells a person a run needs them: paused on a gate or its budget, failed,
+          finished, or a pull request whose checks went red. Every notification is also written to
+          <span class="font-mono">notifications.jsonl</span> whether or not Slack is configured.
+        </p>
+
+        <div
+          v-if="integrations && !integrations.slack.configured"
+          class="rounded-lg px-3 py-2 t-small"
+          style="background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.25);"
+        >
+          No Slack webhook is set, so nothing reaches a channel — a run paused overnight waits until somebody looks.
+        </div>
+        <div v-else-if="integrations" class="t-small" style="color: var(--success);">
+          Slack is configured{{ integrations.slack.source === 'env' ? ' by this deployment (SLACK_WEBHOOK_URL), so it cannot be changed here' : '' }}.
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">
+            Slack incoming webhook
+            <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">
+              {{ integrations?.slack.configured ? 'stored; paste a new one to replace it' : 'not stored' }}
+            </span>
+          </label>
+          <input
+            v-model="slackWebhook"
+            type="password"
+            class="field-input"
+            autocomplete="off"
+            placeholder="https://hooks.slack.com/services/..."
+            :disabled="integrations?.slack.source === 'env'"
+          />
+          <span class="field-hint">
+            Stored encrypted outside the config directory, and never shown again. Create one in Slack under Incoming Webhooks.
+          </span>
+        </div>
+
+        <p v-if="integrations?.slack.unavailable" class="t-small" style="color: var(--error);">
+          {{ integrations.slack.unavailable }}
+        </p>
+
+        <div class="flex items-center gap-2">
+          <UButton
+            label="Save webhook"
+            size="sm"
+            variant="soft"
+            :loading="savingSlack"
+            :disabled="integrations?.slack.source === 'env'"
+            @click="saveSlack"
+          />
+          <UButton
+            label="Send a test message"
+            size="sm"
+            variant="ghost"
+            color="neutral"
+            :loading="testingSlack"
+            :disabled="!integrations?.slack.configured"
+            @click="testSlack"
+          />
+          <UButton
+            v-if="integrations?.slack.source === 'stored'"
+            label="Remove webhook"
+            size="sm"
+            variant="ghost"
+            color="error"
+            :loading="savingSlack"
+            @click="clearSlack"
+          />
+          <span
+            v-if="slackResult"
+            class="t-small"
+            :style="{ color: slackResult.ok ? 'var(--success)' : 'var(--error)' }"
+          >{{ slackResult.message }}</span>
         </div>
       </div>
 
