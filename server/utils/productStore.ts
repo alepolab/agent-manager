@@ -356,20 +356,61 @@ export interface WriteOptions {
   comment?: string
 }
 
+/**
+ * One write at a time, for the whole load-modify-save section.
+ *
+ * `expectedMtimeMs` is not enough on its own: it tolerates a second of skew,
+ * it is skipped entirely when the caller has no prior mtime — which is exactly
+ * what a create sends — and it is skipped again when the file does not yet
+ * exist. Two writes landing together therefore both read the same document and
+ * the second silently discarded the first. Same shape as runQueue's chain, and
+ * process-local for the same reason.
+ */
+let writes: Promise<unknown> = Promise.resolve()
+function serialised<T>(fn: () => Promise<T>): Promise<T> {
+  const next = writes.catch(() => {}).then(fn)
+  writes = next.catch(() => {})
+  return next
+}
+
 /** Create or update one product. Returns the store's new mtime. */
 export async function writeProduct(key: string, product: Record<string, any>, opts: WriteOptions = {}): Promise<number> {
-  const { doc, path } = await loadDocument()
-  applyProduct(doc, key, product)
-  if (opts.comment !== undefined) setProductComment(doc, key, opts.comment)
-  return saveDocument(doc, path, opts.expectedMtimeMs)
+  return serialised(async () => {
+    const { doc, path } = await loadDocument()
+    applyProduct(doc, key, product)
+    if (opts.comment !== undefined) setProductComment(doc, key, opts.comment)
+    return saveDocument(doc, path, opts.expectedMtimeMs)
+  })
+}
+
+/**
+ * Add one product that is not there yet. Returns the new mtime, or null when
+ * the key is already taken.
+ *
+ * The absence check is inside the same loaded document the save writes back —
+ * the shape deleteProduct already uses — rather than in a separate readStore()
+ * the caller made first. Split across two reads, two concurrent creates of one
+ * key both saw it absent and the second overwrote the first, product and
+ * rationale together.
+ */
+export async function createProduct(key: string, product: Record<string, any>, opts: WriteOptions = {}): Promise<number | null> {
+  return serialised(async () => {
+    const { doc, path } = await loadDocument()
+    if (doc.hasIn(['products', key])) return null
+    applyProduct(doc, key, product)
+    if (opts.comment !== undefined) setProductComment(doc, key, opts.comment)
+    return saveDocument(doc, path, opts.expectedMtimeMs)
+  })
 }
 
 /** Remove one product. Returns the new mtime, or null when the key was absent. */
 export async function deleteProduct(key: string, expectedMtimeMs?: number): Promise<number | null> {
-  const { doc, path } = await loadDocument()
-  if (!doc.hasIn(['products', key])) return null
-  doc.deleteIn(['products', key])
-  return saveDocument(doc, path, expectedMtimeMs)
+  return serialised(async () => {
+    const { doc, path } = await loadDocument()
+    if (!doc.hasIn(['products', key])) return null
+    doc.deleteIn(['products', key])
+    return saveDocument(doc, path, expectedMtimeMs)
+  })
 }
 
 /**
@@ -378,16 +419,18 @@ export async function deleteProduct(key: string, expectedMtimeMs?: number): Prom
  * routing, so a dropped product is a ticket that stops resolving.
  */
 export async function reorder(keys: string[], expectedMtimeMs?: number): Promise<number> {
-  const { doc, path } = await loadDocument()
-  const products = doc.get('products', true)
-  if (!isMap(products)) throw new Error('The registry has no products to reorder')
-  const present = products.items.map((p: any) => String(p.key?.value ?? p.key))
-  const sorted = (a: string[]) => [...a].sort()
-  if (JSON.stringify(sorted(keys)) !== JSON.stringify(sorted(present))) {
-    throw new Error('The new order must list every product exactly once; file order decides routing ties, so a partial list would drop products')
-  }
-  products.items = keys.map(k => products.items.find((p: any) => String(p.key?.value ?? p.key) === k)!)
-  return saveDocument(doc, path, expectedMtimeMs)
+  return serialised(async () => {
+    const { doc, path } = await loadDocument()
+    const products = doc.get('products', true)
+    if (!isMap(products)) throw new Error('The registry has no products to reorder')
+    const present = products.items.map((p: any) => String(p.key?.value ?? p.key))
+    const sorted = (a: string[]) => [...a].sort()
+    if (JSON.stringify(sorted(keys)) !== JSON.stringify(sorted(present))) {
+      throw new Error('The new order must list every product exactly once; file order decides routing ties, so a partial list would drop products')
+    }
+    products.items = keys.map(k => products.items.find((p: any) => String(p.key?.value ?? p.key) === k)!)
+    return saveDocument(doc, path, expectedMtimeMs)
+  })
 }
 
 /**
@@ -403,19 +446,21 @@ export async function importFromSource(keys: string[], expectedMtimeMs?: number)
   const sourceProducts = sourceDoc.get('products', true)
   if (!isMap(sourceProducts)) throw new Error(`${source.path} has no products to import`)
 
-  const { doc, path } = await loadDocument()
-  const products = doc.get('products', true)
-  if (!isMap(products)) throw new Error('The registry store has no products map')
+  return serialised(async () => {
+    const { doc, path } = await loadDocument()
+    const products = doc.get('products', true)
+    if (!isMap(products)) throw new Error('The registry store has no products map')
 
-  const imported: string[] = []
-  for (const key of keys) {
-    const pair = sourceProducts.items.find((p: any) => String(p.key?.value ?? p.key) === key)
-    if (!pair) throw new Error(`"${key}" is not in ${source.path}`)
-    if (products.items.some((p: any) => String(p.key?.value ?? p.key) === key)) continue
-    products.items.push(pair)
-    imported.push(key)
-  }
-  return { imported, mtimeMs: await saveDocument(doc, path, expectedMtimeMs) }
+    const imported: string[] = []
+    for (const key of keys) {
+      const pair = sourceProducts.items.find((p: any) => String(p.key?.value ?? p.key) === key)
+      if (!pair) throw new Error(`"${key}" is not in ${source.path}`)
+      if (products.items.some((p: any) => String(p.key?.value ?? p.key) === key)) continue
+      products.items.push(pair)
+      imported.push(key)
+    }
+    return { imported, mtimeMs: await saveDocument(doc, path, expectedMtimeMs) }
+  })
 }
 
 /** Restore the previous version, for an operator who has just made it worse. */

@@ -1,4 +1,4 @@
-import { readStore, writeProduct } from '../../../utils/productStore'
+import { createProduct } from '../../../utils/productStore'
 import { blocking, validateProduct } from '../../../utils/registryValidate'
 import { requireUser } from '../../../utils/session'
 import { createLogger } from '../../../utils/log'
@@ -19,15 +19,19 @@ export default defineEventHandler(async (event) => {
   if (!body?.product || typeof body.product !== 'object' || Array.isArray(body.product)) {
     throw createError({ statusCode: 400, message: 'product must be an object' })
   }
-  if ((await readStore()).products[key]) {
-    throw createError({ statusCode: 409, message: `A product called "${key}" is already registered` })
-  }
-
   const errors = blocking(validateProduct(key, body.product))
   if (errors.length) {
     throw createError({ statusCode: 400, message: errors.map(e => `${e.where}: ${e.message}`).join('; ') })
   }
-  const mtimeMs = await writeProduct(key, body.product, { comment: body.comment, expectedMtimeMs: body.mtimeMs })
+  // The "is it taken?" question is asked inside createProduct, against the
+  // same document it is about to write. Asked here, against a readStore() of
+  // its own, it was two file reads away from the write: two creates of one key
+  // both saw it free and the second overwrote the first. expectedMtimeMs does
+  // not cover it either - a create has no prior mtime to send.
+  const mtimeMs = await createProduct(key, body.product, { comment: body.comment, expectedMtimeMs: body.mtimeMs })
+  if (mtimeMs === null) {
+    throw createError({ statusCode: 409, message: `A product called "${key}" is already registered` })
+  }
   log.info('product added', { key, by: user.login })
   return { key, mtimeMs }
 })
