@@ -333,6 +333,53 @@ export function sqlExecution(command: string): { reachedDb: boolean, files: stri
   return { reachedDb, files }
 }
 
+/** Tools that CHANGE a file, as opposed to reading one. */
+const WRITING_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit)$/
+/** Shell verbs that change a repository rather than inspect it. */
+const WRITING_GIT = /^git\s+(commit|add|push|merge|rebase|checkout\s+-b|apply|am|cherry-pick|reset)\b/
+
+/**
+ * Where this run CHANGED something outside the checkout it was given.
+ *
+ * Run a3cb9d37 was launched against product `infra`, resolved from one word in
+ * a ticket's Environment boilerplate. Its checkout was the devops repository —
+ * which `infra` legitimately owns, so every check passed — while eight of its
+ * nine tasks belonged to a Selfcare repository, where its agents did the real
+ * work. The run raised that as a blocker in its own prose and carried on for 72
+ * minutes; the frontend fix is still sitting as local commits on a bot worktree
+ * that nothing on origin has ever seen.
+ *
+ * Nothing could have caught it. `repoMismatch` compares committed repositories
+ * against the product's, but only at the end and only across the directories
+ * the PR step discovers — the run's checkout and its module subdirectories. A
+ * checkout somewhere else in the workspace is invisible to it by construction.
+ *
+ * The ledger sees it, because the work had to run somewhere: a `[Write]` whose
+ * path is outside, or a `git commit` whose directory is. `allowed` carries the
+ * places a run may legitimately reach — its lanes, the products a step widened
+ * it to, the deployment repository its stack comes from — so widening stays a
+ * feature rather than becoming an alarm.
+ */
+export function strayWork(
+  entries: CommandEntry[], projectDir: string, allowed: string[] = [],
+): { dir: string, what: string }[] {
+  const roots = [projectDir, ...allowed].filter(Boolean)
+  const inside = (p: string) => roots.some(r => p === r || p.startsWith(`${r.replace(/\/$/, '')}/`))
+  const found = new Map<string, string>()
+  for (const e of entries) {
+    // A written PATH is the strongest signal: it names the file, not the shell.
+    if (WRITING_TOOL.test(e.tool) && e.command.startsWith('/') && !inside(e.command)) {
+      const dir = e.command.slice(0, e.command.lastIndexOf('/')) || e.command
+      if (!found.has(dir)) found.set(dir, `wrote ${e.command}`)
+      continue
+    }
+    if (e.tool !== 'Bash' || !e.cwd || inside(e.cwd)) continue
+    const verb = commandSegments(e.command).find(s => WRITING_GIT.test(s))
+    if (verb && !found.has(e.cwd)) found.set(e.cwd, `ran \`${verb}\``)
+  }
+  return [...found].map(([dir, what]) => ({ dir, what }))
+}
+
 export interface ExecutionFacts {
   /** A project build or test that the tool did not report as failing. */
   builtOk: boolean

@@ -297,6 +297,10 @@ export interface WorkflowRun {
   question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** What the gate is asking, where that raises the oversight floor above the run's tier. See shared/utils/oversight.ts. */ gateKind?: GateKind, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
   product?: ProductMatch
+  /** A person has already been asked about work landing outside this run's own
+   *  checkout. Asked once: re-asking at every later step turns a decision into a
+   *  nag, and an operator who was told and continued has decided. */
+  strayWorkAsked?: boolean
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
   startedBy?: string
   /** `projectDir`'s HEAD sha, captured by the runner (startRun, via

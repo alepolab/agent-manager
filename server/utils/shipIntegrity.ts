@@ -62,10 +62,20 @@ async function repoName(dir: string): Promise<string> {
   }
 }
 
-/** Every git worktree this run may have written to: its own, and the module repos under it. */
-export function repoDirsOf(run: WorkflowRun): string[] {
-  if (!run.projectDir) return []
-  return [run.projectDir, ...nestedRepos(run.projectDir)]
+/**
+ * Every git worktree this run may have written to.
+ *
+ * `extra` is the correction to what that sentence used to mean: the run's own
+ * checkout and the module repositories under it are the places a run is
+ * SUPPOSED to write, and run a3cb9d37 wrote its frontend fix into a repository
+ * somewhere else in the workspace entirely — which this function could not see,
+ * so the commits it left behind were never reported as unpushed. The runner
+ * passes the directories the command ledger observed being written to, so work
+ * in the wrong place is still work this function has to account for.
+ */
+export function repoDirsOf(run: WorkflowRun, extra: string[] = []): string[] {
+  if (!run.projectDir) return [...new Set(extra)]
+  return [...new Set([run.projectDir, ...nestedRepos(run.projectDir), ...extra])]
 }
 
 /**
@@ -150,7 +160,9 @@ async function orphanLanes(dir: string, branch: string): Promise<string[]> {
  * a research or review workflow that was never meant to ship must not be failed
  * for not shipping.
  */
-export async function shipIntegrity(run: WorkflowRun, expectPr: boolean, meta: Record<string, unknown> = {}): Promise<ShipFinding[]> {
+export async function shipIntegrity(
+  run: WorkflowRun, expectPr: boolean, meta: Record<string, unknown> = {}, extraDirs: string[] = [],
+): Promise<ShipFinding[]> {
   const findings: ShipFinding[] = []
   // A workflow with no step that opens a pull request never pushes anything —
   // `runPrStep` is the only pusher, and it runs behind `step.pr`. Asking such a
@@ -160,7 +172,7 @@ export async function shipIntegrity(run: WorkflowRun, expectPr: boolean, meta: R
   if (!expectPr || !run.branch) return findings
 
   const onRunBranch: { dir: string, name: string }[] = []
-  for (const dir of repoDirsOf(run)) {
+  for (const dir of repoDirsOf(run, extraDirs)) {
     if (!await isRepo(dir)) continue
     let head: string
     try {

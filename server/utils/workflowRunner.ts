@@ -1,8 +1,8 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
   skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseReviewVerdict, parseHalt, parseSkip, parseWiden, parseRework, parseNotDone,
-  monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
-  type WorkflowGraph, type RunState,
+  monitorPrompt, MAX_CONCURRENCY, ancestorsOf, edgeKey,
+  type WorkflowGraph, type RunState, type StepOutcome, type GraphEdge,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
@@ -104,7 +104,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, verdict?: boolean, gateRole?: Role, gateKind?: GateKind, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: (string | GraphEdge)[], monitorSlug?: string, maxVisits?: number, approval?: boolean, verdict?: boolean, gateRole?: Role, gateKind?: GateKind, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -497,7 +497,17 @@ async function enforceShipIntegrity(run: WorkflowRun): Promise<void> {
   } catch { /* no meta yet: the git checks below still answer */ }
   let findings: ShipFinding[]
   try {
-    findings = await shipIntegrity(run, expectPr, meta)
+    // Plus anywhere the ledger saw this run write outside its own checkout —
+    // repoDirsOf can only enumerate the places a run is SUPPOSED to write, and
+    // a3cb9d37's frontend fix sat in a repository it had never heard of.
+    let strayDirs: string[] = []
+    try {
+      const { readCommandLedger, strayWork } = await import('./commandLedger.ts')
+      strayDirs = run.projectDir
+        ? strayWork(await readCommandLedger(run.id), run.projectDir).map(s => s.dir)
+        : []
+    } catch { /* no ledger: the checks below still answer for the known repos */ }
+    findings = await shipIntegrity(run, expectPr, meta, strayDirs)
   } catch (err) {
     // A check that cannot run must not invent a verdict in either direction.
     log.warn('ship integrity could not be checked', { runId: run.id, error: String(err) })
@@ -1125,6 +1135,48 @@ async function bringStackUp(l: Live, run: WorkflowRun, rec: RunStep): Promise<st
  * `stop`. Failing here would turn a git hiccup into a dead run while making the
  * gate no safer.
  */
+/**
+ * The question to pause on when a step changed a repository this run does not
+ * own, or null when everything landed where it should.
+ *
+ * Asked once per run: a person who has been told and continued has decided, and
+ * re-asking at every subsequent step would turn a decision into a nag. The
+ * allowed set is everywhere a run may legitimately reach — its own lanes, the
+ * products a step widened it to, and the deployment checkout its stack comes
+ * from — so the widening feature does not read as an alarm.
+ */
+async function detectStrayWork(l: Live, run: WorkflowRun, stepId: string): Promise<string | null> {
+  if (!run.projectDir || run.strayWorkAsked) return null
+  let entries
+  try {
+    const { readCommandLedger } = await import('./commandLedger.ts')
+    entries = await readCommandLedger(run.id)
+  } catch {
+    return null // no ledger, nothing to say — never a reason to stop a run
+  }
+  if (!entries.length) return null
+  const { strayWork } = await import('./commandLedger.ts')
+  const allowed = [
+    ...Object.values(l.laneDirs),
+    ...(run.product?.alsoInScope ?? []).flatMap(p => p.repos.map(r => checkoutDirFor(r, run.startedBy))),
+    ...(run.product?.stack?.compose ? [checkoutDirFor(`alepolab/${run.product.stack.compose.split('/')[0]}`, run.startedBy)] : []),
+    runArtifactsDir(run.id),
+    getClaudeDir(),
+  ]
+  const stray = strayWork(entries.filter(e => e.stepId === stepId), run.projectDir, allowed)
+  if (!stray.length) return null
+  run.strayWorkAsked = true
+  return [
+    `This run changed a repository it was not launched against.`,
+    ...stray.map(s => `  ${s.dir} — ${s.what}`),
+    ``,
+    `It is registered against ${run.product?.name ?? 'no product'}${run.product?.repos?.length ? ` (${run.product.repos.join(', ')})` : ''} and its checkout is ${run.projectDir}.`,
+    `Work done anywhere else cannot reach origin from this run: its branch, its pull request and its evidence all belong to the checkout above.`,
+    ``,
+    `Continue only if that is deliberate — otherwise stop this run and start one against the product that owns the code.`,
+  ].join('\n')
+}
+
 async function adoptClassification(
   l: Live, run: WorkflowRun, rec: RunStep, output: string, cwd: string | undefined, headBefore: string | null,
 ): Promise<void> {
@@ -1473,6 +1525,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       return true
     }
 
+    // Work that landed somewhere this run does not own — checked before the
+    // step's own markers, because a step that changed the wrong repository has
+    // a bigger problem than whatever it wants to say next. Paused, not failed:
+    // the honest answers are "widen the run" or "stop and re-run against the
+    // right product", and both are a person's call. See strayWork.
+    const stray = await detectStrayWork(l, run, id)
+    if (stray) {
+      l.outputs[id] = output
+      Object.assign(rec, { status: 'waiting', output, model, usage })
+      run.question = { stepId: id, text: stray, kind: 'question', askedAt: Date.now() }
+      l.waiting = id
+      logLine(l, run, rec, stray)
+      log.warn('run changed a repository it was not launched against', { runId: run.id, stepId: id })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    }
+
     const ask = parseAsk(output)
     if (ask) {
       l.outputs[id] = output
@@ -1513,6 +1582,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // (parseVerdict), and treating silence as consent is exactly how a FAIL
     // came to ship. A step that declared PIPELINE-SKIP is exempt: it examined
     // its job and found nothing to judge.
+    // What this step decided, for its conditional out-edges to be judged
+    // against. Undefined on a step that decides nothing, in which case every
+    // out-edge is unconditional and this changes nothing.
+    let stepOutcome: StepOutcome | undefined
     if (step.verdict && !skip) {
       const verdict = parseReviewVerdict(output)
       // Stating nothing is a format slip, not a refusal, so it gets the same
@@ -1531,6 +1604,27 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         log.warn('review step stated no verdict; asking again', { runId: run.id, stepId: id, visits: rec.visits })
         return true
       }
+      // A declared FAIL route turns a refusal into a PATH instead of the end
+      // of the run. Without one, a `verdict` step that says FAIL has nowhere
+      // to send the work, so stopping is the only honest thing left — which is
+      // what this did for every workflow before conditional edges existed, and
+      // still does for every workflow that declares no such edge.
+      const failRoute = verdict === 'FAIL'
+        && (l.graph.succ[id] ?? []).some(t => l.graph.conditions[edgeKey(id, t)] === 'fail')
+      if (failRoute) {
+        stepOutcome = 'fail'
+        l.outputs[id] = output
+        Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
+        markCompleted(l.graph, l.state, id, 'fail')
+        const went = (l.graph.succ[id] ?? [])
+          .filter(t => l.state.edges[edgeKey(id, t)])
+          .map(t => l.workflow.steps.find(x => x.id === t)?.label ?? t)
+        logLine(l, run, rec, `review verdict FAIL — routed to ${went.join(', ') || 'nothing'}`)
+        log.info('review step routed on FAIL', () => ({ runId: run.id, stepId: id, to: went }))
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return true
+      }
+      if (verdict === 'PASS' || verdict === 'WARNING') stepOutcome = 'pass'
       if (verdict !== 'PASS' && verdict !== 'WARNING') {
         const reason = verdict === 'FAIL'
           ? `Review verdict FAIL — ${preview(output)}`
@@ -1715,7 +1809,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       }
     }
 
-    markCompleted(l.graph, l.state, id)
+    markCompleted(l.graph, l.state, id, stepOutcome)
     // Progress clears the interruption count: only CONSECUTIVE restarts with
     // nothing achieved in between are the loop worth pausing on. `restarts`
     // above is the durable record and is never cleared here.
