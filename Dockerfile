@@ -72,6 +72,18 @@ COPY --from=build --chown=bun:bun /app/node_modules/@anthropic-ai/claude-agent-s
 # commands and made the gap look filled on the one box that built the image.
 COPY --chown=bun:bun engineering/commands ./engineering/commands
 
+# And its agents. teamSync reads plugin agents from the shipped copy as well as
+# from the recorded install, precisely so an install that predates the image
+# cannot shadow what the image carries — and without this COPY the shipped copy
+# is an empty path, so that fallback finds nothing and the six SDLC review
+# personas seed on a developer's checkout and on no container.
+#
+# This list is an allowlist that has to be extended by hand every time
+# engineering/ grows a directory, which is how commands, hooks and skills each
+# came to be missing in turn. The comments above are three previous instances
+# of this same omission; this is the fourth.
+COPY --chown=bun:bun engineering/agents ./engineering/agents
+
 # And the product registry. Without it resolveProduct returns undefined for
 # every ticket - no repos, no branch policy, no stack profile - and the failure
 # is indistinguishable from "no product matched".
