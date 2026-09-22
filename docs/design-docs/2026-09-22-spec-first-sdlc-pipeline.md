@@ -504,6 +504,9 @@ rather than intent.
 | BR-06 | Proposal plus path-derived floor plus a light read of the touched files; the floor only raises, and an unavailable read no longer passes as a clean one (`test-risk-read-failure.mjs`) |
 | BR-24 | A budget ceiling pauses and asks the owner to grant another allowance — it escalates, it does not kill (`workflowRunner.ts:1935`) |
 | BR-30 | Enforced for the control most likely to violate it: separation yields to a backstop rather than stranding a one-person instance |
+| BR-01 | `facts.ts` — a value with no provenance is `indeterminate`, and `scoreGate` reports it BLOCKED, counted apart from failed (`test-facts.mjs`) |
+| BR-02 | Freshness is measured over the working tree, so an uncommitted edit invalidates a capture even though HEAD did not move (`test-facts.mjs`, `test-gate-criteria.mjs`) |
+| BR-03 | The three-run floor is enforced by `meetsBar` and carried down to the case by `aggregate` — disagreement is `flaky`, a vanished or skipped case is `missing`, and neither is a pass (`test-test-report.mjs`, `test-report-facts.mjs`) |
 | BR-07 | `continueRun` refuses an unreasoned approval; now gate-kind aware (`test-gate-kinds.mjs`) |
 | BR-27, BR-28, BR-29 | Conditional edges: a refusal routes, routing is declared on the edge, one arm is taken and the other settled (`test-conditional-edges.mjs`) |
 | BR-37 | The executive gate tiers rather than floors, asserted so it cannot quietly become a checkpoint (`test-sdlc-template.mjs`) |
@@ -523,7 +526,8 @@ rather than intent.
 |---|---|
 | BR-06 | Mostly built, and better than this document first claimed: `classification.ts` takes an agent's proposal, derives a floor from the paths actually touched, adds a light model read of those files for the risk no path rule can see, and lets the floor only ever RAISE. The residual — an unavailable risk read reading as a clean one — is now closed. What remains is that a low class still rests on a proposal when the read succeeds and finds nothing, which is the honest limit of the evidence |
 | BR-11, BR-33, BR-34, BR-35, BR-36 | The review personas are written as definitions but **are not seeded**, so nothing runs them |
-| BR-15, BR-38 | The registry can now record per-class commands and report locations, and reports eligibility — but 16 products still read `CONFIRM` and 22 of 23 declare no report location |
+| BR-15, BR-38 | The mechanism is now complete end to end — schema, validator, `ProductMatch`, a per-case parser in the trusted root, and a gate criterion — but the DATA is not: 16 products still read `CONFIRM` and 22 of 23 declare no report location. Filling them needs each product's real build output path, which is not ours to invent |
+| BR-12 | Half of it exists: `caseId` gives a row something stable to point at, and the gate can score cases individually. The other half is the spec pipeline, which does not exist |
 | BR-17 | A security gate exists in the template; **no scanner is wired behind it** |
 | BR-18 | The flag propagates — registry to `ProductMatch` to the artifact header's merge-order instruction — but nothing enforces **one decision** across the set |
 | BR-23 | Not currently live: it only bites if a run is held open across merge, and BR-22 already keeps runs terminal at PR-open. It becomes real if the release lifecycle lands |
@@ -532,7 +536,7 @@ rather than intent.
 
 | BR | Why it matters |
 |---|---|
-| BR-01 – BR-04 | The fact-provenance substrate. Without it a gate still shows prose |
+| BR-04 | The four questions answerable from the record alone. The facts now exist; the chain that answers all four end to end does not |
 
 | BR-10, BR-12, BR-13, BR-14 | The acceptance-spec pipeline |
 | BR-16 | Visual baselines: no capture, no comparison |
@@ -541,8 +545,8 @@ rather than intent.
 | BR-31, BR-32 | Environment as a property of a verdict |
 | BR-39, BR-40 | Rollback, post-deploy verification, production feedback |
 
-**Count: 12 satisfied with a runnable check, 4 more resting on controls that
-predate this work, 10 partial, 14 not built.**
+**Count: 15 satisfied with a runnable check, 4 more resting on controls that
+predate this work, 11 partial, 10 not built.**
 
 Four of those twelve moved because the code was read properly rather than
 because anything was built: BR-06 and BR-24 were already satisfied and this
