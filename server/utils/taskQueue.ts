@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
-import { listRuns, getRun } from './workflowRunStore.ts'
+import { listRuns, getRun, findRunInWorkspace } from './workflowRunStore.ts'
 import { capacityFor } from './runCapacity.ts'
 import { runWorkspace } from './workspace.ts'
 import type { QueueTask, TaskQueue, DispatchResult } from '../../shared/types/queue.ts'
@@ -42,7 +42,7 @@ async function writeQueue(q: TaskQueue): Promise<void> {
 }
 
 /** Replace the whole queue. Refuses while anything is running, so a live run is never orphaned. */
-export async function setQueue(project: string, tasks: Omit<QueueTask, 'status' | 'queuedAt'>[]): Promise<TaskQueue> {
+export async function setQueue(project: string, tasks: Omit<QueueTask, 'status' | 'queuedAt'>[], owner?: string): Promise<TaskQueue> {
   const current = await readQueue()
   const live = current.tasks.filter(t => t.status === 'running')
   if (live.length) {
@@ -51,6 +51,7 @@ export async function setQueue(project: string, tasks: Omit<QueueTask, 'status' 
   const now = Date.now()
   const next: TaskQueue = {
     project,
+    ...(owner ? { owner } : current.owner ? { owner: current.owner } : {}),
     createdAt: current.createdAt || now,
     updatedAt: now,
     tasks: tasks.map(t => ({
@@ -135,7 +136,12 @@ export async function dispatch(startRun: StartRunFn): Promise<DispatchResult> {
     // against one repository serialise; they do not deadlock the ten against
     // other repositories.
     const workspace = runWorkspace({ projectDir: task.projectDir })
-    const busy = runs.find(r => (r.status === 'running' || r.status === 'paused') && runWorkspace(r) === workspace)
+    // Through the store, not by comparing paths: a live run's projectDir is
+    // its WORKTREE (`<repo>@<branch>`), never the checkout it was started
+    // against, so a string compare never matched and two tasks on one
+    // repository both started. findRunInWorkspace resolves both sides to the
+    // clone's git common directory, which is the identity that matters.
+    const busy = await findRunInWorkspace(workspace)
     if (busy) {
       result.held[task.id] = `${task.module ?? workspace} is busy with run ${busy.id.slice(0, 8)}`
       continue

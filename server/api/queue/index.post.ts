@@ -1,11 +1,11 @@
-import { requireCapability } from '../../utils/session'
+import { requireCapability, currentUser } from '../../utils/session'
 import { setQueue } from '../../utils/taskQueue'
 import type { QueueTask } from '../../../shared/types/queue'
 
 /** Replace the queue with a whole project's work. Operator-only: it schedules spend. */
 export default defineEventHandler(async (event) => {
   await requireCapability(event, 'configure')
-  const body = await readBody<{ project?: string, tasks?: Omit<QueueTask, 'status' | 'queuedAt'>[] }>(event)
+  const body = await readBody<{ project?: string, owner?: string, tasks?: Omit<QueueTask, 'status' | 'queuedAt'>[] }>(event)
   if (!Array.isArray(body?.tasks) || !body.tasks.length) {
     throw createError({ statusCode: 400, message: 'tasks must be a non-empty array' })
   }
@@ -23,7 +23,9 @@ export default defineEventHandler(async (event) => {
     }
   }
   try {
-    return await setQueue(body.project?.trim() || 'Project', body.tasks)
+    // The creator owns it: their credentials are what a dispatched run uses.
+    const me = await currentUser(event)
+    return await setQueue(body.project?.trim() || 'Project', body.tasks, body.owner?.trim() || me?.login)
   } catch (err) {
     throw createError({ statusCode: 409, message: err instanceof Error ? err.message : String(err) })
   }

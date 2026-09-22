@@ -45,6 +45,16 @@ export interface QueueTask {
   /** For display and for grouping; the repository name behind projectDir. */
   module?: string
   ticketKey?: string
+  /**
+   * The registry product this task's module belongs to.
+   *
+   * Without it the runner resolves a product from the prompt, and a Jira key
+   * the registry has never heard of resolves to whichever product matched
+   * first — three runs died in preflight "registered against alepolab/ocs_cpp14
+   * but handed a checkout of alepolab/lum-selfcare-v1". The guard was right;
+   * the queue was not telling it anything.
+   */
+  productKey?: string
   /** The run minted for it, once one exists. */
   runId?: string
   /** Why it is skipped, or how its run ended. Always present when not pending or running. */
@@ -57,6 +67,17 @@ export interface QueueTask {
 export interface TaskQueue {
   /** The project these tasks belong to, so two projects can share an instance. */
   project: string
+  /**
+   * Whose credentials the queue's runs use.
+   *
+   * A run started from the UI carries the signed-in developer, so it reads
+   * Jira and pushes as them. A run the queue dispatched at boot carried
+   * NOBODY — `envForUser(undefined)` — so every one of them failed preflight
+   * on "Jira credentials are not configured" even where the developer who
+   * built the queue had a token stored. The queue has to name its owner,
+   * because unlike a browser request it has no session to infer one from.
+   */
+  owner?: string
   tasks: QueueTask[]
   createdAt: number
   updatedAt: number

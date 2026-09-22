@@ -138,10 +138,66 @@ const task = (id, over = {}) => ({
   assert.match(r.held['2'], /busy with run/, 'and the one that yielded says which repository')
 }
 
+// ---- The lock must survive the runner rewriting projectDir --------------
+// The case the plain-path test above could not see: once a run cuts its
+// branch, its projectDir becomes the WORKTREE (`<repo>@<branch>`), not the
+// checkout it was started against. Comparing strings never matched, so two
+// tasks on one repository both started — which is the corruption the lock
+// exists to prevent.
+{
+  // Settle what the previous block started: setQueue refuses to replace a
+  // queue while anything is running, which is the guard working.
+  for (const prev of (await Q.readQueue()).tasks.filter(x => x.status === 'running')) {
+    const r = await store.getRun(prev.runId)
+    await store.saveRun({ ...r, status: 'completed', endedAt: Date.now() })
+  }
+  await Q.reconcile()
+
+  const { execFileSync } = await import('node:child_process')
+  const { mkdirSync } = await import('node:fs')
+  const repo = join(dir, 'realrepo')
+  mkdirSync(repo, { recursive: true })
+  const git = (...a) => execFileSync('git', a, { cwd: repo, stdio: 'ignore' })
+  git('init', '-q', '-b', 'main'); git('config', 'user.email', 't@x'); git('config', 'user.name', 't')
+  writeFileSync(join(repo, 'a.txt'), 'a\n'); git('add', '-A'); git('commit', '-qm', 'init')
+  const worktree = `${repo}@fix-X-1234`
+  git('worktree', 'add', '--quiet', '-b', 'fix/X-1234', worktree)
+
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({ agentManager: { maxConcurrentRuns: 5 } }))
+  await Q.setQueue('P', [
+    { ...task('1'), projectDir: repo, module: 'realrepo' },
+    { ...task('2'), projectDir: repo, module: 'realrepo' },
+  ])
+  // A live run whose projectDir is the worktree, exactly as the runner leaves it.
+  const live = await store.createRun({
+    workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: 'x',
+    watch: 'direct-invocation', projectDir: worktree,
+    steps: [{ stepId: 'a', label: 'A', agentSlug: 'x' }],
+  })
+  await store.saveRun({ ...live, status: 'running' })
+
+  const r = await Q.dispatch(async () => { throw new Error('must not start') })
+  assert.deepEqual(r.started, [], 'no task starts against a repository whose worktree is already live')
+  assert.match(r.held['1'], /busy with run/, 'and the reason names the run holding it')
+
+  await store.saveRun({ ...live, status: 'completed', endedAt: Date.now() })
+}
+
 // ---- Replacing the queue while something runs is refused ----------------
 // It would orphan a live run: the task pointing at it would be gone and
 // nothing would ever reconcile it back.
 {
+  await Q.setQueue('P', [task('7')])
+  await Q.dispatch(async (tk) => {
+    const nr = await store.createRun({
+      workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: tk.detail,
+      watch: 'direct-invocation', projectDir: tk.projectDir,
+      steps: [{ stepId: 'a', label: 'A', agentSlug: 'x' }],
+    })
+    await store.saveRun({ ...nr, status: 'running' })
+    return nr
+  })
+  assert.equal((await Q.readQueue()).tasks.find(x => x.id === '7').status, 'running')
   await assert.rejects(() => Q.setQueue('P', [task('9')]), /are running/)
 }
 

@@ -34,6 +34,13 @@ const MODULE = {
   'G1.1': 'alepo-notifications',
 }
 
+/** Registry product per module, so the runner is not left to guess from a
+ *  ticket key the registry has never seen. */
+const PRODUCT = {
+  'lum-selfcare-v1': 'lum-selfcare', 'ase_lbss': 'crm',
+  'billing_cpp14': 'billing', 'alepo-notifications': 'ans',
+}
+
 /** Why a task has no run, stated rather than left as an absence. */
 const NOT_CODE = {
   'B1.0': 'four read-only SQL audits against a live database an agent cannot reach',
@@ -160,6 +167,7 @@ if (process.argv.includes('--queue')) {
     workflowSlug: WORKFLOW,
     ...(MODULE[id] ? { module: MODULE[id], projectDir: checkoutDirFor(MODULE[id]) } : {}),
     ...(TICKET_FOR[id] ? { ticketKey: TICKET_FOR[id] } : {}),
+    ...(PRODUCT[MODULE[id]] ? { productKey: PRODUCT[MODULE[id]] } : {}),
     ...(MODULE[id] ? { detail: promptFor(id) } : { note: NOT_CODE[id] ?? 'no module mapped' }),
   }))
   const res = await fetch(`${BASE}/api/queue`, {

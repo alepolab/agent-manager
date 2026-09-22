@@ -1,5 +1,5 @@
 import type { H3Event } from 'h3'
-import { dispatch } from './taskQueue.ts'
+import { dispatch, readQueue } from './taskQueue.ts'
 import { startRun } from './workflowRunner.ts'
 import { readWorkflow } from './workflows.ts'
 import { currentUser } from './session.ts'
@@ -26,8 +26,13 @@ export async function dispatchQueue(event?: H3Event): Promise<DispatchResult> {
 }
 
 async function run(event?: H3Event): Promise<DispatchResult> {
-  const user = event ? await currentUser(event) : null
-  const env = await envForUser(user?.login)
+  // The signed-in developer when a person pressed the button; the queue's
+  // recorded owner when the boot driver or the tick fired it. Without the
+  // second, a dispatched run has no identity and therefore no Jira token, no
+  // git credential and no name on its commits.
+  const signedIn = event ? await currentUser(event) : null
+  const login = signedIn?.login ?? (await readQueue()).owner
+  const env = await envForUser(login)
 
   return dispatch(async (task) => {
     const workflow = await readWorkflow(task.workflowSlug)
@@ -45,12 +50,13 @@ async function run(event?: H3Event): Promise<DispatchResult> {
       initialPrompt,
       watch: 'direct-invocation',
       ticketKey: task.ticketKey,
+      ...(task.productKey ? { productKey: task.productKey } : {}),
       // Never autoRun from a queue: the whole point is one at a time under a
       // person's eye, and a queue that also ran every gate unattended would be
       // the opposite of the control it was asked for.
       autoRun: false,
       projectDir: task.projectDir,
-      startedBy: user?.login,
+      startedBy: login,
     })
   })
 }
