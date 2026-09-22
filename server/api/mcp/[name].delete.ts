@@ -17,10 +17,11 @@ export default defineEventHandler(async (event) => {
   if (scope === 'global') {
     filePath = join(homedir(), '.claude.json')
   } else if (scope === 'project') {
-    if (!workingDir || typeof workingDir !== 'string') {
-      throw createError({ statusCode: 400, message: 'Working directory is required for project scope' })
-    }
-    filePath = join(workingDir, '.mcp.json')
+    // Same fallback as the listing: with no directory chosen the project is
+    // the one the server runs in, so a server this page listed is a server
+    // this route can remove. Refusing here while the list showed it is the
+    // pair of behaviours that made the page look broken.
+    filePath = join((typeof workingDir === 'string' && workingDir) || process.cwd(), '.mcp.json')
   } else {
     throw createError({ statusCode: 400, message: 'Invalid scope' })
   }

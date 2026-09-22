@@ -32,9 +32,21 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // Read project servers
-  if (workingDir && typeof workingDir === 'string') {
-    const projectPath = join(workingDir, '.mcp.json')
+  // Read project servers.
+  //
+  // `workingDir` comes from a browser-local setting that starts empty and
+  // nothing ever defaults, so the usual case was no directory at all — and
+  // this branch then skipped silently. The page kept promising that "project
+  // servers are scoped to your current working directory" while showing only
+  // the global ones: this repository declares context7, aside and serena in
+  // its own .mcp.json, and none of the three appeared.
+  //
+  // The server's own directory is the honest fallback and the one the rest of
+  // the codebase already uses for exactly this (`options.workingDir ||
+  // process.cwd()` in claudeSdk.ts and claudeProvider.ts).
+  const projectDir = (typeof workingDir === 'string' && workingDir) || process.cwd()
+  {
+    const projectPath = join(projectDir, '.mcp.json')
     if (existsSync(projectPath)) {
       try {
         const raw = await readFile(projectPath, 'utf-8')
