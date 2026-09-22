@@ -19,7 +19,7 @@ interface TeamStatus {
     degraded: boolean
     products: number
     path: string | null
-    items: { key: string, suite?: string, repos: string[], recipe: boolean }[]
+    items: { key: string, suite?: string, repos: string[], recipe: boolean, recipeSource: 'local' | 'plugin' | 'shipped' | null }[]
     seed: { seededFrom: string, seededKind: string, seededAt: number } | null
     /** Reported only. Applying never touches the registry — see teamSync.ts. */
     drift: { newInSource: string[], changedInSource: string[], removedInSource: string[] }
@@ -261,7 +261,9 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
               <span class="font-mono">{{ p.key }}</span>
               <span v-if="p.suite" class="text-label">{{ p.suite }}</span>
               <span class="text-label truncate ml-auto" :title="p.repos.join(', ')">{{ p.repos.length }} repo{{ p.repos.length === 1 ? '' : 's' }}</span>
-              <span class="text-[10px] px-1.5 py-0.5 rounded" :style="{ color: p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }" :title="p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? 'recipe' : 'no recipe' }}</span>
+              <!-- 'local' is drift and this page is about drift: the recipe in force
+                   was edited here and no longer matches whatever the plugin ships. -->
+              <span class="text-[10px] px-1.5 py-0.5 rounded" :style="{ color: p.recipeSource === 'local' ? 'var(--warning)' : p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }" :title="p.recipeSource === 'local' ? `recipes/${p.key}.md was edited in the config directory; the plugin's copy, if any, is hidden behind it on this machine` : p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? (p.recipeSource === 'local' ? 'recipe · local' : 'recipe') : 'no recipe' }}</span>
             </div>
           </div>
         </div>

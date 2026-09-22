@@ -8,7 +8,22 @@ export interface ProductRow {
   /** The rationale block written above the entry. */
   comment: string
   recipe: boolean
+  /** Which copy is in force. 'local' is one edited here, shadowing the plugin's. */
+  recipeSource: RecipeSource | null
   problems: Problem[]
+}
+
+export type RecipeSource = 'local' | 'plugin' | 'shipped'
+
+export interface RecipeRead {
+  key: string
+  source: RecipeSource | 'none'
+  path: string | null
+  content: string
+  mtimeMs: number | null
+  /** The copy a local recipe is hiding, when there is one. */
+  shadows: string | null
+  editable: true
 }
 
 export interface RegistryRead {
@@ -74,10 +89,25 @@ export function useProducts() {
   const importProducts = (keys: string[]) =>
     $fetch<{ imported: string[] }>('/api/registry/products/import', { method: 'POST', body: { keys, mtimeMs: mtime() } })
 
+  // Recipes are fetched per product rather than with the list: twenty-four
+  // files of prose in the list payload would be paid for on every load by
+  // everybody who never opens one. They carry their own mtime, separate from
+  // the registry's — different file, different write.
+  const readRecipe = (key: string) =>
+    $fetch<RecipeRead>(`/api/registry/products/${encodeURIComponent(key)}/recipe`)
+
+  const saveRecipe = (key: string, content: string, mtimeMs: number | null) =>
+    $fetch<{ key: string, path: string, mtimeMs: number }>(`/api/registry/products/${encodeURIComponent(key)}/recipe`, {
+      method: 'PUT', body: { content, mtimeMs },
+    })
+
+  const removeRecipe = (key: string) =>
+    $fetch<{ key: string, fellBackTo: string | null }>(`/api/registry/products/${encodeURIComponent(key)}/recipe`, { method: 'DELETE' })
+
   const validate = () =>
     $fetch<{ ok: boolean, degraded: boolean, path: string | null, problems: Problem[] }>('/api/registry/validate', { method: 'POST' })
 
   const byKey = (key: string) => registry.value?.products.find(p => p.key === key)
 
-  return { registry, loading, error, load, create, update, remove, reorder, importProducts, validate, byKey }
+  return { registry, loading, error, load, create, update, remove, reorder, importProducts, validate, byKey, readRecipe, saveRecipe, removeRecipe }
 }

@@ -206,8 +206,12 @@ const sourceLabel = computed(() => ({
               <span
                 class="text-[10px] px-1.5 py-0.5 rounded"
                 :style="{ color: row.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }"
-                :title="row.recipe ? `recipes/${row.key}.md tells the stack step how to bring this product up` : `No recipes/${row.key}.md; the stack step improvises for this product`"
-              >{{ row.recipe ? 'recipe' : 'no recipe' }}</span>
+                :title="row.recipeSource === 'local'
+                  ? `recipes/${row.key}.md in the config directory, edited here — it hides the plugin's copy on this machine only`
+                  : row.recipe
+                    ? `recipes/${row.key}.md tells the stack step how to bring this product up`
+                    : `No recipes/${row.key}.md; the stack step improvises for this product`"
+              >{{ row.recipe ? (row.recipeSource === 'local' ? 'recipe · local' : 'recipe') : 'no recipe' }}</span>
             </span>
           </NuxtLink>
         </div>

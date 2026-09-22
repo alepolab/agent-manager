@@ -15,11 +15,12 @@
  */
 import { baseBranchFor } from '~~/shared/branchPolicy'
 import { OWNER_LABELS } from '~~/shared/registry/rules'
+import type { RecipeRead } from '~/composables/useProducts'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
-const { registry, load, create, update, remove, byKey } = useProducts()
+const { registry, load, create, update, remove, byKey, readRecipe, saveRecipe, removeRecipe } = useProducts()
 
 const key = computed(() => String(route.params.key))
 const isNew = computed(() => key.value === 'new')
@@ -67,8 +68,101 @@ function fill() {
 onMounted(async () => {
   if (!registry.value) await load()
   fill()
+  loadRecipe()
 })
 watch(registry, fill)
+
+// ── Recipe ─────────────────────────────────────────────────────────────────
+//
+// A separate file with its own mtime, fetched on its own, saved on its own.
+// Not folded into the form: the product entry is validated fields the runner
+// acts on and a bad one refuses the write, whereas the recipe is prose the
+// stack agent reads, and a Save button that refused the recipe because a test
+// command was blank would be the wrong coupling entirely.
+
+const recipe = ref<RecipeRead | null>(null)
+const recipeDraft = ref('')
+const recipeLoading = ref(false)
+const recipeSaving = ref(false)
+/** "Write a recipe" was clicked on a product that has none. The badge keeps
+ *  saying `no recipe` until a file actually exists — a control that renamed
+ *  the state before the write is a control that lies about the filesystem. */
+const recipeStarted = ref(false)
+const recipeOpen = computed(() => !!recipe.value && (recipe.value.source !== 'none' || recipeStarted.value))
+const recipeDirty = computed(() => recipe.value !== null && recipeDraft.value !== recipe.value.content)
+
+async function loadRecipe() {
+  if (isNew.value) return
+  recipeLoading.value = true
+  recipeStarted.value = false
+  try {
+    recipe.value = await readRecipe(key.value)
+    recipeDraft.value = recipe.value.content
+  } catch (e: any) {
+    toast.add({ title: 'Could not read the recipe', description: e?.data?.message || e?.message, color: 'error' })
+  } finally {
+    recipeLoading.value = false
+  }
+}
+
+/** The headings the six existing recipes share. Seeded rather than left blank
+ *  because the sections are what a recipe is for: a blank box gets a paragraph
+ *  about compose and nothing about the traps. */
+const recipeSkeleton = () => `# ${key.value}
+
+## Compose
+
+Deployment repo, compose file, project name, and the command that brings it up.
+
+## Variables
+
+Which keys the stack needs and where they come from. Name the ones a developer's
+own .env will not already have.
+
+## Health
+
+How to tell it actually came up, not just that the containers are running.
+
+## Traps
+
+What a run got wrong here before. This section is why the file exists.
+`
+
+async function persistRecipe() {
+  if (recipeSaving.value) return
+  recipeSaving.value = true
+  try {
+    const { mtimeMs } = await saveRecipe(key.value, recipeDraft.value, recipe.value?.mtimeMs ?? null)
+    toast.add({ title: 'Recipe saved', description: `recipes/${key.value}.md in the config directory`, color: 'success' })
+    // Re-read rather than patch: the source may have just changed from the
+    // plugin's copy to a local one, and `shadows` with it.
+    recipe.value = await readRecipe(key.value)
+    recipeDraft.value = recipe.value.content
+    if (recipe.value.mtimeMs === null) recipe.value.mtimeMs = mtimeMs
+    await load({ silent: true })
+  } catch (e: any) {
+    toast.add({ title: 'Refused', description: e?.data?.message || e?.message, color: 'error' })
+  } finally {
+    recipeSaving.value = false
+  }
+}
+
+const showRecipeRevert = ref(false)
+async function revertRecipe() {
+  showRecipeRevert.value = false
+  try {
+    const { fellBackTo } = await removeRecipe(key.value)
+    toast.add({
+      title: 'Local recipe removed',
+      description: fellBackTo ? `${fellBackTo} is live again` : 'This product now has no recipe at all',
+      color: 'success',
+    })
+    await loadRecipe()
+    await load({ silent: true })
+  } catch (e: any) {
+    toast.add({ title: 'Could not remove it', description: e?.data?.message || e?.message, color: 'error' })
+  }
+}
 
 /** The object the store will hold. Empty fields are omitted, never written as ''. */
 const product = computed(() => {
@@ -298,6 +392,75 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
         </div>
       </div>
 
+      <!-- Recipe -->
+      <div class="rounded-xl p-5 space-y-4 bg-card">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="text-section-title mb-0">Recipe</h3>
+          <div class="flex items-center gap-2">
+            <UButton
+              v-if="recipe && recipe.source === 'local'" label="Revert to the shipped copy" size="xs" variant="ghost" color="neutral"
+              @click="() => { showRecipeRevert = true }"
+            />
+            <UButton
+              v-if="recipeOpen" label="Save recipe" icon="i-lucide-save" size="xs"
+              :loading="recipeSaving" :disabled="!recipeDirty || recipeSaving" @click="persistRecipe"
+            />
+          </div>
+        </div>
+
+        <p class="field-hint">
+          What the stack step reads before it brings this product up: the compose file and profile, the variables
+          it needs, how to tell it is actually healthy, and what a run got wrong here before. Prose, not fields —
+          nothing validates it. With no recipe the stack step improvises the bring-up.
+        </p>
+
+        <div v-if="isNew" class="field-hint">
+          A recipe is a file named after the key, so the product has to exist first. Save it and the section opens.
+        </div>
+
+        <div v-else-if="recipeLoading" class="field-hint">Reading…</div>
+
+        <template v-else-if="recipe">
+          <!-- Where the copy on screen came from, always: editing the plugin's
+               copy silently forks it, and that has to be legible BEFORE the
+               edit, not discovered later when a plugin update never arrives. -->
+          <div class="text-[11px] flex items-start gap-2">
+            <span
+              class="px-1.5 py-0.5 rounded shrink-0"
+              :style="{
+                color: recipe.source === 'none' ? 'var(--warning)' : recipe.source === 'local' ? 'var(--info, var(--success))' : 'var(--success)',
+                background: 'var(--surface-base)',
+              }"
+            >{{ recipe.source === 'none' ? 'no recipe' : recipe.source }}</span>
+            <span class="text-meta font-mono break-all">{{ recipe.path ?? `recipes/${key}.md — nothing here yet` }}</span>
+          </div>
+
+          <div v-if="recipe.shadows" class="text-[11px] p-3 rounded-lg" :style="{ color: 'var(--warning)', background: 'var(--surface-base)' }">
+            This local copy hides <span class="font-mono break-all">{{ recipe.shadows }}</span>, on this machine only.
+            Nothing merges the two and nothing sends this edit back to the team: a later plugin release that corrects
+            this product's bring-up will not reach you while the local copy is here.
+          </div>
+          <div v-else-if="recipe.source === 'plugin' || recipe.source === 'shipped'" class="field-hint">
+            Saving forks this into <span class="font-mono">~/.claude/recipes/{{ key }}.md</span> and that copy wins from then on,
+            here and not for the team. Revert puts the {{ recipe.source }} copy back.
+          </div>
+
+          <div v-if="!recipeOpen" class="flex items-center gap-3">
+            <UButton
+              label="Write a recipe" icon="i-lucide-file-plus" size="sm" variant="soft"
+              @click="() => { recipeDraft = recipeSkeleton(); recipeStarted = true }"
+            />
+            <span class="field-hint mb-0">Starts from the headings the six existing recipes share.</span>
+          </div>
+
+          <textarea
+            v-else v-model="recipeDraft" rows="18" spellcheck="false"
+            class="field-input font-mono text-xs" style="line-height: 1.55;"
+            :placeholder="`# ${key}`"
+          />
+        </template>
+      </div>
+
       <!-- Tests -->
       <div class="rounded-xl p-5 space-y-4 bg-card">
         <h3 class="text-section-title">Test commands</h3>
@@ -355,6 +518,28 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
           <div class="flex justify-end gap-2">
             <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showDelete = false }" />
             <UButton label="Remove" color="error" size="sm" :disabled="confirmKey !== key" @click="destroy" />
+          </div>
+        </div>
+      </template>
+    </UModal>
+
+    <UModal v-model:open="showRecipeRevert">
+      <template #content>
+        <div class="p-6 space-y-4 bg-overlay">
+          <h3 class="text-page-title">Discard the local recipe for {{ key }}?</h3>
+          <p class="text-[13px] text-label">
+            <span class="font-mono break-all">{{ recipe?.path }}</span> is deleted and
+            <template v-if="recipe?.shadows">
+              <span class="font-mono break-all">{{ recipe.shadows }}</span> becomes the live recipe again.
+            </template>
+            <template v-else>
+              this product is left with no recipe at all, so the stack step improvises its bring-up.
+            </template>
+            Whatever is only in the local copy is gone.
+          </p>
+          <div class="flex justify-end gap-2">
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showRecipeRevert = false }" />
+            <UButton label="Discard" color="error" size="sm" @click="revertRecipe" />
           </div>
         </div>
       </template>

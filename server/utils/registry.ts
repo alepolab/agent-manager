@@ -180,14 +180,36 @@ export async function explainResolution(text: string): Promise<ResolutionExplana
  * would pair a stale plugin's registry entry with the checkout's recipe for a
  * product that may have moved on, to fix a problem nobody has.
  */
-export function recipePathFor(name: string): string | undefined {
-  const local = resolveClaudePath('recipes', `${name}.md`)
-  if (existsSync(local)) return local
+export type RecipeSource = 'local' | 'plugin' | 'shipped'
+export interface RecipeLocation { path: string, source: RecipeSource }
+
+/**
+ * The two places a recipe for `name` could be, in precedence order, whether or
+ * not a file is actually at either. Exactly two and never a longer chain, for
+ * the reason above: the local copy, then the plugin's when one is installed
+ * and the shipped one when none is.
+ *
+ * Split out from the lookup because the editor needs the candidates and not
+ * just the winner - it writes the local path whether or not a file is there,
+ * and it has to be able to say which copy a local one is hiding.
+ */
+export function recipeCandidates(name: string): RecipeLocation[] {
   const plugin = pluginRecipesDir()
-  const path = plugin
-    ? join(plugin, `${name}.md`)
-    : `${process.cwd().replace(/\\/g, '/')}/engineering/recipes/${name}.md`
-  return existsSync(path) ? path : undefined
+  return [
+    { path: resolveClaudePath('recipes', `${name}.md`), source: 'local' },
+    plugin
+      ? { path: join(plugin, `${name}.md`), source: 'plugin' }
+      : { path: `${process.cwd().replace(/\\/g, '/')}/engineering/recipes/${name}.md`, source: 'shipped' },
+  ]
+}
+
+/** The recipe in force for `name`, and which of the two copies it is. */
+export function resolveRecipe(name: string): RecipeLocation | undefined {
+  return recipeCandidates(name).find(c => existsSync(c.path))
+}
+
+export function recipePathFor(name: string): string | undefined {
+  return resolveRecipe(name)?.path
 }
 
 /** The installed plugin's recipes directory, from the same manifest registryPath() reads. */

@@ -8,7 +8,7 @@ import { parse } from 'yaml'
 import { resolveClaudePath } from './claudeDir.ts'
 import { serializeFrontmatter } from './frontmatter.ts'
 import { invalidate, memo } from './memo.ts'
-import { loadRegistry, recipePathFor } from './registry.ts'
+import { loadRegistry, resolveRecipe } from './registry.ts'
 import { seedInfo, seedSourcePath } from './productStore.ts'
 import { listWatches, saveWatch } from './watchConfig.ts'
 import { agentRunsRoot } from './runArtifacts.ts'
@@ -59,7 +59,7 @@ export interface TeamStatus {
     degraded: boolean
     products: number
     path: string | null
-    items: { key: string, suite?: string, repos: string[], recipe: boolean }[]
+    items: { key: string, suite?: string, repos: string[], recipe: boolean, recipeSource: 'local' | 'plugin' | 'shipped' | null }[]
     /** Where the store was first copied from, and when. Null before it is seeded. */
     seed: { seededFrom: string, seededKind: string, seedSha256: string, seededAt: number } | null
     /** How the store differs from the plugin's copy. Reported only - never applied. */
@@ -415,12 +415,20 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
   }
 
   const reg = await loadRegistry()
-  const items = reg ? Object.entries(reg.products).map(([key, p]: [string, any]) => ({
-    key,
-    ...(p?.suite ? { suite: String(p.suite) } : {}),
-    repos: Array.isArray(p?.repos) ? p.repos.map(String) : [],
-    recipe: !!recipePathFor(key),
-  })) : []
+  const items = reg ? Object.entries(reg.products).map(([key, p]: [string, any]) => {
+    // Which copy matters more here than on the Products page: this section is
+    // about how the config directory differs from the plugin, and a locally
+    // edited recipe is precisely such a difference. Reported, never applied -
+    // same rule as the registry drift below.
+    const recipe = resolveRecipe(key)
+    return {
+      key,
+      ...(p?.suite ? { suite: String(p.suite) } : {}),
+      repos: Array.isArray(p?.repos) ? p.repos.map(String) : [],
+      recipe: !!recipe,
+      recipeSource: recipe?.source ?? null,
+    }
+  }) : []
 
   // Registry drift is REPORTED and never applied.
   //
