@@ -1135,7 +1135,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     <!-- Step settings -->
     <UModal :open="!!settingsStepId" @update:open="settingsStepId = $event ? settingsStepId : null">
       <template #content>
-        <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay">
+        <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
           <h3 class="text-page-title">{{ settingsStep.label }}</h3>
 
           <div class="field-group">
