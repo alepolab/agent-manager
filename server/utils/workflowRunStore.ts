@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { resolveClaudePath } from './claudeDir.ts'
+import { resolveClaudeFile, resolveClaudePath } from './claudeDir.ts'
 import { agentManagerSettings } from './appSettings.ts'
 import { runWorkspace } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
@@ -272,7 +272,7 @@ export async function findRunInWorkspace(
  *  workflow reader on those paths, so returning `group` here is what keeps
  *  slot accounting from re-reading a workflow file per live run. */
 export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, group?: string, notifyChannel?: string, steps: any[], parameters?: WorkflowParameter[] } | null> {
-  const path = resolveClaudePath('workflows', `${slug}.json`)
+  const path = resolveClaudeFile('workflows', slug)
   if (!existsSync(path)) return null
   try {
     const data = JSON.parse(await readFile(path, 'utf-8'))

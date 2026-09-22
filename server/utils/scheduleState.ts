@@ -12,11 +12,11 @@
  */
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { resolveClaudePath } from './claudeDir.ts'
+import { resolveClaudeFile, resolveClaudePath } from './claudeDir.ts'
 import { SCHEDULE_STATE_DIR_NAME, type ScheduleState } from '../../shared/types/schedule.ts'
 
 const stateDir = () => resolveClaudePath(SCHEDULE_STATE_DIR_NAME)
-const statePath = (id: string) => resolveClaudePath(SCHEDULE_STATE_DIR_NAME, `${id}.json`)
+const statePath = (id: string) => resolveClaudeFile(SCHEDULE_STATE_DIR_NAME, id)
 
 async function ensureDir() {
   const dir = stateDir()

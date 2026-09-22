@@ -6,6 +6,10 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'watch'
 }
 
+/** The shape slugify produces. A caller-supplied id has to match it: the id
+ *  names this watch's state and ticket files. */
+const ID = /^[a-z0-9]+(-[a-z0-9]+)*$/
+
 /**
  * Creates or updates a watch. `saveWatch` (T4) is what actually forces a
  * brand-new watch id to `enabled: false` regardless of what is passed here —
@@ -34,6 +38,12 @@ export default defineEventHandler(async (event) => {
       id = `${base}-${counter}`
       counter++
     }
+  }
+  // Same rule, and same exception, as the schedules route: an id already in the
+  // store is accepted whatever it looks like, because this is also the edit and
+  // enable path. See resolveClaudeFile for why that is safe.
+  else if (!ID.test(id) && !(await listWatches()).some(w => w.id === id)) {
+    throw createError({ statusCode: 400, message: 'A watch id is lowercase words separated by hyphens' })
   }
 
   // The owner, and why it is read back rather than taken from the body.

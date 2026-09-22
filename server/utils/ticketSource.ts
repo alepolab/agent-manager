@@ -14,7 +14,7 @@
  */
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { resolveClaudePath } from './claudeDir.ts'
+import { resolveClaudeFile } from './claudeDir.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
 
 export const WATCH_TICKETS_DIR_NAME = 'watch-tickets'
@@ -38,7 +38,7 @@ export interface TicketSource {
 export function createFileTicketSource(): TicketSource {
   return {
     async fetch(watch: Watch): Promise<TicketRef[]> {
-      const path = resolveClaudePath(WATCH_TICKETS_DIR_NAME, `${watch.id}.json`)
+      const path = resolveClaudeFile(WATCH_TICKETS_DIR_NAME, watch.id)
       if (!existsSync(path)) return []
       try {
         const parsed = JSON.parse(await readFile(path, 'utf-8'))

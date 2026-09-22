@@ -11,6 +11,11 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'schedule'
 }
 
+/** The shape slugify produces, and the shape the registry already demands of a
+ *  product key. A caller-supplied id has to match it: the id names this
+ *  schedule's state file, and `../../x` made that an arbitrary file. */
+const ID = /^[a-z0-9]+(-[a-z0-9]+)*$/
+
 /**
  * Creates or updates a schedule. `saveSchedule` is what forces a brand-new id
  * to `enabled: false`; this route resolves the id, fills defaults, and refuses
@@ -46,6 +51,14 @@ export default defineEventHandler(async (event) => {
       id = `${base}-${counter}`
       counter++
     }
+  }
+  // An id already in the store is accepted whatever it looks like: this route
+  // is the edit path too, and setEnabled round-trips the whole record, so
+  // rejecting a legacy id here would make that schedule impossible to turn off
+  // - the one thing the carve-out below insists must always work. Containment
+  // in resolveClaudeFile is what makes accepting it safe.
+  else if (!ID.test(id) && !all.some(s => s.id === id)) {
+    throw createError({ statusCode: 400, message: 'A schedule id is lowercase words separated by hyphens' })
   }
 
   // Validated here, on save, while a person is looking at it. Deferring this

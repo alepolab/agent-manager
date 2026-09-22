@@ -14,7 +14,7 @@
  */
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { resolveClaudePath } from './claudeDir.ts'
+import { resolveClaudeFile } from './claudeDir.ts'
 import { findActiveRun } from './workflowRunStore.ts'
 import { startOrQueue } from './workflowRunner.ts'
 import { fenceTicketBody } from './jiraTicketSource.ts'
@@ -32,7 +32,7 @@ interface WorkflowFile {
  *  `GET /api/workflows/[slug]` reads — rather than looping the dispatch
  *  path back through HTTP for something the server process can just read. */
 async function loadWorkflow(slug: string): Promise<WorkflowFile | null> {
-  const path = resolveClaudePath('workflows', `${slug}.json`)
+  const path = resolveClaudeFile('workflows', slug)
   if (!existsSync(path)) return null
   try {
     const data = JSON.parse(await readFile(path, 'utf-8'))
