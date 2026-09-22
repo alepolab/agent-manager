@@ -70,17 +70,22 @@ export function composeNotification(opts: {
  * step would fail the whole run — discarding a complete scan because of a
  * Microsoft outage.
  *
- * The cost of that choice: a permanently misconfigured channel reads as a green
- * step. It is mitigated at configuration time, by the "Send a test message"
- * button in Settings, rather than by inventing a `required` flag here — a
- * failure sentence in the step output plus a warn line is what the run page has
- * to show for it.
+ * The cost of that choice used to be that a permanently misconfigured channel
+ * read as a green step, mitigated only by the "Send a test message" button in
+ * Settings. That mitigation is not enough: a channel deleted or renamed after
+ * the button was last pressed goes back to being invisible, and a run that
+ * silently told nobody is the failure this step exists to prevent. So a failure
+ * is also returned as `error`, which the runner puts on the step record and the
+ * run page renders in the failure colour — loud, without being fatal.
  */
 export async function runNotifyStep(
   run: WorkflowRun, cfg: NotifyStepConfig, artifact?: string,
-): Promise<string> {
+): Promise<{ output: string, error?: string }> {
   const channel = cfg.channel?.trim()
-  if (!channel) return 'Nothing posted: this step names no channel. Choose one in the workflow builder.'
+  if (!channel) {
+    const output = 'Nothing posted: this step names no channel. Choose one in the workflow builder.'
+    return { output, error: output }
+  }
 
   let entries: Record<string, unknown>[] = []
   if (artifact) {
@@ -101,8 +106,9 @@ export async function runNotifyStep(
     log.warn('notify step could not post', { runId: run.id, channel, error: why })
     // The link is repeated in the failure sentence on purpose: whoever reads
     // this step's output is the person who now has to go and tell somebody.
-    return `Could not post to "${channel}": ${why}. The run still needs attention at ${link}`
+    const output = `Could not post to "${channel}": ${why}. The run still needs attention at ${link}`
+    return { output, error: output }
   }
   log.info('notify step posted', () => ({ runId: run.id, channel, entries: entries.length }))
-  return `Posted to "${channel}": ${text.split('\n')[0]}`
+  return { output: `Posted to "${channel}": ${text.split('\n')[0]}` }
 }

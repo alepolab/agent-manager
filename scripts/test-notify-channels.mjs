@@ -120,30 +120,35 @@ N.setPoster(async (url, body) => { sent.push({ url, body }) })
 
 let out = await S.runNotifyStep(RUN, { channel: 'reviewers', message: '{count} drafts need review' }, 'escalated-drafts.json')
 assert.equal(sent.length, 1, 'it posted')
-assert.match(out, /^Posted to "reviewers": 3 drafts need review/, 'the output names the channel and what was said')
+assert.match(out.output, /^Posted to "reviewers": 3 drafts need review/, 'the output names the channel and what was said')
+assert.equal(out.error, undefined, 'a message that went out carries no error')
 assert.match(sent[0].body.text, /DRAFT-1, DRAFT-2, DRAFT-3/, 'the message carries the entry names')
 assert.match(sent[0].body.text, /workflows\/scan\?run=r1/, 'and the run link')
 assert.equal(sent[0].url, SLACK_URL, 'posted to the stored webhook')
 
 out = await S.runNotifyStep(RUN, { channel: '' }, 'escalated-drafts.json')
-assert.match(out, /names no channel/, 'a step with no channel says so')
+assert.match(out.output, /names no channel/, 'a step with no channel says so')
+assert.equal(out.error, out.output, 'and reports it as the step error, so it is not a green step')
 assert.equal(sent.length, 1, 'and posts nothing')
 
 out = await S.runNotifyStep(RUN, { channel: 'ghosts' }, 'escalated-drafts.json')
-assert.match(out, /no channel named "ghosts" is configured/, 'an unconfigured channel is a sentence, not a throw')
-assert.match(out, /run still needs attention at https:/, 'and still tells the reader where to go')
+assert.match(out.output, /no channel named "ghosts" is configured/, 'an unconfigured channel is a sentence, not a throw')
+assert.match(out.output, /run still needs attention at https:/, 'and still tells the reader where to go')
+assert.equal(out.error, out.output, 'a channel that is gone is an error on the step, not silence')
 
 N.setPoster(async () => { throw new Error('the webhook answered 500') })
 out = await S.runNotifyStep(RUN, { channel: 'reviewers' }, 'escalated-drafts.json')
-assert.match(out, /^Could not post to "reviewers": the webhook answered 500/, 'a delivery failure is reported')
-assert.match(out, /run still needs attention at https:/, 'with the link the reader now has to act on')
+assert.match(out.output, /^Could not post to "reviewers": the webhook answered 500/, 'a delivery failure is reported')
+assert.match(out.output, /run still needs attention at https:/, 'with the link the reader now has to act on')
+assert.equal(out.error, out.output, 'and carries the same sentence as the step error')
 
 // A malformed artifact must not stop the message: telling somebody with a
 // count of zero beats telling nobody because a producer crashed mid-write.
 writeFileSync(join(process.env.AGENT_RUNS_DIR, 'r1', 'artifacts', 'broken.json'), '{ not json')
 N.setPoster(async (url, body) => { sent.push({ url, body }) })
 out = await S.runNotifyStep(RUN, { channel: 'reviewers' }, 'broken.json')
-assert.match(out, /^Posted to "reviewers"/, 'an unreadable artifact still sends')
+assert.match(out.output, /^Posted to "reviewers"/, 'an unreadable artifact still sends')
+assert.equal(out.error, undefined, 'and an unreadable artifact alone is not a step error')
 
 // ── which channel a run's transitions go to ───────────────────────────────
 await C.saveChannel('default', { kind: 'slack', url: 'https://hooks.slack.com/services/default' })
@@ -231,7 +236,7 @@ for (const [patch, why] of [
 // A notify step can address an email channel like any other.
 mailed.length = 0
 const emailOut = await S.runNotifyStep(RUN, { channel: 'leads', message: '{count} drafts need review' }, 'escalated-drafts.json')
-assert.match(emailOut, /^Posted to "leads": 3 drafts need review/, 'the step reports an email send the same way')
+assert.match(emailOut.output, /^Posted to "leads": 3 drafts need review/, 'the step reports an email send the same way')
 assert.equal(mailed.length, 1, 'and the mail went out')
 
 console.log('notify channels: all assertions passed')

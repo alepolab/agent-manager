@@ -893,12 +893,16 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // - a delivery failure is a sentence, never a failed step - because the run's
   // own state is what a reviewer acts on and the message is the convenience on
   // top of it. See runNotifyStep for the full argument.
+  //
+  // It does carry `error` when the message did not go out, so a channel that is
+  // gone reads as a problem on the run page rather than as a green step. The
+  // status stays `completed`: the error is how it says so, not how it fails.
   if (step.notify) {
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const output = await runNotifyStep(run, step.notify, step.runWhen?.artifact)
+    const { output, error } = await runNotifyStep(run, step.notify, step.runWhen?.artifact)
     for (const line of output.split('\n')) logLine(l, run, rec, line)
     l.outputs[id] = output
-    Object.assign(rec, { status: 'completed', output, model: null, usage: null, completedAt: Date.now() })
+    Object.assign(rec, { status: 'completed', output, ...(error ? { error } : {}), model: null, usage: null, completedAt: Date.now() })
     log.info('notify step done', () => ({ runId: run.id, stepId: id, channel: step.notify?.channel }))
     markCompleted(l.graph, l.state, id)
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }

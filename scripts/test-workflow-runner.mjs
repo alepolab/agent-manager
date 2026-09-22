@@ -1946,6 +1946,7 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(nStep.model, null, 'no model ran')
   assert.equal(nStep.usage, null, 'so it costs nothing')
   assert.match(nStep.output, /^Posted to "reviewers"/, 'the output says what happened')
+  assert.equal(nStep.error, undefined, 'and a message that went out leaves no error on the step')
 
   // 33b. Beside the gate now works too: the wave splits, the notify step is not
   // the decision, and it sends before the run stops on the person. Kept as its
@@ -1989,6 +1990,10 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(failedStep.status, 'completed', 'the step completes')
   assert.match(failedStep.output, /Could not post to "reviewers": the webhook answered 503/, 'and says so in its output')
   assert.match(failedStep.output, /run still needs attention at/, 'with the link whoever reads it now has to act on')
+  // The point of the error: a completed step that told nobody must not read as a
+  // green one. The run page renders step.error in the failure colour whatever
+  // the status is, so this is what makes a dead channel visible.
+  assert.equal(failedStep.error, failedStep.output, 'and the step carries it as an error, not just as output')
 
   // 33d. Nothing to report: runWhen skips the step, and nothing is sent.
   N.setPoster(async (url, body) => { sent.push({ url, body }) })
