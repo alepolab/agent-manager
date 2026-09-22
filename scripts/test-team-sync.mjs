@@ -35,13 +35,21 @@ assert.ok(s.skills.length >= 50 && s.skills.every(k => k.state === 'missing'),
   `a fresh directory misses every team skill; got ${s.skills.length}`)
 assert.ok(s.skills.some(k => k.name === 'oma-qa'), 'the oh-my-agent skills are the team skills')
 assert.ok(s.skills.some(k => k.name === 'ultrawork'), 'and its workflows are projected as skills')
-// Two workflows now (app/utils/workflowTemplates.ts), whose steps name the
+// Three workflows now (app/utils/workflowTemplates.ts), whose steps name the
 // seeded oh-my-agent agents directly — runbookSteps builds an identity map, so
 // agentTemplateId IS the agent slug. Asserted by slug rather than by position:
 // the order of the template array is not a contract.
-assert.equal(s.workflows.length, 2, 'the instance ships its workflows over the oh-my-agent agents')
+//
+// `oma-sdlc-jira-to-pr` is the full-lifecycle template: it carries the story,
+// spec and security gates the other two have no phase for. Its steps name six
+// agents that are NOT part of the twelve seeded from .agents/agents —
+// business-analyst, ui-architect, security-reviewer, persona-reviewer,
+// visual-qa and cto-reviewer, which ship as definitions under
+// engineering/agents/. Until those are seeded, this workflow materialises but
+// its new steps resolve to agent slugs with no agent behind them.
+assert.equal(s.workflows.length, 3, 'the instance ships its workflows over the oh-my-agent agents')
 const bySlug = Object.fromEntries(s.workflows.map(w => [w.slug, w]))
-assert.deepEqual(Object.keys(bySlug).sort(), ['oma-csup-to-pr', 'oma-plan-build-review'])
+assert.deepEqual(Object.keys(bySlug).sort(), ['oma-csup-to-pr', 'oma-plan-build-review', 'oma-sdlc-jira-to-pr'])
 // Two parallel waves joined twice: research + reproduce -> plan -> review ->
 // backend + frontend -> verify -> refine -> docs.
 assert.equal(bySlug['oma-plan-build-review'].steps, 9, 'the parallel work graph keeps all nine steps')

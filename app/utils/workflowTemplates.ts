@@ -1,5 +1,6 @@
 import type { WorkflowStep } from '~/types'
 import type { Role } from '~~/shared/types/role'
+import type { GateKind } from '~~/shared/utils/oversight'
 
 export interface WorkflowTemplateStep {
   agentTemplateId: string
@@ -20,6 +21,8 @@ export interface WorkflowTemplateStep {
   verdict?: boolean
   /** See WorkflowStep.gateRole. */
   gateRole?: Role
+  /** See WorkflowStep.gateKind. Raises the oversight floor for story/spec/security gates. */
+  gateKind?: GateKind
   /** See WorkflowStep.ownerRole. Whose work the step is; grants nothing. */
   ownerRole?: Role
   /** See WorkflowStep.pr. The runner pushes the branch and opens the PR. */
@@ -103,6 +106,10 @@ export function materializeTemplateSteps(
       // sets it: a step that declares whose gate it is should not silently lose
       // that when someone later toggles `approval` back on.
       ...(step.gateRole ? { gateRole: step.gateRole } : {}),
+      // In this whitelist for the reason the comment below gives: a story or
+      // security gate that loses its kind here silently reverts to blast-radius
+      // tiering, which for a `docs`-class change means it never fires at all.
+      ...(step.gateKind ? { gateKind: step.gateKind } : {}),
       // Carried for the same reason gateRole is: a step that declares whose
       // work it is must not lose that on the way to the workflow the runner
       // reads. A field missing from this whitelist is dropped in silence -
@@ -493,6 +500,207 @@ export const workflowTemplates: WorkflowTemplate[] = [
         approval: true,
         gateRole: 'developer',
         maxVisits: 3,
+      },
+    ],
+  },
+  {
+    id: 'oma-sdlc-jira-to-pr',
+    name: 'SDLC: Jira to PR (full lifecycle)',
+    description: 'Every phase from ticket to opened pull request: story enrichment and readiness, scenario and spec, backend and UI architecture, stack, baselines, build, the full test matrix, and a multi-persona blind review round.',
+    icon: 'i-lucide-route',
+    // The full-lifecycle template. Three things distinguish it from the two
+    // above, and each closes a gap the SDLC surface audit named:
+    //
+    //  1. It has a FRONT. Story enrichment, readiness and spec run before any
+    //     implementation step, so a feature ticket has a checkable definition
+    //     of done. Without this the pipeline is bug-shaped and a story with no
+    //     reproducible failure has nothing for it to prove.
+    //  2. Its gates declare `gateKind`. A story, spec or security gate cannot
+    //     be tiered by blast radius - see shared/utils/oversight.ts - so these
+    //     carry a floor and fire even on a `docs`-class change. Every other
+    //     gate tiers exactly as before.
+    //  3. The review round is MULTI-PERSONA and runs in parallel. Security, UI
+    //     architecture and end-user personas are separate lanes that join at
+    //     VERIFY, so each lens forms its finding without seeing the others'.
+    //
+    // NOT WIRED HERE, deliberately: release, post-deploy verification and
+    // rollback. A run is a budgeted, container-owning process and a release is
+    // a calendar event spanning many tickets; holding a run open across one
+    // deadlocks the CI poller (which only inspects settled runs) and defers
+    // every teardown hung off a terminal status. Those phases belong to a
+    // separate, ticket-scoped record keyed by merged sha.
+    steps: [
+      // ---- Stage 1: intake and understanding -------------------------------
+      // Every agentTemplateId appears exactly ONCE in this template. The
+      // materializer resolves `next` by agentTemplateId and documents that a
+      // repeat makes the last step win as the translation target - so a
+      // template naming `qa-reviewer` for both spec and verify would silently
+      // route the spec step's predecessors at the verify step. Intake and
+      // classification therefore sit with the business analyst, who is already
+      // reading the ticket, and planning owns scenarios.
+      {
+        agentTemplateId: 'business-analyst',
+        label: 'Intake, Classification, Enrichment & Readiness',
+        ownerRole: 'developer',
+        next: ['research-explorer', 'pm-planner'],
+        jira: { transition: 'In Progress' },
+        // The first floored gate. A story that cannot be made ready goes back
+        // to a person rather than becoming an agent's guess, and "is this the
+        // right thing to build" is a question no blast radius can answer.
+        approval: true,
+        gateRole: 'product-owner',
+        gateKind: 'story',
+      },
+      {
+        agentTemplateId: 'research-explorer',
+        label: 'Prior Art & Duplicate Search',
+        next: ['pm-planner'],
+      },
+
+      // ---- Stage 2: specification -------------------------------------------
+      {
+        agentTemplateId: 'pm-planner',
+        label: 'Scenarios, Acceptance Rows & Test Strategy',
+        next: ['architecture-reviewer', 'ui-architect'],
+        contextMode: 'ancestors',
+        // Positive, negative and boundary scenarios, each bound to a runnable
+        // case, plus which test class proves which row. Floored for the same
+        // reason as the story gate, and asked of the product owner because the
+        // question is "do these rows, all passing, mean the ticket is done".
+        approval: true,
+        gateRole: 'product-owner',
+        gateKind: 'spec',
+        testsUnlocked: true,
+      },
+
+      // ---- Stage 3: design ---------------------------------------------------
+      {
+        agentTemplateId: 'architecture-reviewer',
+        label: 'Backend Architecture & Impact',
+        next: ['tf-infra-engineer'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'architect',
+        gateKind: 'design',
+      },
+      {
+        agentTemplateId: 'ui-architect',
+        label: 'UI Architecture & Design-System Review',
+        next: ['tf-infra-engineer'],
+        contextMode: 'ancestors',
+      },
+
+      // ---- Stage 4-5: environment and baselines ------------------------------
+      {
+        agentTemplateId: 'tf-infra-engineer',
+        label: 'Stack Up & Environment Verification',
+        next: ['debug-investigator'],
+        stack: 'up',
+        contextMode: 'ancestors',
+      },
+      {
+        agentTemplateId: 'debug-investigator',
+        label: 'Failing Oracle & Visual Baseline',
+        next: ['backend-engineer', 'frontend-engineer'],
+        // Owns the oracle; every later step is locked out of it. The visual
+        // baseline is captured here for the same reason the oracle is: a
+        // comparison with no before is a screenshot, not a verification.
+        testsUnlocked: true,
+        contextMode: 'ancestors',
+      },
+
+      // ---- Stage 6: build ----------------------------------------------------
+      {
+        agentTemplateId: 'backend-engineer',
+        label: 'Implement Backend',
+        ownerRole: 'developer',
+        next: ['db-engineer'],
+        monitorSlug: 'refactor-engineer',
+        maxVisits: 3,
+      },
+      {
+        agentTemplateId: 'frontend-engineer',
+        label: 'Implement Frontend',
+        ownerRole: 'developer',
+        next: ['visual-qa'],
+        monitorSlug: 'refactor-engineer',
+        maxVisits: 3,
+      },
+      {
+        agentTemplateId: 'db-engineer',
+        label: 'Schema & Migration',
+        next: ['security-reviewer'],
+        contextMode: 'ancestors',
+      },
+
+      // ---- Stage 7-8: test matrix and the blind review round -----------------
+      // Four lanes, joined at VERIFY. They run in parallel so no lens sees
+      // another's finding before forming its own.
+      {
+        agentTemplateId: 'visual-qa',
+        label: 'UI, Visual & Accessibility Testing',
+        next: ['persona-reviewer'],
+        contextMode: 'predecessors',
+      },
+      {
+        agentTemplateId: 'security-reviewer',
+        label: 'Security Review & Security Testing',
+        next: ['qa-reviewer'],
+        contextMode: 'ancestors',
+        // Threshold-routed rather than tiered: an authz, crypto, personal-data,
+        // payment or dependency change reaches security however small its
+        // blast radius, and the approval carries a written reason.
+        approval: true,
+        gateRole: 'security',
+        gateKind: 'security',
+      },
+      {
+        agentTemplateId: 'persona-reviewer',
+        label: 'End-User Persona Reviews',
+        next: ['qa-reviewer'],
+        contextMode: 'predecessors',
+      },
+
+      // ---- Verify, escalate, ship --------------------------------------------
+      {
+        agentTemplateId: 'qa-reviewer',
+        label: 'Verify: Unit, Integration, Negative & Regression',
+        next: ['cto-reviewer'],
+        contextMode: 'ancestors',
+        // QA, and never the actor who answered the implementation gate.
+        approval: true,
+        gateRole: 'qa',
+        gateKind: 'verify',
+      },
+      {
+        agentTemplateId: 'cto-reviewer',
+        label: 'CTO Escalation (threshold only)',
+        next: ['docs-curator'],
+        contextMode: 'ancestors',
+        // Tiered, NOT floored. This must stay rare: a gate that fires on
+        // everything teaches reviewers to approve without reading, which is
+        // the failure shared/utils/oversight.ts exists to prevent. On a cheap
+        // tier it does not stop at all.
+        approval: true,
+        gateRole: 'cto',
+      },
+      {
+        agentTemplateId: 'docs-curator',
+        label: 'Docs, Evidence Bundle & Pull Request',
+        next: [],
+        contextMode: 'ancestors',
+        pr: true,
+        approval: true,
+        // `operator`, not `manager`, and not by preference: `manager` carries
+        // `answerGate: false` in shared/types/role.ts — it reads progress and
+        // changes nothing — so a gate owned by it is answerable only by an
+        // operator whose 403 would name the wrong owner. The CSUP template
+        // reached the same conclusion. Note this contradicts
+        // .agents/workflows/runbook-a/resources/phase-gates.md, which names
+        // Manager as SHIP_GATE's owner; the role model is the one that runs.
+        gateRole: 'operator',
+        gateKind: 'ship',
+        jira: { transition: 'Dev Done', comment: true, attach: true },
       },
     ],
   },
