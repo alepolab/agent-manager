@@ -35,6 +35,34 @@ s = await W.checkoutState(repo)
 assert.equal(s.dirty, 2, 'files inside an untracked directory are counted, not the directory')
 assert.deepEqual(s.dirtyFiles, ['new-dir/x.txt', 'new-dir/y.txt'], 'paths are whole, including the first line whose status column starts with a space')
 
+// ---- Parked work stays visible after it is parked ------------------------
+// Parking used to announce the recovery command in a confirm() that closed on
+// the click and a toast that faded, then the row read "clean" again. The only
+// trace of the work was a stash nothing in the UI mentioned.
+assert.deepEqual(s.stashes, [], 'a checkout that never stashed reports none, rather than omitting the field')
+{
+  const parked = await W.stashCheckout(repo, 'sandeep')
+  assert.equal(parked.stashed, true)
+  const after = await W.checkoutState(repo)
+  assert.equal(after.dirty, 0, 'parking clears the tree, which is the whole point')
+  assert.equal(after.stashes.length, 1, 'and the parked work is still reported, so it can be found again')
+  assert.match(after.stashes[0].subject, /parked by sandeep/, 'named with who parked it, not an opaque WIP line')
+  assert.match(after.stashes[0].ref, /^stash@\{0\}$/, 'and by the ref `git stash pop` acts on')
+  // Put it back so the rest of the file sees the tree it expects.
+  git(repo, ['stash', 'pop'])
+  assert.equal((await W.checkoutState(repo)).dirty, 2, 'and popping restores exactly what was parked')
+}
+{
+  const clean = join(root, 'clean-repo')
+  mkdirSync(clean); git(clean, ['init', '--quiet', '-b', 'main'])
+  git(clean, ['config', 'user.email', 't@x']); git(clean, ['config', 'user.name', 't'])
+  writeFileSync(join(clean, 'a.txt'), 'a\n'); git(clean, ['add', '.']); git(clean, ['commit', '--quiet', '-m', 'init'])
+  const r = await W.stashCheckout(clean, 'sandeep')
+  assert.equal(r.stashed, false, 'nothing to park is not an error')
+  assert.equal((await W.checkoutState(clean)).stashes.length, 0, 'and it invents no stash')
+  rmSync(clean, { recursive: true, force: true })
+}
+
 const mod = join(repo, 'modules', 'administrator'); mkdirSync(mod, { recursive: true }); git(mod, ['init', '--quiet', '-b', 'main']); git(mod, ['config', 'user.email', 't@x']); git(mod, ['config', 'user.name', 't']); writeFileSync(join(mod, 'm.txt'), 'm\n'); git(mod, ['add', '.']); git(mod, ['commit', '--quiet', '-m', 'init'])
 const wt = W.worktreeDirFor(repo, 'fix/CSUP-1-abcdef12')
 assert.equal(wt, `${repo}@fix-CSUP-1-abcdef12`, 'the run worktree sits beside the clone, named after it and the branch')

@@ -73,7 +73,7 @@ async function assign(login: string, role: string) {
   } catch (e: any) { rosterError.value = e.data?.message || e.message }
   finally { savingLogin.value = null }
 }
-interface Checkout { path: string, name: string, owner?: string, exists: boolean, git: boolean, branch?: string, head?: string, dirty: number, dirtyFiles: string[] }
+interface Checkout { path: string, name: string, owner?: string, exists: boolean, git: boolean, branch?: string, head?: string, dirty: number, dirtyFiles: string[], stashes?: { ref: string, subject: string }[] }
 const checkouts = ref<Checkout[] | null>(null)
 const checkoutsError = ref<string | null>(null)
 const stashing = ref<string | null>(null)
@@ -354,6 +354,19 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <summary class="t-small text-label cursor-pointer focus-ring">Changed files</summary>
             <ul class="font-mono t-small text-label mt-0.5 ml-4 list-disc"><li v-for="f in c.dirtyFiles" :key="f">{{ f }}</li></ul>
           </details>
+          <!-- Parked work told you how to get it back in a confirm() that
+               closed on the click and a toast that faded, then the row read
+               "clean" again with nothing to show anything had been set aside.
+               Read from `git stash list`, so it survives a reload and is true
+               even when someone else parked it. -->
+          <div v-if="c.stashes?.length" class="mt-0.5 t-small">
+            <span style="color: var(--warning);">{{ c.stashes.length }} parked change-set{{ c.stashes.length === 1 ? '' : 's' }}</span>
+            <span class="text-label"> — restore the newest with </span>
+            <code class="font-mono" style="color: var(--text-primary);">git -C {{ c.path }} stash pop</code>
+            <ul class="font-mono t-small text-label mt-0.5 ml-4 list-disc">
+              <li v-for="s in c.stashes" :key="s.ref">{{ s.ref }}: {{ s.subject }}</li>
+            </ul>
+          </div>
         </div>
       </div>
 

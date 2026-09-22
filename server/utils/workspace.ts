@@ -187,25 +187,42 @@ export interface CheckoutState {
   /** Uncommitted or untracked paths, counted with -uall so a new directory is not one entry. */
   dirty: number
   dirtyFiles: string[]
+  /**
+   * Stashes on this checkout, newest first.
+   *
+   * Parking work told you how to get it back in a `confirm()` that closed on
+   * the click and a toast that faded — so the only record of a long
+   * `git -C … stash pop` was gone seconds after the act, and the row went back
+   * to reading "clean" with no sign that anything had been set aside. Read
+   * from git rather than remembered in the client, so it survives a reload and
+   * is true even when someone else did the parking.
+   */
+  stashes: { ref: string, subject: string }[]
 }
 
 export async function checkoutState(path: string): Promise<CheckoutState> {
   const name = path.split('/').pop() || path
-  if (!existsSync(path)) return { path, name, exists: false, git: false, dirty: 0, dirtyFiles: [] }
-  if (!existsSync(join(path, '.git'))) return { path, name, exists: true, git: false, dirty: 0, dirtyFiles: [] }
+  if (!existsSync(path)) return { path, name, exists: false, git: false, dirty: 0, dirtyFiles: [], stashes: [] }
+  if (!existsSync(join(path, '.git'))) return { path, name, exists: true, git: false, dirty: 0, dirtyFiles: [], stashes: [] }
   try {
-    const [branch, head, status] = await Promise.all([
+    const [branch, head, status, stashList] = await Promise.all([
       git(path, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => 'no commits yet'),
       git(path, ['rev-parse', '--short', 'HEAD']).catch(() => ''),
       // Untrimmed: a leading space is the status column of the first line, not padding.
       gitRaw(path, ['status', '--porcelain', '-uall']),
+      // Cheap: reads refs/stash. Empty on a checkout that never stashed.
+      gitRaw(path, ['stash', 'list', '--format=%gd%x00%gs']).catch(() => ''),
     ])
+    const stashes = stashList.split('\n').filter(Boolean).map((l) => {
+      const [ref = '', subject = ''] = l.split('\0')
+      return { ref, subject }
+    })
     const remote = await git(path, ['remote', 'get-url', 'origin']).catch(() => undefined)
     // A nested repository shows up as one untracked directory in its parent; it is its own checkout, not a change here.
     const files = status.split('\n').filter(Boolean).map(l => l.slice(3)).filter(f => !(f.endsWith('/') && existsSync(join(path, f, '.git'))))
-    return { path, name, exists: true, git: true, branch, head, remote, dirty: files.length, dirtyFiles: files.slice(0, 20) }
+    return { path, name, exists: true, git: true, branch, head, remote, dirty: files.length, dirtyFiles: files.slice(0, 20), stashes }
   } catch {
-    return { path, name, exists: true, git: true, dirty: 0, dirtyFiles: [] }
+    return { path, name, exists: true, git: true, dirty: 0, dirtyFiles: [], stashes: [] }
   }
 }
 
