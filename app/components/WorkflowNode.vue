@@ -16,6 +16,9 @@ const props = defineProps<{
     triggerSource?: string
     triggerJoin?: boolean
     notifyChannel?: string
+    produces?: string[]
+    contextMode?: 'predecessors' | 'ancestors'
+    testsUnlocked?: boolean
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
@@ -87,6 +90,24 @@ const verdictColor: Record<string, string> = {
             style="color: var(--text-disabled);"
             :title="`Posts a message to ${data.notifyChannel}`"
           ><UIcon name="i-lucide-bell-ring" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.produces?.length"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Must write: ${data.produces.join(', ')}`"
+          ><UIcon name="i-lucide-file-check" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.contextMode === 'ancestors'"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            title="Receives every upstream step's output, not just the ones before it"
+          ><UIcon name="i-lucide-git-merge" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.testsUnlocked"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            title="Writes tests and code together; the plugin's test lock is lifted for this step"
+          ><UIcon name="i-lucide-unlock" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.monitorLabel"
             class="text-[9px] truncate"

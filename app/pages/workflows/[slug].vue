@@ -238,6 +238,9 @@ const nodes = computed(() => {
           ?? (step.triggerWorkflow?.fromParameter ? `parameter ${step.triggerWorkflow.fromParameter}` : undefined),
         triggerJoin: step.triggerWorkflow?.join === true,
         notifyChannel: step.notify?.channel,
+        produces: step.produces,
+        contextMode: step.contextMode,
+        testsUnlocked: step.testsUnlocked === true,
         maxVisits: step.maxVisits,
         status: exec?.status,
         visits: exec?.visits,
@@ -426,6 +429,11 @@ const monitorOptions = computed(() => [
   ...agents.value.map(a => ({ value: a.slug, label: a.frontmatter.name, description: summarise(a.frontmatter.description) })),
 ])
 
+const contextModeOptions = [
+  { value: 'predecessors', label: 'Only the steps just before it', description: 'The default: immediate forward predecessors' },
+  { value: 'ancestors', label: 'Every step upstream', description: 'The full ancestry, budgeted and truncation-marked' },
+]
+
 function patchStep(stepId: string, changes: Partial<WorkflowStep>) {
   workflowSteps.value = workflowSteps.value.map(s => (s.id === stepId ? { ...s, ...changes } : s))
 }
@@ -439,6 +447,24 @@ const settingsRunWhen = computed({
   set: (value: string) => {
     const artifact = value.trim()
     if (settingsStepId.value) patchStep(settingsStepId.value, { runWhen: artifact ? { artifact } : undefined })
+  },
+})
+/** The files this step must leave behind, edited one per line - the same shape
+ *  as the routing table below, and for the same reason: a JSON array in a text
+ *  box is a worse thing to type than one entry per line. */
+const settingsProduces = computed({
+  get: () => (settingsStep.value?.produces ?? []).join('\n'),
+  set: (value: string) => {
+    const names = value.split('\n').map(n => n.trim()).filter(Boolean)
+    if (settingsStepId.value) patchStep(settingsStepId.value, { produces: names.length ? names : undefined })
+  },
+})
+/** `predecessors` is never persisted: computeInput only tests for 'ancestors',
+ *  so writing the default would be a key that says nothing. */
+const settingsContextMode = computed({
+  get: () => settingsStep.value?.contextMode ?? 'predecessors',
+  set: (value: string) => {
+    if (settingsStepId.value) patchStep(settingsStepId.value, { contextMode: value === 'ancestors' ? 'ancestors' : undefined })
   },
 })
 /** The channel a notify step posts to. Emptying it removes the whole notify
@@ -600,8 +626,41 @@ function parameterNameError(index: number): string | null {
   return null
 }
 
+/**
+ * A produced filename the runner can never satisfy, caught while a person is
+ * looking at it. `resolveRunArtifact` returns null for anything that resolves
+ * outside the run's artifacts directory, and the output check turns that null
+ * into "<name> was not written" - so a typo'd `../report.md` is an
+ * unsatisfiable requirement whose only symptom is a step sent back, after it
+ * has already run and spent its budget.
+ */
+function producesError(names: string[] | undefined): string | null {
+  for (const name of names ?? []) {
+    if (/^[/\\]/.test(name) || /^[A-Za-z]:/.test(name) || name.includes('\\')) return `"${name}" must be a path inside the run's artifacts directory`
+    if (name.split('/').includes('..')) return `"${name}" climbs out of the run's artifacts directory`
+  }
+  return null
+}
+const settingsProducesError = computed(() => producesError(settingsStep.value?.produces))
+/** The same check across every step, because save() is the last place a name
+ *  nobody can satisfy can still be stopped. */
+const badProducesStep = computed(() => {
+  for (const step of workflowSteps.value) {
+    const error = producesError(step.produces)
+    if (error) return { label: step.label, error }
+  }
+  return null
+})
+
 async function save() {
   if (!workflow.value) return
+  // Refused rather than saved-and-warned: the runner reads this list as files it
+  // must find, so a name that can never resolve is a step that always fails, and
+  // the first sign of it is a run sent back after it has already spent budget.
+  if (badProducesStep.value) {
+    toast.add({ title: `"${badProducesStep.value.label}" has a file nothing can write`, description: badProducesStep.value.error, color: 'error' })
+    return
+  }
   saving.value = true
   try {
     const saved = await update(slug, {
@@ -1107,6 +1166,21 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             </span>
           </div>
 
+          <div class="field-group">
+            <label class="field-label">Files this step must leave behind, one per line</label>
+            <textarea
+              v-model="settingsProduces" rows="3" class="field-input font-mono text-xs"
+              placeholder="plan.md&#10;qa-plan.json"
+            />
+            <span v-if="settingsProducesError" class="field-hint" style="color: var(--error);">{{ settingsProducesError }}</span>
+            <span class="field-hint">
+              Filenames in the run's artifacts directory. Checked before the monitor runs, so a step
+              that left one out is sent back for that exact file instead of paying for a model to
+              notice — which costs it a visit. A step with no visits left fails instead, and a step
+              that skipped itself is exempt. Leave empty to check nothing.
+            </span>
+          </div>
+
           <div v-if="settingsStep.agentSlug === 'sdlc-jira-tracker'" class="field-group">
             <label class="field-label">Move the ticket to</label>
             <input
@@ -1185,6 +1259,32 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               rather than on the branch that matters.
               Beside a step that waits for approval is fine: only the gated step waits, so this one sends
               before the run stops on the person.
+            </span>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">What this step is shown from upstream</label>
+            <USelectDropdown v-model="settingsContextMode" :options="contextModeOptions" />
+            <span class="field-hint">
+              By default a step receives only the steps immediately before it. "Every step upstream"
+              is for a step that must see evidence produced several hops back — it is not free: the
+              input is capped at 60,000 characters shared evenly between the contributors, and what
+              does not fit is cut with the truncation marked.
+            </span>
+          </div>
+
+          <div class="field-group">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" :checked="settingsStep.testsUnlocked === true" @change="settingsStepId && patchStep(settingsStepId, { testsUnlocked: ($event.target as HTMLInputElement).checked || undefined })">
+              <span class="field-label mb-0">This step writes tests and code together</span>
+              <HelpTip
+                title="Lifting the test lock"
+                body="The plugin's test lock denies test edits once source has been edited, so a step cannot quietly rewrite the test that was meant to catch it. A step that owns both by design needs that lock lifted: the runner writes .agent/test-unlock.json into the checkout with the reason before the step starts, and preflight checks the lock against this step before the run spends a token. Tick it only for a step whose whole job is test-and-code in one pass."
+              />
+            </label>
+            <span class="field-hint">
+              The runner lifts the plugin's test lock for this step and records why. Leave it off for
+              any step that edits source without owning the tests that cover it.
             </span>
           </div>
 
