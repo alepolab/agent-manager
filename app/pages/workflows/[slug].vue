@@ -33,7 +33,7 @@ const { can } = useUser()
  * your edits on reload is a worse answer than one that does not accept them.
  */
 const readOnly = computed(() => !can('configure'))
-const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote, reject, rework } = useWorkflowRun(slug)
+const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote, reject, skip, rework } = useWorkflowRun(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
@@ -698,7 +698,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           :logs="logs"
           @continue="(n) => continueRun(n)"
           @respond="respond"
-          @reject="reject"
+          @reject="reject" @skip="skip"
           @rework="rework"
           @note="sendNote"
           @stop="stop"

@@ -191,7 +191,7 @@ export interface RunDecision {
    * recorded before gates declared a kind.
    */
   gateKind?: GateKind
-  verdict: 'approved' | 'rejected' | 'sent-back'
+  verdict: 'approved' | 'rejected' | 'sent-back' | 'skipped'
   /** The reviewer's reason. Required for every verdict except a plain approval. */
   note?: string
   /** Milliseconds this gate waited for a person, from `question.askedAt` to `at`. */

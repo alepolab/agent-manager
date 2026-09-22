@@ -430,6 +430,27 @@ export function markFailed(state: RunState, id: string): void {
   state.armed[id] = false
 }
 
+/**
+ * Mark ONE node skipped and let its successors settle.
+ *
+ * `skipPending` abandons everything still pending, which is what a halt wants.
+ * Skipping a single step is the opposite: the run carries on, so the node is
+ * marked and the graph is settled forward exactly as a completion would be —
+ * otherwise its successors stay unarmed and the run stalls with nothing
+ * running and nothing to say why.
+ */
+export function markSkipped(graph: WorkflowGraph, state: RunState, id: string): void {
+  // Arm the successors exactly as a completion would — the rules for which
+  // edges are taken and when a join is ready are the same, and a second copy
+  // of them would drift. Then correct the status: a skipped step is NOT a
+  // completed one, because a completed step's output is evidence and this one
+  // produced none. `settled()` already counts `skipped`, so downstream joins
+  // are satisfied either way.
+  markCompleted(graph, state, id)
+  state.status[id] = 'skipped'
+  state.armed[id] = false
+}
+
 export function skipPending(state: RunState): void {
   for (const id of Object.keys(state.status)) {
     if (state.status[id] === 'pending') {

@@ -2659,6 +2659,74 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
 /** Approving an owner-gated run without saying why. The route answers 400. */
 export class ApprovalNeedsReason extends Error {}
 
+/**
+ * Skip the step a paused run is waiting on, and carry on past it.
+ *
+ * A gate could be approved, rejected, reworked or stopped — and a reviewer who
+ * wanted none of those was stuck. The case that forced this: a Jira transition
+ * step on a run whose ticket must not move, where approving does the wrong
+ * thing, rejecting ends the run, and rework re-does work that was fine. The
+ * only remaining option was to stop a healthy run over one step nobody wanted.
+ *
+ * A skipped step is not a completed one. It is marked `skipped` in the run's
+ * steps and in the graph state, so no downstream step can read its output as
+ * evidence, and the decision goes on the record with its reason — a step that
+ * silently did not happen is the thing every gate in this estate exists to
+ * prevent.
+ *
+ * Requires a reason, always. Unlike an approval this has no blast-radius
+ * exemption: skipping is the one answer with no artifact behind it, so the
+ * sentence is the only account of why the pipeline did less than it says.
+ */
+export class SkipNeedsReason extends Error {}
+
+export async function skipStep(runId: string, reason: string): Promise<WorkflowRun | null> {
+  if (!reason?.trim()) throw new SkipNeedsReason('Say in one line why this step is being skipped: it is the only record that it did not run.')
+
+  let l = live.get(runId)
+  if (!l) {
+    const stored = await getRun(runId)
+    if (stored?.status !== 'paused') return stored
+    l = await rehydrate(stored)
+    stored.pid = process.pid
+    stored.bootId = BOOT_ID
+    await saveRun(stored)
+  }
+  if (l.running) return getRun(runId)
+  l.running = true
+  const run = await getRun(runId)
+  if (!run || run.status !== 'paused' || !run.question?.stepId) {
+    l.running = false
+    return run
+  }
+
+  const stepId = run.question.stepId
+  // A budget pause is not a step anyone can skip: there is no step waiting,
+  // only an allowance that ran out.
+  if (run.question.reason === 'budget') {
+    l.running = false
+    throw new SkipNeedsReason('This run is paused on its budget, not on a step. Grant more budget or stop the run.')
+  }
+
+  // Skipped, never completed: a completed step's output is evidence, and this
+  // one produced none.
+  markSkipped(l.graph, l.state, stepId)
+  const step = run.steps.find(s => s.stepId === stepId)
+  if (step) {
+    step.status = 'skipped'
+    step.completedAt = Date.now()
+    step.output = `Skipped by ${'an operator'}: ${reason.trim()}`
+  }
+  l.notes[stepId] = `This step was SKIPPED and did not run. Reason: ${reason.trim()}`
+
+  run.question = undefined
+  reconcileRunClock(run)
+  run.status = 'running'
+  await publish(run)
+  void driveToSettlement(l, run)
+  return run
+}
+
 export async function continueRun(runId: string, note?: string): Promise<WorkflowRun | null> {
   let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds

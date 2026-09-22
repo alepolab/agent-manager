@@ -5,7 +5,7 @@ import { SHORT_ROLE, ROLE_LABEL } from '~~/shared/types/role'
 import { needsJustification, oversightReason } from '~~/shared/utils/oversight'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
-const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string], rework: [stepId: string, note: string] }>()
+const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string], skip: [reason: string], rework: [stepId: string, note: string] }>()
 
 /**
  * What this person may do here. A reviewer holds `answerGate` and not
@@ -68,10 +68,11 @@ const notePlaceholder = computed(() => ({
   restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
 }[noteMode.value]))
 const sent = ref<string | null>(null)
-function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'rework') {
+function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'skip' | 'rework') {
   const text = note.value.trim()
   if (kind === 'rework') { emit('rework', reworkTarget.value, text); note.value = ''; reworkTarget.value = ''; return }
   if (kind === 'reject') { emit('reject', text); note.value = ''; return }
+  if (kind === 'skip') { emit('skip', text); note.value = ''; return }
   if (kind === 'respond') emit('respond', text)
   else if (kind === 'note') { emit('note', text); sent.value = text }
   else emit('continue', text || undefined)
@@ -450,7 +451,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <div v-for="d in run.decisions" :key="d.at" class="flex gap-2">
         <span
           class="font-mono uppercase shrink-0"
-          :style="{ color: d.verdict === 'approved' ? STATUS_COLOR.completed : d.verdict === 'rejected' ? STATUS_COLOR.failed : STATUS_COLOR.paused }"
+          :style="{ color: d.verdict === 'approved' ? STATUS_COLOR.completed : d.verdict === 'rejected' ? STATUS_COLOR.failed : d.verdict === 'skipped' ? STATUS_COLOR.skipped : STATUS_COLOR.paused }"
         >{{ d.verdict }}</span>
         <span class="shrink-0">{{ d.label }}</span>
         <span class="text-label truncate">{{ d.by }}<template v-if="d.note">: {{ d.note }}</template></span>
@@ -697,6 +698,16 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
           @click="send('rework')"
         />
       </template>
+      <!-- Approve, reject, send back or stop were the only answers. Someone
+           who wanted none of them — a Jira transition on a ticket that must not
+           move — had only "stop a healthy run" left. -->
+      <UButton
+        v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget'"
+        size="xs" variant="ghost" color="neutral" icon="i-lucide-skip-forward" label="Skip this step"
+        :disabled="!note.trim()"
+        :title="note.trim() ? 'This step does not run; the run carries on past it' : 'Say why it is being skipped first'"
+        @click="send('skip')"
+      />
       <UButton
         v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget'"
         size="xs" variant="ghost" color="error" icon="i-lucide-circle-x" label="Reject run"

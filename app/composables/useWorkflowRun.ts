@@ -85,6 +85,10 @@ export function useWorkflowRun(slug: string) {
     // and watch the run carry on. Same two actions as useRun, same routes.
     /** End the run at a gate, with the reason on the record. */
     reject: (note: string) => act('reject')({ note: note.trim() }),
+    // A gate had four answers and none of them was "this step should not
+    // happen": approving does the wrong thing, rejecting ends the run, and
+    // sending back re-does work that was fine.
+    skip: (reason: string) => act('skip')({ reason: reason.trim() }),
     /** Hand the work back to a chosen earlier step with an instruction; the run continues. */
     rework: (stepId: string, note: string) => act('rework')({ stepId, note: note.trim() }),
     respond: async (reply: string) => {
