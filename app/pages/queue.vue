@@ -28,11 +28,18 @@ async function load() {
     loadError.value = e.data?.message || e.message
   }
 }
-onMounted(load)
 // A run settling dispatches the next task server-side, so the page has to look
 // again to see it. Ten seconds: the work takes minutes, not seconds.
-const timer = setInterval(load, 10_000)
-onUnmounted(() => clearInterval(timer))
+//
+// Inside onMounted, not at setup scope: a timer started during setup also runs
+// on the SERVER, where it never fires and never clears, and Nuxt answers the
+// whole route with a 500 rather than letting it leak.
+let timer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  void load()
+  timer = setInterval(load, 10_000)
+})
+onUnmounted(() => { if (timer) clearInterval(timer) })
 
 async function dispatch() {
   dispatching.value = true
