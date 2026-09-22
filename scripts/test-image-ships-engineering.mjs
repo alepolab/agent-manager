@@ -64,6 +64,22 @@ assert.ok(schemas.some(f => f.startsWith('evidence-bundle.') && f.endsWith('.sch
 const NOT_SHIPPED = new Set([
   'docs',       // written for people reading the repo, not for the running app
   'templates',  // authoring aids for the plugin itself
+  // Definitions for six review personas the full-lifecycle workflow names:
+  // business-analyst, ui-architect, security-reviewer, persona-reviewer,
+  // visual-qa and cto-reviewer.
+  //
+  // NOT SHIPPED because nothing reads it yet, and saying so here is the point.
+  // Agents are seeded by teamSync from the oh-my-agent estate under
+  // `.agents/agents/` — `agentTemplates` in app/utils/templates.ts is empty on
+  // purpose — so a definition sitting here does not become a runnable agent.
+  // These live here because engineering/agents is the destination
+  // server/utils/promote.ts already targets when an agent is promoted to the
+  // team, which makes it the sanctioned home for a team-official agent and
+  // keeps this change out of the `.agents/` SSOT.
+  //
+  // To activate: promote them into the oh-my-agent estate. Until then the
+  // steps naming them resolve to slugs with no agent behind them.
+  'agents',
 ])
 const known = new Set([...SHIPPED.map(([d]) => d), ...NOT_SHIPPED])
 const unaccounted = readdirSync(join(root, 'engineering'), { withFileTypes: true })
