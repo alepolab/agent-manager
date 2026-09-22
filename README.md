@@ -143,13 +143,15 @@ All values are environment variables. Never write them into files in this repo.
 `engineering/` is a Claude Code plugin marketplace with one plugin. It carries what the pipeline enforces and what it needs to route work:
 
 - `hooks/`: plan gate (no edits before `.agent/plan.md`), test lock (tests freeze once source changes), secrets guard (denies reading credential files and env dumps).
-- `registry/products.yaml`: products grouped by suite, their repos, branches, stack profiles and test commands. Entries marked CONFIRM have unverified routing.
+- `registry/products.yaml`: products grouped by suite, their repos, branches, stack profiles and test commands. Entries marked CONFIRM have unverified routing. This file is the **seed**: each instance copies it once into `~/.claude/products.yaml` and edits that from the Products page, so a running instance may be ahead of it.
 - `registry/watches.yaml`: the Jira queues the triage loop reads.
 - `recipes/*.md`: per-product stand-up and verification recipes.
 - `skills/`, `commands/`: intent template, regression matrix, triage, reproduce, baseline.
 - `schemas/evidence-bundle.v0.1.schema.json`: what every agent-authored PR carries.
 
-To add a product: add an entry under its suite in `registry/products.yaml` (key, labels, repos, default branch, stack profile, test command), write `recipes/<key>.md` describing how to stand the stack up and prove it is healthy, run the validator, and open a PR. Intake routes a ticket to the product by key, label or component name.
+To add a product: use the **Products** page, which validates the entry as you save it and writes it to this instance's registry store; promote the registry to the team afterwards so the change lands as a reviewed PR. Working from a checkout instead, add the entry under its suite in `registry/products.yaml`, run the validator and open a PR. Either way, write `recipes/<key>.md` describing how to stand the stack up and prove it is healthy.
+
+Intake routes a ticket to the product by key, label or component name; where two products claim the same text the longer term wins, and where nothing separates them the one earlier in the file does. The Products page has a box that tells you which product a given ticket reaches and why, which is the only way to see that last rule without starting a run.
 
 After changing anything under `engineering/`, reinstall the plugin so the instance picks it up. Validate with `node engineering/scripts/validate-registry.mjs`.
 

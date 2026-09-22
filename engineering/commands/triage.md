@@ -10,6 +10,12 @@ Classify a ticket using `engineering/registry/products.yaml` and
 `engineering/registry/watches.yaml` as the only vocabulary — never invent a
 category the registry doesn't define.
 
+> Each instance runs its OWN registry store, seeded once from
+> `engineering/registry/products.yaml` and edited from the Products page. This
+> file is the seed and may be behind it. When a run header carries a
+> `## Product (from the registry)` block, that is the resolved entry and the
+> one to act on.
+
 **This command is read-only.** Its whole value is a classification a human
 or the pipeline can trust without re-deriving it; a triage step that can
 also change files contradicts that. `allowed-tools` above deliberately

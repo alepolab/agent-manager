@@ -63,6 +63,7 @@ const navTopAll = [
   { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
   { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
   { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
+  { label: 'Products', icon: 'i-lucide-boxes', to: '/registry' },
   { label: 'Schedules', icon: 'i-lucide-calendar-clock', to: '/schedules' },
   { label: 'Team', icon: 'i-lucide-users', to: '/team' },
   { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },

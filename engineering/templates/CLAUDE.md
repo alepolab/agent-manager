@@ -16,6 +16,11 @@ the source of truth for build/test commands and stack topology — keep
 this file's summary in sync with it, and resolve any conflict in the
 registry's favour.
 
+That file is the SEED. Each instance copies it once into its own registry
+store and edits that from the Products page, so where a run header carries a
+`## Product (from the registry)` block, that resolved entry wins over both
+this paragraph and the seed.
+
 ## Build
 
 ```

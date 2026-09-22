@@ -13,7 +13,17 @@ interface TeamStatus {
   workflow: { slug: string, state: State, steps: number, diff?: string }
   workflows: { slug: string, name: string, state: State, steps: number, diff?: string }[]
   watches: Item[]
-  registry: { ok: boolean, products: number, path: string | null, items: { key: string, suite?: string, repos: string[], recipe: boolean }[] }
+  registry: {
+    ok: boolean
+    /** The store exists but does not parse, so routing is running on the seed. */
+    degraded: boolean
+    products: number
+    path: string | null
+    items: { key: string, suite?: string, repos: string[], recipe: boolean }[]
+    seed: { seededFrom: string, seededKind: string, seededAt: number } | null
+    /** Reported only. Applying never touches the registry — see teamSync.ts. */
+    drift: { newInSource: string[], changedInSource: string[], removedInSource: string[] }
+  }
   unresolvedSkills: string[]
   enforcement: { ok: boolean, checks: { name: string, armed: boolean, source?: string }[], error?: string }
   lastApplied: { by: string, at: number, items: number } | null
@@ -231,7 +241,21 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <p class="text-[11px] text-label mt-2">Seeded disabled. Enable one on the Watches page once its query has been checked against real tickets.</p>
           </div>
           <div :class="card" :style="cardStyle">
-            <h2 class="text-[12px] font-medium mb-2" style="color: var(--text-primary);">Products</h2>
+            <h2 class="text-[12px] font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+              Products
+              <NuxtLink to="/registry" class="text-[11px] font-normal underline focus-ring text-label">edit</NuxtLink>
+            </h2>
+            <!-- Reported here, never applied here. The registry is the one seeded
+                 thing a developer edits to change how runs route, so an apply that
+                 rewrote it would hand that change back at the next boot. -->
+            <p v-if="status.registry.degraded" class="text-[12px] mb-2" style="color: var(--error);">
+              The store at {{ status.registry.path }} does not parse, so routing is running on the seed.
+            </p>
+            <p v-else-if="status.registry.drift.newInSource.length" class="text-[12px] mb-2" style="color: var(--warning);">
+              The team ships {{ status.registry.drift.newInSource.length }} product(s) this instance does not have
+              ({{ status.registry.drift.newInSource.join(', ') }}). A ticket for one resolves to nothing here until it is
+              imported on the <NuxtLink to="/registry" class="underline focus-ring">Products page</NuxtLink>.
+            </p>
             <p v-if="!status.registry.items.length" class="text-[12px] text-label">Registry not readable{{ status.registry.path ? ` at ${status.registry.path}` : '' }}.</p>
             <div v-for="p in status.registry.items" :key="p.key" class="flex items-center gap-2 text-[12px] py-0.5">
               <span class="font-mono">{{ p.key }}</span>

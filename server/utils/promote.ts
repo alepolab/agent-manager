@@ -5,6 +5,7 @@ import { cp, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
+import { storePath, STORE_FILE_NAME } from './productStore.ts'
 import { envForUser } from './users.ts'
 
 const execFileP = promisify(execFile)
@@ -17,7 +18,7 @@ const execFileP = promisify(execFile)
  */
 import { pluginInstall } from './teamSync.ts'
 
-export type PromoteKind = 'agent' | 'skill' | 'command'
+export type PromoteKind = 'agent' | 'skill' | 'command' | 'registry'
 
 export class PromoteError extends Error {
   statusCode: number
@@ -52,7 +53,14 @@ function locate(kind: PromoteKind, slug: string): { from: string, to: string } {
   if (kind === 'agent') return { from: resolveClaudePath('agents', `${slug}.md`), to: `engineering/agents/${slug}.md` }
   if (kind === 'command') return { from: resolveClaudePath('commands', `${slug}.md`), to: `engineering/commands/${slug}.md` }
   if (kind === 'skill') return { from: resolveClaudePath('skills', slug), to: `engineering/skills/${slug}` }
-  throw new PromoteError(400, 'kind must be agent, skill or command')
+  // The registry is ONE file, so this promotes the whole store rather than a
+  // single product. Promoting one entry would mean merging it into the team's
+  // file, and a merge that has to preserve the comments around its neighbours
+  // is a different and much less safe operation than copying a file. The pull
+  // request's diff shows exactly which entries changed either way, which is
+  // where a reviewer reads it.
+  if (kind === 'registry') return { from: storePath(), to: `engineering/registry/${STORE_FILE_NAME}` }
+  throw new PromoteError(400, 'kind must be agent, skill, command or registry')
 }
 
 // ponytail: one promotion at a time; a per-checkout lock if two developers ever race
