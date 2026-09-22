@@ -18,6 +18,19 @@ const raw = ref('')
 const loading = ref(false)
 const mode = ref<'rendered' | 'raw'>('rendered')
 const wrap = ref(true)
+/**
+ * Read the evidence full screen.
+ *
+ * Escape leaves, because a fixed overlay with no keyboard exit is a trap — and
+ * it is cleared when the file changes so a reader is never left full screen
+ * looking at something they did not choose.
+ */
+const fullscreen = ref(false)
+if (import.meta.client) {
+  const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape' && fullscreen.value) fullscreen.value = false }
+  onMounted(() => document.addEventListener('keydown', onEsc))
+  onUnmounted(() => document.removeEventListener('keydown', onEsc))
+}
 const search = ref('')
 const rendered = ref('')
 const copied = ref(false)
@@ -332,7 +345,11 @@ defineExpose({ refresh })
       </div>
     </div>
 
-    <div class="min-h-0 flex flex-col rounded-lg" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <div
+      class="min-h-0 flex flex-col rounded-lg"
+      :class="fullscreen ? 'fixed inset-0 z-50 rounded-none' : ''"
+      style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+    >
       <div class="px-3 py-1.5 t-small flex items-center gap-2 flex-wrap" style="border-bottom: 1px solid var(--border-subtle);">
         <span class="font-mono truncate max-w-[40%]" :title="selected ?? ''">{{ selected ?? 'Select a file' }}</span>
         <template v-if="selected">
@@ -344,6 +361,15 @@ defineExpose({ refresh })
           <label class="flex items-center gap-1 text-label"><input v-model="wrap" type="checkbox" /> wrap</label>
           <button class="text-label underline" @click="copy">{{ copied ? 'Copied' : 'Copy' }}</button>
           <a :href="`/api/runs/${runId}/artifacts/${selected.split('/').map(encodeURIComponent).join('/')}`" target="_blank" rel="noopener" class="underline text-label">Open raw</a>
+          <!-- The viewer is a pane inside a page inside a panel, so a summary
+               or a test report is read through a letterbox. Reading the
+               evidence IS the reviewer's job; it should get the screen. -->
+          <button
+            class="ml-auto underline text-label focus-ring"
+            :aria-pressed="fullscreen"
+            :title="fullscreen ? 'Back to the run page (Esc)' : 'Read this full screen'"
+            @click="fullscreen = !fullscreen"
+          >{{ fullscreen ? 'Exit full screen' : 'Full screen' }}</button>
         </template>
       </div>
 

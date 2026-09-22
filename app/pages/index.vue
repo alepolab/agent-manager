@@ -55,13 +55,20 @@ async function refresh() {
   loaded.value = true
 }
 let timer: ReturnType<typeof setInterval> | null = null
+async function loadQueue() {
+  // A dashboard on an instance with no queue simply has no queue section; a
+  // failure here must never take the triage screen down with it.
+  try { queue.value = await $fetch('/api/queue') } catch { queue.value = null }
+}
+
 onMounted(() => {
   refresh()
+  void loadQueue()
   if (!agents.value.length) fetchAgents()
   if (!commands.value.length) fetchCommands()
   if (!skills.value.length) fetchSkills()
   if (!workflows.value.length) fetchWorkflows()
-  timer = setInterval(() => { if (runs.value.some(r => r.status === 'running' || r.status === 'paused')) refresh() }, 10_000)
+  timer = setInterval(() => { if (runs.value.some(r => r.status === 'running' || r.status === 'paused')) refresh(); void loadQueue() }, 10_000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 
@@ -316,6 +323,36 @@ const pageTitle = computed(() => REVIEW_QUEUE_TITLE[role.value ?? 'operator'] ??
 // Not "Your runs" — that is the page's own title, and a section repeating its
 // page's heading says the section has no subject of its own.
 const minedTitle = computed(() => (can('startRun') ? 'Recent' : 'Runs you have decided on'))
+/**
+ * The project queue, and what is executing right now.
+ *
+ * Removing the duplicated "Recent" list was right — it repeated /runs in a
+ * second visual vocabulary — but it left a triage screen with one section that
+ * is empty whenever nothing is waiting, which reads as "the system is doing
+ * nothing" when the system may be running four things. These two answer a
+ * different question from "waiting on you": not what needs me, but what is
+ * happening.
+ */
+const queue = ref<{ project: string, tasks: { id: string, status: string, module?: string }[] } | null>(null)
+const queueCounts = computed(() => {
+  const c: Record<string, number> = {}
+  for (const t of queue.value?.tasks ?? []) c[t.status] = (c[t.status] ?? 0) + 1
+  return c
+})
+const queueDone = computed(() => {
+  const done = queueCounts.value.done ?? 0
+  const total = (queue.value?.tasks ?? []).filter(t => t.status !== 'skipped').length
+  return total ? Math.round((done / total) * 100) : 0
+})
+/** Executing right now — distinct from `attention`, which is paused and needs a person. */
+const runningNow = computed(() => runs.value
+  .filter(r => r.status === 'running')
+  .map(r => ({
+    id: r.id,
+    label: r.steps.find(s => s.status === 'running')?.label ?? 'starting',
+    what: (r.ticketKey ?? r.initialPrompt.split('\n')[0] ?? '').slice(0, 60),
+  })))
+
 const minedEmpty = computed(() => (can('startRun')
   ? 'You have not started a run yet. Paste a ticket above to start one.'
   : 'You have not decided on a run yet. Your approvals and send-backs appear here.'))
@@ -483,6 +520,44 @@ const minedEmpty = computed(() => (can('startRun')
            out to the full history, and the runs that are stopped or broken
            but are nobody's decision — which used to rank 1 and 2 inside a
            list called "Waiting on you". -->
+      <!-- What is executing, which "waiting on you" cannot show: a run that
+           needs nobody is invisible to a queue built from decisions. -->
+      <section v-if="runningNow.length" class="order-2">
+        <h2 class="text-section-label mb-2">Running now <span class="text-meta font-normal">{{ runningNow.length }}</span></h2>
+        <div class="space-y-1">
+          <NuxtLink
+            v-for="r in runningNow" :key="r.id" :to="`/runs/${r.id}`"
+            class="flex items-center gap-3 px-3 py-2 rounded-lg focus-ring hover-row"
+            style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+          >
+            <span class="size-1.5 rounded-full shrink-0" style="background: var(--accent);" />
+            <span class="t-ui truncate flex-1">{{ r.what }}</span>
+            <span class="t-small text-label truncate">{{ r.label }}</span>
+          </NuxtLink>
+        </div>
+      </section>
+
+      <!-- The project as a whole. A dashboard that only shows decisions cannot
+           say whether the work is a tenth done or nearly finished. -->
+      <section v-if="queue && queue.tasks.length" class="order-2">
+        <h2 class="text-section-label mb-2">
+          {{ queue.project }} <span class="text-meta font-normal">{{ queueDone }}% done</span>
+        </h2>
+        <div class="rounded-xl px-4 py-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <div class="h-1.5 rounded-full overflow-hidden mb-2.5" style="background: var(--surface-base);">
+            <div class="h-full rounded-full" :style="{ width: `${queueDone}%`, background: 'var(--success)' }" />
+          </div>
+          <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">
+            <span v-if="queueCounts.running"><span style="color: var(--accent);">{{ queueCounts.running }}</span> running</span>
+            <span v-if="queueCounts.pending" class="text-label">{{ queueCounts.pending }} waiting</span>
+            <span v-if="queueCounts.done" class="text-label">{{ queueCounts.done }} done</span>
+            <span v-if="queueCounts.failed" style="color: var(--error);">{{ queueCounts.failed }} failed</span>
+            <span v-if="queueCounts.skipped" class="text-meta">{{ queueCounts.skipped }} not run by an agent</span>
+            <NuxtLink to="/queue" class="underline focus-ring ml-auto text-label">Queue &rsaquo;</NuxtLink>
+          </div>
+        </div>
+      </section>
+
       <div class="order-3 flex flex-wrap items-center gap-x-4 gap-y-1">
         <NuxtLink to="/runs?mine=1" class="t-small underline focus-ring text-label">{{ minedTitle }} &rsaquo;</NuxtLink>
         <NuxtLink
