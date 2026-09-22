@@ -68,6 +68,19 @@ assert.equal(s.drifted, 0, 'apply leaves nothing drifted')
 assert.ok(existsSync(join(process.env.CLAUDE_DIR, 'agents', 'qa-reviewer.md')))
 assert.ok(existsSync(join(process.env.CLAUDE_DIR, 'skills', 'oma-qa', 'SKILL.md')))
 assert.ok(existsSync(join(process.env.CLAUDE_DIR, 'commands', 'triage.md')), 'plugin commands are seeded too')
+
+// ── An install that predates the image must not shadow what the image has ──
+//
+// The fake cache above has no `agents/` directory, which is not a contrivance:
+// the real user-scope install of alepo-engineering on a developer box is
+// pinned to a git sha whose tree has none either. Reading agents only from the
+// recorded install meant the six review personas in `engineering/agents/`
+// reached no instance, and nothing said why — the page listed what it had and
+// never mentioned what it was sitting on.
+for (const persona of ['ui-architect', 'security-reviewer', 'business-analyst', 'cto-reviewer', 'persona-reviewer', 'visual-qa']) {
+  assert.ok(existsSync(join(process.env.CLAUDE_DIR, 'agents', `${persona}.md`)),
+    `${persona} ships in engineering/agents and must seed even when the recorded install predates it`)
+}
 {
   // Watches are not seeded here. A watch exists only to dispatch a runbook, and
   // this instance seeds no *.json workflows for one to dispatch into, so the

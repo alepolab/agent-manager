@@ -380,11 +380,32 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
   // template kept winning and the operator's edit kept being reverted on every
   // boot - after a green PR that said it had been promoted. The escape hatch
   // reported success and changed nothing.
+  /**
+   * Plugin agents, from the copy this image carries and from the recorded
+   * install, in that order so a real install still wins.
+   *
+   * Reading only the recorded install meant an install that PREDATES the
+   * image shipped less than the image contains, silently. On this box the
+   * record is a user-scope install of alepo-engineering from 2026-09-07,
+   * pinned to a git sha whose tree has no `agents/` directory at all — and
+   * `registerShippedPlugins` leaves an id an operator already owns alone, by
+   * design. So the six review personas in `engineering/agents/` reached no
+   * instance, and nothing anywhere said why: the page listed the agents it
+   * had and never mentioned the ones it was sitting on.
+   *
+   * The shipped copy is this repository's own plugin source, so having it
+   * available is the same claim `registerShippedPlugins` already makes about
+   * the image — "the copies baked into the image are the installs they
+   * already are". An installed plugin still overrides it file by file.
+   */
   const pluginAgents = new Map<string, string>()
-  if (plugin && existsSync(join(plugin.installPath, 'agents'))) {
-    for (const name of await readdir(join(plugin.installPath, 'agents'))) {
+  for (const base of [shippedDir(), plugin?.installPath]) {
+    if (!base) continue
+    const dir = join(base, 'agents')
+    if (!existsSync(dir)) continue
+    for (const name of await readdir(dir)) {
       if (!name.endsWith('.md')) continue
-      pluginAgents.set(name.replace(/\.md$/, ''), await readFile(join(plugin.installPath, 'agents', name), 'utf-8'))
+      pluginAgents.set(name.replace(/\.md$/, ''), await readFile(join(dir, name), 'utf-8'))
     }
   }
 
