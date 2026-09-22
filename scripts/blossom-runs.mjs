@@ -60,6 +60,77 @@ const TICKET_FOR = {
   'G1.1': 'SASKNEPCR-5',
 }
 
+
+/** Titles and dependency order, from the plan's section 03. */
+const TITLE = {
+  'SEC-0': 'Rotate the committed payment-gateway passcode',
+  'B1.0': 'Run the four data audits',
+  'A1.1': 'NPA to province and service-area map, with one lookup helper',
+  'F1.1': 'isRegionAllowed() helper, replacing 28 inlined allow-list checks',
+  'F1.2': 'Guard the region-id parse before Bambora and the shipment feed',
+  'B1.1': 'MB tax type, MB billing policy, MB plan and add-on clones pointed at it',
+  'A2.1': 'serviceProvince and serviceArea columns, plus the history twin',
+  'A3.1': 'Extend the CRM states row to SK,MB; flip and rollback runbook',
+  'A2.2': 'Set service province at onboarding and re-validate at number assignment',
+  'B2.1': 'Extend order-summary and quote responses with rate, code and province',
+  'B1.2': 'Harden the quote path with the state guard BillBuilder already has',
+  'B2.2': 'Drive the BIRT invoice from the tax table, not two hardcoded GL codes',
+  'D3.1': 'Activate an MB test number and diff the provisioning payload',
+  'G1.1': 'Notification drift check and the two fixes it finds',
+  'C1.1': 'Tag the SK catalogue and author the SK availability rule',
+  'C1.2': 'Clone the MB catalogue and author the mirror MB rule',
+  'D1.1': 'Build and load the MB number CSV through the existing batch import',
+  'D1.2': 'Restricted-NXX handling as a guarded post-import update',
+  'D2.1': 'Send the bound service-area parameter; restore by code, not by label',
+  'D2.2': 'Backfill the service-area column on existing SK numbers',
+  'E1.1': 'Add validatePortInEligibility() to the existing port-in utility',
+  'C2.1': 'Bring service options into the availability engine',
+  'E1.2': 'Call the validator at four sites, including both outbound bodies',
+  'C2.2': 'Filter the three unfiltered list operations server-side',
+  'C2.3': 'Add availability-rule evaluation to purchaseService',
+  'E2.1': 'Province-key the static wireless port-in address at both sites',
+  'C3.1': 'MB data and travel add-on purchased end to end',
+  'T2.1': 'Assemble the named SK pack and write the exclusion declaration',
+  'T1.1': 'Acceptance-script scaffold, SK regression first',
+  'B1.3': 'Per-slab tax assertion on remark and GL code',
+  'C1.3': 'Catalogue rule verification, all four cases',
+  'T1.2': 'Automate acceptance-script steps 1-6 as the APIs land',
+  'D2.3': 'Number-list regression, SK picker identical before and after',
+  'F1.3': 'External touchpoint evidence: Canada Post, Bambora, shipment XML',
+  'D3.2': 'Usage simulation, EDR check and voicemail provisioning',
+  'T1.3': 'Steps 7 and 9, and the full script run on NE dev',
+  'G1.2': 'Send the lifecycle set to an MB test subscriber',
+  'T2.2': 'Run the named SK pack and publish the report with its exclusions',
+  'T3.1': 'UAT case pack in execution order, reviewed and walked through',
+  'I2.1': 'Configuration baseline, three snapshot scripts',
+  'I2.2': 'Flag register plus a CI check that fails on an unregistered key',
+  'I2.3': 'Assemble and publish the alpha package',
+  'A3.2': 'WSC configuration: allow-list, MB region entries, signup-reason wording',
+}
+
+const DEPS = {
+  'C1.1': ['B1.0'], 'D1.1': ['B1.0'], 'C1.2': ['C1.1'], 'B1.1': ['C1.2'],
+  'D1.2': ['D1.1'], 'D2.1': ['D1.1'], 'D2.2': ['D2.1', 'B1.0'], 'D2.3': ['D2.2'],
+  'A2.2': ['A1.1', 'A2.1'], 'A3.2': ['A3.1'], 'B2.1': ['B1.1'], 'B2.2': ['B1.1'],
+  'B1.3': ['B1.1'], 'C1.3': ['C1.2'], 'C2.1': ['C1.2'], 'C2.2': ['C2.1'], 'C2.3': ['C2.1'],
+  'C3.1': ['C2.3', 'B1.1'], 'E1.1': ['A1.1'], 'E1.2': ['E1.1'], 'E2.1': ['E1.2'],
+  'D3.1': ['D1.1'], 'D3.2': ['D3.1'], 'G1.2': ['G1.1'], 'T1.2': ['T1.1'],
+  'T1.3': ['T1.2', 'A3.1'], 'T2.2': ['T2.1'], 'T3.1': ['T1.3'], 'F1.3': ['F1.1'],
+  'I2.2': ['A3.1'], 'I2.3': ['T1.3', 'I2.1'],
+}
+
+/** The prompt a run starts from: the task, and the brief for its ticket. */
+function promptFor(id) {
+  const ticket = TICKET_FOR[id]
+  return [
+    `${ticket ?? 'Blossom'} — implement plan task ${id}: ${TITLE[id] ?? id}`,
+    '',
+    `Work ONLY on task ${id}. The brief below lists the other tasks for context;`,
+    "do not start them, and do not go beyond this task's own done-when.",
+    planBriefFor(ticket) ?? '',
+  ].join('\n')
+}
+
 const ids = only ?? [...Object.keys(MODULE), ...Object.keys(NOT_CODE)]
 const runnable = ids.filter(id => MODULE[id])
 const skipped = ids.filter(id => !MODULE[id])
@@ -74,21 +145,40 @@ if (skipped.length) {
   for (const id of skipped) console.log(`  ${id.padEnd(6)} ${NOT_CODE[id] ?? 'no module mapped'}`)
 }
 
+// --queue creates the WHOLE project as queue tasks, runnable and not, and
+// lets the dispatcher mint runs one at a time. That is the difference between
+// "what are we doing" and "what is executing right now": 23 of these can
+// become runs, 12 of those share one repository and so can never be live
+// together, and the other 20 are human work that still belongs on the list.
+if (process.argv.includes('--queue')) {
+  const order = Object.fromEntries([...runnable, ...skipped].map((id, i) => [id, i]))
+  const tasks = [...runnable, ...skipped].map(id => ({
+    id,
+    title: TITLE[id] ?? id,
+    order: order[id],
+    deps: (DEPS[id] ?? []).filter(d => order[d] !== undefined),
+    workflowSlug: WORKFLOW,
+    ...(MODULE[id] ? { module: MODULE[id], projectDir: checkoutDirFor(MODULE[id], process.env.USER || undefined) } : {}),
+    ...(TICKET_FOR[id] ? { ticketKey: TICKET_FOR[id] } : {}),
+    ...(MODULE[id] ? { detail: promptFor(id) } : { note: NOT_CODE[id] ?? 'no module mapped' }),
+  }))
+  const res = await fetch(`${BASE}/api/queue`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ project: 'Blossom — Manitoba (CR2026016)', tasks }),
+  })
+  const body = await res.text()
+  console.log(res.ok ? `\nqueued ${tasks.length} task(s)` : `\nqueue refused: HTTP ${res.status} ${body.slice(0,300)}`)
+  process.exit(res.ok ? 0 : 1)
+}
+
 if (!write) {
-  console.log(`\nPlan only. Re-run with --write to create the ${runnable.length} runnable ones.`)
+  console.log(`\nPlan only. --write creates the ${runnable.length} runnable ones; --queue lists all ${runnable.length + skipped.length} as a queue.`)
   process.exit(0)
 }
 
 let created = 0
 for (const id of runnable) {
-  const ticket = TICKET_FOR[id]
-  const prompt = [
-    `${ticket ?? 'Blossom'} — implement plan task ${id}.`,
-    '',
-    `Work only on task ${id}. The implementation brief below lists the other tasks for context;`,
-    'do not start them, and do not go beyond this task\'s own done-when.',
-    planBriefFor(ticket) ?? '',
-  ].join('\n')
+  const prompt = promptFor(id)
   const res = await fetch(`${BASE}/api/workflows/${WORKFLOW}/runs`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ initialPrompt: prompt, autoRun: false, projectDir: checkoutDirFor(MODULE[id], process.env.USER || undefined) }),

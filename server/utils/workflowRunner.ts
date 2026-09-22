@@ -654,6 +654,20 @@ async function publish(run: WorkflowRun) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
     onRunTransition(run)
+    // A settled run frees the checkout it held and the capacity slot it
+    // occupied, which is the only moment the next queued task can start. Doing
+    // it here rather than on a timer means "one after another" needs nobody
+    // watching; `onRunSettled` never throws and never blocks this publish.
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'stopped' || run.status === 'interrupted') {
+      // Imported here rather than at module scope on purpose: the dispatcher
+      // reaches the workflow store and the Jira client, and pulling that chain
+      // into the runner's own module graph put it in front of thirteen
+      // plain-node tests that never needed it. It is only wanted at runtime,
+      // at exactly this moment.
+      void import('./queueDispatcher.ts')
+        .then(m => m.onRunSettled())
+        .catch(err => console.error('[queue] could not dispatch after settle:', err instanceof Error ? err.message : err))
+    }
   })
   publishChains.set(run.id, next)
   await next

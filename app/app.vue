@@ -117,6 +117,9 @@ const navTopAll = [
   { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/', group: 'decide' },
   { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs', group: 'decide' },
   { label: 'Board', icon: 'i-lucide-gauge', to: '/board', group: 'decide' },
+  // Beside Runs, not under Workflows: the queue answers "what are we doing",
+  // which is the same question Runs and Board answer at a different scale.
+  { label: 'Queue', icon: 'i-lucide-list-ordered', to: '/queue', group: 'decide' },
   // Supervise — weekly to monthly.
   { label: 'Watches', icon: 'i-lucide-radio', to: '/watches', group: 'supervise' },
   { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows', group: 'supervise' },
@@ -165,28 +168,28 @@ const navTopAll = [
  * rather than their job".
  */
 const NAV_BY_ROLE: Record<Role, string[]> = {
-  developer: ['/', '/runs', '/agents', '/skills', '/commands'],
-  qa: ['/', '/runs'],
+  developer: ['/', '/runs', '/queue', '/agents', '/skills', '/commands'],
+  qa: ['/', '/runs', '/queue'],
   // Decides whether a story is ready and what "done" means. They start change
   // requests, so they need the dashboard's start panel; they author nothing.
-  'product-owner': ['/', '/runs', '/board'],
+  'product-owner': ['/', '/runs', '/board', '/queue'],
   // Reaches a run because it touched authz, crypto, data or a dependency —
   // never to browse the estate's configuration.
-  security: ['/', '/runs'],
+  security: ['/', '/runs', '/queue'],
   // Only what crosses the escalation threshold, plus the view that shows
   // whether the threshold is set right.
-  cto: ['/', '/runs', '/board'],
+  cto: ['/', '/runs', '/board', '/queue'],
   // An architect reads across runs rather than inside one, so they are offered
   // the board and the relationship graph. Both are read-only and the API
   // refuses the writes regardless, so offering them costs nothing.
   // '/graph' was here and is no longer in the sidebar, so listing it granted
   // nothing and only made this row disagree with what an architect can see.
-  architect: ['/', '/runs', '/board'],
+  architect: ['/', '/runs', '/board', '/queue'],
   // A designer reviews what a run produced. Artifacts are in `navMid` for
   // everyone, which is where their evidence lives until a design surface exists.
-  designer: ['/', '/runs'],
+  designer: ['/', '/runs', '/queue'],
   // A manager's screen is the board, not the run list with its buttons removed.
-  manager: ['/', '/board', '/runs'],
+  manager: ['/', '/board', '/runs', '/queue'],
   // Explicit rather than implied by absence. The full sidebar is a CHOICE for
   // the one role that configures the pipeline, not the accident of a missing
   // key — which is what it used to be, and what let three roles inherit it.
