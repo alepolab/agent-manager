@@ -27,9 +27,16 @@ const { enhanceArtifactIndex, writeArtifactIndex } = await import('../server/uti
 const { readRunIndex } = await import('../server/utils/runIndex.ts')
 const { lightAgentEnabled } = await import('../server/utils/lightAgent.ts')
 
-if (!lightAgentEnabled()) {
-  console.log('AGENT_LIGHT_INTERPRET=0 — interpretation is off; nothing to do.')
-  process.exit(0)
+// `--build` is the deterministic half and always runs: a rules index is worth
+// having with interpretation switched off, and refusing to write one here is
+// how a machine with no model access ends up with no index at all.
+const interpret = lightAgentEnabled()
+if (!interpret) {
+  if (!build) {
+    console.log('AGENT_LIGHT_INTERPRET=0 — interpretation is off. Re-run with --build to write rules indexes.')
+    process.exit(0)
+  }
+  console.log('AGENT_LIGHT_INTERPRET=0 — writing rules indexes only.')
 }
 
 const root = agentRunsRoot()
@@ -57,7 +64,7 @@ for (const runId of runIds) {
     const summary = await writeArtifactIndex(dir, { id: runId, steps: [] })
     console.log(`${runId}  built index: ${Object.entries(summary.kinds).map(([k, n]) => `${k}:${n}`).join(' ')}`)
   }
-  const changed = await enhanceArtifactIndex(dir)
+  const changed = interpret ? await enhanceArtifactIndex(dir) : 0
   const ticket = known.get(runId)?.ticket ?? '-'
   if (changed) {
     console.log(`${runId}  ${ticket}  ${changed} file(s) reclassified by the light agent`)

@@ -33,6 +33,7 @@ async function refresh() {
   try {
     files.value = await $fetch<{ name: string, size: number }[]>(`/api/runs/${props.runId}/artifacts`)
     listError.value = null
+    await loadIndex()
   } catch (e: any) {
     files.value = []
     listError.value = e?.data?.message || e?.message || 'Could not load the evidence list'
@@ -178,9 +179,63 @@ function shortName(path: string): string {
   return `${name.slice(0, MAX - tail - 1)}…${name.slice(-tail)}`
 }
 
+/**
+ * What each file IS, from the run's own `artifacts.json` (artifactIndex.ts).
+ * Without it this list is 200+ one-off names under a single `.` heading, which
+ * is how a reviewer ends up opening files at random to find the oracle. Absent
+ * for a run that predates the index — the directory grouping below is the
+ * fallback, unchanged.
+ */
+const index = ref<Record<string, { kind: string, step?: string, ticket?: string }>>({})
+async function loadIndex() {
+  try {
+    const rows = JSON.parse(await $fetch<string>(fileUrl('artifacts.json'), { responseType: 'text' }))
+    const map: Record<string, { kind: string, step?: string, ticket?: string }> = {}
+    for (const r of rows) if (r?.name && r?.kind) map[r.name] = { kind: r.kind, step: r.step, ticket: r.ticket }
+    index.value = map
+  } catch { index.value = {} }
+}
+
+const KIND_LABEL: Record<string, string> = {
+  'summary': 'Summary', 'plan': 'Plan', 'decision': 'Decisions', 'contract': 'Contracts',
+  'oracle': 'Oracle', 'test-red': 'Failing tests', 'test-green': 'Passing tests', 'qa': 'QA',
+  'review': 'Reviews', 'deploy': 'Deployment', 'pr': 'Pull request', 'docs': 'Docs',
+  'evidence': 'Investigation', 'patch': 'Patches', 'media': 'Screens & traces',
+  'result': 'Agent reports', 'script': 'Scripts', 'log': 'Logs', 'other': 'Other',
+}
+/** The order a reviewer works in: what was decided, what proved it, what shipped. */
+const KIND_ORDER = ['summary', 'plan', 'decision', 'contract', 'oracle', 'test-red', 'test-green', 'qa', 'review', 'evidence', 'patch', 'media', 'result', 'deploy', 'pr', 'docs', 'script', 'log', 'other']
+
+const kindFilter = ref<string | null>(null)
+const fileSearch = ref('')
+const hasIndex = computed(() => Object.keys(index.value).length > 0)
+
+const visible = computed(() => {
+  const q = fileSearch.value.trim().toLowerCase()
+  return files.value.filter(f =>
+    (!kindFilter.value || index.value[f.name]?.kind === kindFilter.value)
+    && (!q || f.name.toLowerCase().includes(q)),
+  )
+})
+
+/** Counts for the filter row, from every file — not from the filtered view, or
+ *  choosing one kind would erase the evidence that the others exist. */
+const kindCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const f of files.value) {
+    const k = index.value[f.name]?.kind
+    if (k) counts[k] = (counts[k] ?? 0) + 1
+  }
+  return KIND_ORDER.filter(k => counts[k]).map(k => ({ kind: k, label: KIND_LABEL[k] ?? k, n: counts[k]! }))
+})
+
 const groups = computed(() => {
   const g: Record<string, { name: string, size: number }[]> = {}
-  for (const f of files.value) { const dir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '.'; (g[dir] ??= []).push(f) }
+  if (hasIndex.value) {
+    for (const f of visible.value) (g[index.value[f.name]?.kind ?? 'other'] ??= []).push(f)
+    return KIND_ORDER.filter(k => g[k]?.length).map(k => [KIND_LABEL[k] ?? k, g[k]!] as [string, typeof files.value])
+  }
+  for (const f of visible.value) { const dir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '.'; (g[dir] ??= []).push(f) }
   return Object.entries(g).sort(([a], [b]) => a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b))
 })
 const size = (n: number) => n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`
@@ -214,10 +269,30 @@ defineExpose({ refresh })
         <button class="underline focus-ring" style="color: var(--error);" @click="refresh">Try again</button>
       </div>
       <p v-else-if="!files.length" class="text-label">Nothing written yet.</p>
+      <!-- Categorisation and search over the bundle. A run leaves 40-200 files
+           with names invented per run, and until this row existed the only way
+           to find the oracle among them was to recognise its filename. -->
+      <template v-if="files.length">
+        <input v-model="fileSearch" class="field-input t-small py-0.5 w-full" placeholder="Filter files by name" aria-label="Filter evidence files by name">
+        <div v-if="kindCounts.length" class="flex flex-wrap gap-1">
+          <button
+            class="px-1.5 py-0.5 rounded t-small focus-ring"
+            :style="{ background: kindFilter === null ? 'var(--accent-muted)' : 'transparent', border: '1px solid var(--border-subtle)' }"
+            @click="kindFilter = null"
+          >All {{ files.length }}</button>
+          <button
+            v-for="k in kindCounts" :key="k.kind"
+            class="px-1.5 py-0.5 rounded t-small focus-ring"
+            :style="{ background: kindFilter === k.kind ? 'var(--accent-muted)' : 'transparent', border: '1px solid var(--border-subtle)' }"
+            @click="kindFilter = kindFilter === k.kind ? null : k.kind"
+          >{{ k.label }} {{ k.n }}</button>
+        </div>
+        <p v-if="!visible.length" class="text-label">No file matches.</p>
+      </template>
       <div v-for="[dir, list] in groups" :key="dir">
-        <div v-if="dir !== '.'" class="font-mono t-small text-label mt-1">{{ dir }}/</div>
+        <div v-if="dir !== '.'" class="t-small text-label mt-1" :class="hasIndex ? 'text-section-label' : 'font-mono'">{{ hasIndex ? dir : `${dir}/` }}</div>
         <button v-for="f in list" :key="f.name" class="w-full flex items-center gap-2 px-2 py-1 rounded text-left focus-ring" :style="{ background: selected === f.name ? 'var(--accent-muted)' : 'transparent', color: selected === f.name ? 'var(--text-primary)' : 'var(--text-secondary)' }" @click="open(f.name)">
-          <span class="font-mono truncate" :title="f.name">{{ shortName(f.name) }}</span>
+          <span class="font-mono truncate" :title="index[f.name]?.step ? `${f.name} — written during: ${index[f.name]!.step}` : f.name">{{ shortName(f.name) }}</span>
           <span class="ml-auto text-label whitespace-nowrap">{{ size(f.size) }}</span>
         </button>
       </div>
