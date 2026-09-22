@@ -8,7 +8,17 @@ const { commands } = useCommands()
 const { plugins } = usePlugins()
 const { skills } = useSkills()
 
-const open = ref(false)
+/**
+ * Owned by the parent as well as by the keyboard.
+ *
+ * This was a private ref, so the sidebar's Search button — which sets its own
+ * `showSearch` and passes nothing — did nothing at all. The button even
+ * renders the correct shortcut inside itself, so a user learned "the click is
+ * broken but the key works", and intermittent reinforcement of that kind is
+ * the hardest model to unlearn. `defineModel` gives the click and the key one
+ * piece of state to agree about.
+ */
+const open = defineModel<boolean>('open', { default: false })
 const query = ref('')
 const selectedIndex = ref(0)
 

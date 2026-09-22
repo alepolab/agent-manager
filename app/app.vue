@@ -53,6 +53,8 @@ const viewAsRoles = computed<Role[]>(() => ['operator', ...ROLES.filter(r => r !
 
 /** Switching to your own role clears the impersonation rather than setting one. */
 const switchingRole = ref(false)
+/** The banner's exit, so it does not depend on the sidebar being expanded. */
+const stopViewingAs = () => switchRole('operator')
 async function switchRole(next: string) {
   if (role.value === next) return
   switchingRole.value = true
@@ -116,9 +118,31 @@ const navTopAll = [
  * this list decides what a person is OFFERED, which is the actual complaint
  * about the old sidebar: it showed a reviewer the whole engine.
  */
-const NAV_BY_ROLE: Record<string, string[]> = {
+/**
+ * Typed on `Role`, not `string`, so the compiler refuses this file until every
+ * role has an entry.
+ *
+ * It was `Record<string, string[]>`, and three roles added later —
+ * product-owner, security and cto — silently had none. The lookup below
+ * treats a miss as "no filter", so the three newest roles were each offered
+ * the FULL operator sidebar: a CTO whose job is threshold escalations was
+ * shown Plugins and MCP Servers. A restriction that fails open is not a
+ * restriction, and the whole stated purpose of this map is that "a console
+ * which shows an actor controls they must not use is describing the system
+ * rather than their job".
+ */
+const NAV_BY_ROLE: Record<Role, string[]> = {
   developer: ['/', '/runs', '/agents', '/skills', '/commands'],
   qa: ['/', '/runs'],
+  // Decides whether a story is ready and what "done" means. They start change
+  // requests, so they need the dashboard's start panel; they author nothing.
+  'product-owner': ['/', '/runs', '/board'],
+  // Reaches a run because it touched authz, crypto, data or a dependency —
+  // never to browse the estate's configuration.
+  security: ['/', '/runs'],
+  // Only what crosses the escalation threshold, plus the view that shows
+  // whether the threshold is set right.
+  cto: ['/', '/runs', '/board'],
   // An architect reads across runs rather than inside one, so they are offered
   // the board and the relationship graph. Both are read-only and the API
   // refuses the writes regardless, so offering them costs nothing.
@@ -128,10 +152,21 @@ const NAV_BY_ROLE: Record<string, string[]> = {
   designer: ['/', '/runs'],
   // A manager's screen is the board, not the run list with its buttons removed.
   manager: ['/', '/board', '/runs'],
+  // Explicit rather than implied by absence. The full sidebar is a CHOICE for
+  // the one role that configures the pipeline, not the accident of a missing
+  // key — which is what it used to be, and what let three roles inherit it.
+  operator: [],
 }
 
 const navTop = computed(() => {
-  const allowed = role.value ? NAV_BY_ROLE[role.value] : undefined
+  // An unknown role gets the NARROWEST sidebar, not the widest. `operator`
+  // holds its full list explicitly; anything unrecognised is a bug, and a bug
+  // must not grant reach.
+  // `operator` declares an empty list meaning "no restriction"; every other
+  // role restricts, and an unrecognised one gets the narrowest set rather
+  // than the widest, because a bug must not grant reach.
+  const entry = role.value ? (NAV_BY_ROLE[role.value] ?? ['/', '/runs']) : undefined
+  const allowed = entry && entry.length ? entry : undefined
   return navTopAll
     .filter(l => labs.value || l.to !== '/output-styles')
     // No role entry means operator: the full sidebar, exactly as before.
@@ -467,6 +502,30 @@ function badgeFor(to: string) {
           @complete="onOnboardingComplete"
         />
 
+        <!-- View-as is a MODE, and a mode needs its indicator where the user
+             is looking — not 800px away in the sidebar. This banner lived
+             inside app/pages/index.vue, so on the other twenty-nine routes the
+             only evidence you were impersonating was one tinted 3-letter chip.
+
+             The mode is subtractive: it REMOVES controls. `can()` also returns
+             false while loading, so a missing Restart button is indistinguishable
+             from "still loading" and from "this run cannot be restarted" — an
+             operator who forgets reads a working gate as a broken one.
+
+             The exit lives here too. The sidebar picker is hidden when the
+             sidebar is collapsed, and it force-collapses below 767px, so on a
+             phone an impersonating operator previously had no way out except
+             navigating back to Home and knowing that is where it lives. -->
+        <div
+          v-if="viewingAs"
+          class="flex flex-wrap items-center gap-2 t-small px-4 py-2"
+          style="background: var(--accent-muted); border-bottom: 1px solid var(--accent);"
+          role="status"
+        >
+          <UIcon name="i-lucide-eye" class="size-4 shrink-0" style="color: var(--accent);" />
+          <span style="color: var(--text-primary);">Viewing as <span class="font-mono">{{ role }}</span> — controls you normally have are hidden.</span>
+          <button class="ml-auto underline focus-ring" :disabled="switchingRole" @click="stopViewingAs">Back to your own view</button>
+        </div>
         <div v-show="initialized && claudeDirExists" class="h-full">
           <NuxtPage />
         </div>
@@ -476,7 +535,7 @@ function badgeFor(to: string) {
       </main>
     </div>
     <template v-if="!isLogin">
-      <GlobalSearch />
+      <GlobalSearch v-model:open="showSearch" />
       <ChatPanel v-if="can('configure')" v-model:open="chatOpen" />
       <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
     </template>

@@ -47,6 +47,11 @@ const savingLogin = ref<string | null>(null)
  *  are camelCase in code and have to be spelled out for a reader. */
 const CAP_WORDS: Record<string, string> = {
   configure: 'configure the pipeline',
+  // Was missing, so `grants()` fell through to the raw key and the single
+  // most consequential power on this page rendered as "runEngine" beside four
+  // plain-English phrases — reading as a rendering artifact rather than as
+  // the ability to stop, restart and steer anyone's run.
+  runEngine: 'stop, restart and steer any run',
   startRun: 'start runs',
   answerGate: 'answer gates',
   readAllRuns: 'see every run',
@@ -191,7 +196,14 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
                         :disabled="savingLogin === m.login" :value="m.assigned ? m.role : ''"
                         :data-testid="`role-select-${m.login}`"
                         @change="assign(m.login, ($event.target as HTMLSelectElement).value)">
-                  <option value="">no role chosen (defaults to {{ m.role }})</option>
+                  <!-- The default is DEFAULT_ROLE, never the role this person
+                       currently holds. Reading `m.role` here made the option
+                       say "defaults to qa" while clearing the assignment
+                       actually hands them `operator` — the one role holding
+                       both `configure` and `runEngine`. The label was correct
+                       only when it did not matter and wrong exactly when it
+                       did. -->
+                  <option value="">no role chosen — defaults to operator: configure the pipeline, stop and steer any run</option>
                   <option v-for="r in roster.assignable" :key="r" :value="r">{{ r }}</option>
                 </select>
                 <span v-else class="font-mono" :data-testid="`role-fixed-${m.login}`">{{ m.role }}</span>
