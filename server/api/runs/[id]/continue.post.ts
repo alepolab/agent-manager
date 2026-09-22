@@ -19,11 +19,17 @@ export default defineEventHandler(async (event) => {
     throw err
   })
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
-  if (before && before.status !== run.status) {
+  // Gated on the question having moved, not on the status having moved. A run
+  // can stay `paused` across two consecutive approval gates - only
+  // question.stepId changes - so approving one gate and landing straight on
+  // the next wrote nothing, dropping exactly the "who approved this" record
+  // this route exists to keep. A question that was there and is gone is an
+  // answer; one that changed step is an answer too.
+  if (before && (before.question?.stepId !== run.question?.stepId || before.status !== run.status)) {
     await appendRunAudit(id, {
       type: before.question?.kind === 'question' ? 'answer' : 'approve',
       actor: (await currentUser(event))?.login,
-      stepId: before.question?.stepId ?? before.currentStepIds[0],
+      stepId: before.question?.stepId || before.currentStepIds[0],
       text: body?.note?.trim() || undefined,
     })
   }

@@ -10,8 +10,21 @@ export default defineEventHandler(async (event) => {
   const before = await getRun(id)
   const run = await respondToRun(id, body.reply)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
-  if (before && before.status !== run.status) {
-    await appendRunAudit(id, { type: 'answer', actor: (await currentUser(event))?.login, stepId: before.currentStepIds[0], text: body.reply })
+  // Same gate as continue.post.ts, and for the same reason: a run can stay
+  // `paused` across two consecutive questions, with only question.stepId
+  // moving, and the reply would then be lost from the trail entirely.
+  //
+  // The step id comes from the question first. currentStepIds alone was wrong
+  // here: on the gate path the runner sets it to [], so the event recorded no
+  // step at all - and this is the handler for ANSWERING a question, where
+  // question.stepId is the authoritative one.
+  if (before && (before.question?.stepId !== run.question?.stepId || before.status !== run.status)) {
+    await appendRunAudit(id, {
+      type: 'answer',
+      actor: (await currentUser(event))?.login,
+      stepId: before.question?.stepId || before.currentStepIds[0],
+      text: body.reply,
+    })
   }
   return run
 })
