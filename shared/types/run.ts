@@ -171,6 +171,14 @@ export interface RunDecision {
   at: number
   /** GitHub login of whoever decided. */
   by: string
+  /**
+   * Which gate this was, copied from the question at the moment it was
+   * answered. Separation of duties needs to ask "who answered the
+   * implementation gate on this run", and deriving that from a step label is
+   * guesswork the moment a template renames one. Absent on every decision
+   * recorded before gates declared a kind.
+   */
+  gateKind?: GateKind
   verdict: 'approved' | 'rejected' | 'sent-back'
   /** The reviewer's reason. Required for every verdict except a plain approval. */
   note?: string

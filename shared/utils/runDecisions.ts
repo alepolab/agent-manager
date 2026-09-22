@@ -43,6 +43,10 @@ export function recordDecision(
     at,
     by,
     verdict,
+    // Carried so separation of duties can ask "who answered the implementation
+    // gate on this run" without re-deriving it from a step label a template
+    // rename would invalidate.
+    ...(question.gateKind ? { gateKind: question.gateKind } : {}),
     // Clamped at zero rather than trusted: askedAt comes from the server that
     // raised the gate, and a negative wait would be a clock artefact, not a fact.
     waitedMs: Math.max(0, at - question.askedAt),
