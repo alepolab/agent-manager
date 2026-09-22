@@ -131,11 +131,39 @@ No prose, no code fence.`
  * only ever raise oversight. A model that is slow, wrong-shaped or unavailable
  * returns null and the rules floor stands unchanged.
  */
-export async function agentFloorFrom(paths: string[]): Promise<string | null> {
-  if (!paths.length) return null
-  const answer = parseJsonObject(await askLight(FLOOR_SYSTEM, paths.slice(0, 300).join('\n'), { timeoutMs: 20_000 }))
-  const cls = answer?.class
-  return typeof cls === 'string' && cls ? cls : null
+/**
+ * The risk read, and whether it actually happened.
+ *
+ * `read: false` means this control did not run — the light agent is disabled,
+ * the model timed out, or it answered with something unparseable. That is a
+ * different fact from "it looked and found nothing dangerous", and the two
+ * must not collapse into one value.
+ *
+ * They used to. This returned a bare `string | null`, and the caller treated
+ * an unavailable model exactly as it treated a clean read: the path-rule floor
+ * stood, an uncorroborated low proposal was adopted, and `oversightFor` mapped
+ * it to `auto` — so a run whose risk was never assessed skipped every human
+ * gate and looked identical to one that had been cleared. A control that is
+ * not proven to have run is absent, and absence of evidence is not evidence of
+ * safety.
+ */
+export interface FloorRead {
+  /** Whether the model actually answered. False means the control did not run. */
+  read: boolean
+  /** The class it named, when it named one. */
+  class: string | null
+}
+
+export async function agentFloorFrom(paths: string[]): Promise<FloorRead> {
+  // Nothing to read is a complete read of nothing, not a failure: a step that
+  // changed no files has no diff to misjudge.
+  if (!paths.length) return { read: true, class: null }
+  const raw = await askLight(FLOOR_SYSTEM, paths.slice(0, 300).join('\n'), { timeoutMs: 20_000 })
+  if (raw === null) return { read: false, class: null }
+  const answer = parseJsonObject(raw)
+  if (!answer) return { read: false, class: null }
+  const cls = answer.class
+  return { read: true, class: typeof cls === 'string' && cls ? cls : null }
 }
 
 /** The JSON object a light call answered with, or null when it did not answer

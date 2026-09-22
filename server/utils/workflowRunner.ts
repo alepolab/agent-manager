@@ -1182,6 +1182,10 @@ async function adoptClassification(
 ): Promise<void> {
   const proposed = parseProposal(output)
   let floor: BlastRadius | null = null
+  // Did the risk read actually run? Starts false, so a path that never reaches
+  // the read (no checkout, no baseline, a throw) is treated as "not assessed"
+  // rather than as assessed-and-clean.
+  let riskRead = false
   if (cwd) {
     // Against the run's own baseline, not the step's: the class describes the
     // whole change a reviewer will be asked to approve, and a migration written
@@ -1197,8 +1201,11 @@ async function adoptClassification(
         // the model is unavailable the rules floor stands exactly as before.
         const { agentFloorFrom } = await import('./lightAgent.ts')
         const read = await agentFloorFrom(paths)
-        if (read && (BLAST_RADIUS_ORDER as string[]).includes(read)) {
-          const asClass = read as BlastRadius
+        // Whether the read HAPPENED, kept apart from what it said. An
+        // unavailable model must not read as a clean bill of health.
+        riskRead = read.read
+        if (read.class && (BLAST_RADIUS_ORDER as string[]).includes(read.class)) {
+          const asClass = read.class as BlastRadius
           if (!floor || BLAST_RADIUS_ORDER.indexOf(asClass) > BLAST_RADIUS_ORDER.indexOf(floor)) {
             logLine(l, run, rec, `a light read of the touched files raises the risk floor to \`${asClass}\`; the path rules alone said ${floor ?? 'nothing'}`)
             floor = asClass
@@ -1210,6 +1217,30 @@ async function adoptClassification(
     }
   }
   if (proposed === null && floor === null) return
+
+  // A LOW class can only ever come from an agent's own proposal: floorFrom
+  // never asserts one, by design, because path evidence cannot rule danger
+  // out. So `docs` and `ui_parsing` rest entirely on the claim of the party
+  // the classification governs — and they are exactly the two classes that
+  // buy `auto`, which skips every gate in the run.
+  //
+  // That is acceptable only while the risk read is actually running: it is
+  // the one check that can look at ordinary Java and notice the money
+  // arithmetic no path rule can see. When it did NOT run, the low claim is
+  // uncorroborated by anything, and adopting it would let a model outage
+  // silently switch the pipeline's human oversight off.
+  //
+  // So leave the run unclassified instead. That is not a new policy — it
+  // reuses the one already written into oversight.ts: an unclassified run
+  // stops, because absence of evidence is not evidence of safety.
+  const LOW: BlastRadius[] = ['docs', 'ui_parsing']
+  if (!riskRead && floor === null && proposed !== null && LOW.includes(proposed)) {
+    logLine(l, run, rec,
+      `this step proposed \`${proposed}\`, but the risk read did not run and no path rule corroborates it; `
+      + 'leaving the run unclassified so its gates stop for a person rather than accepting an unchecked low class')
+    log.warn('low class proposed with no risk read; left unclassified', { runId: run.id, stepId: rec.stepId, proposed })
+    return
+  }
 
   // An adopted class is a floor of its own from here on. A later step may raise
   // the run's risk - it may discover the money path - but nothing may lower what
