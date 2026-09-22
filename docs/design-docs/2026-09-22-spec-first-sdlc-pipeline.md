@@ -409,13 +409,140 @@ requirements on the *system*, not tasks.
   held open across human calendar time.
 - **BR-23** — Waiting on a human decision and waiting on an external system are
   distinguishable states, and only the first pages anyone.
-- **BR-24** — Every run has a wall-clock, token and spend ceiling, and exceeding
-  it stops the run rather than silently extending.
+- **BR-24** — Every run has a wall-clock, token and spend ceiling. Exceeding it
+  **escalates to the owner as a decision**, never silently extends and never
+  simply kills the work. Four real runs ratcheted to 9.9M tokens because the
+  cap was soft; three steps died at `error_max_turns` because it was hard. A
+  ceiling that ends a run is as much a failure as one that does not exist —
+  the person is the ceiling, and the system's job is to ask them in time.
 - **BR-25** — A control that is not proven armed is treated as absent.
   Enforcement is verified by execution, not by reading configuration.
 
+### Flow and autonomy
+
+- **BR-26** — The pipeline advances phase to phase without a person. Every stop
+  must be attributable to a decision a machine cannot derive; a gate that stops
+  for anything else is a defect to be removed, not a control to be kept.
+- **BR-27** — Anything that can refuse declares where refused work goes. Ending
+  the run is a legitimate destination, but it must be **chosen**, not the
+  default that happens when no path was modelled.
+- **BR-28** — Routing is declared on the edge and visible in the builder.
+  Conditional flow expressed as prose an agent emits, and resolved by matching
+  that prose against step names, is not permitted: it is invisible to the
+  reader, undrawable on the canvas, and fatal on a miss.
+- **BR-29** — Conditional arms are alternatives: exactly one is taken, and a
+  step made unreachable by the arm not taken is **settled**, never left pending.
+  A join must never wait on a step that will not run.
+- **BR-30** — No role may be an unbackstopped bottleneck. Every gate an
+  instance can reach has an operator backstop, and the record names who
+  actually answered rather than who nominally owned it. **A pipeline that
+  cannot proceed because one person is unavailable is a defect**, not a
+  control — this is what makes a one-person operator viable, and it is the
+  requirement most likely to be quietly violated by adding a role.
+
+### Environment
+
+- **BR-31** — A test verdict counts only against a stack stood up at the
+  registry's declared topology, with the deployed build identifier recorded
+  alongside the verdict. A green suite against an unknown environment proves
+  nothing about the change.
+- **BR-32** — Which environment a check ran against is a property of the
+  **verdict**, not of the test file. A check whose target is decided by
+  whatever the file reads at runtime cannot be gated on.
+
+### Design review
+
+- **BR-33** — Any change to a data model, API contract, transaction boundary or
+  migration is reviewed before implementation against two questions: is it
+  reversible, and were the sibling callers of every changed function checked.
+- **BR-34** — Any user-facing change is reviewed for design-system conformance,
+  state coverage (loading, empty, error, partial), behaviour at 375px, and
+  WCAG 2.2 AA. A screen designed only for the populated happy path is
+  incomplete.
+- **BR-35** — Every story is checked against how the product behaves today:
+  contradiction with a configured rule, duplication of an existing capability,
+  and impact on operators other than the requester.
+- **BR-36** — Every end-user persona a change reaches is reviewed, or recorded
+  as **not performed** with the credential or fixture the customer must supply.
+  A persona review against invented data is worse than none: it produces a
+  green nobody can trace to a real user.
+- **BR-37** — Executive escalation is threshold-routed and rare. A lens that
+  fires on every change is invalid and its threshold must be retuned — a gate
+  that always fires teaches its owner to approve without reading, which is
+  worse than no gate because it looks like oversight from outside.
+
+### Testing
+
+- **BR-38** — A change crossing a module or service boundary requires an
+  integration verdict. A unit suite alone is not sufficient evidence for it,
+  and "the unit tests pass" must not be reportable as verification of a
+  cross-boundary change.
+
+### Release and feedback
+
+- **BR-39** — No release without a declared rollback path and declared
+  post-deploy verification, both agreed **before** the deploy runs. A change we
+  cannot detect the failure of is worse than one we can roll back.
+- **BR-40** — A defect found after release re-enters the same intake,
+  referencing the run that shipped it. A pipeline whose knowledge of its own
+  changes ends at "merged" cannot improve, and cannot be trusted with the next
+  one.
+
 BR-25 is not defensive drafting. This estate has twice discovered a control
 enforcing nothing at the moment it was most trusted.
+
+### Traceability: which of these actually hold today
+
+Written is not built. Status as of this commit, verified against the code
+rather than intent.
+
+**Satisfied, with a runnable check**
+
+| BR | By what |
+|---|---|
+| BR-07 | `continueRun` refuses an unreasoned approval; now gate-kind aware (`test-gate-kinds.mjs`) |
+| BR-27, BR-28, BR-29 | Conditional edges: a refusal routes, routing is declared on the edge, one arm is taken and the other settled (`test-conditional-edges.mjs`) |
+| BR-37 | The executive gate tiers rather than floors, asserted so it cannot quietly become a checkpoint (`test-sdlc-template.mjs`) |
+
+**Satisfied by controls that already existed**
+
+| BR | By what |
+|---|---|
+| BR-20 | `secrets-guard` hook — it blocked this session three times |
+| BR-21 | `branchPolicy` refuses `main`, `develop`, `ci-release` |
+| BR-22 | A run is already terminal at pull-request-open |
+| BR-25 | `verify-enforcement.mjs` proves a control armed by executing it |
+
+**Partial — the mechanism exists, the data or the wiring does not**
+
+| BR | What is missing |
+|---|---|
+| BR-05 | Role ownership is enforced; **actor identity is not** — the same person may answer IMPL and VERIFY |
+| BR-11, BR-33, BR-34, BR-35, BR-36 | The review personas are written as definitions but **are not seeded**, so nothing runs them |
+| BR-15, BR-38 | The registry can now record per-class commands and report locations, and reports eligibility — but 16 products still read `CONFIRM` and 22 of 23 declare no report location |
+| BR-17 | A security gate exists in the template; **no scanner is wired behind it** |
+
+**Not built**
+
+| BR | Why it matters |
+|---|---|
+| BR-01 – BR-04 | The fact-provenance substrate. Without it a gate still shows prose |
+| BR-06 | Blast radius is still agent-authored, and it still decides whether any human is asked — **a live defect, not a future one** |
+| BR-10, BR-12, BR-13, BR-14 | The acceptance-spec pipeline |
+| BR-16 | Visual baselines: no capture, no comparison |
+| BR-18 | Multi-repo as one unit; the registry flag still has zero readers |
+| BR-19 | Nothing yet prevents an invented fixture |
+| BR-23 | Waiting on a human and waiting on GitHub are still the same state |
+| BR-24 | Ceilings still end a run instead of escalating |
+| BR-26, BR-30 | Autonomy and the operator backstop as enforced properties |
+| BR-31, BR-32 | Environment as a property of a verdict |
+| BR-39, BR-40 | Rollback, post-deploy verification, production feedback |
+
+**Count: 7 satisfied with a check or a pre-existing control that this session
+verified, 4 more resting on controls that predate it, 8 partial, 21 not built.**
+The requirements are complete as a specification. They are roughly a quarter
+implemented, and the largest single gap — BR-01 to BR-04 — is the substrate
+everything in the "not built" column sits on.
 
 ---
 
