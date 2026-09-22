@@ -18,6 +18,7 @@ import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions }
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline, workingTreeDirty, uncommittedPatch } from './gitFacts.ts'
 import { shipIntegrity, describeShipFindings, type ShipFinding } from './shipIntegrity.ts'
+import { recordCommandLine, forgetRun } from './commandLedger.ts'
 import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
 import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
@@ -224,7 +225,7 @@ async function flushLogs(runId: string): Promise<void> {
   await Promise.all(mine.map(k => logChains.get(k)?.catch(() => {})))
   for (const k of mine) logChains.delete(k)
 }
-function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
+function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string, kind?: 'text' | 'tool' | 'result') {
   const stamped = `${new Date().toISOString().slice(11, 19)} ${line}`
   const tail = (l.logs[rec.stepId] ??= [])
   tail.push(stamped)
@@ -240,6 +241,13 @@ function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
   logChains.set(path, (logChains.get(path) ?? Promise.resolve())
     .then(() => appendFile(path, stamped + '\n'))
     .catch(() => {}))
+  // The same line, parsed into the record of what this run actually executed.
+  // Every tool call an agent makes already passes through here as a line
+  // carrying its command; until now that was written to a log nothing read. See
+  // commandLedger.ts for what the gates then ask of it — and note that `kind`
+  // is load-bearing: a line the AGENT typed reads exactly like a tool call, and
+  // only the block it came from tells them apart.
+  recordCommandLine(run.id, rec.stepId, line, kind, l.laneDirs[rec.stepId] ?? run.projectDir)
   for (const fn of logSubscribers.get(run.id) ?? []) {
     try { fn(rec.stepId, stamped) } catch { /* a broken listener must not stop the run */ }
   }
@@ -508,6 +516,10 @@ async function publish(run: WorkflowRun) {
   if (TERMINAL_STATUSES.includes(run.status)) {
     await classifyFromDiff(run)
     await enforceShipIntegrity(run)
+    // In-flight command bookkeeping for a finished run: the file on disk is the
+    // record from here, and these maps would otherwise grow for the life of the
+    // process.
+    forgetRun(run.id)
   }
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -1343,7 +1355,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // Never hold the process open on this timer alone.
   if (typeof watchdog.unref === 'function') watchdog.unref()
   try {
-    const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+    // The product's own toolchain, last so a registry pin wins over whatever
+    // the host's PATH would have given the agent. See ProductMatch.toolchain.
+    const userEnv = { ...await envResolver(run.startedBy).catch(() => ({})), ...(run.product?.toolchain ?? {}) }
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
     const raw = await agentCaller(step.agentSlug, input, cwd, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
@@ -1355,7 +1369,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       // Loaded on demand: that module's extension-less imports do not resolve under the plain-node tests.
       void import('./claudeCodeHistory.ts').then(m => m.setSessionName(sessionId, `${run.ticketKey ?? run.workflowSlug} · ${step.label} · run ${run.id.slice(0, 8)}`)).catch(() => {})
     }, onProgress: (progress: AgentProgress) => {
-      if (progress.line) { logLine(l, run, rec, progress.line); return }
+      if (progress.line) { logLine(l, run, rec, progress.line, progress.lineKind); return }
       // Diagnostic only (see AgentProgress's doc comment) - mutated directly
       // onto the live rec and republished so the SSE stream carries it, but
       // never written to the step's persisted artifact JSON and never
@@ -1546,6 +1560,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         const result = await runPrStep(run)
         prLines = result.lines
         await recordPrUrls(run.id, result.prs)
+        // A refused pull request FAILS the step. It used to be one line among
+        // ten, which is how "no pull request was opened" came to read as a
+        // detail rather than as the run not having shipped — and why two runs
+        // whose build had failed still finished `completed`.
+        if (result.refused?.length) {
+          const reason = result.refused.map(r => `${r.repo}: ${r.reason}`).join('\n')
+          markFailed(l.state, id)
+          Object.assign(rec, { status: 'failed', output, model, usage, error: `Pull request refused — ${reason}`, completedAt: Date.now() })
+          for (const line of prLines) logLine(l, run, rec, line)
+          log.warn('pull request refused for lack of execution evidence', { runId: run.id, stepId: id, repos: result.refused.map(r => r.repo) })
+          try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+          return false
+        }
       } catch (err) {
         // Never fatal: the commits are already on the branch, and a step that
         // fails here would hide the work rather than ship it.

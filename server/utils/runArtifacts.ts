@@ -769,6 +769,9 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
       `Tests: ${Object.entries(product.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,
+      ...(product.toolchain && Object.keys(product.toolchain).length
+        ? [`Toolchain: ${Object.entries(product.toolchain).map(([k, v]) => `${k}=${v}`).join(' ')} — already set in your environment. Build with these; a build failure under a different one says nothing about this repository.`]
+        : []),
       ...(product.recipe ? [`Recipe: ${product.recipe}`] : []),
       ...(product.alsoInScope ?? []).flatMap(p => [
         '',
@@ -796,6 +799,30 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     'One line per item. The runner records them on the run, the summary prints',
     'them and the pull request body carries them. "Out of scope for this lane"',
     'is a reason; leaving it in prose where nobody can read it is not.',
+    '',
+    '## A blocker you find yourself',
+    '',
+    'If you discover that this run cannot do its job as set up — the wrong',
+    'product was resolved, the checkout is not the repository the ticket is',
+    'about, the environment you need does not exist — say so on its own line,',
+    'exactly:',
+    '',
+    '    PIPELINE-HALT: <what is wrong>',
+    '',
+    'That stops the run for a person. Run a3cb9d37 diagnosed its own wrong-product',
+    'checkout, wrote it up as a T0 blocker in prose, and carried on for 72 minutes',
+    'into a branch its work could never reach origin from. A blocker described in',
+    'prose is a blocker nobody acted on.',
+    '',
+    '## What you claim, you must have run',
+    '',
+    'Every command you run is recorded. A gate reads that record before this run',
+    'is allowed to open a pull request: source changes need a project build that',
+    'succeeded, and any .sql file in the change must have been executed against a',
+    'database. Compiling a few files by hand against a jar is not a build of the',
+    'module, and a remediation script that has never been run is a guess about a',
+    'schema. If you cannot run the build or the script here, say so with',
+    'PIPELINE-NOT-DONE rather than describing it as done.',
   )
   lines.push('', '---', '')
   return lines.join('\n')

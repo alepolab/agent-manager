@@ -132,6 +132,18 @@ export interface ProductMatch {
   branches: Record<string, string>
   stack: { compose: string, topology_default: string, liquibase?: boolean }
   tests: Record<string, string>
+  /**
+   * The versions this product's build actually needs, as environment variables
+   * the agent inherits (JAVA_HOME, NODE_VERSION, …).
+   *
+   * Run 9a6ea7d0 read 6,820 "AspectJ source level is 1.5" errors from a gradle
+   * build as a defect in the repository and concluded that no module in the
+   * workspace could run `gradle test` — then opened three pull requests. That
+   * signature is what ase_lbss *-api modules produce under a newer JDK; under
+   * JDK 11 both modules build first try. A run that cannot build is a run that
+   * must say so, not one that reasons its way past the build.
+   */
+  toolchain?: Record<string, string>
   recipe?: string
   /** Products a step widened the run to, with their own stack and tests: the fault turned out to live there. */
   alsoInScope?: { name: string, repos: string[], stack?: { compose: string, topology_default: string }, tests: Record<string, string> }[]

@@ -60,6 +60,13 @@ async function freeGb(path: string): Promise<{ gb: number, usedPct: number, moun
   return { gb: availableKb / 1024 / 1024, usedPct: Number.parseInt(cols[4] ?? '', 10) || 0, mount: cols[5] ?? probe }
 }
 
+/** `owner/repo` from any origin URL shape, or undefined rather than a guess —
+ *  a checkout with no origin cannot contradict a registry entry. */
+export function repoOf(remote: string | undefined): string | undefined {
+  const m = (remote ?? '').trim().match(/[/:]([^/:]+\/[^/]+?)(?:\.git)?\/?$/)
+  return m?.[1]
+}
+
 /** The one-line reason a run must not start, or null. */
 export function preflightFailure(report: PreflightReport | undefined): string | null {
   const bad = (report?.checks ?? []).filter(c => c.level === 'fail')
@@ -124,6 +131,22 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       // was already sitting in.
       if (run.projectDir && existsSync(join(run.projectDir, '.git'))) {
         const s = await checkoutState(run.projectDir)
+        // Handed is not the same as RIGHT. Run a3cb9d37 (CSUP-7526) was started
+        // against product `infra`, resolved from one word in the ticket's
+        // Environment boilerplate, and worked for 72 minutes in a devops
+        // checkout while eight of its nine tasks belonged to a Selfcare
+        // repository — its own output raised that as a T0 blocker and it
+        // carried on. This check is the cheap half: the checkout a run was
+        // handed must be a repository the product actually owns.
+        const owner = repoOf(s.remote)
+        if (owner && !repos.includes(owner)) {
+          return {
+            name: 'product checkout',
+            level: 'fail',
+            detail: `this run is registered against ${repos.join(', ')} but was handed a checkout of ${owner} (${run.projectDir}). `
+              + 'Every commit, branch and pull request would land in the wrong repository. Re-run against the right product, or fix the registry entry.',
+          }
+        }
         return { name: 'product checkout', level: 'ok', detail: `${s.name} on ${s.branch}, handed to this run${s.dirty ? `, ${s.dirty} uncommitted change(s)` : ''}` }
       }
       const dir = checkoutDirFor(repos[0]!, run.startedBy)

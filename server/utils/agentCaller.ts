@@ -199,6 +199,15 @@ export interface AgentProgress {
   lastActivityAt: number
   /** One human-readable line for the live log: a tool call, a text excerpt or a result preview. Present only on events that carry one. */
   line?: string
+  /**
+   * WHICH KIND of block produced `line`, and the only reason this field exists:
+   * a line reading `[Bash] gradle build` can be a real tool call or an agent
+   * typing that text. They are indistinguishable once both are strings, and the
+   * command ledger gates a pull request on the difference — an agent that could
+   * narrate a successful build would be grading its own homework, which is the
+   * defect the gate was written to stop. Present whenever `line` is.
+   */
+  lineKind?: 'text' | 'tool' | 'result'
 }
 
 const LINE_MAX = 300
@@ -211,6 +220,14 @@ const squash = (s: string, max = LINE_MAX) => s.replace(/\s+/g, ' ').trim().slic
  * says what is happening (a command, a path, a pattern), never dumped whole:
  * a Write's content or a prompt's ticket text has no place in a log.
  */
+export function blockKind(block: unknown): 'text' | 'tool' | 'result' | null {
+  const type = (block as { type?: unknown })?.type
+  if (type === 'text') return 'text'
+  if (type === 'tool_use') return 'tool'
+  if (type === 'tool_result') return 'result'
+  return null
+}
+
 export function describeBlock(block: unknown): string | null {
   if (!block || typeof block !== 'object') return null
   const b = block as { type?: string, text?: string, name?: string, input?: Record<string, unknown>, content?: unknown, is_error?: boolean }
@@ -512,7 +529,8 @@ export async function callAgent(
           // Lines are never throttled: a watcher wants every command, not a sample.
           const line = describeBlock(block)
           if (line && /\bAPI Error\b/i.test(line)) lastApiError = line.trim().slice(0, 300)
-          if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
+          const kind = blockKind(block)
+          if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line, ...(kind ? { lineKind: kind } : {}) })
         }
       }
       emitProgress()
@@ -522,7 +540,8 @@ export async function callAgent(
       if (Array.isArray(content)) {
         for (const block of content) {
           const line = describeBlock(block)
-          if (line) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
+          const kind = blockKind(block)
+          if (line) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line, ...(kind ? { lineKind: kind } : {}) })
         }
       }
     }

@@ -112,6 +112,14 @@ products:
     stack:
       compose: alepo-dev-team-infra/crm
       topology_default: 1node
+    # What the build needs, not what the host happens to have. Run 9a6ea7d0 read
+    # 6,820 "AspectJ source level is 1.5" errors as a repo defect and concluded
+    # no module here could run gradle test; that signature is what the *-api
+    # modules produce under a newer JDK. Verified 2026-09-21: under this
+    # JAVA_HOME subscriber-activity and subscriber-management both build first
+    # try. Agents inherit these variables and are told the values.
+    toolchain:
+      JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
     tests:
       unit: 'CONFIRM'
     owners:

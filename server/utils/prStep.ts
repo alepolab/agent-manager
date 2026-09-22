@@ -76,6 +76,8 @@ export interface PrStepOptions {
   exec?: ExecLike
   /** Candidate directories, for tests. Discovered from the run checkout otherwise. */
   repoDirs?: string[]
+  /** What the run executed, for tests. Read from the run's command ledger otherwise. */
+  facts?: { builtOk: boolean, buildFailed: boolean, buildCommands: string[], sqlFilesExecuted: string[] }
 }
 
 export interface PrStepResult {
@@ -83,6 +85,67 @@ export interface PrStepResult {
   lines: string[]
   /** Only pull requests that were actually opened, or already existed. */
   prs: { repo: string, url: string }[]
+  /**
+   * A repository whose pull request this step REFUSED to open, with why. The
+   * runner fails the step on any of these: a refusal reported as one line among
+   * ten is how "no pull request was opened" came to read like a detail.
+   */
+  refused?: { repo: string, reason: string }[]
+}
+
+/** Extensions whose change has to compile before anyone is asked to review it. */
+const CODE_FILE = /\.(java|kt|scala|groovy|ts|tsx|js|jsx|vue|py|go|rb|php|cs|c|cc|cpp|h|hpp|rs|swift|m|mm)$/i
+
+/**
+ * Whether this repository's change is allowed to become a pull request, given
+ * what the run actually executed.
+ *
+ * Both runs in the 2026-09-21 review opened pull requests over a RECORDED build
+ * failure. CSUP-7524's "22/22 green" was six files compiled flat against the
+ * junit jar — the one file carrying the real wiring was compiled by nothing —
+ * and CSUP-7526 shipped a remediation script that dies on its second query
+ * because eighteen references name a column on the wrong table. Infra CI runs
+ * Ansible, bats, compose config and ShellCheck: none of them executes SQL, and
+ * a diff reads fine either way.
+ *
+ * So the precondition is evidence, not assertion: the command ledger
+ * (commandLedger.ts) is built from the tool calls the agents really made, and
+ * this asks it two questions — did a project build succeed, and was every .sql
+ * file in this diff actually fed to a database.
+ *
+ * A product with no build command configured (the registry says `CONFIRM`)
+ * cannot answer the first, and that is REPORTED as the gap it is rather than
+ * waved through: a gate that passes when it cannot see is not a gate. The
+ * escape is explicit and loud — AGENT_ALLOW_UNBUILT_PR=1 — for the operator who
+ * knows the build lives somewhere this run could not reach.
+ */
+export function prEvidenceRefusal(
+  changedFiles: string[],
+  facts: { builtOk: boolean, buildFailed: boolean, buildCommands: string[], sqlFilesExecuted: string[] },
+): string | null {
+  const code = changedFiles.filter(f => CODE_FILE.test(f))
+  const sql = changedFiles.filter(f => /\.sql$/i.test(f))
+
+  if (code.length && !facts.builtOk) {
+    const ran = facts.buildCommands.length
+      ? `The build commands this run ran were: ${facts.buildCommands.slice(0, 5).map(c => `\`${c}\``).join(', ')}`
+        + `${facts.buildFailed
+          ? ', and the last of them failed.'
+          : ', and none of them can be shown to have succeeded — an outcome the shell swallowed (`|| true`) or a result that arrived while several commands were in flight is not a pass.'}`
+      : 'No project build ran in this run for this repository — not a failed one, none. '
+        + '(If a build did run, its record is missing: check that the run\'s artifacts directory is writable.)'
+    return `${code.length} source file(s) changed and nothing in this run proves they compile. ${ran}`
+      + ' A pull request is a request for someone to merge code; this run cannot show the code builds.'
+      + ' Run the product build in the checkout, or set AGENT_ALLOW_UNBUILT_PR=1 if the build genuinely cannot run here.'
+  }
+
+  const unexecuted = sql.filter(f => !facts.sqlFilesExecuted.includes(f.replace(/^.*\//, '')))
+  if (unexecuted.length) {
+    return `${unexecuted.length} SQL file(s) in this change were never executed against a database: ${unexecuted.slice(0, 5).join(', ')}.`
+      + ' A remediation script that has not been run is a guess about a schema.'
+      + ' Run it against a throwaway copy, or set AGENT_ALLOW_UNBUILT_PR=1 if no database is reachable here.'
+  }
+  return null
 }
 
 /** `owner/repo` from any origin URL shape, or null rather than a guess. */
@@ -136,6 +199,21 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
   const exec = opts.exec ?? realExec
   const lines: string[] = []
   const prs: { repo: string, url: string }[] = []
+  const refused: { repo: string, reason: string }[] = []
+  // Read once: the ledger is append-only and every repository in this loop is
+  // judged against the same run.
+  // The raw ledger, scoped per repository below: a build that succeeded in one
+  // checkout must not vouch for untouched code in another repository of the
+  // same run.
+  const ledger = opts.facts ? [] : await (async () => {
+    const { readCommandLedger } = await import('./commandLedger.ts')
+    return readCommandLedger(run.id)
+  })()
+  const factsFor = async (dir: string) => {
+    if (opts.facts) return opts.facts
+    const { executionFacts } = await import('./commandLedger.ts')
+    return executionFacts(ledger, dir)
+  }
 
   if (!run.branch || !run.baseBranch) {
     // Inventing either is how a run opens a pull request against the wrong
@@ -200,6 +278,32 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
       continue
     }
 
+    // What this run EXECUTED, against what this diff CHANGES. Nothing is pushed
+    // until that question is answered — see prEvidenceRefusal.
+    let changed: string[] | null = null
+    try {
+      changed = (await exec('git', ['diff', '--name-only', `origin/${run.baseBranch}...HEAD`], { cwd: dir }))
+        .split('\n').map(s => s.trim()).filter(Boolean)
+    } catch {
+      // Failing open here would skip the evidence check entirely for a repo
+      // whose diff could not be read — the one case where nobody can say what
+      // is about to be shipped.
+      refused.push({ repo, reason: `the list of changed files could not be read, so there is no way to say what this pull request would contain.` })
+      lines.push(`${repo}: NO PULL REQUEST. The diff against origin/${run.baseBranch} could not be read.`)
+      continue
+    }
+    const refusal = prEvidenceRefusal(changed, await factsFor(dir))
+    if (refusal) {
+      if (process.env.AGENT_ALLOW_UNBUILT_PR === '1') {
+        log.warn('pull request opened without execution evidence; AGENT_ALLOW_UNBUILT_PR=1', { runId: run.id, repo, refusal })
+        lines.push(`${repo}: WARNING — ${refusal} Opened anyway because AGENT_ALLOW_UNBUILT_PR=1.`)
+      } else {
+        refused.push({ repo, reason: refusal })
+        lines.push(`${repo}: NO PULL REQUEST. ${refusal}`)
+        continue
+      }
+    }
+
     try {
       await exec('git', ['push', '--set-upstream', 'origin', `${run.branch}:refs/heads/${run.branch}`], { cwd: dir })
     } catch (err) {
@@ -246,8 +350,8 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
   }
 
   if (!dirs.length) lines.push('No repositories to consider for a pull request.')
-  log.info('pr step done', () => ({ runId: run.id, opened: prs.length, considered: dirs.length }))
-  return { lines, prs }
+  log.info('pr step done', () => ({ runId: run.id, opened: prs.length, considered: dirs.length, refused: refused.length }))
+  return refused.length ? { lines, prs, refused } : { lines, prs }
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err)).split('\n').slice(0, 2).join(' ').trim()

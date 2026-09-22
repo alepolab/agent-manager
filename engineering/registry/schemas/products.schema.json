@@ -154,6 +154,12 @@
           "type": "string",
           "description": "Build command. Absent means the product needs no build step before tests."
         },
+        "toolchain": {
+          "type": "object",
+          "description": "Environment the build actually needs (JAVA_HOME, NODE_VERSION, ...), set for every agent on this product. Run 9a6ea7d0 read 6,820 'AspectJ source level is 1.5' errors from the wrong JDK as a defect in the repository, concluded nothing here could build, and opened three pull requests anyway.",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" }
+        },
         "tests": {
           "type": "object",
           "required": [
