@@ -330,6 +330,96 @@ await groups.replaceGroups([
   await reset()
 }
 
+// ══ 12. the gate is released AT the persist point ═════════════════════════
+// Both halves of one invariant, and each breaks a different way.
+//
+// A start is allowed to answer `{ run, rest }`: the run is on disk as
+// `running` and therefore already counted, and `rest` is the slow remainder -
+// the git fetch, the worktree add, preflight's ten-second execFiles. Persist
+// too late and the cap breaks; hold the gate across `rest` and every watch
+// dispatch and cron fire queues behind one launch, which is how a 2am
+// schedule missed its window.
+{
+  const withTimeout = (p, ms, why) => Promise.race([
+    p,
+    new Promise((_, rej) => { const t = setTimeout(() => rej(new Error(why)), ms); t.unref?.() }),
+  ])
+
+  let seenFromRest = null
+  let release
+  const gate = new Promise((r) => { release = r })
+
+  const first = queue.admit({
+    group: 'scans',
+    start: async () => ({
+      run: await mk({ status: 'running', group: 'scans' }),
+      rest: async () => { seenFromRest = await queue.inFlightForGroup('scans'); await gate },
+    }),
+    enqueue: () => mk({ status: 'queued', group: 'scans' }),
+  })
+
+  // Let the first admission reach its slow half before the second one asks.
+  await new Promise(r => setImmediate(r))
+
+  const second = await withTimeout(queue.admit({
+    group: 'scans',
+    start: async () => ({ run: await mk({ status: 'running', group: 'scans' }), rest: async () => {} }),
+    enqueue: () => mk({ status: 'queued', group: 'scans' }),
+  }), 2000, 'a second admission blocked behind the first run\'s SLOW half: the gate is being held across the whole launch, which is what makes a 2am schedule miss its window')
+
+  assert.equal(second.queued, true,
+    'THE CAP: a run still in its slow half already occupies the group\'s only slot, because its record is on disk as running before the gate opens')
+  assert.equal(seenFromRest, 1,
+    'and it counts against its own group from INSIDE the slow half - persist first, slow work second, never the other way round')
+
+  release()
+  await first
+  await reset()
+
+  // A start that answers with a plain run - no slow half - still works.
+  const plain = await queue.admit({
+    group: 'scans',
+    start: () => mk({ status: 'running', group: 'scans' }),
+    enqueue: () => mk({ status: 'queued', group: 'scans' }),
+  })
+  assert.equal(plain.queued, false)
+  await reset()
+
+  // Twenty at once, each spending real time outside the gate.
+  const results = await Promise.all(Array.from({ length: 20 }, () => queue.admit({
+    group: 'sdlc',
+    start: async () => ({
+      run: await mk({ status: 'running', group: 'sdlc' }),
+      rest: () => new Promise(r => setTimeout(r, 20)),
+    }),
+    enqueue: () => mk({ status: 'queued', group: 'sdlc' }),
+  })))
+  assert.equal(results.filter(r => !r.queued).length, 2,
+    'exactly maxConcurrent started, even though each start spent 20ms outside the gate')
+  assert.equal(results.filter(r => r.queued).length, 18, 'and the rest are queued, not lost')
+  assert.equal(await queue.inFlightForGroup('sdlc'), 2, 'between them they filled the two slots, once each')
+  await reset()
+
+  // A slow half that throws must not wedge the shared chain for everyone else.
+  await assert.rejects(queue.admit({
+    group: 'scans',
+    start: async () => ({
+      run: await mk({ status: 'running', group: 'scans' }),
+      rest: async () => { throw new Error('checkout is gone') },
+    }),
+    enqueue: () => mk({ status: 'queued', group: 'scans' }),
+  }), /checkout is gone/)
+  await reset()
+
+  const after = await withTimeout(queue.admit({
+    group: 'scans',
+    start: () => mk({ status: 'running', group: 'scans' }),
+    enqueue: () => mk({ status: 'queued', group: 'scans' }),
+  }), 2000, 'a start whose slow half threw wedged the admission chain')
+  assert.equal(after.queued, false, 'the next admission is unaffected by the previous one failing late')
+  await reset()
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 rmSync(process.env.AGENT_RUNS_DIR, { recursive: true, force: true })
 console.log('runQueue: all assertions passed')

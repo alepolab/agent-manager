@@ -135,9 +135,26 @@ export async function groupLoad(group: string): Promise<{ group: string, inFligh
  * Anything already waiting in the group goes first, even when a slot is free —
  * a queue that lets later arrivals overtake is not a queue.
  */
-export function admit<T extends WorkflowRun>(opts: {
+export async function admit<T extends WorkflowRun>(opts: {
   group: string
-  start: () => Promise<T>
+  /**
+   * Starts the run. May answer either with the run, or with the run plus the
+   * slow remainder of its launch.
+   *
+   * The two-part answer is the whole point of the split: a run is countable by
+   * inFlightForGroup the instant its record is on disk as `running`, and that
+   * happens long before its checkout and preflight are done. Whatever is
+   * returned as `rest` is run AFTER this gate is released. Held inside, one
+   * launch - a git fetch, a worktree add, and preflight's several ten-second
+   * execFiles - blocked every other watch dispatch and cron fire for its whole
+   * duration, and a 2am schedule could miss its window entirely.
+   *
+   * What must NOT move out is the persist itself. Nothing is written before
+   * `start`, so this gate IS the slot reservation: return before the record
+   * exists and the next admission re-reads the runs, does not see it, and
+   * admits a second into the same slot.
+   */
+  start: () => Promise<T | { run: T, rest?: () => Promise<unknown> }>
   enqueue: () => Promise<T>
   /**
    * Anything else that must be decided against the same snapshot of the runs,
@@ -152,7 +169,7 @@ export function admit<T extends WorkflowRun>(opts: {
    */
   guard?: () => Promise<void>
 }): Promise<{ run: T, queued: boolean }> {
-  return serialised(async () => {
+  const decided = await serialised(async () => {
     await opts.guard?.()
 
     const runs = await listRuns()
@@ -160,9 +177,22 @@ export function admit<T extends WorkflowRun>(opts: {
     const free = cap - await inFlightForGroup(opts.group, runs)
     const ahead = (await waiting(opts.group, runs)).length
 
-    if (free > 0 && ahead === 0) return { run: await opts.start(), queued: false }
-    return { run: await opts.enqueue(), queued: true }
+    if (free > 0 && ahead === 0) {
+      const started = await opts.start()
+      const staged = typeof (started as { rest?: unknown }).rest === 'function'
+        ? started as { run: T, rest: () => Promise<unknown> }
+        : { run: started as T, rest: undefined }
+      return { ...staged, queued: false }
+    }
+    // The queued record is written inside the gate on purpose: the `ahead`
+    // count and the guard above both read persisted runs, so a run that is
+    // queued but not yet on disk is one the next admission cannot see.
+    return { run: await opts.enqueue(), rest: undefined, queued: true }
   })
+
+  // Outside the gate. See `start` above for why.
+  if (decided.rest) await decided.rest()
+  return { run: decided.run, queued: decided.queued }
 }
 
 /**
