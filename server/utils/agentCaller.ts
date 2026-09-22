@@ -342,6 +342,11 @@ export async function callAgent(
   let modelRan: string | null = null
   let usage: AgentUsage | null = null
   let sessionId: string | null = null
+  /** Results discarded as a resume replay, and whether any result was ever
+   *  taken. Together they separate "the agent legitimately said nothing" from
+   *  "we threw away the only result there was" - see the check after the loop. */
+  let replayed = 0
+  let accepted = false
 
   // ── steering: the prompt is a stream so the operator can talk to the agent mid-step ──
   // The first message is the step input. Later ones are operator notes, pushed
@@ -483,7 +488,9 @@ export async function callAgent(
       const replay = isResumeReplay({ resuming: Boolean(resume), resultsSoFar: results, modelSpoke })
       results += 1
       modelSpoke = false
+      if (replay) replayed += 1
       if (!replay) {
+        accepted = true
         result = interpreted.output
         usage = interpreted.usage
         // The turn is over. Close the input stream unless a note is still queued,
@@ -519,6 +526,28 @@ export async function callAgent(
   // shouldEmitProgress's caller: "absent when nothing informative" holds
   // because emitProgress/onProgress are never called at all when turn stays 0).
   if (turn > 0) emitProgress(true)
+
+  // A resumed call whose ONLY result was discarded as a replay.
+  //
+  // isResumeReplay drops the first result of a resumed session because the CLI
+  // closes the dead turn itself, with a synthetic message and no model behind
+  // it, before it reads the queued input. The assumption is that a real result
+  // follows. When the session was already terminal none does, the stream just
+  // ends, and `result` is still the empty string it started as - so the step
+  // recorded a green completion with no output and no model. parseAsk and
+  // parseSkip both return falsy on '', so nothing downstream noticed, and
+  // `produces` only catches it for a step that declares artifacts.
+  //
+  // Deliberately narrow: an empty output from a call that accepted a result is
+  // still legal, because a successful result may genuinely carry no text.
+  if (isReplayOnly({ accepted, replayed })) {
+    throw new AgentResultError(
+      `the resumed session for ${agentSlug} ended without running the step`
+      + ' (its only result was the replay of the turn that was already finished when it was resumed);'
+      + ' restart the step to run it in a fresh session',
+      usage, 'error_resume_replay_only',
+    )
+  }
 
   log.info('agent call completed', () => ({
     agentSlug,
@@ -597,6 +626,29 @@ export const SYNTHETIC_MODEL = '<synthetic>'
  */
 export function isResumeReplay(opts: { resuming: boolean, resultsSoFar: number, modelSpoke: boolean }): boolean {
   return opts.resuming && opts.resultsSoFar === 0 && !opts.modelSpoke
+}
+
+/**
+ * The call threw away the only result it ever saw.
+ *
+ * isResumeReplay discards the first result of a resumed session on the
+ * assumption that a real one follows. When the session was already terminal
+ * none does — the stream just ends — and the call would otherwise return the
+ * empty string it started with: a green step with no output and no model
+ * recorded. parseAsk and parseSkip both read '' as falsy, so nothing
+ * downstream notices, and `produces` only catches it for a step that declares
+ * artifacts.
+ *
+ * Exported beside isResumeReplay, and for the same reason: the decision is
+ * worth stating once and testing directly, rather than inferring it from a
+ * live SDK stream.
+ *
+ * Narrow on purpose. A call that accepted a result and still has no text is
+ * fine — a successful result may genuinely carry none — and a call that never
+ * replayed anything has a different problem, reported elsewhere.
+ */
+export function isReplayOnly(opts: { accepted: boolean, replayed: number }): boolean {
+  return !opts.accepted && opts.replayed > 0
 }
 
 export class AgentResultError extends Error {

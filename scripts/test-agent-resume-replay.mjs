@@ -27,7 +27,7 @@
  */
 import assert from 'node:assert/strict'
 
-const { isResumeReplay, SYNTHETIC_MODEL } = await import('../server/utils/agentCaller.ts')
+const { isResumeReplay, isReplayOnly, SYNTHETIC_MODEL } = await import('../server/utils/agentCaller.ts')
 
 // ── the replay turn itself: resuming, first result, nothing but synthetic output ──
 assert.equal(isResumeReplay({ resuming: true, resultsSoFar: 0, modelSpoke: false }), true,
@@ -57,5 +57,25 @@ for (const modelSpoke of [true, false]) {
 // way, every result looks like a real turn and the behaviour falls back to
 // what it was before this fix, which is the safe direction.
 assert.equal(SYNTHETIC_MODEL, '<synthetic>')
+
+// ── the replay was the ONLY result: that is a failure, not an empty answer ──
+// The skip above assumes a real result follows the replay. A session that was
+// already terminal when it was resumed emits the replay and then ends, so
+// nothing is ever accepted and `result` stays the empty string it started as.
+// The step used to record that as a green completion with no output and no
+// model; parseAsk and parseSkip both read '' as falsy, so nothing downstream
+// noticed, and `produces` only catches it for a step that declares artifacts.
+assert.equal(isReplayOnly({ accepted: false, replayed: 1 }), true,
+  'a resumed call whose only result was discarded as a replay ran nothing and must not return green')
+assert.equal(isReplayOnly({ accepted: false, replayed: 3 }), true,
+  'however many were discarded')
+
+// ── and the cases that must stay legal ──
+assert.equal(isReplayOnly({ accepted: true, replayed: 1 }), false,
+  'a replay followed by a real result is the ordinary resumed call')
+assert.equal(isReplayOnly({ accepted: true, replayed: 0 }), false,
+  'a fresh call that answered')
+assert.equal(isReplayOnly({ accepted: false, replayed: 0 }), false,
+  'a call that never replayed anything has a different problem, reported elsewhere - this check must not claim it')
 
 console.log('agent resume replay: ok')
