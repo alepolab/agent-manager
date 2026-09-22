@@ -500,6 +500,10 @@ rather than intent.
 
 | BR | By what |
 |---|---|
+| BR-05 | `checkGateSeparation` refuses the actor who approved the implementation from accepting its own verification, with a recorded backstop where nobody else could (`test-gate-separation.mjs`) |
+| BR-06 | Proposal plus path-derived floor plus a light read of the touched files; the floor only raises, and an unavailable read no longer passes as a clean one (`test-risk-read-failure.mjs`) |
+| BR-24 | A budget ceiling pauses and asks the owner to grant another allowance — it escalates, it does not kill (`workflowRunner.ts:1935`) |
+| BR-30 | Enforced for the control most likely to violate it: separation yields to a backstop rather than stranding a one-person instance |
 | BR-07 | `continueRun` refuses an unreasoned approval; now gate-kind aware (`test-gate-kinds.mjs`) |
 | BR-27, BR-28, BR-29 | Conditional edges: a refusal routes, routing is declared on the edge, one arm is taken and the other settled (`test-conditional-edges.mjs`) |
 | BR-37 | The executive gate tiers rather than floors, asserted so it cannot quietly become a checkpoint (`test-sdlc-template.mjs`) |
@@ -517,11 +521,12 @@ rather than intent.
 
 | BR | What is missing |
 |---|---|
-| BR-05 | Role ownership is enforced; **actor identity is not** — the same person may answer IMPL and VERIFY |
 | BR-06 | Mostly built, and better than this document first claimed: `classification.ts` takes an agent's proposal, derives a floor from the paths actually touched, adds a light model read of those files for the risk no path rule can see, and lets the floor only ever RAISE. The residual — an unavailable risk read reading as a clean one — is now closed. What remains is that a low class still rests on a proposal when the read succeeds and finds nothing, which is the honest limit of the evidence |
 | BR-11, BR-33, BR-34, BR-35, BR-36 | The review personas are written as definitions but **are not seeded**, so nothing runs them |
 | BR-15, BR-38 | The registry can now record per-class commands and report locations, and reports eligibility — but 16 products still read `CONFIRM` and 22 of 23 declare no report location |
 | BR-17 | A security gate exists in the template; **no scanner is wired behind it** |
+| BR-18 | The flag propagates — registry to `ProductMatch` to the artifact header's merge-order instruction — but nothing enforces **one decision** across the set |
+| BR-23 | Not currently live: it only bites if a run is held open across merge, and BR-22 already keeps runs terminal at PR-open. It becomes real if the release lifecycle lands |
 
 **Not built**
 
@@ -531,16 +536,21 @@ rather than intent.
 
 | BR-10, BR-12, BR-13, BR-14 | The acceptance-spec pipeline |
 | BR-16 | Visual baselines: no capture, no comparison |
-| BR-18 | Multi-repo as one unit; the registry flag still has zero readers |
 | BR-19 | Nothing yet prevents an invented fixture |
-| BR-23 | Waiting on a human and waiting on GitHub are still the same state |
-| BR-24 | Ceilings still end a run instead of escalating |
 | BR-26, BR-30 | Autonomy and the operator backstop as enforced properties |
 | BR-31, BR-32 | Environment as a property of a verdict |
 | BR-39, BR-40 | Rollback, post-deploy verification, production feedback |
 
-**Count: 8 satisfied with a runnable check, 4 more resting on controls that
-predate this work, 8 partial, 20 not built.**
+**Count: 12 satisfied with a runnable check, 4 more resting on controls that
+predate this work, 10 partial, 14 not built.**
+
+Four of those twelve moved because the code was read properly rather than
+because anything was built: BR-06 and BR-24 were already satisfied and this
+document said otherwise, and BR-18 and BR-23 were over-claimed as absent. Two
+mis-traces in one table is a pattern, not an accident — the first version was
+written from this document's own assumptions instead of from the controls it
+describes, which is the exact failure mode the pipeline exists to prevent,
+committed by the review of it.
 The requirements are complete as a specification. They are roughly a quarter
 implemented, and the largest single gap — BR-01 to BR-04 — is the substrate
 everything in the "not built" column sits on.
