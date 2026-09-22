@@ -320,6 +320,21 @@ body {
 :root { --danger-wash: color-mix(in srgb, var(--error) 6%, var(--surface-raised)); }
 .dark { --danger-wash: color-mix(in srgb, var(--error) 14%, var(--surface-raised)); }
 
+/* A control revealed by hover does not exist on a touch screen: no hover event
+   ever fires, so the reveal never happens and the control cannot be reached at
+   all. The keyboard path is the :focus / :focus-within variant on each site;
+   this is the pointer one, and the project's own standard says these pages
+   work at 375px.
+
+   Doubled class rather than !important: it beats Tailwind's `opacity-0` on
+   specificity without making the rule unoverridable. Applied only where the
+   reveal hides something you can operate — decorative overlays keep their
+   hover-only behaviour, because showing them permanently on a phone would be
+   a visual change rather than a fix. */
+@media (hover: none) {
+  .reveal-quiet.reveal-quiet { opacity: 1; }
+}
+
 /* A destructive control sitting beside a routine one: quiet at rest so it does
    not compete, unmistakable the moment a pointer or the keyboard reaches it.
    Same rule as above — the rare item pops because the routine one recedes. */

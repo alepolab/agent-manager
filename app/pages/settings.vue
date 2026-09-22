@@ -732,7 +732,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                   </span>
                 </div>
                 <button
-                  class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1.5 -m-0.5 rounded focus-ring"
+                  class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1.5 -m-0.5 rounded focus-ring reveal-quiet"
                   style="color: var(--error);"
                   :aria-label="`Delete the ${hookEventLabels[hook.event] || hook.event} hook that runs ${hookCommandText(cmd)}`"
                   @click="askRemoveHook(hook.event, idx, hookCommandText(cmd))"

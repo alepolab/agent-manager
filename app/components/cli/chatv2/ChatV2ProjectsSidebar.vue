@@ -551,7 +551,7 @@ function confirmDelete() {
               </span>
               
               <!-- Project Action icons -->
-              <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
+              <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0 reveal-quiet">
                 <button
                   class="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
                   title="Rename folder"

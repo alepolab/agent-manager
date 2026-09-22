@@ -614,7 +614,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <!-- Copy button - appears on hover -->
         <button
           v-if="message.content && !message.isStreaming"
-          class="absolute -top-1 right-0 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          class="absolute -top-1 right-0 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity reveal-quiet"
           style="background: var(--surface-raised);"
           title="Copy to clipboard"
           @click="copyContent"
