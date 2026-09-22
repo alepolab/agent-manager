@@ -2144,6 +2144,17 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
  * stream and this module's own tests do.
  */
 export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
+  const { rest } = await startRunStaged(opts)
+  return rest()
+}
+
+/** startRun, stopped at the moment the run record exists.
+ *
+ *  Only admit() wants this: it holds a process-global gate while it decides
+ *  whether a slot is free, and the record being on disk is what makes that
+ *  decision safe to hand over. The slow remainder must not be done under the
+ *  gate. Everyone else calls startRun and gets the whole thing. */
+async function startRunStaged(opts: StartRunOpts): Promise<{ run: WorkflowRun, rest: () => Promise<WorkflowRun> }> {
   const resolved = await resolveStart(opts)
   return beginRun(opts.workflow, resolved, baseCommit =>
     createRun({ ...newRunInput(opts, resolved), status: 'running', baseCommit }))
@@ -2224,7 +2235,7 @@ async function beginRun(
   workflow: WorkflowLike,
   resolved: ResolvedStart,
   make: (baseCommit?: string) => Promise<WorkflowRun>,
-): Promise<WorkflowRun> {
+): Promise<{ run: WorkflowRun, rest: () => Promise<WorkflowRun> }> {
   // Reserved synchronously, before the first await below, and held until the
   // run record exists.
   //
@@ -2272,6 +2283,36 @@ async function beginRun(
     // findRunInWorkspace can see it, so the reservation has done its job.
     starting.delete(workspace)
   }
+
+  // THE SPLIT, and it is the same instant the reservation above is released:
+  // the record is on disk as `running`, so inFlightForGroup counts it and the
+  // slot is genuinely taken. Everything below is slow - a git fetch, a
+  // worktree add, and preflight's several ten-second execFiles - and none of
+  // it is needed to make the slot countable. admit() runs this OUTSIDE its
+  // serialised section for that reason; held inside, one launch blocked every
+  // watch dispatch and every cron fire for its whole duration, and a 2am
+  // schedule could miss its window.
+  const rest = async () => {
+    try {
+      return await finishRun(workflow, run)
+    } catch (err) {
+      // The record is already on disk as `running`, owned by this process's
+      // pid and bootId, with no `live` entry and no wave loop - so
+      // applyInterrupted will not rescue it while this process lives. Left
+      // alone it holds its group's slot and its workspace until a restart.
+      // launchQueuedRun has always repaired this for the queued path; doing
+      // it here covers every path into this phase.
+      await failRun(run, err)
+      throw err
+    }
+  }
+  return { run, rest }
+}
+
+/** Everything after the run record exists: the checkout, preflight, and the
+ *  wave loop. Separated from beginRun only so the admission gate can be
+ *  released before it runs — see the split there. */
+async function finishRun(workflow: WorkflowLike, run: WorkflowRun): Promise<WorkflowRun> {
   await ensureRunCheckout(run)
   // Before the gate below, not after: a run that fails preflight is precisely
   // the one whose reason has to be readable afterwards, and the artifacts
@@ -2376,7 +2417,7 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   }))
 
   try {
-    await beginRun(toWorkflowLike(wf), {
+    const { rest } = await beginRun(toWorkflowLike(wf), {
       product: run.product, projectDir: run.projectDir, ticketKey: run.ticketKey, workspace,
     }, async (baseCommit) => {
       run.baseCommit = baseCommit
@@ -2393,6 +2434,13 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
       await saveRun(run)
       return run
     })
+    // Answered as soon as the record is `running`, which is the moment the
+    // slot is genuinely taken and so the moment the drain's own `free--` is
+    // honest. The remainder is the git fetch and preflight, and awaiting it
+    // here would hold the drain's serialised section open across every
+    // candidate in turn. Its failures are not dropped: `rest` fails the run
+    // through failRun before it rejects, which publishes and drains again.
+    void rest().catch(() => {})
     return 'launched'
   } catch (err) {
     if (err instanceof WorkspaceBusyError) return 'deferred'
@@ -2433,7 +2481,9 @@ export async function startOrQueue(opts: StartRunOpts): Promise<{ run: WorkflowR
         throw new WorkspaceBusyError(workspace)
       }
     },
-    start: () => startRun(opts),
+    // Staged, so admit can release its gate at the persist point: the run is
+    // countable from there, and the rest is minutes of git and preflight.
+    start: () => startRunStaged(opts),
     enqueue: () => enqueueRun(opts),
   })
 }

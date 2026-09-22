@@ -947,6 +947,38 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 }
 
+// ── 18d. a launch that throws AFTER the record is persisted fails the run ──
+// The record exists on disk as `running`, owned by this process's pid and
+// bootId, from the moment the slot is taken - which is well before the
+// checkout and preflight are done. A throw in that window used to leave it
+// there: no live entry, no wave loop, and applyInterrupted will not rescue a
+// run whose process is still alive. It held its group's slot and its
+// workspace until the server was restarted.
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const queue = await import('../server/utils/runQueue.ts')
+  const before = new Set((await store.listRuns('demo')).map(r => r.id))
+
+  runner.setPreflight(async () => { throw new Error('docker socket vanished') })
+  await assert.rejects(
+    runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true }),
+    /docker socket vanished/,
+    'the caller still sees the error: the repair must not swallow it')
+
+  const rec = (await store.listRuns('demo')).find(r => !before.has(r.id))
+  assert.ok(rec, 'the run record was persisted before the throw, which is the whole reason it needs repairing')
+  assert.equal(rec.status, 'failed',
+    'THE REGRESSION: a launch that threw after the persist point used to leave the record `running` for ever, holding its slot and its workspace')
+  assert.match(rec.error, /docker socket vanished/, 'and it says what went wrong, rather than "Unknown error"')
+  assert.ok(rec.endedAt, 'settled, so the run clock stops')
+  assert.equal(await queue.inFlightForGroup(queue.groupOf(rec)), 0,
+    'and the group has its slot back at once, not at the next sweep')
+  assert.ok(rec.steps.every(s => s.status === 'pending'),
+    'the steps stay pending: flipping them off pending is what un-gates the Jira comment, and this run did nothing to report')
+
+  runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
+}
+
 // ── 19. live output: every line an agent reports is kept, streamed and logged ──
 {
   for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
