@@ -102,10 +102,10 @@ const sourceLabel = computed(() => ({
     </PageHeader>
 
     <div class="px-6 py-4 space-y-4">
-      <div v-if="error" class="rounded-lg p-3 text-[13px]" style="color: var(--error); background: var(--surface-base);">{{ error }}</div>
+      <div v-if="error" class="rounded-lg p-3 t-ui" style="color: var(--error); background: var(--surface-base);">{{ error }}</div>
 
       <!-- A store that does not parse routes every ticket on the seed instead. -->
-      <div v-if="registry?.degraded" class="rounded-lg p-3 text-[13px]" style="color: var(--error); background: var(--surface-base);">
+      <div v-if="registry?.degraded" class="rounded-lg p-3 t-ui" style="color: var(--error); background: var(--surface-base);">
         The registry at <code>{{ registry.path }}</code> does not parse, so routing is running on the seed instead.
         Fix the file, or restore <code>{{ registry.path }}.bak</code>.
       </div>
@@ -114,33 +114,33 @@ const sourceLabel = computed(() => ({
       <div class="rounded-xl p-5 space-y-3 bg-card">
         <div>
           <h3 class="text-section-title">Where would a ticket go?</h3>
-          <p class="text-[12px] text-meta mt-1">
+          <p class="t-small text-meta mt-1">
             Paste a ticket key or summary. A project key is the strongest signal, then a label, then a component
             word; where two products claim the same text, the longer term wins, and where nothing separates them
             the one earlier in this list does.
           </p>
         </div>
         <input v-model="ticket" type="text" class="field-input" placeholder="AAA-56 EMS Admin page fails to load" aria-label="Ticket to route" />
-        <div v-if="routing" class="text-[12px] text-label">Resolving…</div>
-        <div v-else-if="preflight?.product" class="text-[13px]">
+        <div v-if="routing" class="t-small text-label">Resolving…</div>
+        <div v-else-if="preflight?.product" class="t-ui">
           <span style="color: var(--success);">Routes to <strong>{{ preflight.product.name }}</strong></span>
           <span class="text-label">{{ preflight.product.suite ? ` (${preflight.product.suite})` : '' }} — {{ preflight.product.repos.join(', ') || 'no repos listed' }}</span>
-          <div v-if="preflight.why" class="text-[12px] text-meta mt-1">{{ preflight.why.reason }}</div>
-          <div v-if="preflight.why?.tier === 'order'" class="text-[12px] mt-1" style="color: var(--warning);">
+          <div v-if="preflight.why" class="t-small text-meta mt-1">{{ preflight.why.reason }}</div>
+          <div v-if="preflight.why?.tier === 'order'" class="t-small mt-1" style="color: var(--warning);">
             This one was decided by file order alone. Reorder the products below to change it.
           </div>
         </div>
-        <div v-else-if="ticket.trim()" class="text-[13px]" style="color: var(--warning);">
+        <div v-else-if="ticket.trim()" class="t-ui" style="color: var(--warning);">
           Nothing in the registry claims this text, so a run would have no product — no repos, no branch policy, no stack.
-          <span v-if="preflight?.why" class="text-meta block text-[12px] mt-1">{{ preflight.why.reason }}</span>
+          <span v-if="preflight?.why" class="text-meta block t-small mt-1">{{ preflight.why.reason }}</span>
         </div>
       </div>
 
       <!-- Check results -->
       <div v-if="checkResult" class="rounded-xl p-5 space-y-2 bg-card">
         <h3 class="text-section-title">{{ checkResult.ok ? 'Valid' : 'Problems' }}</h3>
-        <p v-if="!checkResult.problems.length" class="text-[12px] text-meta">Nothing to report.</p>
-        <div v-for="(p, i) in checkResult.problems" :key="i" class="text-[12px] flex gap-2">
+        <p v-if="!checkResult.problems.length" class="t-small text-meta">Nothing to report.</p>
+        <div v-for="(p, i) in checkResult.problems" :key="i" class="t-small flex gap-2">
           <span :style="{ color: p.severity === 'error' ? 'var(--error)' : 'var(--warning)' }">{{ p.severity === 'error' ? '✗' : '!' }}</span>
           <span><code>{{ p.where }}</code> {{ p.message }}</span>
         </div>
@@ -149,7 +149,7 @@ const sourceLabel = computed(() => ({
       <!-- Drift against the plugin: reported, imported only on request -->
       <div v-if="drift?.newInSource.length" class="rounded-xl p-5 space-y-2 bg-card">
         <h3 class="text-section-title">The team ships products this instance does not have</h3>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           {{ drift.newInSource.join(', ') }}. A ticket for any of them resolves to nothing here until it is imported.
           Nothing is copied automatically — an automatic import is one step from an automatic overwrite, and a
           registry that rewrote itself at boot would hand back every routing change made on this page.
@@ -161,15 +161,15 @@ const sourceLabel = computed(() => ({
       <div class="rounded-xl p-5 space-y-3 bg-card">
         <div class="flex items-baseline justify-between gap-4">
           <h3 class="text-section-title">{{ registry?.products.length ?? 0 }} products</h3>
-          <span class="text-[11px] text-meta">
+          <span class="t-small text-meta">
             Read from {{ sourceLabel }}<template v-if="registry?.seed">, seeded once from <code>{{ registry.seed.seededFrom }}</code></template>
           </span>
         </div>
-        <p v-if="registry?.path" class="text-[11px] text-meta font-mono">{{ registry.path }}</p>
+        <p v-if="registry?.path" class="t-small text-meta font-mono">{{ registry.path }}</p>
 
         <div v-if="loading && !registry" class="space-y-2"><SkeletonRow v-for="i in 6" :key="i" /></div>
         <div v-else class="space-y-1">
-          <div class="flex items-center gap-3 text-[11px] font-mono uppercase tracking-wider text-meta px-2">
+          <div class="flex items-center gap-3 t-label font-mono uppercase tracking-wider text-meta px-2">
             <span style="flex: 0 0 2rem;">#</span>
             <span style="flex: 1 1 0%;">Product</span>
             <span style="flex: 2 1 0%;">Repos</span>
@@ -178,33 +178,33 @@ const sourceLabel = computed(() => ({
           <NuxtLink
             v-for="row in registry?.products ?? []" :key="row.key"
             :to="`/registry/${row.key}`"
-            class="flex items-center gap-3 px-2 py-2 rounded-lg hover-lift focus-ring text-[13px]"
+            class="flex items-center gap-3 px-2 py-2 rounded-lg hover-lift focus-ring t-ui"
             style="border: 1px solid var(--border-subtle);"
           >
-            <span class="text-meta font-mono text-[11px]" style="flex: 0 0 2rem;">{{ row.position + 1 }}</span>
+            <span class="text-meta font-mono t-small" style="flex: 0 0 2rem;">{{ row.position + 1 }}</span>
             <span style="flex: 1 1 0%; min-width: 0;" class="truncate">
               <strong>{{ row.key }}</strong>
-              <span v-if="row.product.suite" class="text-label text-[11px] ml-2">{{ row.product.suite }}</span>
+              <span v-if="row.product.suite" class="text-label t-small ml-2">{{ row.product.suite }}</span>
             </span>
-            <span style="flex: 2 1 0%; min-width: 0;" class="truncate text-label font-mono text-[11px]">{{ (row.product.repos ?? []).join(', ') }}</span>
+            <span style="flex: 2 1 0%; min-width: 0;" class="truncate text-label font-mono t-small">{{ (row.product.repos ?? []).join(', ') }}</span>
             <span class="flex items-center gap-1.5 justify-end" style="flex: 0 0 12rem;">
               <span
-                v-if="errorsOf(row.problems).length" class="text-[10px] px-1.5 py-0.5 rounded"
+                v-if="errorsOf(row.problems).length" class="t-small px-1.5 py-0.5 rounded"
                 :style="{ color: 'var(--error)', background: 'var(--surface-base)' }"
                 :title="errorsOf(row.problems).map(p => p.message).join('; ')"
               >{{ errorsOf(row.problems).length }} error{{ errorsOf(row.problems).length === 1 ? '' : 's' }}</span>
               <span
-                v-if="warningsOf(row.problems).length" class="text-[10px] px-1.5 py-0.5 rounded"
+                v-if="warningsOf(row.problems).length" class="t-small px-1.5 py-0.5 rounded"
                 :style="{ color: 'var(--warning)', background: 'var(--surface-base)' }"
                 :title="warningsOf(row.problems).map(p => p.message).join('; ')"
               >{{ warningsOf(row.problems).length }}</span>
               <span
-                v-if="unconfirmed(row.product)" class="text-[10px] px-1.5 py-0.5 rounded"
+                v-if="unconfirmed(row.product)" class="t-small px-1.5 py-0.5 rounded"
                 :style="{ color: 'var(--warning)', background: 'var(--surface-base)' }"
                 title="Carries a CONFIRM placeholder: a field somebody drafted and nobody has confirmed"
               >unconfirmed</span>
               <span
-                class="text-[10px] px-1.5 py-0.5 rounded"
+                class="t-small px-1.5 py-0.5 rounded"
                 :style="{ color: row.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }"
                 :title="row.recipeSource === 'local'
                   ? `recipes/${row.key}.md in the config directory, edited here — it hides the plugin's copy on this machine only`

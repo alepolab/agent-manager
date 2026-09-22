@@ -282,7 +282,7 @@ function relativeTime(ms: number): string {
   <div>
     <PageHeader title="Watches">
       <template #trailing>
-        <span class="text-[12px] text-meta">{{ watches.length }}</span>
+        <span class="t-small text-meta">{{ watches.length }}</span>
       </template>
       <template #right>
         <UButton
@@ -301,7 +301,7 @@ function relativeTime(ms: number): string {
     </PageHeader>
 
     <div class="px-6 py-4">
-      <p class="text-[13px] mb-4 leading-relaxed text-label">
+      <p class="t-ui mb-4 leading-relaxed text-label">
         Polls a ticket source and starts a workflow run per new ticket. Three failed
         attempts and a ticket is escalated and permanently skipped — it never blocks the rest of the queue.
       </p>
@@ -313,7 +313,7 @@ function relativeTime(ms: number): string {
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ error }}</span>
+        <span class="t-small" style="color: var(--error);">{{ error }}</span>
       </div>
 
       <!-- Loading -->
@@ -324,7 +324,7 @@ function relativeTime(ms: number): string {
       <!-- Empty state -->
       <div v-else-if="!watches.length" class="flex flex-col items-center justify-center py-16 space-y-3">
         <UIcon name="i-lucide-eye" class="size-8 text-meta" />
-        <p class="text-[13px] text-label">No watches configured yet.</p>
+        <p class="t-ui text-label">No watches configured yet.</p>
         <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="openCreate" />
       </div>
 
@@ -344,17 +344,17 @@ function relativeTime(ms: number): string {
               />
               <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
-                  <span class="text-[13px] font-medium">{{ watch.name }}</span>
-                  <span class="text-[11px] font-mono text-meta">{{ workflowName(watch.workflowSlug) }}</span>
+                  <span class="t-ui font-medium">{{ watch.name }}</span>
+                  <span class="t-small font-mono text-meta">{{ workflowName(watch.workflowSlug) }}</span>
                   <span
                     v-if="escalatedCount(watch.id) > 0"
-                    class="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                    class="t-small font-mono px-1.5 py-0.5 rounded"
                     style="background: rgba(239, 68, 68, 0.1); color: var(--error);"
                   >
                     {{ escalatedCount(watch.id) }} escalated
                   </span>
                 </div>
-                <div class="flex items-center gap-3 mt-1 text-[11px] text-meta font-mono">
+                <div class="flex items-center gap-3 mt-1 t-small text-meta font-mono">
                   <span>every {{ watch.intervalSeconds }}s</span>
                   <span v-for="d in DISPOSITION_ORDER" :key="d" :style="{ color: countsFor(watch.id)[d] ? DISPOSITION_COLOR[d] : 'var(--text-disabled)' }">
                     {{ countsFor(watch.id)[d] }} {{ d }}
@@ -404,26 +404,26 @@ function relativeTime(ms: number): string {
 
           <!-- Expanded: tickets grouped by disposition, escalated first -->
           <div v-if="expanded[watch.id]" class="border-t border-subtle px-4 py-3 space-y-3" style="border-color: var(--border-subtle);">
-            <div v-if="!ticketsFor(watch.id).length" class="text-[12px] text-label">
+            <div v-if="!ticketsFor(watch.id).length" class="t-small text-label">
               No tickets seen yet for this watch.
             </div>
             <div v-for="group in groupedTickets(watch.id)" :key="group.disposition" class="space-y-1.5">
-              <p class="text-[10px] font-mono uppercase tracking-wide" :style="{ color: DISPOSITION_COLOR[group.disposition] }">
+              <p class="t-small font-mono uppercase tracking-wide" :style="{ color: DISPOSITION_COLOR[group.disposition] }">
                 {{ group.disposition }} ({{ group.tickets.length }})
               </p>
               <div
                 v-for="ticket in group.tickets"
                 :key="ticket.key"
-                class="rounded-md px-3 py-2 text-[12px]"
+                class="rounded-md px-3 py-2 t-small"
                 :style="group.disposition === 'escalated'
                   ? 'background: rgba(239, 68, 68, 0.06); border: 1px solid rgba(239, 68, 68, 0.18);'
                   : 'background: var(--surface-base); border: 1px solid var(--border-subtle);'"
               >
                 <div class="flex items-center gap-2 flex-wrap">
                   <span class="font-mono font-medium">{{ ticket.key }}</span>
-                  <span class="text-[10px] text-meta">attempts {{ ticket.attempts }}</span>
-                  <span v-if="ticket.lastRunId" class="text-[10px] font-mono text-meta">run {{ ticket.lastRunId }}</span>
-                  <span class="text-[10px] text-meta ml-auto">{{ relativeTime(ticket.updatedAt) }}</span>
+                  <span class="t-small text-meta">attempts {{ ticket.attempts }}</span>
+                  <span v-if="ticket.lastRunId" class="t-small font-mono text-meta">run {{ ticket.lastRunId }}</span>
+                  <span class="t-small text-meta ml-auto">{{ relativeTime(ticket.updatedAt) }}</span>
                   <UButton
                     v-if="ticket.disposition === 'escalated'"
                     label="Clear escalation"
@@ -433,7 +433,7 @@ function relativeTime(ms: number): string {
                     @click="onClearEscalation(watch, ticket.key)"
                   />
                 </div>
-                <p v-if="ticket.lastError" class="mt-1 text-[11px]" style="color: var(--error);">
+                <p v-if="ticket.lastError" class="mt-1 t-small" style="color: var(--error);">
                   {{ ticket.lastError }}
                 </p>
               </div>
@@ -448,14 +448,14 @@ function relativeTime(ms: number): string {
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">{{ isEditing ? `Edit ${editing?.name || 'watch'}` : 'New Watch' }}</h3>
-          <p v-if="!isEditing" class="text-[12px] text-label">
+          <p v-if="!isEditing" class="t-small text-label">
             New watches always start disabled — enable it explicitly once you've watched it behave against a real cycle.
           </p>
-          <p v-else-if="!editing?.createdBy" class="text-[12px] text-label">
+          <p v-else-if="!editing?.createdBy" class="t-small text-label">
             This watch has no owner, so the scheduler refuses to dispatch from it — its runs would carry no
             credentials and would halt at the first clone. Saving here makes you its owner.
           </p>
-          <p v-else class="text-[12px] text-label">
+          <p v-else class="t-small text-label">
             Runs as <span class="font-medium">@{{ editing?.createdBy }}</span>. Enabling and disabling stays on the card;
             this form does not change it.
           </p>
@@ -485,14 +485,14 @@ function relativeTime(ms: number): string {
             <div class="field-group">
               <label class="field-label">
                 Query
-                <span class="text-[10px] font-normal ml-1" style="color: var(--text-disabled);">optional, source-specific</span>
+                <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">optional, source-specific</span>
               </label>
               <input v-model="form.query" placeholder="e.g. a JQL filter" class="field-input w-full">
             </div>
             <div class="field-group">
               <label class="field-label">
                 Project folder
-                <span class="text-[10px] font-normal ml-1" style="color: var(--text-disabled);">optional</span>
+                <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">optional</span>
               </label>
               <input v-model="form.projectDir" placeholder="/Users/you/projects/my-app" class="field-input w-full">
             </div>

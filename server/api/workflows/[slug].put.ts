@@ -1,9 +1,11 @@
+import { requireCapability } from '../../utils/session'
 import { readFile, writeFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveClaudeFile } from '../../utils/claudeDir'
 import type { Workflow } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const slug = getRouterParam(event, 'slug')!
   const filePath = resolveClaudeFile('workflows', slug)
 

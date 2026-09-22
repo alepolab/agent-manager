@@ -1,3 +1,4 @@
+import { requireCapability } from '../../../utils/session'
 import { getChannel } from '../../../utils/channels.ts'
 import { sendToChannel, baseUrl } from '../../../utils/notify.ts'
 import { currentUser } from '../../../utils/session.ts'
@@ -12,6 +13,8 @@ import { currentUser } from '../../../utils/session.ts'
  * the server. Post to what is stored; never to what is posted.
  */
 export default defineEventHandler(async (event) => {
+  // Sending a test message is an outward effect from instance config.
+  await requireCapability(event, 'configure')
   const name = decodeURIComponent(getRouterParam(event, 'name')!)
   const channel = await getChannel(name)
   if (!channel) throw createError({ statusCode: 404, message: `No channel named "${name}"` })

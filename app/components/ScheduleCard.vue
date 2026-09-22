@@ -61,22 +61,22 @@ const directory = computed(() =>
   >
     <div class="flex-1 min-w-0 space-y-1">
       <div class="flex items-center gap-2 flex-wrap">
-        <span class="text-[13px] font-medium">{{ schedule.name }}</span>
-        <span v-if="workflowName" class="text-[11px] font-mono text-meta">{{ workflowName }}</span>
+        <span class="t-ui font-medium">{{ schedule.name }}</span>
+        <span v-if="workflowName" class="t-small font-mono text-meta">{{ workflowName }}</span>
         <span
           v-if="workflowMissing"
-          class="text-[10px] font-mono px-1.5 py-0.5 rounded"
+          class="t-small font-mono px-1.5 py-0.5 rounded"
           style="background: rgba(245, 158, 11, 0.1); color: var(--warning);"
           title="The workflow this points at is not on this instance any more. Every fire will fail until it comes back or this schedule is deleted."
         >workflow missing</span>
         <span
           v-if="schedule.enabled && !schedule.nextFireAt"
-          class="text-[10px] font-mono px-1.5 py-0.5 rounded"
+          class="t-small font-mono px-1.5 py-0.5 rounded"
           style="background: rgba(239, 68, 68, 0.1); color: var(--error);"
         >expression unusable</span>
       </div>
 
-      <div class="flex items-center gap-3 text-[11px] text-meta font-mono flex-wrap">
+      <div class="flex items-center gap-3 t-small text-meta font-mono flex-wrap">
         <span>{{ schedule.cron }}{{ schedule.timezone ? ` (${schedule.timezone})` : '' }}</span>
         <span v-if="schedule.enabled">next {{ when(schedule.nextFireAt) }}</span>
         <span v-else style="color: var(--text-disabled);">disabled</span>
@@ -85,14 +85,14 @@ const directory = computed(() =>
 
       <div
         v-if="Object.keys(schedule.parameters ?? {}).length"
-        class="flex flex-wrap gap-x-3 text-[11px] font-mono text-label"
+        class="flex flex-wrap gap-x-3 t-small font-mono text-label"
       >
         <span v-for="(value, name) in schedule.parameters" :key="name">
           <span style="color: var(--text-tertiary);">{{ name }}:</span> {{ value }}
         </span>
       </div>
 
-      <div v-if="schedule.state?.lastOutcome" class="text-[11px] font-mono">
+      <div v-if="schedule.state?.lastOutcome" class="t-small font-mono">
         <span :style="{ color: OUTCOME_COLOR[schedule.state.lastOutcome] }">
           {{ schedule.state.lastOutcome }}
         </span>

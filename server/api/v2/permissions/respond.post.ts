@@ -1,6 +1,10 @@
 import { providerRegistry } from '../../../utils/providers/registry'
+import { requireCapability } from '../../../utils/session'
 
 export default defineEventHandler(async (event) => {
+  // `configure`: this route mutates the instance, and carried no authorisation check —
+  // the auth middleware proves WHO the caller is, never WHAT they may do.
+  await requireCapability(event, 'configure')
   const body = await readBody(event)
 
   const { permissionId, decision, remember, updatedInput, provider: providerName = 'claude' } = body

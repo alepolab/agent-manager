@@ -70,15 +70,15 @@ async function handleFile(file: File) {
 
     <div v-if="importing" class="flex flex-col items-center gap-2">
       <UIcon name="i-lucide-loader-2" class="size-6 animate-spin" style="color: var(--accent);" />
-      <span class="text-[12px] text-label">Importing...</span>
+      <span class="t-small text-label">Importing...</span>
     </div>
 
     <div v-else class="flex flex-col items-center gap-2">
       <UIcon name="i-lucide-upload" class="size-6" style="color: var(--text-disabled);" />
-      <p class="text-[13px] text-label">
-        Drop a <code class="font-mono text-[11px] px-1 py-px rounded" style="background: var(--badge-subtle-bg);">{{ type === 'mcp' ? '.json' : '.md' }}</code> file here or click to browse
+      <p class="t-ui text-label">
+        Drop a <code class="font-mono t-small px-1 py-px rounded" style="background: var(--badge-subtle-bg);">{{ type === 'mcp' ? '.json' : '.md' }}</code> file here or click to browse
       </p>
-      <p class="text-[11px] text-meta">
+      <p class="t-small text-meta">
         Import {{ type === 'mcp' ? 'MCP configuration' : (type === 'agents' ? 'an agent' : 'a skill') }} exported from another setup
       </p>
     </div>

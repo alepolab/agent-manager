@@ -80,7 +80,7 @@ function handleSubmit() {
         <div class="flex gap-4">
           <label class="flex items-center gap-2 cursor-pointer">
             <input type="radio" v-model="form.scope" value="global" class="accent-accent" />
-            <span class="text-[13px] text-secondary">Global (~/.claude/output-styles)</span>
+            <span class="t-ui text-secondary">Global (~/.claude/output-styles)</span>
           </label>
           <label
             class="flex items-center gap-2 cursor-pointer"
@@ -88,16 +88,16 @@ function handleSubmit() {
             :title="!workingDir ? 'Set a working directory in the sidebar to use project scope' : ''"
           >
             <input type="radio" v-model="form.scope" value="project" :disabled="!workingDir" class="accent-accent" />
-            <span class="text-[13px] text-secondary">Project (.claude/output-styles)</span>
+            <span class="t-ui text-secondary">Project (.claude/output-styles)</span>
           </label>
         </div>
-        <p v-if="!workingDir" class="text-[10px] text-meta italic">Project scope is disabled because no working directory is set.</p>
+        <p v-if="!workingDir" class="t-small text-meta italic">Project scope is disabled because no working directory is set.</p>
       </div>
 
       <div class="flex items-center justify-between p-3 rounded-xl border border-subtle bg-surface-base">
         <div class="space-y-0.5">
-          <div class="text-[13px] font-medium">Keep Coding Instructions</div>
-          <div class="text-[11px] text-secondary">Whether Claude's default software engineering rules should remain active.</div>
+          <div class="t-ui font-medium">Keep Coding Instructions</div>
+          <div class="t-small text-secondary">Whether Claude's default software engineering rules should remain active.</div>
         </div>
         <label class="field-toggle">
           <input type="checkbox" v-model="form.keepCodingInstructions" />
@@ -113,7 +113,7 @@ function handleSubmit() {
           v-model="form.content"
           rows="10"
           placeholder="Enter the behavioral instructions for this style..."
-          class="field-input font-mono text-[12px] resize-none"
+          class="field-input font-mono t-small resize-none"
         ></textarea>
         <p class="field-hint">These instructions will be appended to the system prompt.</p>
       </div>

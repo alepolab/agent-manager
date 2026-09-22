@@ -1,3 +1,4 @@
+import type { Role } from '~~/shared/types/role'
 import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
 
 export type { WorkflowParameter }
@@ -128,7 +129,15 @@ export interface Skill {
   githubRepo?: string
   pluginName?: string
   mcpServer?: { name: string; scope: string }
+  /** Agents that DECLARE this skill: its full body is inlined into their prompt. */
   agents?: { name: string; slug: string }[]
+  /**
+   * Agents that read this skill from disk at run time without declaring it —
+   * the language catalogue ($SDLC_SKILLS_DIR) and the compound-engineering
+   * steps ($CE_SKILLS_DIR). Separate from `agents` because declaring these
+   * instead would add ~80,000 tokens to every agent's prompt on every step.
+   */
+  readBy?: { name: string; slug: string }[]
 }
 
 export interface AgentSkill {
@@ -252,6 +261,18 @@ export interface WorkflowStep {
   maxVisits?: number
   /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
   approval?: boolean
+  /**
+   * Whose decision this gate is. Copied onto `run.question.role` when the gate
+   * fires, and enforced by the gate routes.
+   *
+   * Without it, any holder of `answerGate` could answer any gate: a developer
+   * could accept QA's verification, and QA could approve a plan. The runbooks
+   * already asserted the mapping in their own comments ("Gate 3 of 4:
+   * verification. QA answers this one") — this makes the workflow say it in data
+   * rather than in prose nothing reads. An operator may always answer, as the
+   * backstop for a role nobody on this instance holds.
+   */
+  gateRole?: Role
   /** Canvas position, persisted so branches and loops keep their layout. */
   position?: { x: number, y: number }
   /**
@@ -363,6 +384,30 @@ export interface WorkflowStep {
     channel: string
     message?: string
   }
+  /**
+   * This step continues its predecessor's Claude Code session instead of
+   * starting a fresh one.
+   *
+   * The default is a cold start per step: a new session, a new context, and the
+   * repository re-read from nothing. Measured across the four recorded runs,
+   * the three steps that share one piece of work — write the failing test, fix
+   * it, verify it — were 55-75% of every run's cost, each rebuilding what the
+   * one before it had just learned.
+   *
+   * Set it only where the next phase needs everything the last one learned AND
+   * independence does not matter. It is wrong wherever a fresh pair of eyes is
+   * the point: a reviewer continuing the implementer's session reviews its own
+   * work from inside its own assumptions, and QA that watched the fix being
+   * written is no longer testing it.
+   *
+   * The step keeps its own agent: system prompt, tools, model and hooks are
+   * sent on every call, resumed or not. What carries is the conversation.
+   *
+   * Ignored — with a cold start, which is always correct and only more
+   * expensive — when the step has no single predecessor, or that predecessor's
+   * transcript is not on disk.
+   */
+  continuesSession?: boolean
 }
 
 export interface Workflow {
@@ -503,18 +548,6 @@ export interface ConversationSummary {
 
 // ── CLI Terminal ──────────────────────────────────
 
-export interface CliSession {
-  id: string
-  agentSlug?: string
-  workingDir: string
-  shell: string
-  status: 'active' | 'idle' | 'terminated'
-  createdAt: string
-  lastActivity: string
-  tokenUsage?: TokenUsage
-  cost?: number
-}
-
 export interface TokenUsage {
   input: number
   output: number
@@ -577,16 +610,6 @@ export type CliWebSocketMessage =
   | { type: 'input'; sessionId: string; data: string }
   | { type: 'resize'; sessionId: string; cols: number; rows: number }
   | { type: 'kill'; sessionId: string }
-
-export type CliWebSocketEvent =
-  | { type: 'session'; sessionId: string }
-  | { type: 'output'; data: string }
-  | { type: 'context_update'; metrics: ContextMetrics }
-  | { type: 'token_update'; tokens: Partial<TokenUsage> }
-  | { type: 'file_change'; change: FileChange }
-  | { type: 'tool_call'; tool: ToolCall }
-  | { type: 'error'; error: string }
-  | { type: 'exit'; exitCode: number }
 
 // ── Claude Code Chat ──────────────────────────────────
 

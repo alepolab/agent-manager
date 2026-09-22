@@ -1,6 +1,8 @@
 import type { H3Event } from 'h3'
 import { getRequestHeader, useSession } from 'h3'
 import { timingSafeEqual } from 'node:crypto'
+import { roleFor, effectiveRole } from './roles.ts'
+import { can, rolesWith, type Capabilities, type Role } from '../../shared/types/role.ts'
 
 /**
  * The signed-in developer, held in an h3 sealed cookie. AUTH_DISABLED=1 (local
@@ -23,7 +25,7 @@ function password(): string {
 }
 
 export async function authSession(event: H3Event) {
-  return useSession<{ user?: SessionUser }>(event, {
+  return useSession<{ user?: SessionUser, viewAs?: Role }>(event, {
     password: password(),
     name: 'am',
     maxAge: 60 * 60 * 24 * 14,
@@ -65,6 +67,37 @@ export async function requireUser(event: H3Event): Promise<SessionUser> {
   const user = await currentUser(event)
   if (!user) throw createError({ statusCode: 401, message: 'Sign in required' })
   return user
+}
+
+/**
+ * The role this request acts with, and the gate every route that changes
+ * something calls.
+ *
+ * Enforced here rather than in the UI alone: hiding a button is a courtesy to
+ * the person, not a control on the request. A developer's browser shows no
+ * Stop, and a developer's `POST /api/runs/:id/stop` must still be refused.
+ */
+export async function currentRole(event: H3Event): Promise<Role> {
+  const user = await currentUser(event)
+  const real = await roleFor(user?.login)
+  const viewAs = await authSession(event).then(s => s.data.viewAs, () => undefined)
+  return effectiveRole(real, viewAs)
+}
+
+/** 403 unless this request's role carries `capability`. Returns the role. */
+export async function requireCapability(event: H3Event, capability: keyof Capabilities): Promise<Role> {
+  const role = await currentRole(event)
+  if (!can(role, capability)) {
+    throw createError({
+      statusCode: 403,
+      // Names both sides: the role you are, and who actually holds this — a
+      // manager told "an operator can" would chase the wrong colleague when
+      // the answer is that a developer decides at a gate. "Forbidden" alone,
+      // against a button you were shown, is indistinguishable from a bug.
+      message: `Your role (${role}) cannot do this. Ask ${rolesWith(capability).join(' or ')}.`,
+    })
+  }
+  return role
 }
 
 /** Paths that must work without a session: health, the auth dance itself. */

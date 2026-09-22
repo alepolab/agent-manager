@@ -1,5 +1,5 @@
 import { deleteProduct, StaleStoreError } from '../../../utils/productStore'
-import { requireUser } from '../../../utils/session'
+import { requireUser, requireCapability } from '../../../utils/session'
 import { createLogger } from '../../../utils/log'
 
 const log = createLogger('registry')
@@ -7,6 +7,7 @@ const log = createLogger('registry')
 /** Remove a product. Every ticket that resolved through it stops resolving, so
  *  the page asks for the key to be typed before it calls this. */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const user = await requireUser(event)
   const key = getRouterParam(event, 'key')!
   const mtimeMs = Number(getQuery(event).mtimeMs) || undefined

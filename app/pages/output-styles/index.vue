@@ -40,7 +40,7 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
   <div class="flex flex-col">
     <PageHeader title="Output Styles">
       <template #trailing>
-        <span class="font-mono text-[12px] text-meta mr-4">{{ styles.length }}</span>
+        <span class="font-mono t-small text-meta mr-4">{{ styles.length }}</span>
       </template>
       <template #right>
         <UButton label="New Output Style" icon="i-lucide-plus" size="sm" @click="onNewStyle" />
@@ -48,13 +48,13 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
     </PageHeader>
 
     <div class="px-6 py-4 flex-1">
-      <p class="text-[13px] mb-6 leading-relaxed text-label max-w-2xl">
+      <p class="t-ui mb-6 leading-relaxed text-label max-w-2xl">
         Output styles allow you to adapt Claude Code for different roles while maintaining its core capabilities. They modify the system prompt and define the fundamental behavior, tone, and formatting.
       </p>
 
       <div v-if="error" class="rounded-xl px-4 py-3 mb-6 flex items-start gap-3 border-error bg-error-subtle">
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5 text-error" />
-        <span class="text-[12px] text-error">{{ error }}</span>
+        <span class="t-small text-error">{{ error }}</span>
       </div>
 
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -62,7 +62,7 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
       </div>
       <div v-else-if="styles.length === 0" class="flex flex-col items-center justify-center py-12 border border-dashed rounded-xl border-subtle">
         <UIcon name="i-lucide-palette" class="size-8 text-meta mb-3" />
-        <p class="text-[13px] text-secondary">No custom output styles configured.</p>
+        <p class="t-ui text-secondary">No custom output styles configured.</p>
         <UButton label="Create your first style" variant="link" color="primary" @click="onNewStyle" class="mt-2" />
       </div>
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -74,22 +74,22 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 mb-1">
-                <h3 class="text-[14px] font-semibold text-primary font-display truncate">{{ style.name }}</h3>
+                <h3 class="t-body font-semibold text-primary font-display truncate">{{ style.name }}</h3>
                 <span
                   v-if="!style.path"
-                  class="text-[10px] px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-accent/10 text-accent border border-accent/20"
+                  class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-accent/10 text-accent border border-accent/20"
                 >
                   Built-in
                 </span>
                 <span
                   v-else
-                  class="text-[10px] px-1.5 py-0.5 rounded font-medium tracking-wide uppercase"
+                  class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase"
                   :class="style.scope === 'global' ? 'bg-accent-subtle text-accent border border-accent-subtle' : 'bg-surface-raised text-secondary border border-subtle'"
                 >
                   {{ style.scope }}
                 </span>
               </div>
-              <p class="text-[12px] text-secondary line-clamp-2 min-h-[32px]">
+              <p class="t-small text-secondary line-clamp-2 min-h-[32px]">
                 {{ style.description || 'No description provided.' }}
               </p>
             </div>
@@ -115,9 +115,9 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
           <div class="mt-auto pt-3 border-t border-subtle flex items-center justify-between">
             <div class="flex items-center gap-2">
               <UIcon :name="!style.path ? 'i-lucide-shield' : 'i-lucide-file-text'" class="size-3 text-meta" />
-              <span class="text-[11px] text-meta font-mono">{{ !style.path ? 'System' : style.id + '.md' }}</span>
+              <span class="t-small text-meta font-mono">{{ !style.path ? 'System' : style.id + '.md' }}</span>
             </div>
-            <div v-if="style.keepCodingInstructions" class="flex items-center gap-1 text-[10px] text-accent font-medium uppercase tracking-wider">
+            <div v-if="style.keepCodingInstructions" class="flex items-center gap-1 t-small text-accent font-medium uppercase tracking-wider">
               <UIcon name="i-lucide-shield-check" class="size-3" />
               <span>Coding rules active</span>
             </div>

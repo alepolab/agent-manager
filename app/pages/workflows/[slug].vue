@@ -17,7 +17,23 @@ const toast = useToast()
 const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
-const { run, runs, logs, attach, refresh: refreshRun, start, continueRun, stop, restart, respond, sendNote } = useWorkflowRun(slug)
+// This page had no role awareness at all. It is reachable by URL, and Clone on
+// the runs page used to land every role here - so a manager, whose role is
+// "Reads progress across runs. Changes nothing", was shown Save and Delete
+// workflow. The routes behind them already refuse it; the page did not.
+const { can } = useUser()
+/**
+ * Hiding a button is a courtesy to the person; it is not a control on the edit.
+ *
+ * Every mutation on this canvas funnels through the five handlers below, and
+ * three of them need no button at all: clicking an edge deletes it, dragging a
+ * node moves it, dropping an agent adds a step. Guarding the markup alone would
+ * leave all three reachable. The server refuses the Save that would persist any
+ * of it, so the damage was never permanent - but a canvas that silently discards
+ * your edits on reload is a worse answer than one that does not accept them.
+ */
+const readOnly = computed(() => !can('configure'))
+const { run, runs, logs, attach, refresh: refreshRun, start, continueRun, stop, restart, respond, sendNote, reject, rework } = useWorkflowRun(slug)
 // The PAGE fetches, not the panel: the tab's own label carries the count, so it
 // is needed before the panel mounts.
 const { fetchAll: fetchSchedules, forWorkflow } = useSchedules()
@@ -366,7 +382,7 @@ function materializeEdges() {
 }
 
 function onConnect({ source, target }: { source: string, target: string }) {
-  if (isRunning.value || !source || !target || source.startsWith('monitor:') || target.startsWith('monitor:')) return
+  if (readOnly.value || isRunning.value || !source || !target || source.startsWith('monitor:') || target.startsWith('monitor:')) return
   materializeEdges()
   workflowSteps.value = workflowSteps.value.map((s) => {
     if (s.id !== source) return s
@@ -379,7 +395,7 @@ function onEdgeClick({ edge }: { edge: { id: string, source: string, target: str
   // 'r-' is a send-back edge: derived, not stored in `next`, so deleting it
   // would filter a target that was never there and leave the user thinking they
   // had removed something.
-  if (isRunning.value || edge.id.startsWith('m-') || edge.id.startsWith('r-')) return
+  if (readOnly.value || isRunning.value || edge.id.startsWith('m-') || edge.id.startsWith('r-')) return
   materializeEdges()
   workflowSteps.value = workflowSteps.value.map(s =>
     s.id === edge.source ? { ...s, next: (s.next ?? []).filter(id => id !== edge.target) } : s,
@@ -387,7 +403,7 @@ function onEdgeClick({ edge }: { edge: { id: string, source: string, target: str
 }
 
 function onNodeDragStop({ node }: { node: { id: string, position: { x: number, y: number } } }) {
-  if (node.id.startsWith('monitor:')) return
+  if (readOnly.value || node.id.startsWith('monitor:')) return
   workflowSteps.value = workflowSteps.value.map(s =>
     s.id === node.id ? { ...s, position: { x: Math.round(node.position.x), y: Math.round(node.position.y) } } : s,
   )
@@ -395,7 +411,7 @@ function onNodeDragStop({ node }: { node: { id: string, position: { x: number, y
 
 function addStep(agentSlug: string, position?: { x: number, y: number }) {
   const agent = agentBySlug(agentSlug)
-  if (!agent || isRunning.value) return
+  if (!agent || readOnly.value || isRunning.value) return
   // Once edges are explicit, a new node starts unconnected rather than silently
   // inheriting the array-order fallback.
   const explicit = workflowSteps.value.some(s => s.next !== undefined)
@@ -418,7 +434,7 @@ function onDrop(event: DragEvent) {
 function onDragOver(event: DragEvent) { event.preventDefault() }
 
 function removeStep(stepId: string) {
-  if (isRunning.value) return
+  if (readOnly.value || isRunning.value) return
   workflowSteps.value = workflowSteps.value
     .filter(s => s.id !== stepId)
     .map(s => (s.next ? { ...s, next: s.next.filter(id => id !== stepId) } : s))
@@ -758,13 +774,13 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <input
           v-if="editingName"
           v-model="name"
-          class="field-input text-[14px] font-medium w-full max-w-xs"
+          class="field-input t-body font-medium w-full max-w-xs"
           @blur="editingName = false"
           @keydown.enter="editingName = false"
         />
         <button
           v-else
-          class="text-[14px] font-medium truncate text-left"
+          class="t-body font-medium truncate text-left"
           style="color: var(--text-primary);"
           @click="editingName = true"
         >
@@ -772,8 +788,11 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         </button>
       </div>
 
-      <!-- Mobile: Add Agent button -->
+      <!-- Mobile: Add Agent button. `configure` like Save, because a step added
+           by someone who cannot save is a step that quietly disappears on
+           reload — a worse outcome than not offering it. -->
       <UButton
+        v-if="can('configure')"
         class="md:hidden"
         label="Add Agent"
         icon="i-lucide-plus"
@@ -782,8 +801,12 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         @click="() => { showMobileAgentPicker = true }"
       />
 
+      <!-- Each of these maps to a route that already refuses the wrong role:
+           Stop needs `runEngine`, Run needs `startRun`, Save and Delete need
+           `configure`. They rendered for everyone regardless, so the only way to
+           learn you could not use one was to press it and read the 403. -->
       <UButton
-        v-if="isRunning || isPaused || isReviewing || isQueued"
+        v-if="(isRunning || isPaused || isReviewing || isQueued) && can('runEngine')"
         label="Stop"
         icon="i-lucide-square"
         size="sm"
@@ -792,7 +815,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         @click="stop"
       />
       <UButton
-        v-else
+        v-else-if="!isRunning && !isPaused && can('startRun')"
         label="Run"
         icon="i-lucide-play"
         size="sm"
@@ -800,6 +823,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         @click="() => { showRunModal = true }"
       />
       <UButton
+        v-if="can('configure')"
         :label="workflowParameters.length ? `Inputs (${workflowParameters.length})` : 'Inputs'"
         icon="i-lucide-sliders-horizontal"
         size="sm"
@@ -811,29 +835,37 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
            because both are things you state about the workflow rather than
            about one run, and both are saved by the same Save. -->
       <select
+        v-if="can('configure')"
         v-model="group"
-        class="field-input text-[12px] max-w-[11rem]"
+        class="field-input t-small max-w-[11rem]"
         aria-label="Concurrency group"
         :title="groupHint"
       >
         <option value="">Ungrouped (default)</option>
         <option v-for="g in groups.filter(x => !x.implicit)" :key="g.id" :value="g.id">
-          {{ g.name }} — {{ g.maxConcurrent }} at once
+          {{ g.name }} - {{ g.maxConcurrent }} at once
         </option>
       </select>
       <!-- Where this workflow's runs announce themselves. Beside the group for
            the same reason: both are stated about the workflow, not about a run. -->
       <select
+        v-if="can('configure')"
         v-model="notifyChannel"
-        class="field-input text-[12px] max-w-[11rem]"
+        class="field-input t-small max-w-[11rem]"
         aria-label="Notification channel"
         title="Where this workflow's runs announce that they paused, finished or failed"
       >
         <option value="">Default channel</option>
         <option v-for="c in channels" :key="c.name" :value="c.name">Announce to {{ c.name }}</option>
       </select>
-      <UButton label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
-      <UButton icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
+      <UButton v-if="can('configure')" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
+      <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
+      <!-- Said out loud rather than left as an absence: a page with its controls
+           quietly removed is indistinguishable from a broken one, and the
+           pipeline definition is worth reading before answering a gate on it. -->
+      <span v-if="!can('configure')" class="t-small text-label whitespace-nowrap">
+        Read-only - changing a workflow is an operator's job.
+      </span>
     </div>
 
     <!-- Description -->
@@ -841,14 +873,14 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <input
         v-if="editingDescription"
         v-model="description"
-        class="field-input text-[12px] w-full max-w-lg"
+        class="field-input t-small w-full max-w-lg"
         placeholder="Workflow description..."
         @blur="editingDescription = false"
         @keydown.enter="editingDescription = false"
       />
       <button
         v-else
-        class="text-[12px] text-left flex-1 truncate"
+        class="t-small text-left flex-1 truncate"
         style="color: var(--text-tertiary);"
         @click="editingDescription = true"
       >
@@ -856,7 +888,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       </button>
       <span
         v-if="parallelHint"
-        class="text-[10px] shrink-0"
+        class="t-small shrink-0"
         style="color: var(--text-disabled);"
         title="Parallel branches share one project folder. Safe for agents that read and analyse; risky for two agents writing the same files."
       >
@@ -871,7 +903,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <button
         v-for="tab in (['canvas', 'schedule'] as const)"
         :key="tab"
-        class="px-4 py-2.5 text-[12px] font-medium capitalize transition-all relative"
+        class="px-4 py-2.5 t-small font-medium capitalize transition-all relative"
         :style="{ color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-tertiary)' }"
         :data-testid="`workflow-tab-${tab}`"
         @click="activeTab = tab"
@@ -897,16 +929,17 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     <div v-show="activeTab === 'canvas'" class="flex-1 flex min-h-0">
       <!-- Left palette (hidden on mobile) -->
       <div
+        v-if="can('configure')"
         class="hidden md:flex flex-col w-[200px] shrink-0 overflow-hidden"
         style="border-right: 1px solid var(--border-subtle); background: var(--surface-raised);"
       >
         <div class="px-3 pt-3 pb-2">
-          <div class="text-[11px] font-medium mb-2" style="color: var(--text-secondary);">Your Agents</div>
+          <div class="t-small font-medium mb-2" style="color: var(--text-secondary);">Your Agents</div>
           <input
             v-model="paletteSearch"
             placeholder="Filter..."
             aria-label="Filter agents"
-            class="field-search w-full text-[11px]"
+            class="field-search w-full t-small"
           />
         </div>
         <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
@@ -923,16 +956,16 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               class="size-2 rounded-full shrink-0"
               :style="{ background: getAgentColor(agent.frontmatter.color) }"
             />
-            <span class="text-[11px] truncate" style="color: var(--text-secondary);">
+            <span class="t-small truncate" style="color: var(--text-secondary);">
               {{ agent.frontmatter.name }}
             </span>
             <UIcon name="i-lucide-grip-vertical" class="size-3 ml-auto text-meta opacity-50" />
           </button>
-          <div v-if="!filteredAgents.length" class="text-[11px] text-center py-4 text-meta">
+          <div v-if="!filteredAgents.length" class="t-small text-center py-4 text-meta">
             No agents found
           </div>
         </div>
-        <div class="px-3 py-2 text-[10px] leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-tertiary);">
+        <div class="px-3 py-2 t-small leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-tertiary);">
           Click or drag an agent to add a step. Drag a handle to link steps. Several links out of one step run in parallel; a link back to an
           earlier step loops. Click a link to delete it.
         </div>
@@ -959,8 +992,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             :edges="edges"
             :min-zoom="0.3"
             :max-zoom="2"
-            :nodes-connectable="!isRunning"
-            :nodes-draggable="!isRunning"
+            :nodes-connectable="!isRunning && can('configure')"
+            :nodes-draggable="!isRunning && can('configure')"
             @drop="onDrop"
             @dragover="onDragOver"
             @connect="onConnect"
@@ -970,6 +1003,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             <template #node-workflow="nodeProps">
               <WorkflowNode
                 :data="nodeProps.data"
+                :editable="!readOnly"
                 @remove="removeStep(nodeProps.id)"
                 @settings="settingsStepId = nodeProps.id"
               />
@@ -983,10 +1017,10 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
                 <Handle id="out" type="source" :position="Position.Top" />
                 <UIcon name="i-lucide-shield" class="size-3.5 shrink-0" :style="{ color: nodeProps.data.color }" />
                 <div class="min-w-0">
-                  <div class="text-[11px] font-medium truncate" style="color: var(--text-primary);">
+                  <div class="t-small font-medium truncate" style="color: var(--text-primary);">
                     {{ nodeProps.data.label }}
                   </div>
-                  <div class="text-[9px]" style="color: var(--text-disabled);">
+                  <div class="t-small" style="color: var(--text-disabled);">
                     monitoring {{ nodeProps.data.watching }} step{{ nodeProps.data.watching === 1 ? '' : 's' }}
                   </div>
                 </div>
@@ -1004,7 +1038,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           >
             <div class="text-center space-y-2">
               <UIcon name="i-lucide-mouse-pointer-click" class="size-8 mx-auto" style="color: var(--text-disabled);" />
-              <p class="text-[13px]" style="color: var(--text-tertiary);">
+              <p class="t-ui" style="color: var(--text-tertiary);">
                 Drag agents from the left panel onto the canvas
               </p>
             </div>
@@ -1018,7 +1052,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           style="background: rgba(74, 222, 128, 0.06); border-top: 1px solid rgba(74, 222, 128, 0.12);"
         >
           <UIcon name="i-lucide-check-circle" class="size-4" style="color: var(--success, #22c55e);" />
-          <span class="text-[12px] font-medium" style="color: var(--success, #22c55e);">Workflow complete</span>
+          <span class="t-small font-medium" style="color: var(--success, #22c55e);">Workflow complete</span>
         </div>
 
       </div>
@@ -1044,6 +1078,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           :logs="logs"
           @continue="(n) => continueRun(n)"
           @respond="respond"
+          @reject="reject"
+          @rework="rework"
           @note="sendNote"
           @stop="stop"
           @attach="attachRun"
@@ -1069,13 +1105,13 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Workflow inputs</h3>
-          <p class="text-[12px] text-label">
+          <p class="t-small text-label">
             Named values collected when a run starts and stated to every step. Declare what this
             workflow needs - which repository, which Jira project - so no agent has to work it out
             from the prompt.
           </p>
 
-          <div v-if="!workflowParameters.length" class="text-[12px]" style="color: var(--text-disabled);">
+          <div v-if="!workflowParameters.length" class="t-small" style="color: var(--text-disabled);">
             No inputs declared. Runs are started with just the prompt.
           </div>
 
@@ -1344,7 +1380,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
                 class="size-2 rounded-full shrink-0"
                 :style="{ background: getAgentColor(agent.frontmatter.color) }"
               />
-              <span class="text-[12px]" style="color: var(--text-secondary);">
+              <span class="t-small" style="color: var(--text-secondary);">
                 {{ agent.frontmatter.name }}
               </span>
             </button>

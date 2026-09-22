@@ -9,8 +9,26 @@ import { isLiveStatus } from '~~/shared/types/run'
  */
 const route = useRoute()
 const id = route.params.id as string
-const { run, logs, error, load, refresh, continueRun, stop, restart, respond, sendNote } = useRun(id)
+const { run, logs, error, load, refresh, continueRun, stop, restart, respond, sendNote, reject, rework } = useRun(id)
 useAutoRefresh(refresh)
+// The builder and Clone are pipeline controls; a reviewer opening the run they
+// hold a gate on has no use for either, and the API refuses them anyway.
+const { can } = useUser()
+async function onReject(note: string) {
+  try {
+    await reject(note)
+    // This toast used to say "Sent back", which described something the route
+    // does not do: reject stops the run. Sending back to a step is `onRework`.
+    toast.add({ title: 'Run rejected', description: 'The run is stopped and your reason is on the record.', color: 'success' })
+  } catch (e: any) { toast.add({ title: 'Could not reject it', description: e.data?.message || e.message, color: 'error' }) }
+}
+async function onRework(stepId: string, note: string) {
+  try {
+    await rework(stepId, note)
+    const label = run.value?.steps.find(s => s.stepId === stepId)?.label ?? 'that step'
+    toast.add({ title: `Sent back to ${label}`, description: 'It restarts with your instruction.', color: 'success' })
+  } catch (e: any) { toast.add({ title: 'Could not send it back', description: e.data?.message || e.message, color: 'error' }) }
+}
 async function onNote(text: string) {
   try {
     const r = await sendNote(text)
@@ -33,23 +51,33 @@ async function onRestart(stepId: string, note?: string) {
         <UButton to="/runs" icon="i-lucide-arrow-left" size="sm" variant="ghost" color="neutral" aria-label="All runs" />
       </template>
       <template #subtitle>
-        <p v-if="run" class="text-[11px] font-mono text-meta truncate">
+        <p v-if="run" class="t-small font-mono text-meta truncate">
           <span :style="{ color: RUN_STATUS_COLOR[run.status] }">{{ runStatusLabel(run.status) }}</span>
           · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}
         </p>
       </template>
       <template #right>
-        <UButton :to="`/workflows/${run?.workflowSlug ?? ''}?run=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-git-branch" label="Open in builder" :disabled="!run" />
-        <UButton :to="`/workflows/${run?.workflowSlug ?? ''}?clone=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :disabled="!run" />
+        <UButton v-if="can('configure')" :to="`/workflows/${run?.workflowSlug ?? ''}?run=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-git-branch" label="Open in builder" :disabled="!run" />
+        <UButton v-if="can('runEngine')" :to="`/workflows/${run?.workflowSlug ?? ''}?clone=${id}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :disabled="!run" />
       </template>
     </PageHeader>
-    <div v-if="error" class="px-6 py-4 text-[12px]" style="color: var(--error);">{{ error }}</div>
-    <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 px-6 py-4" style="grid-template-columns: minmax(22rem, 2fr) minmax(0, 3fr);">
+    <!-- A missing or unreadable run used to render one bare red line of raw API
+         text, with no heading and no way back except the browser button. -->
+    <div v-if="error" class="page space-y-2">
+      <p class="t-head" style="color: var(--text-primary);">This run could not be opened.</p>
+      <p class="t-ui text-label">{{ error }}</p>
+      <UButton to="/runs" size="sm" variant="soft" icon="i-lucide-arrow-left" label="All runs" />
+    </div>
+    <!-- Stacks below `lg`. This was a fixed two-column grid at every width — about
+         37rem of minimum track before the evidence pane's own 15rem file list was
+         counted — so on anything narrower than a laptop the evidence a reviewer is
+         meant to be reading was squeezed to nothing and the page scrolled sideways. -->
+    <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 page page--wide grid-cols-1 lg:grid-cols-[minmax(22rem,2fr)_minmax(0,3fr)]">
       <div class="min-h-0 overflow-y-auto pr-1">
-        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
+        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
       </div>
       <RunArtifacts :run-id="id" :live="live" class="min-h-0" />
     </div>
-    <div v-else class="px-6 py-4"><SkeletonCard /></div>
+    <div v-else class="page"><SkeletonCard /></div>
   </div>
 </template>

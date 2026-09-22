@@ -71,7 +71,7 @@ async function useTemplate(templateId: string) {
   <div>
     <PageHeader title="Agents">
       <template #trailing>
-        <span class="text-[12px] text-meta">{{ agents.length }}</span>
+        <span class="t-small text-meta">{{ agents.length }}</span>
       </template>
       <template #right>
         <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
@@ -80,7 +80,7 @@ async function useTemplate(templateId: string) {
     </PageHeader>
 
     <div class="px-6 py-4">
-      <p class="text-[13px] mb-4 leading-relaxed text-label">
+      <p class="t-ui mb-4 leading-relaxed text-label">
         Specialized AI assistants with custom instructions and behavior.
       </p>
 
@@ -100,7 +100,7 @@ async function useTemplate(templateId: string) {
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ error }}</span>
+        <span class="t-small" style="color: var(--error);">{{ error }}</span>
       </div>
 
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -113,10 +113,10 @@ async function useTemplate(templateId: string) {
           <!-- Section header — only shown when there are multiple groups -->
           <div v-if="hasGroups" class="flex items-center gap-2 mb-3">
             <UIcon name="i-lucide-folder" class="size-3.5 shrink-0" style="color: var(--text-meta);" />
-            <span class="text-[11px] font-semibold uppercase tracking-widest" style="color: var(--text-meta);">
+            <span class="t-small font-semibold uppercase tracking-widest" style="color: var(--text-meta);">
               {{ directory || 'General' }}
             </span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded-full" style="background: var(--surface-raised); color: var(--text-disabled);">
+            <span class="t-small px-1.5 py-0.5 rounded-full" style="background: var(--surface-raised); color: var(--text-disabled);">
               {{ groupAgents.length }}
             </span>
             <div class="flex-1 h-px" style="background: var(--border-subtle);" />
@@ -150,12 +150,12 @@ async function useTemplate(templateId: string) {
                 >
                   <UIcon name="i-lucide-cpu" class="size-3.5" :style="{ color: getAgentColor(agent.frontmatter.color) }" />
                 </div>
-                <span class="text-[13px] font-medium truncate flex-1">
+                <span class="t-ui font-medium truncate flex-1">
                   {{ agent.frontmatter.name }}
                 </span>
                 <span
                   v-if="agent.frontmatter.model"
-                  class="text-[10px] font-mono font-medium px-1.5 py-px rounded-full shrink-0"
+                  class="t-small font-mono font-medium px-1.5 py-px rounded-full shrink-0"
                   :class="[getModelBadgeClasses(agent.frontmatter.model).bg, getModelBadgeClasses(agent.frontmatter.model).text]"
                 >
                   {{ agent.frontmatter.model }}
@@ -163,7 +163,7 @@ async function useTemplate(templateId: string) {
               </div>
 
               <!-- Description -->
-              <p v-if="agent.frontmatter.description" class="text-[12px] leading-relaxed line-clamp-2 text-label relative">
+              <p v-if="agent.frontmatter.description" class="t-small leading-relaxed line-clamp-2 text-label relative">
                 {{ agent.frontmatter.description }}
               </p>
 
@@ -174,7 +174,7 @@ async function useTemplate(templateId: string) {
                   <span
                     v-for="skill in agent.frontmatter.skills"
                     :key="skill"
-                    class="text-[10px] font-mono px-1.5 py-px rounded-full"
+                    class="t-small font-mono px-1.5 py-px rounded-full"
                     style="background: var(--badge-subtle-bg); color: var(--text-secondary);"
                   >{{ skill }}</span>
                 </div>
@@ -182,7 +182,7 @@ async function useTemplate(templateId: string) {
 
               <!-- Fallback: skills that point back at this agent via their own frontmatter -->
               <div v-else-if="skillCounts[agent.slug]" class="mt-3 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
-                <span class="text-[10px] text-meta flex items-center gap-1.5">
+                <span class="t-small text-meta flex items-center gap-1.5">
                   <UIcon name="i-lucide-sparkles" class="size-3" style="color: var(--accent);" />
                   {{ skillCounts[agent.slug] }} skill{{ skillCounts[agent.slug] === 1 ? '' : 's' }}
                 </span>
@@ -194,21 +194,21 @@ async function useTemplate(templateId: string) {
 
       <!-- Empty state: search miss -->
       <div v-else-if="searchQuery" class="flex flex-col items-center justify-center py-16 space-y-3">
-        <p class="text-[13px] text-label">No agents match your search.</p>
+        <p class="t-ui text-label">No agents match your search.</p>
       </div>
 
       <!-- Empty state: no agents — show templates -->
       <div v-else class="space-y-5">
         <div class="text-center py-4">
-          <p class="text-[13px] text-label">No agents yet. Start from a template or create your own.</p>
+          <p class="t-ui text-label">No agents yet. Start from a template or create your own.</p>
         </div>
 
         <ExampleBlock title="What does a good agent look like?" class="max-w-md mx-auto mb-6">
-          <div class="space-y-2 text-[11px]" style="color: var(--text-secondary);">
+          <div class="space-y-2 t-small" style="color: var(--text-secondary);">
             <div class="rounded-lg p-3" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">
-              <p><strong style="color: var(--text-primary);">code-reviewer</strong> <span class="text-[10px]" style="color: var(--text-disabled);">← This name is short and descriptive</span></p>
-              <p class="mt-1">"Reviews pull requests for bugs, style, and security." <span class="text-[10px]" style="color: var(--text-disabled);">← Explains what it does in one sentence</span></p>
-              <p class="mt-1 text-[10px]" style="color: var(--text-tertiary);">"Check for bugs, flag security issues, suggest improvements..." <span style="color: var(--text-disabled);">← Instructions are specific</span></p>
+              <p><strong style="color: var(--text-primary);">code-reviewer</strong> <span class="t-small" style="color: var(--text-disabled);">← This name is short and descriptive</span></p>
+              <p class="mt-1">"Reviews pull requests for bugs, style, and security." <span class="t-small" style="color: var(--text-disabled);">← Explains what it does in one sentence</span></p>
+              <p class="mt-1 t-small" style="color: var(--text-tertiary);">"Check for bugs, flag security issues, suggest improvements..." <span style="color: var(--text-disabled);">← Instructions are specific</span></p>
             </div>
           </div>
         </ExampleBlock>
@@ -223,14 +223,14 @@ async function useTemplate(templateId: string) {
           >
             <div class="flex items-center gap-2.5 mb-2">
               <UIcon :name="template.icon" class="size-4 shrink-0 text-label" />
-              <span class="text-[13px] font-medium">{{ template.frontmatter.name }}</span>
+              <span class="t-ui font-medium">{{ template.frontmatter.name }}</span>
               <UIcon
                 v-if="creatingTemplate === template.id"
                 name="i-lucide-loader-2"
                 class="size-3.5 ml-auto animate-spin text-meta"
               />
             </div>
-            <p class="text-[12px] text-label leading-relaxed line-clamp-2">
+            <p class="t-small text-label leading-relaxed line-clamp-2">
               {{ template.frontmatter.description }}
             </p>
           </button>

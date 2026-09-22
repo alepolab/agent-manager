@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { resolveClaudePath } from '../../utils/claudeDir'
 import { 
@@ -13,6 +14,7 @@ import {
 import { syncGithubImportSymlinks } from '../../utils/githubSkillSymlinks'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('skills'); invalidate('relationships')
   const { owner, repo, url, targetPath, selectedItems, totalItems, type } = await readBody<{
     owner: string

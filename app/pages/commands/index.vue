@@ -38,7 +38,7 @@ const filteredCount = computed(() =>
   <div>
     <PageHeader title="Commands">
       <template #trailing>
-        <span class="font-mono text-[12px] text-meta">{{ commands.length }}</span>
+        <span class="font-mono t-small text-meta">{{ commands.length }}</span>
       </template>
       <template #right>
         <UButton label="New Command" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
@@ -46,7 +46,7 @@ const filteredCount = computed(() =>
     </PageHeader>
 
     <div class="px-6 py-4">
-      <p class="text-[13px] mb-4 leading-relaxed text-label">
+      <p class="t-ui mb-4 leading-relaxed text-label">
         Reusable workflows you can trigger with a slash command (e.g., /deploy).
       </p>
 
@@ -65,7 +65,7 @@ const filteredCount = computed(() =>
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ error }}</span>
+        <span class="t-small" style="color: var(--error);">{{ error }}</span>
       </div>
 
       <div v-if="loading" class="space-y-1">
@@ -84,8 +84,8 @@ const filteredCount = computed(() =>
               class="size-3.5 text-meta"
             />
             <UIcon name="i-lucide-folder" class="size-3.5 text-meta" />
-            <span class="font-mono text-[13px] font-medium">{{ dir }}</span>
-            <span class="font-mono text-[12px] text-meta">{{ cmds.length }}</span>
+            <span class="font-mono t-ui font-medium">{{ dir }}</span>
+            <span class="font-mono t-small text-meta">{{ cmds.length }}</span>
           </button>
 
           <!-- Commands in group -->
@@ -97,23 +97,23 @@ const filteredCount = computed(() =>
               class="flex items-center gap-3 px-3 py-2 rounded-lg group focus-ring hover-row"
             >
               <!-- Terminal icon -->
-              <span class="font-mono text-[10px] font-medium shrink-0 text-meta">&gt;_</span>
+              <span class="font-mono t-small font-medium shrink-0 text-meta">&gt;_</span>
 
               <!-- Name -->
-              <span class="text-[13px] font-medium w-44 shrink-0 truncate">
+              <span class="t-ui font-medium w-44 shrink-0 truncate">
                 /{{ cmd.frontmatter.name }}
               </span>
 
               <!-- Argument hint badge -->
               <span
                 v-if="cmd.frontmatter['argument-hint']"
-                class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
+                class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
               >
                 {{ cmd.frontmatter['argument-hint'] }}
               </span>
 
               <!-- Description -->
-              <span class="flex-1 text-[12px] truncate text-label">
+              <span class="flex-1 t-small truncate text-label">
                 {{ cmd.frontmatter.description }}
               </span>
 
@@ -131,17 +131,17 @@ const filteredCount = computed(() =>
 
       <!-- Empty state: search miss -->
       <div v-else-if="searchQuery" class="flex flex-col items-center justify-center py-16">
-        <p class="text-[13px] text-label">No commands match your search.</p>
+        <p class="t-ui text-label">No commands match your search.</p>
       </div>
 
       <!-- Empty state: no commands -->
       <div v-else class="flex flex-col items-center justify-center py-12 space-y-5">
-        <div class="rounded-lg p-4 bg-card max-w-sm w-full font-mono text-[12px] text-label leading-relaxed">
+        <div class="rounded-lg p-4 bg-card max-w-sm w-full font-mono t-small text-label leading-relaxed">
           <span class="text-meta"># Example: a deploy command</span><br>
           <span style="color: var(--accent);">/deploy</span> staging --skip-tests<br>
           <span class="text-meta"># Claude follows your command's instructions</span>
         </div>
-        <p class="text-[13px] text-label">Commands let you trigger repeatable workflows with a slash.</p>
+        <p class="t-ui text-label">Commands let you trigger repeatable workflows with a slash.</p>
         <UButton label="Create a command" size="sm" @click="() => { showCreateModal = true }" />
       </div>
     </div>

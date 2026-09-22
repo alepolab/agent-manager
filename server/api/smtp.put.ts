@@ -1,3 +1,4 @@
+import { requireCapability } from '../utils/session'
 import { saveSmtp } from '../utils/channels.ts'
 
 /**
@@ -8,6 +9,7 @@ import { saveSmtp } from '../utils/channels.ts'
  * list would be several places to rotate one password.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody<Record<string, unknown>>(event)
   try {
     return await saveSmtp(body ?? {})

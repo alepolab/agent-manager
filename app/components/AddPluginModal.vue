@@ -94,7 +94,7 @@ async function onManualInstall() {
     <div class="flex items-center justify-between">
       <div>
         <h3 class="text-page-title">Add Plugin</h3>
-        <p class="text-[12px] text-label mt-1">
+        <p class="t-small text-label mt-1">
           Install extensions from your registered marketplaces.
         </p>
       </div>
@@ -111,13 +111,13 @@ async function onManualInstall() {
     <div class="p-4 rounded-xl bg-surface-base border border-border-subtle space-y-3">
       <div class="flex items-center gap-2">
         <UIcon name="i-lucide-terminal" class="size-4 text-accent" />
-        <span class="text-[13px] font-medium">Quick Install</span>
+        <span class="t-ui font-medium">Quick Install</span>
       </div>
       <div class="flex gap-2">
         <input
           v-model="manualInput"
           placeholder="e.g. marketplace/plugin or plugin@marketplace"
-          class="field-input text-[13px] flex-1"
+          class="field-input t-ui flex-1"
           @keydown.enter="onManualInstall"
         />
         <UButton
@@ -129,19 +129,19 @@ async function onManualInstall() {
           @click="onManualInstall"
         />
       </div>
-      <p class="text-[11px] text-meta">
+      <p class="t-small text-meta">
         Type the plugin's full identifier to install it directly.
       </p>
     </div>
 
     <div class="space-y-4 flex-1 flex flex-col min-h-0">
       <div class="flex items-center justify-between">
-        <h4 class="text-[12px] font-mono uppercase tracking-wider text-meta">Browse Marketplaces</h4>
+        <h4 class="t-small font-mono uppercase tracking-wider text-meta">Browse Marketplaces</h4>
         <div class="relative w-48">
           <input
             v-model="searchQuery"
             placeholder="Search..."
-            class="field-search text-[12px] h-8"
+            class="field-search t-small h-8"
           />
         </div>
       </div>
@@ -163,19 +163,19 @@ async function onManualInstall() {
             
             <div class="flex-1 min-w-0 space-y-1">
               <div class="flex items-center gap-2">
-                <span class="text-[14px] font-medium truncate">{{ plugin.name }}</span>
-                <span class="text-[10px] px-1.5 py-px rounded-full bg-surface-base text-meta font-mono border border-border-subtle">
+                <span class="t-body font-medium truncate">{{ plugin.name }}</span>
+                <span class="t-small px-1.5 py-px rounded-full bg-surface-base text-meta font-mono border border-border-subtle">
                   {{ plugin.marketplace }}
                 </span>
               </div>
-              <p class="text-[12px] text-label leading-normal line-clamp-2">
+              <p class="t-small text-label leading-normal line-clamp-2">
                 {{ plugin.description || 'No description available.' }}
               </p>
               <div class="flex items-center gap-3 pt-1">
-                <span v-if="plugin.skillCount" class="font-mono text-[10px] text-meta">
+                <span v-if="plugin.skillCount" class="font-mono t-small text-meta">
                   {{ plugin.skillCount }} skill{{ plugin.skillCount === 1 ? '' : 's' }}
                 </span>
-                <span v-if="plugin.commandCount" class="font-mono text-[10px] text-meta">
+                <span v-if="plugin.commandCount" class="font-mono t-small text-meta">
                   {{ plugin.commandCount }} cmd{{ plugin.commandCount === 1 ? '' : 's' }}
                 </span>
               </div>
@@ -193,12 +193,12 @@ async function onManualInstall() {
         </template>
 
         <div v-else-if="searchQuery" class="py-12 text-center border border-dashed border-border-subtle rounded-xl">
-          <p class="text-[13px] text-meta">No plugins match "{{ searchQuery }}"</p>
+          <p class="t-ui text-meta">No plugins match "{{ searchQuery }}"</p>
         </div>
         
         <div v-else class="py-12 text-center space-y-3 border border-dashed border-border-subtle rounded-xl">
           <UIcon name="i-lucide-package-open" class="size-8 mx-auto text-meta opacity-20" />
-          <p class="text-[13px] text-meta">No available plugins found in your marketplaces.</p>
+          <p class="t-ui text-meta">No available plugins found in your marketplaces.</p>
           <UButton 
             label="Manage Marketplaces" 
             to="/explore?tab=marketplace" 

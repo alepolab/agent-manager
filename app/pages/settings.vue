@@ -460,7 +460,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
     <PageHeader title="Settings">
       <template #right>
         <button
-          class="text-[12px] px-2 py-1 rounded focus-ring text-label"
+          class="t-small px-2 py-1 rounded focus-ring text-label"
           style="background: var(--surface-raised); border: 1px solid var(--border-default);"
           @click="viewMode = viewMode === 'structured' ? 'raw' : 'structured'"
         >
@@ -487,8 +487,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <!-- Always Thinking toggle -->
           <div class="flex items-start justify-between gap-4 py-3">
             <div>
-              <div class="text-[13px] font-medium">Labs pages</div>
-              <div class="text-[12px] mt-0.5 text-label">
+              <div class="t-ui font-medium">Labs pages</div>
+              <div class="t-small mt-0.5 text-label">
                 Show Graph, Explore and Output styles in the sidebar. They work, but are not part of the daily set yet.
               </div>
             </div>
@@ -505,14 +505,14 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Model for pipeline agents</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              <div class="t-ui font-medium">Model for pipeline agents</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
                 Runs every pipeline agent, monitors included, on one model, overriding each agent's own choice. Default keeps those choices: Opus for the fix and test agents, Sonnet for the rest. Fable is the strongest; its steps show as unpriced, since it has no list price here.
               </div>
             </div>
             <!-- field-input is full-width by design; these controls sit beside their text, so the width is pinned here. -->
             <select
-              class="field-input text-[12px]" style="width: 16rem; flex: none;" aria-label="Model for pipeline agents"
+              class="field-input t-small" style="width: 16rem; flex: none;" aria-label="Model for pipeline agents"
               :value="settings?.agentManager?.agentModel ?? ''"
               @change="setAgentModel(($event.target as HTMLSelectElement).value)"
             >
@@ -522,34 +522,34 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Run budget</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
-                Caps for each new run; when one is reached the run pauses and asks whether to continue with a fresh allowance. Defaults are 8,000,000 tokens and 180 minutes.
+              <div class="t-ui font-medium">Run budget</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
+                Caps for each new run; when one is reached the run pauses and asks whether to continue with a fresh allowance. Defaults are 8,000,000 tokens and 180 minutes, overridden by AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES on the instance.
               </div>
-              <div v-if="pinnedBy('AGENT_RUN_MAX_TOKENS')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_TOKENS') }}</div>
-              <div v-if="pinnedBy('AGENT_RUN_MAX_MINUTES')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_MINUTES') }}</div>
+              <div v-if="pinnedBy('AGENT_RUN_MAX_TOKENS')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_TOKENS') }}</div>
+              <div v-if="pinnedBy('AGENT_RUN_MAX_MINUTES')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_MINUTES') }}</div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <input
-                type="number" min="1" step="100000" class="field-input text-[12px]" style="width: 9rem; flex: none;" placeholder="8000000" aria-label="Max tokens per run"
+                type="number" min="1" step="100000" class="field-input t-small" style="width: 9rem; flex: none;" placeholder="8000000" aria-label="Max tokens per run"
                 :value="settings?.agentManager?.runBudget?.maxTokens ?? ''"
                 :disabled="!!pinnedBy('AGENT_RUN_MAX_TOKENS')" :title="pinnedNote('AGENT_RUN_MAX_TOKENS')"
                 @change="setRunBudget('maxTokens', ($event.target as HTMLInputElement).value)"
               />
-              <span class="text-[11px] text-label">tokens</span>
+              <span class="t-small text-label">tokens</span>
               <input
-                type="number" min="1" step="10" class="field-input text-[12px]" style="width: 6rem; flex: none;" placeholder="180" aria-label="Max minutes per run"
+                type="number" min="1" step="10" class="field-input t-small" style="width: 6rem; flex: none;" placeholder="180" aria-label="Max minutes per run"
                 :value="settings?.agentManager?.runBudget?.maxMinutes ?? ''"
                 :disabled="!!pinnedBy('AGENT_RUN_MAX_MINUTES')" :title="pinnedNote('AGENT_RUN_MAX_MINUTES')"
                 @change="setRunBudget('maxMinutes', ($event.target as HTMLInputElement).value)"
               />
-              <span class="text-[11px] text-label">min</span>
+              <span class="t-small text-label">min</span>
             </div>
           </div>
           <div class="flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Always Thinking</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              <div class="t-ui font-medium">Always Thinking</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
                 When enabled, Claude takes more time to reason through complex problems before responding. Better answers, but slower and uses more resources.
               </div>
             </div>
@@ -568,8 +568,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <!-- /tasks-picker-infra lookback window -->
           <div class="flex items-center justify-between gap-4">
             <div class="min-w-0 flex-1 max-w-2xl">
-              <div class="text-[13px] font-medium">Task picker window</div>
-              <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+              <div class="t-ui font-medium">Task picker window</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
                 How far back <code>/tasks-picker-infra</code> looks for newly raised DEVOPS issues.
                 Jira cannot filter below one minute, so the command queries the window rounded up to
                 whole minutes and applies the exact seconds itself.
@@ -579,12 +579,12 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <input
                 type="number"
                 min="1"
-                class="w-24 text-[13px] px-2 py-1 rounded-md bg-card border border-subtle text-right tabular-nums"
+                class="w-24 t-ui px-2 py-1 rounded-md bg-card border border-subtle text-right tabular-nums"
                 data-testid="tasks-picker-window"
                 :value="settings?.tasksPickerWindowSeconds ?? TASKS_PICKER_DEFAULT_SECONDS"
                 @change="updateTasksPickerWindow(($event.target as HTMLInputElement).value)"
               />
-              <span class="text-[12px] text-label">seconds</span>
+              <span class="t-small text-label">seconds</span>
             </div>
           </div>
         </div>
@@ -593,7 +593,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
       <!-- Jira -->
       <div class="rounded-xl p-5 space-y-4 bg-card">
         <h3 class="text-section-title">Jira</h3>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           The host and the posting gate for this instance. The API token is not here and never will be: it is
           per-developer and stored encrypted outside the config tree — set yours on
           <NuxtLink to="/profile" class="underline focus-ring">your profile</NuxtLink>. An environment variable
@@ -602,13 +602,13 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
         <div class="flex items-start justify-between gap-4 py-3">
           <div class="min-w-0 flex-1 max-w-2xl">
-            <div class="text-[13px] font-medium">Post outcomes to Jira</div>
-            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+            <div class="t-ui font-medium">Post outcomes to Jira</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
               Off by default. Every run writes the comment it would post to its own <code>jira-comment.json</code>
               artifact either way, so this decides where that comment goes, never whether one is produced.
               <code>JIRA_POST_ENABLED=0</code> on the instance pins it off for everyone.
             </div>
-            <div v-if="pinnedBy('JIRA_POST_ENABLED')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_POST_ENABLED') }}</div>
+            <div v-if="pinnedBy('JIRA_POST_ENABLED')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_POST_ENABLED') }}</div>
           </div>
           <label class="field-toggle" :title="pinnedNote('JIRA_POST_ENABLED')">
             <input
@@ -621,15 +621,15 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
         <div class="flex items-start justify-between gap-4 py-3">
           <div class="min-w-0 flex-1 max-w-2xl">
-            <div class="text-[13px] font-medium">Jira host</div>
-            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+            <div class="t-ui font-medium">Jira host</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
               The site every Jira call goes to, as an https URL. If this was the missing credential, ticket
               polling starts at the next restart — the watcher chooses its ticket source once, at boot.
             </div>
-            <div v-if="pinnedBy('JIRA_BASE_URL')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_BASE_URL') }}</div>
+            <div v-if="pinnedBy('JIRA_BASE_URL')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_BASE_URL') }}</div>
           </div>
           <input
-            type="url" class="field-input text-[12px]" style="width: 20rem; flex: none;" placeholder="https://your-team.atlassian.net"
+            type="url" class="field-input t-small" style="width: 20rem; flex: none;" placeholder="https://your-team.atlassian.net"
             aria-label="Jira host" :value="jiraSettings.baseUrl ?? ''"
             :disabled="!!pinnedBy('JIRA_BASE_URL')" :title="pinnedNote('JIRA_BASE_URL')"
             @change="setJira('baseUrl', ($event.target as HTMLInputElement).value)"
@@ -638,14 +638,14 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
         <div class="flex items-start justify-between gap-4 py-3">
           <div class="min-w-0 flex-1 max-w-2xl">
-            <div class="text-[13px] font-medium">Default project key</div>
-            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+            <div class="t-ui font-medium">Default project key</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
               Written into the generated jira-cli config for new runs. Leave empty and the agents name a project explicitly.
             </div>
-            <div v-if="pinnedBy('JIRA_DEFAULT_PROJECT')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_DEFAULT_PROJECT') }}</div>
+            <div v-if="pinnedBy('JIRA_DEFAULT_PROJECT')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_DEFAULT_PROJECT') }}</div>
           </div>
           <input
-            type="text" class="field-input text-[12px]" style="width: 10rem; flex: none;" placeholder="ASECRM"
+            type="text" class="field-input t-small" style="width: 10rem; flex: none;" placeholder="ASECRM"
             aria-label="Default Jira project key" :value="jiraSettings.defaultProject ?? ''"
             :disabled="!!pinnedBy('JIRA_DEFAULT_PROJECT')" :title="pinnedNote('JIRA_DEFAULT_PROJECT')"
             @change="setJira('defaultProject', ($event.target as HTMLInputElement).value)"
@@ -654,14 +654,14 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
         <div class="flex items-start justify-between gap-4 py-3">
           <div class="min-w-0 flex-1 max-w-2xl">
-            <div class="text-[13px] font-medium">"For vis:" name</div>
-            <div class="text-[12px] mt-0.5 text-label leading-relaxed">
+            <div class="t-ui font-medium">"For vis:" name</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
               Appended as a last line on a posted or rendered comment. Left out entirely when empty — never filled with a placeholder.
             </div>
-            <div v-if="pinnedBy('JIRA_COMMENT_FOR_VIS_NAME')" class="text-[12px] mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_COMMENT_FOR_VIS_NAME') }}</div>
+            <div v-if="pinnedBy('JIRA_COMMENT_FOR_VIS_NAME')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_COMMENT_FOR_VIS_NAME') }}</div>
           </div>
           <input
-            type="text" class="field-input text-[12px]" style="width: 14rem; flex: none;" placeholder="Nobody by default"
+            type="text" class="field-input t-small" style="width: 14rem; flex: none;" placeholder="Nobody by default"
             aria-label="For vis name" :value="jiraSettings.forVisName ?? ''"
             :disabled="!!pinnedBy('JIRA_COMMENT_FOR_VIS_NAME')" :title="pinnedNote('JIRA_COMMENT_FOR_VIS_NAME')"
             @change="setJira('forVisName', ($event.target as HTMLInputElement).value)"
@@ -672,27 +672,27 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
       <!-- Instance: read-only, because none of it can change without a restart -->
       <div v-if="instance" class="rounded-xl p-5 space-y-4 bg-card">
         <h3 class="text-section-title">Instance</h3>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           What this server is actually running, as it booted. None of it is editable here: every switch below is
           read once at startup, before the timer it controls exists, so a toggle would save cleanly and change
           nothing until a restart. Each row names the variable to set instead.
         </p>
 
         <div>
-          <div class="text-[13px] font-medium mb-2">Automations</div>
+          <div class="t-ui font-medium mb-2">Automations</div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-            <div v-for="a in instance.automations" :key="a.envVar" class="flex items-center gap-2 text-[12px]">
+            <div v-for="a in instance.automations" :key="a.envVar" class="flex items-center gap-2 t-small">
               <span class="size-1.5 rounded-full shrink-0" :style="{ background: a.enabled ? 'var(--success)' : 'var(--text-disabled)' }" />
               <span>{{ a.name }}</span>
               <span class="text-label">{{ a.enabled ? (a.detail ?? 'on') : 'off' }}</span>
-              <code class="text-[10px] text-label ml-auto">{{ a.envVar }}</code>
+              <code class="t-small text-label ml-auto">{{ a.envVar }}</code>
             </div>
           </div>
         </div>
 
         <div>
-          <div class="text-[13px] font-medium mb-2">Paths</div>
-          <div class="grid grid-cols-1 gap-y-1 text-[12px]">
+          <div class="t-ui font-medium mb-2">Paths</div>
+          <div class="grid grid-cols-1 gap-y-1 t-small">
             <div><span class="text-label">Config</span> <code class="ml-2">{{ instance.paths.claudeDir }}</code></div>
             <div><span class="text-label">Run evidence</span> <code class="ml-2">{{ instance.paths.agentRunsDir }}</code></div>
             <div><span class="text-label">Checkouts</span> <code class="ml-2">{{ instance.paths.workspaceRoot }}</code></div>
@@ -701,28 +701,28 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         </div>
 
         <div>
-          <div class="text-[13px] font-medium mb-2">Credentials</div>
-          <div class="text-[12px] text-meta mb-2">Presence only — no value is ever sent to this page.</div>
+          <div class="t-ui font-medium mb-2">Credentials</div>
+          <div class="t-small text-meta mb-2">Presence only — no value is ever sent to this page.</div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-            <div v-for="s in instance.secrets" :key="s.name" class="flex items-center gap-2 text-[12px]">
+            <div v-for="s in instance.secrets" :key="s.name" class="flex items-center gap-2 t-small">
               <span class="size-1.5 rounded-full shrink-0" :style="{ background: s.set ? 'var(--success)' : 'var(--text-disabled)' }" />
-              <code class="text-[11px]">{{ s.name }}</code>
+              <code class="t-small">{{ s.name }}</code>
               <span class="text-label ml-auto">{{ s.set ? 'set' : 'not set' }}</span>
             </div>
           </div>
         </div>
 
-        <div class="text-[12px]">
+        <div class="t-small">
           <span class="text-label">Sign-in</span>
           <span class="ml-2">{{ instance.identity.authDisabled ? 'disabled (every request is the local developer)' : `GitHub${instance.identity.githubOrg ? `, ${instance.identity.githubOrg}` : ''}` }}</span>
-          <code class="text-[10px] text-label ml-2">AUTH_DISABLED, GITHUB_ORG</code>
+          <code class="t-small text-label ml-2">AUTH_DISABLED, GITHUB_ORG</code>
         </div>
       </div>
 
       <!-- Notification channels -->
       <div class="rounded-xl p-5 space-y-4 bg-card">
         <h3 class="text-section-title">Notification channels</h3>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Named Teams, Slack and email destinations a workflow refers to by name — from a notify step, or as a
           workflow's channel for run transitions. Stored encrypted on the server under
           <code>~/.agent-manager</code>, outside the Claude config directory: they are not part of
@@ -730,9 +730,9 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <code>default</code> receives run transitions from every workflow that names no channel of its own.
         </p>
 
-        <div v-if="channelsError" class="text-[12px]" style="color: var(--error);">{{ channelsError }}</div>
+        <div v-if="channelsError" class="t-small" style="color: var(--error);">{{ channelsError }}</div>
 
-        <table v-if="channels.length" class="w-full text-[12px]">
+        <table v-if="channels.length" class="w-full t-small">
           <thead>
             <tr class="text-meta text-left">
               <th class="pb-2 font-medium">Name</th>
@@ -757,7 +757,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             </tr>
           </tbody>
         </table>
-        <p v-else-if="!channelsError" class="text-[12px] text-meta">No channels configured yet.</p>
+        <p v-else-if="!channelsError" class="t-small text-meta">No channels configured yet.</p>
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div class="field-group">
@@ -791,8 +791,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
         <!-- The relay, shown only when something would actually use it. -->
         <div v-if="needsSmtp" class="rounded-lg p-4 space-y-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-          <h4 class="text-[13px] font-semibold text-primary">SMTP relay</h4>
-          <p class="text-[12px] text-meta">
+          <h4 class="t-ui font-semibold text-primary">SMTP relay</h4>
+          <p class="t-small text-meta">
             One relay for every email channel: it is a property of this deployment, not of an audience.
             The password is sealed like a webhook URL, and leaving it blank keeps the stored one.
           </p>
@@ -839,7 +839,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         class="rounded-xl p-5 space-y-4 bg-card"
       >
         <h3 class="text-section-title">Status Line</h3>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Shows custom information in Claude Code's interface. Use a bash command to display dynamic content.
         </p>
 
@@ -867,7 +867,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           Extensions
           <HelpTip title="Managing extensions" body="Enable or disable extensions here. Install new ones via the Claude Code CLI." />
         </h3>
-        <div v-if="plugins.length === 0" class="text-[13px] text-label">
+        <div v-if="plugins.length === 0" class="t-ui text-label">
           No plugins configured.
         </div>
         <div v-else class="space-y-2">
@@ -877,7 +877,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             class="flex items-center justify-between py-2 px-3 rounded-lg"
             style="background: var(--input-bg);"
           >
-            <span class="font-mono text-[12px] text-body">{{ plugin.name }}</span>
+            <span class="font-mono t-small text-body">{{ plugin.name }}</span>
             <div class="flex items-center gap-3">
               <label class="field-toggle">
                 <input
@@ -914,11 +914,11 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             @click="onCheckUpdates"
           />
         </div>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Manage repositories imported from GitHub.
         </p>
 
-        <div v-if="githubImports.length === 0" class="text-[13px] text-label">
+        <div v-if="githubImports.length === 0" class="t-ui text-label">
           No GitHub imports. Use the Explore page to import skills from GitHub.
         </div>
 
@@ -930,19 +930,19 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
             style="background: var(--input-bg);"
           >
             <div class="flex-1 min-w-0 flex items-center gap-2">
-              <span class="font-mono text-[12px] text-body">{{ entry.owner }}/{{ entry.repo }}</span>
+              <span class="font-mono t-small text-body">{{ entry.owner }}/{{ entry.repo }}</span>
               <span 
-                class="text-[9px] font-mono px-1.5 py-px rounded-full uppercase" 
+                class="t-small font-mono px-1.5 py-px rounded-full uppercase" 
                 style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);"
               >
                 {{ entry.type }}
               </span>
-              <span class="text-[10px] text-meta ml-1">{{ entry.selectedItems?.length || 0 }} items</span>
+              <span class="t-small text-meta ml-1">{{ entry.selectedItems?.length || 0 }} items</span>
             </div>
             <div class="flex items-center gap-2">
               <span
                 v-if="entry.currentSha !== entry.remoteSha"
-                class="text-[10px] font-medium px-2 py-0.5 rounded-full"
+                class="t-small font-medium px-2 py-0.5 rounded-full"
                 style="background: rgba(59, 130, 246, 0.1); color: var(--info, #3b82f6);"
               >
                 Update available
@@ -974,11 +974,11 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <h3 class="text-section-title">Automations</h3>
           <UButton label="Add Automation" icon="i-lucide-plus" size="xs" variant="soft" @click="() => { showAddHookModal = true }" />
         </div>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Run shell commands automatically when certain events happen in Claude Code.
         </p>
 
-        <div v-if="hooks.length === 0" class="text-[13px] text-label">
+        <div v-if="hooks.length === 0" class="t-ui text-label">
           No automations configured.
         </div>
 
@@ -986,8 +986,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
           <div v-for="hook in hooks" :key="hook.event">
             <div class="flex items-center gap-2 mb-1.5">
               <UIcon name="i-lucide-webhook" class="size-3.5 text-meta" />
-              <span class="text-[12px] font-medium text-body">{{ hookEventLabels[hook.event] || hook.event }}</span>
-              <span class="font-mono text-[10px] text-meta">{{ hook.commands.length }}</span>
+              <span class="t-small font-medium text-body">{{ hookEventLabels[hook.event] || hook.event }}</span>
+              <span class="font-mono t-small text-meta">{{ hook.commands.length }}</span>
             </div>
             <div class="ml-5 space-y-1">
               <div
@@ -997,12 +997,12 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                 style="background: var(--input-bg);"
               >
                 <div class="flex-1 min-w-0">
-                  <span class="font-mono text-[12px] truncate block text-label">
+                  <span class="font-mono t-small truncate block text-label">
                     {{ typeof cmd === 'string' ? cmd : (cmd as any).command || JSON.stringify(cmd) }}
                   </span>
                   <span
                     v-if="typeof cmd === 'object' && (cmd as any).matcher"
-                    class="font-mono text-[10px] block mt-0.5 text-meta"
+                    class="font-mono t-small block mt-0.5 text-meta"
                   >
                     matcher: {{ (cmd as any).matcher }}
                   </span>
@@ -1031,10 +1031,10 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         <div class="flex items-center justify-between px-4 py-2.5" style="background: var(--surface-raised); border-bottom: 1px solid var(--border-subtle);">
           <h3 class="text-section-title">settings.json</h3>
           <div class="flex items-center gap-3">
-            <span class="font-mono text-[10px] text-meta">
+            <span class="font-mono t-small text-meta">
               {{ lineCount }} lines
             </span>
-            <span class="font-mono text-[10px] text-meta">
+            <span class="font-mono t-small text-meta">
               {{ charCount.toLocaleString() }} chars
             </span>
           </div>
@@ -1053,7 +1053,7 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Add Automation</h3>
-          <p class="text-[12px] leading-relaxed text-label">
+          <p class="t-small leading-relaxed text-label">
             Run a shell command automatically when a specific event happens.
           </p>
 
@@ -1096,13 +1096,13 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <UIcon name="i-lucide-alert-triangle" class="size-6 text-error" />
             </div>
             <div>
-              <h3 class="text-[15px] font-semibold text-primary">Remove Repository?</h3>
-              <p class="text-[12px] text-label mt-1">This action cannot be undone.</p>
+              <h3 class="t-body font-semibold text-primary">Remove Repository?</h3>
+              <p class="t-small text-label mt-1">This action cannot be undone.</p>
             </div>
           </div>
 
           <div class="rounded-lg p-3 border" style="background: var(--surface-base); border-color: var(--border-subtle);">
-            <p class="text-[13px] leading-relaxed">
+            <p class="t-ui leading-relaxed">
               Removing <span class="font-mono font-bold">{{ repoToRemove?.owner }}/{{ repoToRemove?.repo }}</span> will delete the local clone and unlink 
               <strong class="text-error">{{ repoToRemove?.count }} {{ repoToRemove?.type }}</strong> currently installed on your system.
             </p>

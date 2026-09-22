@@ -8,6 +8,7 @@ import {
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } from '../../shared/utils/runClock.ts'
+import type { Role } from '../../shared/types/role.ts'
 import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, toWorkflowLike, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
@@ -31,7 +32,8 @@ export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { getClaudeDir, safeSegment } from './claudeDir.ts'
+import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
+import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -96,7 +98,7 @@ interface WorkflowLike {
   group?: string
   /** See Workflow.notifyChannel - where this workflow's run transitions are announced. */
   notifyChannel?: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
 }
 
 export interface StartRunOpts {
@@ -630,8 +632,38 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
  */
 function resumableSession(rec: RunStep): string | undefined {
   if (!rec.sessionId || !rec.sessionProject) return undefined
-  const transcript = join(getClaudeDir(), 'projects', rec.sessionProject, `${rec.sessionId}.jsonl`)
-  return existsSync(transcript) ? rec.sessionId : undefined
+  // Asked of every place the SDK might have written it, not just this app's
+  // config directory: in a container those are different directories, and
+  // looking only in ours made every resume a silent cold start.
+  return transcriptPath(rec.sessionProject, rec.sessionId) ? rec.sessionId : undefined
+}
+
+/**
+ * The predecessor's session this step continues, or undefined for a cold start.
+ *
+ * Only for a step that declares `continuesSession`, and only when the answer is
+ * unambiguous: exactly one forward predecessor, which completed, whose
+ * transcript is still on disk. Anything else starts fresh — the same contract
+ * as `resumableSession`: undefined is always correct, only more expensive.
+ *
+ * Fan-in is the reason for the single-predecessor rule. A step joining three
+ * upstream branches has no "the" session to continue, and silently picking one
+ * would hand it one third of its context while the header it would otherwise
+ * have received carried all three.
+ */
+function inheritedSession(l: Live, run: WorkflowRun, id: string): string | undefined {
+  const step = stepOf(l, id)
+  if (!step?.continuesSession) return undefined
+  const preds = l.graph.forwardPreds[id] ?? []
+  if (preds.length !== 1) {
+    log.info('step declares continuesSession but has no single predecessor; starting fresh', { runId: run.id, stepId: id, preds: preds.length })
+    return undefined
+  }
+  const rec = run.steps.find(s => s.stepId === preds[0])
+  if (!rec || rec.status !== 'completed') return undefined
+  const session = resumableSession(rec)
+  if (session) log.info('step continues its predecessor\'s session', { runId: run.id, stepId: id, from: rec.stepId, sessionId: session })
+  return session
 }
 
 function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: string): string {
@@ -770,7 +802,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
-  const resume = l.resumeFrom[id]
+  const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
   const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
@@ -1866,14 +1898,33 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return run
   }
 
-  // A step marked for approval waits for a person before it starts, run-to-completion or not.
+  // The radius is normally recorded once, where the worktree is cut. But that
+  // path early-returns for a run that already has its branch, so a run that was
+  // restarted, resumed after the server died, or reworked back to an earlier
+  // step never passes through it again - and would arrive here unclassified and
+  // stop for a person even when its own meta.json says `docs`. Backfill at the
+  // point the answer is actually needed, and only while it is still missing.
+  if (run.blastRadius === undefined) {
+    const late = await readClassification(run)
+    if (late?.blast_radius) {
+      run.blastRadius = late.blast_radius
+      run.workType = run.workType ?? late.work_type
+      run.origin = run.origin ?? late.origin
+    }
+  }
+
+  // A step marked for approval is a point where a gate MAY fire; the run's own
+  // blast radius decides whether it does. A docs or ui_parsing change flows
+  // straight through the same runbook that stops hard on a money one, so
+  // nobody learns to click approve without reading. See shared/utils/oversight.
+  // Still-unclassified stays `stop`: absence of evidence is not evidence of safety.
   //
-  // Only that step waits. The gate used to stop the WHOLE wave the moment any
-  // member of it was gated, which is how a scan's auto-approved half ended up
-  // behind the human deciding its escalated half: conditional routing puts the
-  // two branches in one wave, and one of them needs nobody. So the wave splits,
-  // the rest of it runs, and the gate is raised only when there is nothing else
-  // left to run.
+  // Only the gated step waits. The gate used to stop the WHOLE wave the moment
+  // any member of it was gated, which is how a scan's auto-approved half ended
+  // up behind the human deciding its escalated half: conditional routing puts
+  // the two branches in one wave, and one of them needs nobody. So the wave
+  // splits, the rest of it runs, and the gate is raised only when there is
+  // nothing else left to run.
   //
   // A deferred gate is not a skipped one. Nothing marks it running, so it stays
   // armed and readyNodes offers it again on every wave until it is the only
@@ -1884,13 +1935,19 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // then capped at MAX_CONCURRENCY. `gated` deliberately keeps every gated
   // node, because it is published verbatim as run.nextStepIds below and
   // truncating it would drop steps from the run page.
-  const gatedSet = new Set(ready.filter(id => stepOf(l, id)?.approval && !l.approved.has(id)))
+  const gatedSet = new Set(ready.filter(id => stepOf(l, id)?.approval && !l.approved.has(id)
+    && oversightFor(run.blastRadius) !== 'auto'))
   const gated = [...gatedSet]
   const runnable = ready.filter(id => !gatedSet.has(id)).slice(0, MAX_CONCURRENCY)
   const gate = runnable.length ? undefined : gated[0]
+  let artifact: string | undefined
   if (gate) {
     const step = stepOf(l, gate)
     const label = step?.label ?? gate
+    // Whose decision this is, from the step that declares it. A gate with no
+    // `gateRole` stays everyone's, which is the old behaviour and the honest
+    // default for a workflow that never said.
+    const gateRole = (step as { gateRole?: Role } | undefined)?.gateRole
     // A gated step that consumes an artifact asks a different question. "Approve
     // this step" acts on every entry in that file, and a step downstream of it
     // may start one child run per entry - so the honest question is which
@@ -1898,12 +1955,13 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // step's own runWhen rather than from anything workflow-specific: the shape
     // (approval + a file to consume) is the whole condition, exactly as
     // resolveConditions gates on the file rather than on an announcement.
-    const artifact = step?.runWhen?.artifact
+    artifact = step?.runWhen?.artifact
     run.question = {
       stepId: gate, kind: 'approval', askedAt: Date.now(),
       text: artifact
         ? `Decide which entries of ${artifact} to act on before "${label}" runs`
-        : `Approve "${label}" to run it`,
+        : `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}`,
+      ...(gateRole ? { role: gateRole } : {}),
       ...(artifact ? { artifact } : {}),
     }
     run.status = artifact ? 'awaiting_review' : 'paused'
@@ -2080,10 +2138,21 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * have pushed it. Idempotent: a run that already has its branch is left alone.
  */
 /** Intake's classification from meta.json, once it has written one. */
-async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string } | null> {
+async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string } | null> {
   try {
     const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
-    return meta && typeof meta === 'object' ? { work_type: meta.work_type, origin: meta.origin } : null
+    // `blast_radius` is read here because it is written here: intake merges all
+    // three into the same meta.json (app/utils/templates.ts). This reader
+    // declared it in its return type and then did not return it, so
+    // `classified?.blast_radius` was `undefined` on every run ever recorded and
+    // the entire risk-tier policy in shared/utils/oversight.ts never executed —
+    // every approval step stopped, nothing was ever owner-gated, and
+    // ApprovalNeedsReason could not be thrown. One absent key in one object
+    // literal, and no test caught it: test-oversight.mjs exercises oversightFor()
+    // in isolation and never asks whether anything populates its input.
+    return meta && typeof meta === 'object'
+      ? { work_type: meta.work_type, origin: meta.origin, blast_radius: meta.blast_radius }
+      : null
   } catch { return null }
 }
 
@@ -2138,6 +2207,7 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // there, and the clone stays on whatever branch the developer left it on.
   run.projectDir = worktrees[0] ?? checkout
   run.workType = run.workType ?? classified?.work_type
+  run.blastRadius = run.blastRadius ?? classified?.blast_radius
   run.origin = run.origin ?? classified?.origin
   run.baseBranch = base
   // The branch starts at the base now, so the fix facts diff against it.
@@ -2559,6 +2629,9 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
 }
 
 /** Continue a paused run. A note travels to the approved step, or to whichever step starts next. */
+/** Approving an owner-gated run without saying why. The route answers 400. */
+export class ApprovalNeedsReason extends Error {}
+
 export async function continueRun(
   runId: string, note?: string, opts: { grantApproval?: boolean } = {},
 ): Promise<WorkflowRun | null> {
@@ -2621,6 +2694,16 @@ export async function continueRun(
       // another two.
       const added = note?.trim() ? ` The operator added: ${note.trim()}` : ''
       return restartRun(run.id, w.target, `Sent back by "${from}", granted by the operator after the automatic attempts were spent.${added} ${w.instruction}`, run.startedBy, { fromRunner: true })
+    }
+    // An owner-gated change is approved with a reason or not at all. Writing one
+    // sentence is the cheapest defence against a gate decaying into a reflex:
+    // it cannot be satisfied without having read something. Reject already
+    // demanded a reason; approve did not, which had it backwards - saying yes to
+    // a money change is the answer that needs the justification.
+    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius) && !note?.trim()) {
+      l.running = false
+      throw new ApprovalNeedsReason(
+        `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
     }
     if (run.question.reason === 'budget') extendBudget(run)
     // Withholding the approval is what lets a review that approved nothing take

@@ -141,8 +141,8 @@ onUnmounted(() => {
           <div class="flex items-center gap-3 min-w-0">
             <UIcon name="i-lucide-file-code" class="size-4 text-accent shrink-0" />
             <div class="flex flex-col min-w-0">
-              <span class="text-[13px] font-semibold truncate">{{ fileName }}</span>
-              <span class="text-[10px] text-meta truncate">{{ displayPath }}</span>
+              <span class="t-ui font-semibold truncate">{{ fileName }}</span>
+              <span class="t-small text-meta truncate">{{ displayPath }}</span>
             </div>
           </div>
           <div class="flex items-center gap-1">
@@ -177,14 +177,14 @@ onUnmounted(() => {
 
           <div v-else class="h-full overflow-auto p-4 custom-scrollbar">
             <div v-if="highlightedHtml" class="shiki-editor" v-html="highlightedHtml" />
-            <pre v-else class="text-[12px] font-mono whitespace-pre-wrap">{{ content }}</pre>
+            <pre v-else class="t-small font-mono whitespace-pre-wrap">{{ content }}</pre>
           </div>
         </div>
         
         <!-- Footer -->
         <div class="px-4 py-2 border-t border-border-subtle shrink-0 flex items-center justify-between">
-          <span class="text-[10px] text-meta font-mono">{{ content.split('\n').length }} lines</span>
-          <div v-if="state.diffInfo" class="text-[10px] px-2 py-0.5 rounded-full bg-accent-muted text-accent font-medium">
+          <span class="t-small text-meta font-mono">{{ content.split('\n').length }} lines</span>
+          <div v-if="state.diffInfo" class="t-small px-2 py-0.5 rounded-full bg-accent-muted text-accent font-medium">
             Viewing Changes
           </div>
         </div>

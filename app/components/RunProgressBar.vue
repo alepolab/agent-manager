@@ -6,6 +6,9 @@ const props = defineProps<{ steps: RunStep[] }>()
 
 /** Colour carries the status visually; this sentence carries it for everyone else. */
 const summary = computed(() => {
+  // A run with no steps produced an empty aria-label on a role="img", which
+  // announces as an unlabelled image rather than as "nothing recorded".
+  if (!props.steps.length) return 'No steps recorded for this run'
   const counts: Record<string, number> = {}
   for (const s of props.steps) counts[s.status] = (counts[s.status] ?? 0) + 1
   return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ')

@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { writeFile, rename, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -7,6 +8,7 @@ import { slugToPath, pathToSlug } from '../../utils/slugUtils'
 import type { CommandPayload } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const { directory, filename } = slugToPath(slug)

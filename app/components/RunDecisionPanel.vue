@@ -134,7 +134,7 @@ async function submit() {
 
 <template>
   <div
-    class="rounded-lg p-3 text-[12px] space-y-3"
+    class="rounded-lg p-3 t-small space-y-3"
     style="background: var(--surface-raised); border: 1px solid var(--warning);"
     role="alert"
     data-testid="run-decision-panel"
@@ -144,20 +144,20 @@ async function submit() {
       <span class="font-medium" style="color: var(--text-primary);">
         Awaiting your decision<template v-if="items.length"> — {{ items.length }} {{ items.length === 1 ? 'draft' : 'drafts' }}</template>
       </span>
-      <span v-if="queue" class="ml-auto font-mono text-[10px] text-meta">{{ queue.artifact }}</span>
+      <span v-if="queue" class="ml-auto font-mono t-small text-meta">{{ queue.artifact }}</span>
     </div>
 
-    <p v-if="loadError" class="text-[12px]" style="color: var(--error);">{{ loadError }}</p>
+    <p v-if="loadError" class="t-small" style="color: var(--error);">{{ loadError }}</p>
     <p v-else-if="!queue" class="text-label">Reading the drafts…</p>
     <p v-else-if="!items.length" class="text-label">There is nothing to decide in {{ queue.artifact }}.</p>
 
     <div v-for="(item, n) in items" :key="item.index" class="rounded-lg px-3 py-2 space-y-1.5" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">
       <div class="flex items-center gap-2 flex-wrap">
-        <span class="font-mono text-[10px] text-meta">[{{ n + 1 }}/{{ items.length }}]</span>
-        <span class="font-mono text-[10px] uppercase text-label">{{ [item.key, ...facets(item.fields, item.entry)].join(' | ') }}</span>
+        <span class="font-mono t-label text-meta">[{{ n + 1 }}/{{ items.length }}]</span>
+        <span class="font-mono t-label uppercase text-label">{{ [item.key, ...facets(item.fields, item.entry)].join(' | ') }}</span>
         <span
           v-if="decisions[item.index]"
-          class="ml-auto font-mono text-[10px] uppercase"
+          class="ml-auto font-mono t-label uppercase"
           :style="{ color: decisions[item.index] === 'approved' ? 'var(--success)' : 'var(--text-disabled)' }"
         >{{ decisions[item.index] }}</span>
       </div>
@@ -167,7 +167,7 @@ async function submit() {
       <p v-if="item.decisionPrompt" class="whitespace-pre-wrap" style="color: var(--text-primary);">{{ item.decisionPrompt }}</p>
       <p v-else class="whitespace-pre-wrap" style="color: var(--text-primary);">{{ item.summary || 'This draft carries no decision prompt; open it to decide.' }}</p>
       <p v-if="item.reason" class="text-label">{{ item.reason }}</p>
-      <p v-if="item.escalationCriteria?.length" class="font-mono text-[10px] text-meta">{{ item.escalationCriteria.join(', ') }}</p>
+      <p v-if="item.escalationCriteria?.length" class="font-mono t-small text-meta">{{ item.escalationCriteria.join(', ') }}</p>
 
       <div v-if="editing !== item.index" class="flex items-center gap-2 flex-wrap pt-0.5">
         <UButton size="xs" icon="i-lucide-check" label="Approve" :variant="decisions[item.index] === 'approved' ? 'solid' : 'soft'" @click="decide(item.index, 'approved')" />
@@ -205,8 +205,8 @@ async function submit() {
 
       <div v-if="opened === item.index" class="space-y-1 pt-1" style="border-top: 1px solid var(--border-subtle);">
         <p v-if="item.summary" class="font-medium pt-1" style="color: var(--text-primary);">{{ item.summary }}</p>
-        <pre v-if="item.description" class="whitespace-pre-wrap text-[11px] text-label">{{ item.description }}</pre>
-        <ul v-if="item.acceptanceCriteria?.length" class="list-disc pl-4 text-[11px] text-label">
+        <pre v-if="item.description" class="whitespace-pre-wrap t-small text-label">{{ item.description }}</pre>
+        <ul v-if="item.acceptanceCriteria?.length" class="list-disc pl-4 t-small text-label">
           <li v-for="(c, ci) in item.acceptanceCriteria" :key="ci">{{ c }}</li>
         </ul>
       </div>

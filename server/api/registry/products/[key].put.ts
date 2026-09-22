@@ -1,6 +1,6 @@
 import { StaleStoreError, writeProduct } from '../../../utils/productStore'
 import { blocking, validateProduct } from '../../../utils/registryValidate'
-import { requireUser } from '../../../utils/session'
+import { requireUser, requireCapability } from '../../../utils/session'
 import { createLogger } from '../../../utils/log'
 
 const log = createLogger('registry')
@@ -21,6 +21,7 @@ const log = createLogger('registry')
  * entry nothing can act on is a run that fails after standing a stack up.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const user = await requireUser(event)
   const key = getRouterParam(event, 'key')!
   const body = await readBody<{ product?: Record<string, any>, comment?: string, mtimeMs?: number }>(event)

@@ -14,8 +14,34 @@ const initialized = ref(false)
 const isLogin = computed(() => route.path === '/login')
 const showSearch = ref(false)
 const sidebarCollapsed = useState('sidebar-collapsed', () => false)
+/**
+ * The sidebar was 200px wide at every width, and its collapse control was
+ * `hidden md:flex` — so on a phone it took half the screen with no way to
+ * dismiss it. The app ships exactly one @media rule in 1,400 lines of CSS
+ * (prefers-reduced-motion), which is the whole story of its responsive design.
+ *
+ * This nudges the default closed when the viewport goes narrow and then leaves
+ * the person in control. Forcing it instead would make the toggle inert on a
+ * phone — a control that is visible and does nothing, which is worse than the
+ * hidden one it replaced.
+ */
+onMounted(() => {
+  const mq = window.matchMedia('(max-width: 767px)')
+  const sync = () => { if (mq.matches) sidebarCollapsed.value = true }
+  sync()
+  mq.addEventListener('change', sync)
+  onUnmounted(() => mq.removeEventListener('change', sync))
+})
 const { isPanelOpen: chatOpen } = useChat()
 const colorMode = useColorMode()
+
+/** Switching to your own role clears the impersonation rather than setting one. */
+const switchingRole = ref(false)
+async function switchRole(next: string) {
+  if (role.value === next) return
+  switchingRole.value = true
+  try { await viewAs(next === 'operator' ? null : next as any) } finally { switchingRole.value = false }
+}
 
 function toggleTheme() {
   colorMode.preference = colorMode.value === 'dark' ? 'light' : 'dark'
@@ -25,6 +51,11 @@ function toggleTheme() {
 if (import.meta.client) {
   const chatHandler = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+      // The same `configure` gate as the button and the panel. Gating only the
+      // two visible affordances would leave the shortcut as an undocumented way
+      // in — the panel would not render, so the key would silently do nothing,
+      // which is a worse answer than the key not being ours to press.
+      if (!can('configure')) return
       e.preventDefault()
       chatOpen.value = !chatOpen.value
     }
@@ -54,7 +85,7 @@ useAutoRefresh(() => canRefresh() && Promise.all([
 useAutoRefresh(() => canRefresh() && fetchSkills({}, { silent: true }), { interval: 0 })
 
 const { settings, load: loadSettings } = useSettings()
-const { me, signOut } = useUser()
+const { me, signOut, can, role, viewingAs, viewAs } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
 const labs = computed(() => settings.value?.agentManager?.labs === true)
 const navTopAll = [
@@ -62,6 +93,7 @@ const navTopAll = [
   { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
   { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
   { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
+  { label: 'Board', icon: 'i-lucide-gauge', to: '/board' },
   { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
   { label: 'Products', icon: 'i-lucide-boxes', to: '/registry' },
   { label: 'Schedules', icon: 'i-lucide-calendar-clock', to: '/schedules' },
@@ -73,7 +105,26 @@ const navTopAll = [
   { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
 ]
 
-const navTop = computed(() => navTopAll.filter(l => labs.value || l.to !== '/output-styles'))
+/**
+ * What each role has any business opening. Everything absent here is still
+ * reachable by URL for an operator and refused by the API for everyone else —
+ * this list decides what a person is OFFERED, which is the actual complaint
+ * about the old sidebar: it showed a reviewer the whole engine.
+ */
+const NAV_BY_ROLE: Record<string, string[]> = {
+  developer: ['/', '/runs', '/agents', '/skills', '/commands'],
+  qa: ['/', '/runs'],
+  // A manager's screen is the board, not the run list with its buttons removed.
+  manager: ['/', '/board', '/runs'],
+}
+
+const navTop = computed(() => {
+  const allowed = role.value ? NAV_BY_ROLE[role.value] : undefined
+  return navTopAll
+    .filter(l => labs.value || l.to !== '/output-styles')
+    // No role entry means operator: the full sidebar, exactly as before.
+    .filter(l => !allowed || allowed.includes(l.to))
+})
 
 /** Reload everything the sidebar counts after onboarding finishes.
  *  Written as a named handler rather than inline: a template expression
@@ -88,17 +139,25 @@ async function onOnboardingComplete() {
   ])
 }
 
-const navMid = [
+const navMidAll = [
   { key: 'artifacts', label: 'Artifacts', icon: 'i-lucide-folder-root', to: '/project-artifacts' },
   { key: 'cli', label: 'CLI', icon: 'i-lucide-terminal-square', to: '/cli' },
 ]
+// The CLI is a Claude Code session against the working directory — the most
+// powerful thing in the app, and nothing a reviewer's job needs. Artifacts are
+// evidence, so they stay for everyone.
+const navMid = computed(() => navMidAll.filter(l => l.key !== 'cli' || can('configure')))
 
 const navBottomAll = [
   { label: 'Explore', icon: 'i-lucide-compass', to: '/explore' },
   { label: 'Graph', icon: 'i-lucide-workflow', to: '/graph' },
   { label: 'Settings', icon: 'i-lucide-settings', to: '/settings' },
 ]
-const navBottom = computed(() => navBottomAll.filter(l => labs.value || !['/explore', '/graph'].includes(l.to)))
+// Settings is configuration, so it goes with the rest of it: only an operator
+// is offered it, and /api/settings refuses the write regardless.
+const navBottom = computed(() => navBottomAll
+  .filter(l => labs.value || !['/explore', '/graph'].includes(l.to))
+  .filter(l => l.to !== '/settings' || can('configure')))
 
 function isActive(to: string) {
   if (to === '/') return route.path === '/'
@@ -146,10 +205,10 @@ function badgeFor(to: string) {
               <UIcon name="i-lucide-bot" class="size-3.5" style="color: var(--accent);" />
             </div>
             <div class="flex-1 flex flex-col min-w-0">
-              <span class="text-[12px] font-semibold tracking-tight group-hover/brand:text-accent transition-colors" style="color: var(--text-primary); font-family: var(--font-display);">
+              <span class="t-small font-semibold tracking-tight group-hover/brand:text-accent transition-colors" style="color: var(--text-primary); font-family: var(--font-display);">
                 Agent Manager
               </span>
-              <span class="text-[9px] font-mono tracking-wider uppercase" style="color: var(--text-disabled);">
+              <span class="t-small font-mono tracking-wider uppercase" style="color: var(--text-disabled);">
                 Claude Code
               </span>
             </div>
@@ -161,7 +220,7 @@ function badgeFor(to: string) {
           </div>
           <!-- Collapse toggle -->
           <button
-            class="hidden md:flex size-7 items-center justify-center rounded-lg transition-all duration-150 focus-ring press-scale shrink-0"
+            class="flex size-7 items-center justify-center rounded-lg transition-all duration-150 focus-ring press-scale shrink-0"
             style="color: var(--text-tertiary);"
             :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
             @mouseenter="($event.currentTarget as HTMLElement).style.background = 'var(--surface-hover)'"
@@ -185,8 +244,8 @@ function badgeFor(to: string) {
           >
             <UIcon name="i-lucide-search" class="size-3.5" />
             <template v-if="!sidebarCollapsed">
-              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
-              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
+              <span class="t-small flex-1 text-left" style="font-family: var(--font-sans);">Search</span>
+              <kbd class="t-small font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘K</kbd>
             </template>
           </button>
         </div>
@@ -198,7 +257,7 @@ function badgeFor(to: string) {
             v-for="link in navTop"
             :key="link.to"
             :to="link.to"
-            class="nav-item group flex items-center rounded-lg text-[13px] transition-all duration-150 relative focus-ring"
+            class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
               sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               { 'nav-item--active': isActive(link.to) }
@@ -221,7 +280,7 @@ function badgeFor(to: string) {
               <span class="flex-1" style="font-family: var(--font-sans);">{{ link.label }}</span>
               <span
                 v-if="badgeFor(link.to)"
-                class="font-mono text-[10px] tabular-nums transition-colors duration-150"
+                class="font-mono t-small tabular-nums transition-colors duration-150"
                 :style="{ color: isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
               >
                 {{ badgeFor(link.to) }}
@@ -237,7 +296,7 @@ function badgeFor(to: string) {
             v-for="link in navMid"
             :key="link.key"
             :to="link.to"
-            class="nav-item group flex items-center rounded-lg text-[13px] transition-all duration-150 relative focus-ring"
+            class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
               sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               { 'nav-item--active': isActive(link.to) }
@@ -268,7 +327,7 @@ function badgeFor(to: string) {
             v-for="link in navBottom"
             :key="link.to"
             :to="link.to"
-            class="nav-item group flex items-center rounded-lg text-[13px] transition-all duration-150 relative focus-ring"
+            class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
               sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               { 'nav-item--active': isActive(link.to) }
@@ -290,8 +349,11 @@ function badgeFor(to: string) {
           </NuxtLink>
         </nav>
 
-        <!-- Chat with Claude -->
-        <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
+        <!-- Chat with Claude. `configure` only, matching /cli in navMid above and
+             the server check on /api/chat: this panel runs an agent over the
+             config directory with permissions bypassed, so offering it to a
+             reviewer contradicted the link we deliberately hid from them. -->
+        <div v-if="can('configure')" :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
           <button
             class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring cursor-pointer press-scale"
             :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
@@ -311,8 +373,8 @@ function badgeFor(to: string) {
               />
             </div>
             <template v-if="!sidebarCollapsed">
-              <span class="text-[12px] flex-1 text-left" style="font-family: var(--font-sans);">Claude</span>
-              <kbd class="text-[9px] font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘J</kbd>
+              <span class="t-small flex-1 text-left" style="font-family: var(--font-sans);">Claude</span>
+              <kbd class="t-small font-mono px-1.5 py-0.5 rounded" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">⌘J</kbd>
             </template>
           </button>
         </div>
@@ -329,11 +391,36 @@ function badgeFor(to: string) {
             >
               <img v-if="me.avatar" :src="me.avatar" alt="" class="size-5 rounded-full" />
               <UIcon v-else name="i-lucide-user" class="size-4" />
-              <span v-if="!sidebarCollapsed" class="text-[12px] truncate flex-1 text-left" style="font-family: var(--font-sans);">{{ me.name || me.login }}</span>
-              <button v-if="!sidebarCollapsed && !me.authDisabled" class="text-[10px] underline" @click.prevent="signOut">Sign out</button>
+              <span v-if="!sidebarCollapsed" class="t-small truncate flex-1 text-left" style="font-family: var(--font-sans);">{{ me.name || me.login }}</span>
+              <button v-if="!sidebarCollapsed && !me.authDisabled" class="t-small underline" @click.prevent="signOut">Sign out</button>
             </NuxtLink>
           </div>
         </ClientOnly>
+
+        <!-- Look at the app as a lesser role.
+             On `realRole`, never `can('configure')`: the moment you view as a
+             developer you lose `configure`, so a control gated on it would
+             disappear and strand you in the role you were inspecting.
+             Lives here rather than on the dashboard because it is an occasional
+             operator tool that was occupying the best line of the busiest page,
+             and because a gate or a run list is often what you want to inspect. -->
+        <div v-if="me?.realRole === 'operator' && !sidebarCollapsed" class="px-2.5 pb-1">
+          <div class="t-label mb-1" style="color: var(--text-disabled);">View as</div>
+          <div class="flex rounded-lg overflow-hidden" style="border: 1px solid var(--border-subtle);">
+            <button
+              v-for="r in ['operator', 'developer', 'qa', 'manager']" :key="r"
+              class="flex-1 py-1 t-label focus-ring transition-colors"
+              :style="{
+                background: role === r ? 'var(--accent-muted)' : 'transparent',
+                color: role === r ? 'var(--accent)' : 'var(--text-tertiary)',
+              }"
+              :title="r === 'operator' ? 'Your own role' : `See the app as a ${r}`"
+              :aria-pressed="role === r"
+              :disabled="switchingRole"
+              @click="switchRole(r)"
+            >{{ r === 'operator' ? 'You' : r === 'developer' ? 'Dev' : r === 'manager' ? 'Mgr' : 'QA' }}</button>
+          </div>
+        </div>
 
         <!-- Theme toggle -->
         <div :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
@@ -346,7 +433,7 @@ function badgeFor(to: string) {
               @click="toggleTheme"
             >
               <UIcon :name="colorMode.value === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon'" class="size-4" />
-              <span v-if="!sidebarCollapsed" class="text-[12px]" style="font-family: var(--font-sans);">
+              <span v-if="!sidebarCollapsed" class="t-small" style="font-family: var(--font-sans);">
                 {{ colorMode.value === 'dark' ? 'Light mode' : 'Dark mode' }}
               </span>
             </button>
@@ -373,7 +460,7 @@ function badgeFor(to: string) {
     </div>
     <template v-if="!isLogin">
       <GlobalSearch />
-      <ChatPanel v-model:open="chatOpen" />
+      <ChatPanel v-if="can('configure')" v-model:open="chatOpen" />
       <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
     </template>
   </UApp>

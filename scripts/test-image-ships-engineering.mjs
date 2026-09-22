@@ -37,6 +37,8 @@ const SHIPPED = [
   ['scripts', 'the evidence step is instructed to run engineering/scripts/assemble-bundle.mjs'],
   ['schemas', 'assemble-bundle.mjs validates against schemas/evidence-bundle.v0.1.schema.json and halts without it'],
   ['recipes', 'registry.ts resolves <registry>/../../recipes/<key>.md; absent, every product silently has no recipe'],
+  ['hooks', 'agentHooks.ts falls back to /app/engineering/hooks, and in a container that is the ONLY path that resolves: the staged installed_plugins.json records the host\'s installPath. Absent, preflight fails every run on "the guardrail hooks are on neither"'],
+  ['.claude-plugin', 'teamSync reads the manifest for shippedVersion AND records this directory as the installed plugin, which is what puts it on the Plugins page; absent, the page is empty on an instance whose plugin is demonstrably installed'],
 ]
 
 for (const [dir, why] of SHIPPED) {
@@ -52,15 +54,27 @@ const schemas = readdirSync(join(root, 'engineering', 'schemas'))
 assert.ok(schemas.some(f => f.startsWith('evidence-bundle.') && f.endsWith('.schema.json')),
   `engineering/schemas holds the evidence-bundle schema; found: ${schemas.join(', ') || '(empty)'}`)
 
+// The compound-engineering skills are not under engineering/ — they are a
+// third party's, fetched at build time — but the same rule applies: Runbook C's
+// Plan step halts without them, and a real run did, twice, because the plugin
+// was installed on the operator's host while the app read a config volume that
+// had never seen it. ceSkillsDir falls back to /app/vendor/compound-engineering,
+// so the Dockerfile must put them there, at a pinned commit, not a branch.
+{
+  const fetch = dockerfile.match(/ARG CE_PLUGIN_REV=([0-9a-f]{40})\r?\n/)
+  assert.ok(fetch, 'the Dockerfile pins the compound-engineering plugin to a full commit sha (ARG CE_PLUGIN_REV)')
+  assert.ok(dockerfile.includes('compound-engineering-plugin.git'), 'and fetches it from the EveryInc repository')
+  assert.ok(dockerfile.includes('/app/vendor/compound-engineering/skills/ce-plan/SKILL.md'),
+    'and proves ce-plan landed where ceSkillsDir looks before the layer is accepted')
+}
+
 // Anything new under engineering/ is a deliberate choice, not an oversight: a
 // directory the app reads must be added above, one it does not must be named
 // here. Both halves are cheap; a silent third option is what this file exists
 // to prevent.
 const NOT_SHIPPED = new Set([
   'docs',       // written for people reading the repo, not for the running app
-  'hooks',      // installed into CLAUDE_DIR by the plugin, never read from /app
   'templates',  // authoring aids for the plugin itself
-  '.claude-plugin', // the marketplace/plugin manifest, read by `claude plugin install`, not by this app
 ])
 const known = new Set([...SHIPPED.map(([d]) => d), ...NOT_SHIPPED])
 const unaccounted = readdirSync(join(root, 'engineering'), { withFileTypes: true })

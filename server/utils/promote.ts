@@ -107,7 +107,14 @@ export async function promoteToTeam(kind: PromoteKind, slug: string, login: stri
     // every boot. Reporting only the PR link would be the same defect the
     // seeder warning just fixed: an operation that reports success while
     // nothing changes where the operator is looking.
-    const installed = (await pluginInstall()) !== null
+    // "Installed" here means one question only: can merging this PR change
+    // THIS box? A scope 'shipped' record is the copy baked into the image - it
+    // is a real install, and the Plugins page is right to list it, but it
+    // updates on a REDEPLOY, never on a reinstall. Treating it as installed
+    // would drop the note below and report a promotion as effective here when
+    // the seeder will keep reverting the same edit on every boot.
+    const install = await pluginInstall()
+    const installed = install !== null && install.scope !== 'shipped'
     return {
       branch,
       pr,
@@ -115,7 +122,9 @@ export async function promoteToTeam(kind: PromoteKind, slug: string, login: stri
       pluginInstalled: installed,
       ...(installed
         ? {}
-        : { note: 'No alepo-engineering plugin is installed on this instance, so merging this PR will not change behaviour here — the seeder will keep reverting local edits to the shipped copy. Install the plugin and apply team standards on the Team page, or edit the shipped template in the product repo and redeploy.' }),
+        : { note: install?.scope === 'shipped'
+          ? 'This instance runs the plugin copy baked into its image, so merging this PR will not change behaviour here until the image is rebuilt and redeployed. Install the plugin separately and apply team standards on the Team page, or redeploy after the merge.'
+          : 'No alepo-engineering plugin is installed on this instance, so merging this PR will not change behaviour here — the seeder will keep reverting local edits to the shipped copy. Install the plugin and apply team standards on the Team page, or edit the shipped template in the product repo and redeploy.' }),
     }
   } finally {
     busy = false

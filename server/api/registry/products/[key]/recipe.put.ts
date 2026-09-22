@@ -1,5 +1,5 @@
 import { StaleRecipeError, writeRecipe } from '../../../../utils/recipeStore'
-import { requireUser } from '../../../../utils/session'
+import { requireUser, requireCapability } from '../../../../utils/session'
 import { createLogger } from '../../../../utils/log'
 
 const log = createLogger('registry')
@@ -13,6 +13,7 @@ const log = createLogger('registry')
  * are different: absent skips the check, null asserts there was nothing there.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const user = await requireUser(event)
   const key = getRouterParam(event, 'key')!
   const body = await readBody<{ content?: string, mtimeMs?: number | null }>(event)

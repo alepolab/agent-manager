@@ -186,9 +186,9 @@ they exist only to register route params.
 - `useSessionStore.ts` - session-keyed message store; switching session moves a pointer rather than clearing
 - `useContextMonitor.ts` - token and cost tracking
 
-`useWebSocketChat.ts` and `useChatSessions.ts` are the previous generation of
-the same two jobs. Nothing imports them. Treat them as dead until deleted; do
-not extend them.
+The previous generation of the same two jobs — `useWebSocketChat.ts` and
+`useChatSessions.ts` — has been deleted, along with `useAgentHistory.ts` and
+`useVersionHistory.ts`. Nothing imported any of them.
 
 **Backend**:
 - `server/api/v2/chat/ws.ts` - the WebSocket the chat connects to
@@ -316,12 +316,15 @@ All TypeScript types are centralized in `app/types/index.ts`. Key types:
 - `ChatSession`, `ChatSessionSummary`, `ChatWebSocketMessage`, `ChatWebSocketEvent` -
   Session and WebSocket types, still used by the session REST routes
 
-`CliSession`, `FileChange` and `CliWebSocketEvent` are left over from the
-removed terminal — PTY sessions and its chokidar file watcher. Nothing on the
-server produces any of them now. `CliSession` is referenced nowhere outside this
-file; `FileChange` and `CliWebSocketEvent` are still imported by
-`useContextMonitor.ts`, which no longer receives either. Do not build anything
-new on them.
+`CliSession` and `CliWebSocketEvent` were left over from the removed terminal —
+PTY sessions and its chokidar file watcher — and have been deleted along with
+the only function that consumed the latter.
+
+`FileChange` stays, and is worth being precise about: it is the element type of
+`ContextMetrics.files`, which the chat's context monitor still carries. Nothing
+on the server produces the events that once filled those arrays, so they are
+always empty — but the type is load-bearing for a live one, and deleting it
+would not compile. Do not build anything new on that shape.
 
 ## Model Registry Design
 
@@ -403,3 +406,49 @@ if (model === MODEL_ALIAS_KEY.SONNET)    // not if (model === 'sonnet')
 3. **No inline model data**: No hardcoded `rgba()` per model in templates. No `{ opus: '...', sonnet: '...', haiku: '...' }` spread across components.
 4. **Frontend/server split**: App utils cannot be imported server-side (different module context). Each layer has its own registry file.
 5. **Backwards compat**: Legacy helpers (e.g., `getFriendlyModelName` in `terminology.ts`) are kept with `@deprecated` JSDoc and delegate to the new helpers.
+
+<!-- OMA:START — managed by oh-my-agent. Do not edit this block manually. -->
+
+# oh-my-agent
+
+Follow `.agents/skills/_shared/core/execution-policy.md` for authorization, clarification, verification, and completion. System/developer instructions and the user's request take precedence over OMA defaults. Never build, compile, bundle, or package software unless the user explicitly requests a build.
+
+- **SSOT**: Do not modify `.agents/` definitions (skills, workflows, rules, agents, config) directly. Run outputs under `.agents/results/` and `.agents/state/` are generated artifacts and may be written.
+- **Response language**: Follow `language` in `.agents/oma-config.yaml`.
+- **Skills**: Read the relevant `.agents/skills/{name}/SKILL.md` when needed.
+- **Subagents**: Same-vendor native dispatch via Claude Code Agent tool with `.claude/agents/{name}.md`; cross-vendor fallback via `oma agent spawn`
+- Write non-ASCII tool-call parameters as literal UTF-8, not Unicode escapes.
+
+## Per-Agent Dispatch
+
+Resolve each agent from `.agents/oma-config.cue` or `.agents/oma-config.yaml`, overlaid by `.agents/oma-config.local.cue` or `.agents/oma-config.local.yaml` when present. With `model_preset: free`, always use `oma agent spawn` so the subprocess receives the FreeLLMAPI route; `free.model` replaces per-agent model pins. Otherwise, explicit `agents:` overrides take priority. With `model_preset: auto`, follow the current vendor's native agent/model settings; use `default_cli` only when the runtime is unknown. Use native subagents when the target matches the current runtime; otherwise, or when native dispatch is unavailable, use `oma agent spawn`.
+
+## Code Search
+
+Serena MCP is required for code search and discovery. Load deferred tools before use. Use native search/read only when Serena is unavailable or times out, or for plain non-code content.
+
+## Workflows
+
+Run workflows only when explicitly requested or detected by a hook; never self-initiate. Read and follow `.agents/workflows/{name}.md`. Continue active workflows until complete or explicitly cancelled.
+
+## Project Rules
+
+Read the relevant file from `.agents/rules/` when working on matching code.
+
+| Rule | File | Scope |
+|------|------|-------|
+| backend | `.agents/rules/backend.md` | on request |
+| commit | `.agents/rules/commit.md` | on request |
+| database | `.agents/rules/database.md` | **/*.{sql,prisma} |
+| debug | `.agents/rules/debug.md` | on request |
+| design | `.agents/rules/design.md` | on request |
+| dev-workflow | `.agents/rules/dev-workflow.md` | on request |
+| frontend | `.agents/rules/frontend.md` | **/*.{tsx,jsx,css,scss} |
+| i18n-arb | `.agents/rules/i18n-arb.md` | **/*.arb |
+| i18n-guide | `.agents/rules/i18n-guide.md` | always |
+| infrastructure | `.agents/rules/infrastructure.md` | **/*.{tf,tfvars,hcl} |
+| market | `.agents/rules/market.md` | on request |
+| mobile | `.agents/rules/mobile.md` | **/*.{dart,swift,kt} |
+| quality | `.agents/rules/quality.md` | on request |
+
+<!-- OMA:END -->

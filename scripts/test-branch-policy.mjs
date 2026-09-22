@@ -12,13 +12,22 @@ const { baseBranchFor, describeBranchChoice } = await import('../server/utils/br
 // Policy.
 assert.deepEqual(baseBranchFor('feature', 'development'), { base: 'develop', reason: 'a feature found in development starts from develop and is promoted with the next release', mergeBack: [] })
 assert.equal(baseBranchFor('bug', 'development').base, 'develop', 'a bug found while developing is fixed on develop')
-assert.deepEqual(baseBranchFor('bug', 'production'), { base: 'main', reason: 'a bug found in production is a hotfix from main', mergeBack: ['ci-release', 'develop'] })
-assert.deepEqual(baseBranchFor('bug', 'qa'), { base: 'ci-release', reason: 'a bug found by QA or CI on the release candidate is a hotfix from ci-release', mergeBack: ['develop'] })
+// Develop-first, a production or QA bug included: a fix cut from main or
+// ci-release is lost on the next promotion unless someone remembers to merge
+// it back (lum-selfcare PR #537). CSUP-7514's run was cut from main this way.
+assert.deepEqual(baseBranchFor('bug', 'production'), { base: 'develop', reason: 'a bug found in production starts from develop and is promoted with the next release', mergeBack: [] })
+assert.deepEqual(baseBranchFor('bug', 'qa'), { base: 'develop', reason: 'a bug found in qa starts from develop and is promoted with the next release', mergeBack: [] })
+assert.equal(baseBranchFor('security', 'production').base, 'develop', 'a security fix is no exception')
+assert.equal(baseBranchFor('bug', 'production', { bug: 'develop', feature: 'develop', infra: 'develop' }).base, 'develop', "lum-selfcare's registry entry, which names no hotfix branch")
+// A product that names a hotfix branch in its registry opts in to hotfix flow.
+assert.deepEqual(baseBranchFor('bug', 'production', { hotfix: 'main' }), { base: 'main', reason: 'a bug found in production is a hotfix from main', mergeBack: ['ci-release', 'develop'] })
+assert.deepEqual(baseBranchFor('bug', 'qa', { qa: 'ci-release' }), { base: 'ci-release', reason: 'a bug found by QA or CI on the release candidate is a hotfix from ci-release', mergeBack: ['develop'] })
 assert.equal(baseBranchFor('feature', 'production').base, 'develop', 'a feature is never a hotfix, whoever asked for it')
 assert.equal(baseBranchFor(undefined, undefined).base, 'develop', 'unclassified work starts from develop')
 assert.equal(baseBranchFor('bug', 'development', { bug: 'development', feature: 'development' }).base, 'development', "a product's own branch names win")
 assert.equal(baseBranchFor('bug', 'production', { hotfix: 'master' }).base, 'master')
-assert.match(describeBranchChoice('fix/CSUP-1-abcd1234', baseBranchFor('bug', 'production')), /cut from origin\/main.*targets main.*merged into ci-release and then develop/s)
+assert.match(describeBranchChoice('fix/CSUP-1-abcd1234', baseBranchFor('bug', 'production')), /cut from origin\/develop.*targets develop\.$/s)
+assert.match(describeBranchChoice('fix/CSUP-1-abcd1234', baseBranchFor('bug', 'production', { hotfix: 'main' })), /cut from origin\/main.*targets main.*merged into ci-release and then develop/s)
 
 // Cutting from the base on the remote.
 const W = await import('../server/utils/workspace.ts')

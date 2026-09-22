@@ -18,6 +18,9 @@ const root = mkdtempSync(join(tmpdir(), 'preflight-'))
 process.env.CLAUDE_DIR = join(root, 'claude')
 process.env.AGENT_WORKSPACE_ROOT = join(root, 'ws')
 process.env.AGENT_RUNS_DIR = join(root, 'runs')
+// Profiles live outside CLAUDE_DIR (~/.agent-manager/users by default), so this
+// has to be redirected too or the test writes into the developer's real one.
+process.env.AGENT_USERS_DIR = join(root, 'users')
 process.env.JIRA_BASE_URL = 'https://jira.test'
 process.env.JIRA_EMAIL = 'dev@example.test'
 process.env.JIRA_API_TOKEN = 'not-a-real-token'
@@ -106,14 +109,25 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
     'a later status is reached from wherever the run leaves the ticket, which no check before the run can know')
   assert.equal(preflightFailure(r), null, 'so a later status never blocks the run')
 
-  // The SCN-658 shape: the first status is not reachable and has no synonym or category match.
+  // The SCN-658 shape, which CSUP-7516 then repeated in production: the ticket
+  // sits in an untriaged status whose only transition lands in `done`
+  // ("Close as invalid", "Cancel"), so the first status is unreachable by name,
+  // synonym or category.
+  //
+  // This used to FAIL the run, and the cost was real: a billing bug with a
+  // production impact died at dispatch having done nothing, because nobody had
+  // triaged its ticket. Fixing the bug never depended on the bookkeeping, and
+  // moveTicket already treats "nothing safe to move it to" as a normal outcome
+  // it reports and carries on from. So it warns, names where the ticket is and
+  // what it offers, and lets the work proceed.
   const stuck = { transitions: [{ id: '1', name: 'Close', to: { name: 'Closed', statusCategory: { key: 'done' } } }] }
   const jira2 = async (url) => String(url).endsWith('?fields=status')
     ? new Response(JSON.stringify({ fields: { status: { name: 'Submitted', statusCategory: { key: 'new' } } } }), { status: 200 })
     : new Response(JSON.stringify(stuck), { status: 200 })
   const bad = await runPreflight(run({ ticketKey: 'SCN-658' }), steps, jira2)
-  assert.equal(of(bad, 'jira: In Progress').level, 'fail')
+  assert.equal(of(bad, 'jira: In Progress').level, 'warn')
   assert.match(of(bad, 'jira: In Progress').detail, /Submitted.*Closed/s, 'naming where the ticket is and what it offers')
+  assert.equal(preflightFailure(bad), null, 'an untriaged ticket must not stop the run doing the engineering work')
 }
 
 // ── 6. a step that owns its tests needs .agent/ writable, and says so before it runs ──
@@ -168,6 +182,76 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   assert.doesNotMatch(probe[1], /'info'/, '`docker info` answers and then hangs; its exit is not something to wait on')
   assert.match(src, /\{\{\.Server\.Version\}\}/,
     'and must ask for .Server.Version — a round trip to the daemon, so it still proves reachability rather than just that a CLI exists')
+}
+// ── 9. a host with no git identity of its own still passes: the run's identity
+//      comes from the env the agents get, not from ~/.gitconfig ──────────────
+// This is the shape of the bug that made CI red for a day: preflight asked
+// `git var GIT_COMMITTER_IDENT` in an environment missing the identity every
+// agent is handed, so every run on a runner (or any fresh container) died
+// before an agent started. It passes on a developer's machine either way,
+// which is why it needs forcing here rather than being left to the suite.
+{
+  const saved = { HOME: process.env.HOME, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM }
+  const bare = mkdtempSync(join(tmpdir(), 'preflight-nohome-'))
+  process.env.HOME = bare
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null'
+  process.env.GIT_CONFIG_SYSTEM = '/dev/null'
+  try {
+    const r = await runPreflight(run(), [{ agentSlug: 'sdlc-ticket-intake', label: 'Ticket Intake' }])
+    assert.equal(of(r, 'git identity').level, 'ok', JSON.stringify(of(r, 'git identity')))
+    assert.ok(!preflightFailure(r), `a host without a global gitconfig must not fail the run: ${preflightFailure(r)}`)
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+    rmSync(bare, { recursive: true, force: true })
+  }
+}
+
+// ── 10. the checkout the run was handed satisfies the product check ───────────
+// Preflight used to look only at the canonical workspace path, so a run given
+// an explicit projectDir was failed for "not checked out" and told to sign in
+// to clone the repo it was already sitting in.
+{
+  const handed = repo(join(root, 'handed-checkout'))
+  const r = await runPreflight(run({ projectDir: handed, product: product() }), [stackStep])
+  assert.equal(of(r, 'product checkout').level, 'ok', JSON.stringify(of(r, 'product checkout')))
+  assert.match(of(r, 'product checkout').detail, /handed to this run/)
+}
+
+// ── the starter's own GitHub token counts as a way to clone ──────────────────
+// The check used to read process.env alone, so a developer whose profile holds
+// a working token was told there was none and the run failed before it started.
+// That is the real shape: the token lives in the PROFILE and reaches a run
+// through envForUser, never through the server's own environment. The
+// distinction only shows when process.env has no token at all, which is why
+// this case clears them.
+{
+  const saved = { GH_TOKEN: process.env.GH_TOKEN, GITHUB_TOKEN: process.env.GITHUB_TOKEN, AGENT_GH_TOKEN: process.env.AGENT_GH_TOKEN }
+  for (const k of Object.keys(saved)) delete process.env[k]
+  // Storing a credential needs the instance secret; any value will do here.
+  process.env.AGENT_MANAGER_SECRET ||= 'test-secret-not-a-real-one-0123456789'
+  const { saveProfile } = await import('../server/utils/users.ts')
+  // Unique per run: token verdicts are memoised for ten minutes by token
+  // string, so a reused fixture value carries a stale verdict between runs.
+  await saveProfile('a-developer-with-a-token', { githubTokenPlain: `ghp-fixture-${Date.now()}` })
+  // A stored token is verified with GitHub before it is allowed near a run — a
+  // revoked one must not reach it. Stubbed here so the case is about preflight
+  // reading the run's environment, not about network reachability.
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => ({ ok: true, status: 200 })
+  try {
+    // A repo nothing has cloned, so the token is the only thing that can answer.
+    const withToken = await runPreflight(
+      run({ startedBy: 'a-developer-with-a-token', product: product({ repos: ['alepolab/never-cloned'] }) }), [stackStep])
+    assert.equal(of(withToken, 'product checkout').level, 'ok', JSON.stringify(of(withToken, 'product checkout')))
+
+    // And someone with neither a checkout nor a token is still told so.
+    const without = await runPreflight(
+      run({ startedBy: 'a-developer-with-nothing', product: product({ repos: ['alepolab/never-cloned'] }) }), [stackStep])
+    assert.equal(of(without, 'product checkout').level, 'fail')
+  } finally {
+    globalThis.fetch = realFetch
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+  }
 }
 
 rmSync(root, { recursive: true, force: true })

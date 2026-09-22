@@ -72,7 +72,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
       <button
         v-for="tab in (['instructions', 'settings', 'skills'] as const)"
         :key="tab"
-        class="px-4 py-2.5 text-[12px] font-medium capitalize transition-all relative"
+        class="px-4 py-2.5 t-small font-medium capitalize transition-all relative"
         :style="{ color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-tertiary)' }"
         @click="activeTab = tab"
       >
@@ -87,20 +87,20 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
 
     <div v-if="activeTab === 'settings'" class="flex-1 overflow-y-auto p-4 space-y-4">
       <div class="space-y-1">
-        <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Name</label>
+        <label class="t-small font-medium" style="color: var(--text-tertiary);">Name</label>
         <input :value="frontmatter.name" class="field-input w-full" placeholder="Agent name" @input="updateFrontmatter('name', ($event.target as HTMLInputElement).value)" />
       </div>
       <div class="space-y-1">
-        <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Description</label>
+        <label class="t-small font-medium" style="color: var(--text-tertiary);">Description</label>
         <textarea :value="frontmatter.description" rows="4" class="field-input w-full" placeholder="What does this agent do?" @input="updateFrontmatter('description', ($event.target as HTMLInputElement).value)" />
       </div>
       <div class="space-y-1">
-        <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Model</label>
+        <label class="t-small font-medium" style="color: var(--text-tertiary);">Model</label>
         <div class="flex gap-2">
           <button
             v-for="opt in modelOptions"
             :key="opt.value"
-            class="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all"
+            class="px-3 py-1.5 rounded-lg t-small font-medium transition-all"
             :style="{
               background: frontmatter.model === opt.value ? 'var(--accent-muted)' : 'var(--surface-raised)',
               border: '1px solid ' + (frontmatter.model === opt.value ? 'rgba(229, 169, 62, 0.2)' : 'var(--border-subtle)'),
@@ -113,12 +113,12 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
         </div>
       </div>
       <div class="space-y-1">
-        <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Memory</label>
+        <label class="t-small font-medium" style="color: var(--text-tertiary);">Memory</label>
         <div class="flex gap-2">
           <button
             v-for="opt in memoryOptions"
             :key="opt.value"
-            class="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all"
+            class="px-3 py-1.5 rounded-lg t-small font-medium transition-all"
             :style="{
               background: frontmatter.memory === opt.value ? 'var(--accent-muted)' : 'var(--surface-raised)',
               border: '1px solid ' + (frontmatter.memory === opt.value ? 'rgba(229, 169, 62, 0.2)' : 'var(--border-subtle)'),
@@ -133,7 +133,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
 
       <!-- Tools selection -->
       <div class="space-y-2 pt-2">
-        <label class="text-[11px] font-medium uppercase tracking-wider opacity-50" style="color: var(--text-primary);">Allowed Tools</label>
+        <label class="t-small font-medium uppercase tracking-wider opacity-50" style="color: var(--text-primary);">Allowed Tools</label>
         <div class="grid grid-cols-2 gap-2">
           <button
             v-for="tool in toolOptions"
@@ -168,7 +168,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
 
       <!-- Color -->
       <div class="space-y-2.5 pt-2">
-        <label class="text-[11px] font-medium uppercase tracking-wider opacity-50" style="color: var(--text-primary);">UI Theme Color</label>
+        <label class="t-small font-medium uppercase tracking-wider opacity-50" style="color: var(--text-primary);">UI Theme Color</label>
         <div class="flex flex-wrap gap-2">
           <!-- Preset Swatches -->
           <button
@@ -199,7 +199,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
               />
               <UIcon name="i-lucide-plus" class="absolute inset-0 m-auto size-3 pointer-events-none" style="color: white; mix-blend-mode: difference;" />
             </div>
-            <span class="text-[10px] font-mono opacity-60 uppercase" style="color: var(--text-tertiary);">{{ frontmatter.color || 'Default' }}</span>
+            <span class="t-small font-mono opacity-60 uppercase" style="color: var(--text-tertiary);">{{ frontmatter.color || 'Default' }}</span>
           </div>
         </div>
       </div>
@@ -208,7 +208,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
     <div v-if="activeTab === 'skills'" class="flex-1 overflow-y-auto p-5 space-y-6">
       <div class="space-y-2.5">
         <div class="flex items-center justify-between">
-          <label class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Preloaded Skills</label>
+          <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Preloaded Skills</label>
           <HelpTip title="Preloading Skills" body="Injected directly into the subagent's context. Faster and more reliable than discovery." />
         </div>
         
@@ -224,16 +224,16 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
           icon="i-lucide-sparkles"
         />
         
-        <p class="text-[10px] leading-relaxed" style="color: var(--text-tertiary);">
+        <p class="t-small leading-relaxed" style="color: var(--text-tertiary);">
           These skills will be available to the agent immediately without needing to search for them.
         </p>
       </div>
 
       <div class="space-y-3">
-        <label class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Currently Attached</label>
+        <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Currently Attached</label>
         
-        <div v-if="loadingSkills" class="text-[11px] font-mono py-4 text-center" style="color: var(--text-disabled);">Loading attached skills...</div>
-        <div v-else-if="!skills.length" class="text-[12px] py-8 text-center border border-dashed rounded-xl" style="color: var(--text-tertiary); border-color: var(--border-subtle);">
+        <div v-if="loadingSkills" class="t-small font-mono py-4 text-center" style="color: var(--text-disabled);">Loading attached skills...</div>
+        <div v-else-if="!skills.length" class="t-small py-8 text-center border border-dashed rounded-xl" style="color: var(--text-tertiary); border-color: var(--border-subtle);">
           <UIcon name="i-lucide-sparkles" class="size-5 mx-auto mb-2 opacity-20" />
           No skills attached to this agent.
         </div>
@@ -249,12 +249,12 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
               <UIcon name="i-lucide-sparkles" class="size-4" style="color: var(--accent);" />
             </div>
             <div class="flex-1 min-w-0">
-              <div class="text-[12px] font-medium truncate group-hover/skill:text-accent transition-colors" style="color: var(--text-primary);">{{ skill.frontmatter.name }}</div>
-              <div class="text-[10px] truncate" style="color: var(--text-tertiary);">{{ skill.frontmatter.description }}</div>
+              <div class="t-small font-medium truncate group-hover/skill:text-accent transition-colors" style="color: var(--text-primary);">{{ skill.frontmatter.name }}</div>
+              <div class="t-small truncate" style="color: var(--text-tertiary);">{{ skill.frontmatter.description }}</div>
             </div>
             <div class="flex flex-col items-end gap-1 shrink-0">
-              <span class="text-[9px] font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);">{{ skill.source }}</span>
-              <span v-if="frontmatter.skills?.includes(skill.slug)" class="text-[8px] font-bold uppercase tracking-tighter" style="color: var(--accent);">Preloaded</span>
+              <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);">{{ skill.source }}</span>
+              <span v-if="frontmatter.skills?.includes(skill.slug)" class="t-small font-bold uppercase tracking-tighter" style="color: var(--accent);">Preloaded</span>
             </div>
           </NuxtLink>
         </div>

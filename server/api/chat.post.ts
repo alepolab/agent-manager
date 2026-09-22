@@ -7,6 +7,7 @@ import { DEFAULT_OUTPUT_STYLES } from '../utils/defaultOutputStyles'
 import { parseFrontmatter } from '../utils/frontmatter'
 import { resolveTools, resolveMaxTurns } from '../utils/agentToolPolicy'
 import { buildAgentSystemPrompt } from '../utils/agentSystemPrompt'
+import { requireCapability } from '../utils/session'
 import type { AgentFrontmatter } from '~/types'
 
 interface ChatMessage {
@@ -83,6 +84,14 @@ You can create, read, update, and delete any of these files. You can also:
 }
 
 export default defineEventHandler(async (event) => {
+  // This route runs the SDK over the config directory with
+  // `permissionMode: 'bypassPermissions'` (below) — the broadest capability the
+  // app hands out — and carried no authorisation check of any kind. The auth
+  // middleware establishes WHO the caller is, never WHAT they may do, so every
+  // signed-in role reached it. The sidebar already hides /cli behind `configure`
+  // for precisely this reason; without this line a manager took the same power
+  // from the ⌘J panel instead, which is the hole the hidden link implied was closed.
+  await requireCapability(event, 'configure')
   const body = await readBody<{ 
     messages: ChatMessage[]; 
     sessionId?: string; 

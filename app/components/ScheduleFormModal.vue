@@ -177,7 +177,7 @@ async function onSave() {
                  they are scheduling. -->
             <div v-if="lockedWorkflowSlug" class="field-group">
               <label class="field-label">Workflow</label>
-              <p class="text-[12px] font-mono text-label">{{ pinnedName }}</p>
+              <p class="t-small font-mono text-label">{{ pinnedName }}</p>
             </div>
             <div v-else class="field-group">
               <label class="field-label">Workflow</label>
@@ -197,7 +197,7 @@ async function onSave() {
             <div class="field-group">
               <label class="field-label">
                 Timezone
-                <span class="text-[10px] font-normal ml-1" style="color: var(--text-disabled);">optional</span>
+                <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">optional</span>
               </label>
               <input v-model="form.timezone" placeholder="Asia/Kolkata" class="field-input w-full">
               <span class="field-hint">An IANA zone name. Empty means this server's local time.</span>
@@ -206,7 +206,7 @@ async function onSave() {
             <div class="field-group">
               <label class="field-label">
                 Working directory
-                <span class="text-[10px] font-normal ml-1" style="color: var(--text-disabled);">optional</span>
+                <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">optional</span>
               </label>
               <input
                 v-model="form.projectDir"
@@ -236,7 +236,7 @@ async function onSave() {
                 {{ param.name }}
                 <span
                   v-if="!param.required"
-                  class="text-[10px] font-normal ml-1"
+                  class="t-small font-normal ml-1"
                   style="color: var(--text-disabled);"
                 >optional</span>
               </label>

@@ -23,6 +23,10 @@ const props = defineProps<{
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
   }
+  /** Whether this node may be changed. False for anyone without `configure`,
+   *  who can read the pipeline but not edit it. Defaults true so the existing
+   *  callers keep their behaviour until they opt in. */
+  editable?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -61,7 +65,7 @@ const verdictColor: Record<string, string> = {
         <div class="flex items-center gap-1 min-w-0">
           <span
             v-if="(data.visits ?? 0) > 1"
-            class="text-[9px] font-mono px-1 rounded"
+            class="t-small font-mono px-1 rounded"
             style="background: var(--accent-glow, rgba(255,255,255,0.08)); color: var(--accent);"
             :title="`Ran ${data.visits} times`"
           >×{{ data.visits }}</span>
@@ -110,7 +114,7 @@ const verdictColor: Record<string, string> = {
           ><UIcon name="i-lucide-unlock" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.monitorLabel"
-            class="text-[9px] truncate"
+            class="t-small truncate"
             :style="{ color: data.monitorVerdict ? verdictColor[data.monitorVerdict] : 'var(--text-disabled)' }"
             :title="`Monitored by ${data.monitorLabel}${data.monitorVerdict ? ` - ${data.monitorVerdict}` : ''}`"
           >
@@ -124,15 +128,15 @@ const verdictColor: Record<string, string> = {
           <button class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Step settings" aria-label="Step settings" @click="emit('settings')">
             <UIcon name="i-lucide-settings-2" class="size-3" />
           </button>
-          <button class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Remove step" aria-label="Remove step" @click="emit('remove')">
+          <button v-if="editable !== false" class="p-0.5 rounded focus-ring" style="color: var(--text-disabled);" title="Remove step" aria-label="Remove step" @click="emit('remove')">
             <UIcon name="i-lucide-x" class="size-3" />
           </button>
         </div>
       </div>
-      <div class="text-[11px] font-medium truncate" style="color: var(--text-primary);">{{ data.label }}</div>
+      <div class="t-small font-medium truncate" style="color: var(--text-primary);">{{ data.label }}</div>
       <div class="flex items-center justify-between">
-        <span class="text-[9px]" style="color: var(--text-tertiary);">{{ modelLabel }}</span>
-        <span v-if="data.maxVisits" class="text-[9px] font-mono" style="color: var(--text-disabled);" title="Max visits per run">
+        <span class="t-small" style="color: var(--text-tertiary);">{{ modelLabel }}</span>
+        <span v-if="data.maxVisits" class="t-small font-mono" style="color: var(--text-disabled);" title="Max visits per run">
           ≤{{ data.maxVisits }}
         </span>
       </div>

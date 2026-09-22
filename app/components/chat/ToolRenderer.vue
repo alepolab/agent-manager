@@ -39,15 +39,15 @@ function handleFileClick() {
         :name="isDiffTool ? 'i-lucide-file-edit' : (isReadTool ? 'i-lucide-file-text' : 'i-lucide-wrench')" 
         class="size-3.5 text-meta"
       />
-      <span class="text-[11px] font-mono font-medium text-label">{{ toolName }}</span>
+      <span class="t-small font-mono font-medium text-label">{{ toolName }}</span>
       <button 
         v-if="filePath"
-        class="text-[11px] font-mono text-accent hover:underline truncate flex-1 text-left"
+        class="t-small font-mono text-accent hover:underline truncate flex-1 text-left"
         @click="handleFileClick"
       >
         {{ filePath }}
       </button>
-      <span v-else-if="toolInput" class="text-[10px] font-mono text-meta truncate flex-1">
+      <span v-else-if="toolInput" class="t-small font-mono text-meta truncate flex-1">
         {{ typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput) }}
       </span>
     </div>
@@ -66,7 +66,7 @@ function handleFileClick() {
       <!-- General result display (if not already handled or if error) -->
       <div 
         v-else-if="isError"
-        class="p-2 rounded bg-error/5 border border-error/20 text-[11px] text-error font-mono whitespace-pre-wrap"
+        class="p-2 rounded bg-error/5 border border-error/20 t-small text-error font-mono whitespace-pre-wrap"
       >
         {{ typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2) }}
       </div>
@@ -74,7 +74,7 @@ function handleFileClick() {
       <!-- For Read tool, we could show a snippet or just the clickable header -->
       <div 
         v-else-if="isReadTool"
-        class="p-2 rounded bg-surface-base border border-border-subtle text-[11px] text-label font-mono max-h-32 overflow-hidden relative"
+        class="p-2 rounded bg-surface-base border border-border-subtle t-small text-label font-mono max-h-32 overflow-hidden relative"
       >
         <div class="whitespace-pre-wrap">{{ typeof toolResult === 'string' ? toolResult : toolResult.content }}</div>
         <div class="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-surface-base to-transparent" />

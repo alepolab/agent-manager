@@ -48,8 +48,8 @@ function timeAgo(iso: string): string {
           <UIcon name="i-lucide-git-branch" class="size-4" style="color: var(--accent);" />
         </div>
         <div class="flex-1 min-w-0">
-          <div class="text-[13px] font-medium truncate" style="color: var(--text-primary);">{{ workflow.name }}</div>
-          <div class="text-[11px] mt-0.5 line-clamp-2" style="color: var(--text-tertiary);">
+          <div class="t-ui font-medium truncate" style="color: var(--text-primary);">{{ workflow.name }}</div>
+          <div class="t-small mt-0.5 line-clamp-2" style="color: var(--text-tertiary);">
             {{ workflow.description || 'No description' }}
           </div>
         </div>
@@ -60,15 +60,15 @@ function timeAgo(iso: string): string {
         <div
           v-for="(agent, idx) in stepAgents.slice(0, 4)"
           :key="idx"
-          class="size-5 rounded-full flex items-center justify-center text-[8px] font-bold"
+          class="size-5 rounded-full flex items-center justify-center t-small font-bold"
           :style="{ background: agent ? getAgentColor(agent.frontmatter.color) + '30' : 'var(--badge-subtle-bg)', color: agent ? getAgentColor(agent.frontmatter.color) : 'var(--text-disabled)', border: '2px solid var(--surface-raised)', zIndex: 10 - idx }"
         >
           {{ idx + 1 }}
         </div>
       </div>
-      <span class="text-[10px]" style="color: var(--text-disabled);">{{ workflow.steps.length }} step{{ workflow.steps.length === 1 ? '' : 's' }}</span>
+      <span class="t-small" style="color: var(--text-disabled);">{{ workflow.steps.length }} step{{ workflow.steps.length === 1 ? '' : 's' }}</span>
       <ClientOnly>
-        <span v-if="workflow.lastRunAt" class="text-[10px] ml-2" style="color: var(--text-disabled);">{{ timeAgo(workflow.lastRunAt) }}</span>
+        <span v-if="workflow.lastRunAt" class="t-small ml-2" style="color: var(--text-disabled);">{{ timeAgo(workflow.lastRunAt) }}</span>
       </ClientOnly>
       <!-- Outside the NuxtLink wrapper above, so a link here is legal. The
            colour carries the distinction somebody scanning the list cares
@@ -77,7 +77,7 @@ function timeAgo(iso: string): string {
       <NuxtLink
         v-if="schedules?.total"
         :to="`/workflows/${workflow.slug}?tab=schedule`"
-        class="text-[10px] ml-2 flex items-center gap-1 focus-ring rounded"
+        class="t-small ml-2 flex items-center gap-1 focus-ring rounded"
         :style="{ color: schedules.enabled ? 'var(--text-tertiary)' : 'var(--text-disabled)' }"
         :title="`${schedules.total} schedule${schedules.total === 1 ? '' : 's'}, ${schedules.enabled} enabled`"
       >

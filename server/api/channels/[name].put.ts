@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { saveChannel } from '../../utils/channels.ts'
 import { currentUser } from '../../utils/session.ts'
 
@@ -11,6 +12,7 @@ import { currentUser } from '../../utils/session.ts'
  * unchanged.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const name = getRouterParam(event, 'name')!
   const body = await readBody<{ kind?: unknown, url?: unknown, to?: unknown }>(event)
   const user = await currentUser(event)

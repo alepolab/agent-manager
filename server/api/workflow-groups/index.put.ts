@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { replaceGroups } from '../../utils/workflowGroups.ts'
 import type { WorkflowGroup } from '../../../shared/types/workflowGroup.ts'
 
@@ -16,6 +17,7 @@ import type { WorkflowGroup } from '../../../shared/types/workflowGroup.ts'
  * before anything is written, so the table is never half-saved.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody<{ groups?: WorkflowGroup[] }>(event)
   if (!Array.isArray(body?.groups)) {
     throw createError({ statusCode: 400, message: 'groups must be an array' })

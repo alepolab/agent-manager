@@ -69,6 +69,15 @@ const STEP_SETTLED = new Set<string>(['completed', 'failed', 'skipped'])
  * hanging: steps still `running` or `pending` and nobody alive to advance them.
  */
 function applyInterrupted(run: WorkflowRun): WorkflowRun {
+  // A run paused on a person was never executing, so there is nothing to have
+  // interrupted: the process that owned it died while a gate sat unanswered,
+  // and answering it starts the work in whichever process is alive then.
+  // resumeInterruptedRuns already refuses to touch these for exactly this
+  // reason ("not an interruption, a question nobody answered"); relabelling
+  // them here contradicted it, and the contradiction was visible - a restart
+  // turned a developer's pending approval into an `interrupted` run, which
+  // only an operator may resume. The decision must survive a deploy.
+  if (run.status === 'paused' && run.question) return run
   // Deliberately NOT isLiveStatus: a `queued` run has no owner to lose. Its
   // pid and bootId name the process that queued it, which is routinely gone by
   // the time a slot frees, and calling that "interrupted" would delete the

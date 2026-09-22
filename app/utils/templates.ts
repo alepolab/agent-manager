@@ -65,6 +65,112 @@ These hold at every step in this pipeline, not just this one:
 
 - **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
 
+/**
+ * Shared by the first step of each runbook that has a shell and runs before
+ * any code is written.
+ *
+ * The pipeline's cost is spent on the assumption the work is not already done.
+ * It can be: a fix merged on another branch, a branch pushed and never PR'd, a
+ * PR opened and never merged, or a Jira comment saying it is fixed with the
+ * code nowhere to be found. A run that does not look produces a second PR
+ * against a bug that already has one, after paying for every step.
+ *
+ * ASK, never halt. A branch six weeks stale and a PR merged yesterday look
+ * alike to a grep, and "already fixed" is a claim a person should confirm.
+ * Halting on a false positive costs a whole run for nothing; asking costs one
+ * answer.
+ */
+const PRIOR_ART_CHECK = `## 0. Has this already been fixed?
+
+Before you write anything, spend a few commands finding out whether someone
+already did this work. Run these in the working checkout named at the top of
+your input, with \`KEY\` set to the ticket key from \`meta.json\`:
+
+\`\`\`bash
+KEY=$(python3 -c 'import json;print(json.load(open("meta.json")).get("ticket",""))' 2>/dev/null || echo "")
+git fetch --all --quiet
+echo "--- commits mentioning $KEY on any branch ---"
+git log --all --oneline --grep="$KEY" --regexp-ignore-case | head -20
+echo "--- branches whose name carries it ---"
+git branch --all --list "*$KEY*"
+echo "--- pull requests, any state ---"
+gh pr list --state all --search "$KEY" --limit 10 \\
+  --json number,state,title,headRefName,updatedAt,url 2>&1 | head -40
+\`\`\`
+
+And the ticket's own comments, which the intake packet does not carry — the
+runner fetches only summary, labels and description:
+
+\`\`\`bash
+curl -sS -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \\
+  "$JIRA_BASE_URL/rest/api/3/issue/$KEY/comment?maxResults=20&orderBy=-created" \\
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("-", c["author"]["displayName"], "|", json.dumps(c["body"])[:300]) for c in d.get("comments",[])]'
+\`\`\`
+
+Read what comes back. Then:
+
+- **Found nothing.** Say so in one line and carry on with your step. This is
+  the normal case and costs you four commands.
+- **Found something.** Do NOT start work, and do NOT halt the run. End your
+  output with a single \`PIPELINE-ASK:\` line naming exactly what you found and
+  the choice it forces — the sha and branch, the PR number and its state, or
+  the commenter and date — so the developer can answer without repeating your
+  search. A person decides whether to continue that work, supersede it, or stop.
+
+Two failure modes to be precise about, because both look like "nothing found":
+
+- \`gh\` with no token, or \`curl\` with no \`JIRA_API_TOKEN\`, answers like an
+  empty result. If a command errors or the credential is absent, that search
+  did not happen — say which one, and that the check is partial. Never report
+  a credential failure as "no prior art".
+- The ticket key is not always in the commit subject. When the key search is
+  empty, widen once with a distinctive phrase from the ticket — a function
+  name, an error string — before concluding nothing exists. A negative result
+  is a failed search until you have widened it.
+
+Write what you found to \`prior-art.md\` in the run artifacts directory either
+way, including "none found, searched: commits, branches, PRs, comments". A
+later step, or the next run on this ticket, reads it instead of searching again.`
+
+/**
+ * Compound-engineering skills a step MAY read, as opposed to the one it must.
+ *
+ * `CE_SKILL_RULES` binds a ce step to a single skill as its method and halts
+ * when it is missing. These are the other way round: available, matched to a
+ * condition, and skipped without comment when absent. The difference matters
+ * more than it looks - a step that halts because an OPTIONAL skill is not on
+ * disk fails a run for nothing, and the plugin is fetched at image build time,
+ * so "not there" is a normal state on a checkout.
+ *
+ * Read from disk, never declared in frontmatter, for the reason the language
+ * catalogue exists: buildAgentSystemPrompt inlines the full body of every
+ * declared skill into every prompt on every step, and the ce skills run to
+ * ~240,000 bytes between the four the runbooks already use. A table row costs
+ * about twenty tokens; the skill's body is read only by the step that turns
+ * out to need it.
+ *
+ * Nothing here replaces a skill an agent already declares. These are additions.
+ */
+const CE_SKILL_MENU = (rows: [string, string][]) => `## Compound-engineering skills available to you
+
+These are on disk at \`$CE_SKILLS_DIR/<name>/SKILL.md\` (its \`references/\`
+directory sits beside it). When a row's condition holds, read that skill first
+(\`cat "$CE_SKILLS_DIR/<name>/SKILL.md"\`) and follow it for that part of your
+work. The four adjustments in "## The compound-engineering skill you follow"
+apply to these too: nobody is at the keyboard, no subagents or Skill tool,
+artifacts go to the run artifacts directory, and your git mandate is this
+prompt's.
+
+| Skill | Read it when |
+|---|---|
+${rows.map(([skill, when]) => `| \`${skill}\` | ${when} |`).join('\n')}
+
+These are optional, and they do not replace the skills your frontmatter already
+declares. If \`CE_SKILLS_DIR\` is empty or a file is not there, carry on with
+your own method and say so in one line - never halt, and never ask. That is the
+opposite of the skill your step is *told* to follow, where a missing file is a
+halt.`
+
 const SDLC_LANGUAGE_SKILLS = `## Language-matched skills
 
 The stack this run touches is named in the context packet and the product
@@ -392,7 +498,6 @@ Rules:
       //
       // A higher cap costs more only in the rare runaway case. A cap set too
       // low costs 100% of the run, every time it bites.
-      maxTurns: 30,
       skills: ['intent-template', 'using-superpowers'],
     },
     body: `You are the intake step of a bug-fix pipeline. Your input is the raw text of a support or escalation ticket. Your output is the context packet every later step reads.
@@ -439,7 +544,7 @@ Write two files into the run artifacts directory named at the top of your input:
 Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\`, \`stack_required\` and \`stack_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
-- \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch from it — a production bug is a hotfix from main, a QA bug a hotfix from ci-release, everything else starts from develop — and no code step runs before this file says which.
+- \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch once it is written — from develop, whatever the origin, unless the product's registry names a hotfix branch for it — and no code step runs before this file says which.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
@@ -480,7 +585,6 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 80,
       skills: ['ponytail', 'using-git-worktrees', 'using-superpowers'],
     },
     body: `You stand up the environment the rest of the pipeline tests against. Nothing downstream works if you get this wrong, and a stack you *believe* is up but is not produces a false FAIL that wastes the whole run.
@@ -801,6 +905,8 @@ When you skipped, merge \`stack: null\` instead — the key present and null, so
 - Config resolution here is **env first, config file second**, and \`\${VAR:-}\` in a compose file *defines* the variable as an empty string rather than leaving it unset. If you are seeding or checking a value the product treats as mandatory, confirm what the container's actual environment holds — empty, unset, and absent are three different states here and behave differently.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-worktree', 'you are creating or attaching a git worktree for the run branch']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -824,19 +930,15 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'red',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
-      // 90 minutes, not the 30-minute default: this step runs a containerised
-      // multi-module Gradle build three times to prove the oracle red. Measured
-      // at 8m 23s per run plus compilation, so 30 minutes could not fit it and
-      // killed three consecutive attempts. The default was calibrated on a
-      // 10.5-minute step, which is a different kind of step entirely.
-      maxDurationMs: 5400000,
+
       // writing-plans because the plan gate (B2) stops this step before its test
       // lands unless .agent/plan.md exists with five specific headings. Writing
       // that well is a skill this agent was expected to have and did not.
       skills: ['regression-matrix', 'test-driven-development', 'writing-plans', 'using-superpowers'],
     },
     body: `You write the oracle. Everything after you is judged against the test you produce, so a test that passes for the wrong reason is worse than no test.
+
+${PRIOR_ART_CHECK}
 
 ## Generalise before you write
 
@@ -914,10 +1016,7 @@ not happen.`,
       model: MODEL.OPUS,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
-      // Builds and runs the oracle to prove it green. Ran out of the 30-minute
-      // default twice on one ticket. See sdlc-test-author's note.
-      maxDurationMs: 5400000,
+
       // receiving-code-review is here because this step is the one that gets sent
       // back: a monitor voting RETRY hands it a review to act on, and a real run
       // returned "the agent claims all 6 tests pass but provides zero test
@@ -996,6 +1095,8 @@ Then merge a \`fix\` key into \`meta.json\` in that same directory. \`fix\` is a
 \`files_changed\` and \`lines_changed\` are counts — get them from \`git diff --stat\` or equivalent, not from memory of what you touched. A \`model\` field was once recorded as fact by a runner that had never actually selected a model; the same failure mode is writing a plausible-looking number into \`fix\` without having run the command that would make it true. Absent-and-rejected beats present-and-wrong: if you cannot honestly compute a value here — a merge order you are not certain of, a commit sha you have not verified exists — leave it out and let the bundle validator reject it, rather than writing something that merely looks right.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-debug', 'the cause is not yet located: a failing test you cannot explain, or behaviour that is wrong without an obvious line']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -1019,10 +1120,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 80,
-      // Runs the same Gradle build as the test-author, plus a scoped regression
-      // and the adversarial red-green check. See sdlc-test-author's note.
-      maxDurationMs: 5400000,
+
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You produce the PASS half of the evidence. You verify; you do not fix. If something is broken, report it — do not edit code to make your own step succeed.
@@ -1266,12 +1364,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'purple',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      // Each agent-browser call — open, interact, screenshot, read console —
-      // is its own turn, and this step does that for every route the change
-      // touches, so its budget matches the other tool-heavy steps rather than
-      // the single-Playwright-run job it used to be. A real run hit 30 twice.
-      maxTurns: 80,
-      maxDurationMs: 5400000,
+
       skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You capture browser evidence for the change, against the stack the provisioning step brought up: what the changed screen looks like and does now, seen through a real browser, so a reviewer verifies the change visually without standing anything up.
@@ -1328,6 +1421,8 @@ If there is no browser surface to trace, say so plainly and write nothing. The b
 A Playwright run can exit 0 with nothing meaningful behind it — no tests collected, every test skipped, a \`trace.zip\` that exists but is empty. Confirm the counts (tests run, passed, failed) before you report a result, and confirm the trace file is actually populated before you name it in your report — an exit code alone is no more evidence than "the stack is up" is evidence with no request behind it.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-test-browser', 'you are choosing which pages the diff affects and driving a real browser over them']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -1351,8 +1446,7 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'red',
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
-      maxTurns: 30,
-      maxDurationMs: 5400000,
+
       // No `claude-security` here, though it is the obvious fit: that plugin is
       // licensed "All rights reserved", so it cannot be vendored into this repo
       // the way the MIT superpowers skills are - and a container installs no
@@ -1406,7 +1500,6 @@ not happen.`,
       model: MODEL.SONNET,
       color: 'yellow',
       tools: ['Read'],
-      maxTurns: 20,
       skills: ['requesting-code-review', 'ponytail-review'],
     },
     body: `You review one step of an automated fix pipeline. You did not run the step, but you have a Read tool and the step's evidence is files in the run artifacts directory named in its input.
@@ -1502,8 +1595,7 @@ shape of the answer.`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
-      maxDurationMs: 5400000,
+
       skills: ['receiving-code-review', 'finishing-a-development-branch'],
     },
     body: `You close the loop after the pull request opens. An open PR is not a finished
@@ -1631,6 +1723,8 @@ run behind a fix, the URL of each reply.
 - Merge the PR, approve it, or dismiss a review. A person merges.
 - Read or print a secrets file; the secrets guard denies it and the attempt is logged.
 
+${CE_SKILL_MENU([['ce-babysit-pr', 'you are watching an open PR across several visits: checks, reviews, and what to do between them'], ['ce-resolve-pr-feedback', 'you are addressing review comments a person or a bot already left']])}
+
 ${SDLC_STANDING_RULES}`,
   },
   {
@@ -1670,7 +1764,6 @@ ${SDLC_STANDING_RULES}`,
       color: 'gray',
       // Never invoked as a model; declared for the shape checks every sdlc agent passes.
       tools: ['Read', 'Write'],
-      maxTurns: 1,
       skills: [],
     },
     body: `You do not run as a model. The runner executes this step itself: it takes the
@@ -1705,7 +1798,6 @@ ${SDLC_STANDING_RULES}`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Write', 'Glob', 'Grep'],
-      maxTurns: 40,
       skills: [],
     },
     body: `You prove that this instance can work on one product: that its repository can
@@ -1757,8 +1849,7 @@ ${SDLC_STANDING_RULES}`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob'],
-      maxTurns: 60,
-      maxDurationMs: 5400000,
+
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You produce the deliverable. The deliverable is the **evidence bundle**, not the diff — a reviewer should be able to decide from your PR body whether the change is trustworthy, without re-deriving any of it.
@@ -1790,13 +1881,14 @@ The run header names it: the runner cut the run branch from the base branch the
 team's standard flow assigns to this kind of work, and the pull request targets
 that same branch.
 
-- A task, a feature, or a bug found in development: from **develop**, promoted
-  develop -> ci-release -> main with the next release.
-- A bug found in production (a customer or support incident): a hotfix from
-  **main**. After it merges, main is merged into ci-release and develop, so the
-  fix is not lost at the next promotion; say so in the PR body.
-- A bug found by QA or CI on a release candidate: a hotfix from **ci-release**,
-  merged into develop after it lands; say so in the PR body.
+- Everything starts from **develop** — a task, a feature, and a bug found in
+  development, by QA, or in production alike — and is promoted
+  develop -> ci-release -> main with the next release. A fix cut from main or
+  ci-release is lost at the next promotion unless someone remembers to merge it
+  back, which is why Alepo's repositories send hotfixes to develop first.
+- Only where the product's registry names a hotfix branch does a production or
+  QA bug start there. The header then names the merge-back; say so in the PR
+  body.
 
 Never retarget on your own. If the header's base looks wrong for what the
 ticket describes, say so in the report and open the PR against the header's
@@ -1982,6 +2074,8 @@ If it exits non-zero, the fields it names as missing are the finding. Report the
 
 Every field you assemble here inherits the rule behind the PR-link placeholder above: a value that looks plausible but was never actually verified is worse than a missing one, because a missing field fails loudly at validation and a wrong one does not fail at all. If a prior step left something unresolved, implausible, or unverifiable in \`meta.json\`, that is a finding for your report — flag it — not something to smooth over so the bundle validates cleanly.
 
+${CE_SKILL_MENU([['ce-commit-push-pr', 'you are writing the commit messages and the pull request body']])}
+
 ${SDLC_STANDING_RULES}
 
 ## Stopping
@@ -2007,7 +2101,6 @@ not happen.`,
       tools: ['Bash', 'Read', 'Grep', 'Glob', 'Write'],
       // Reads a 109 KB skill and then a codebase; a real run on the PMS
       // super-repo burned three 60-turn visits reading and never wrote a plan.
-      maxTurns: 120,
       skills: ['using-superpowers'],
     },
     body: `You write the plan the rest of the run executes, and the QA plan the run is judged by. You change no code.
@@ -2015,6 +2108,8 @@ not happen.`,
 ## Read the run artifacts before you touch the filesystem
 
 The run artifacts directory named at the top of your input holds \`context-packet.json\` and \`intent.md\` from intake (the ticket, the acceptance criteria, the affected system, the classification) and \`stack-report.md\` from provisioning (the checkout path, the stack, its URL and seeded users). Read them first, then work in the working checkout the header names. Never search the filesystem for the repository.
+
+${PRIOR_ART_CHECK}
 
 ## Draft first, then refine — a plan that exists beats a plan that is complete
 
@@ -2065,7 +2160,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 100,
       skills: ['test-driven-development', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You implement the plan. Implement and verify locally, commit on the run branch, and hand the result back: review, stack update, QA and the pull request are later steps' work, not yours.
@@ -2118,7 +2212,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'purple',
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      maxTurns: 80,
       skills: ['using-superpowers'],
     },
     body: `You review the change before anything is deployed or tested against it: bugs, regressions, missing tests, standards. Findings you verify and can fix within the ticket, you fix and commit; the rest you record.
@@ -2154,6 +2247,8 @@ The scope, the count by severity, what you fixed, what remains. End with the lin
 then the listing of the artifacts directory. A review with an unfixed P1 never says PASS; it ends with the rework line above.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-simplify-code', 'the diff works but carries duplication, dead flexibility or an abstraction with one caller']])}
+
 ${SDLC_STANDING_RULES}
 
 ${SDLC_STOPPING}`,
@@ -2167,7 +2262,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 60,
       skills: ['using-superpowers'],
     },
     body: `The stack the provisioning step stood up runs an image built before this run's commits existed. You rebuild the product from the working checkout and put that build into the running stack, so that every QA step after you tests the change and not the old release.
@@ -2241,7 +2335,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'green',
       tools: ['Bash', 'Read', 'Glob', 'Write'],
-      maxTurns: 80,
       skills: ['regression-matrix', 'verification-before-completion', 'using-superpowers'],
     },
     body: `You are the automated half of QA. You run what exists and report what happened; you fix nothing. A green result you did not watch produce its counts is not a result.
@@ -2296,7 +2389,6 @@ ${SDLC_STOPPING}`,
       tools: ['Bash', 'Read', 'Glob', 'Write'],
       // One agent-browser call per open, click, type, screenshot and console
       // read, for every step of every case: the most tool-heavy step there is.
-      maxTurns: 120,
       skills: ['agent-browser', 'using-superpowers'],
     },
     body: `You are the manual tester. You perform every manual case in the QA plan through a real browser against the stack that now serves the fixed build, exactly as a QA engineer would: preconditions, steps, what was expected, what was observed, a verdict. You judge; you do not fix.
@@ -2342,6 +2434,8 @@ End with one of
 then the listing of the artifacts directory. A FAIL caused by this change ends instead with \`PIPELINE-REWORK: Implement Fix — <case id>: expected <x>, observed <y>, see browser/<file>\`, one line per case. A BLOCKED case because the stack is not serving is \`PIPELINE-REWORK: Update Stack — <what you saw>\`; a BLOCKED case because of missing seed data is \`PIPELINE-REWORK: Stand Up Stack — <what is missing>\`.
 
 ${SDLC_LANGUAGE_SKILLS}
+${CE_SKILL_MENU([['ce-test-browser', 'a manual case needs a browser walked through it and the evidence captured']])}
+
 ${SDLC_STANDING_RULES}
 
 ${SDLC_STOPPING}`,
@@ -2355,7 +2449,6 @@ ${SDLC_STOPPING}`,
       model: MODEL.SONNET,
       color: 'blue',
       tools: ['Bash', 'Read', 'Write', 'Glob', 'Grep'],
-      maxTurns: 60,
       skills: ['finishing-a-development-branch', 'using-superpowers'],
     },
     body: `You are the one step with an outward effect: you push the run branch and open the pull request. Everything is already committed; nothing here writes code. The pull request body is the deliverable — a reviewer decides from it whether the change is trustworthy, without re-deriving any of it.
@@ -2370,7 +2463,7 @@ ${CE_SKILL_RULES('ce-commit-push-pr', 'the Full workflow, Steps 1 to 5, as if in
 
 ## Git
 
-This brief allows exactly two remote actions, and only for this step: \`git push -u origin <run branch>\` and \`gh pr create\`. Never force-push, never amend, never rebase, never push any other branch. The base branch is the one your header names under the branch policy; the pull request targets it. When the policy says the fix merges back into other branches afterwards, say so in the body.
+This brief allows exactly two remote actions, and only for this step: \`git push -u origin <run branch>\` and \`gh pr create\`. Never force-push, never amend, never rebase, never push any other branch. The base branch is the one your header names under the branch policy; the pull request targets it. When the policy says the fix merges back into other branches afterwards, say so in the body.\n\nA repository whose only change is under \`.agent/\` gets NO pull request. The plan is run scaffolding: the plan gate requires \`.agent/plan.md\` beside the directory you work in, so on a container product the umbrella repo ends up holding a commit with nothing else in it. A pull request carrying only a plan asks a reviewer to approve agent bookkeeping and puts it in a product's history — on a real run that opened three pull requests, one of them was the umbrella with the plan and no fix at all. Open a pull request only for the repositories that own a changed file outside \`.agent/\`, and say in the body which repositories those are and in what order they merge.
 
 ## The pull request
 
@@ -2397,6 +2490,7 @@ The PR URL, its base and head, and the commit count. End with the line
     PR: <url>
 
 then the listing of the artifacts directory.
+
 
 ${SDLC_STANDING_RULES}
 

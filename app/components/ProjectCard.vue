@@ -42,10 +42,10 @@ defineProps<{
         <UIcon name="i-lucide-box" class="size-4" style="color: var(--accent);" />
       </div>
       <div class="flex-1 min-w-0">
-        <div class="text-[14px] font-semibold truncate" style="color: var(--text-primary);">
+        <div class="t-body font-semibold truncate" style="color: var(--text-primary);">
           {{ project.displayName }}
         </div>
-        <div class="text-[11px] mt-0.5 font-mono truncate" style="color: var(--text-tertiary);" :title="project.path">
+        <div class="t-small mt-0.5 font-mono truncate" style="color: var(--text-tertiary);" :title="project.path">
           {{ project.path }}
         </div>
       </div>
@@ -53,7 +53,7 @@ defineProps<{
     
     <div class="flex items-center justify-between mt-4 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
       <div class="flex items-center gap-2">
-        <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
+        <span class="t-small font-medium px-1.5 py-0.5 rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
           {{ project.sessionCount }} sessions
         </span>
       </div>
@@ -61,14 +61,14 @@ defineProps<{
         <NuxtLink
           :to="`/cli/project/${encodeURIComponent(project.name)}`"
           @click.stop
-          class="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+          class="flex items-center gap-1 t-small font-medium px-2 py-0.5 rounded-full transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
           style="background: var(--accent-muted); color: var(--accent);"
           title="Open in CLI"
         >
           <UIcon name="i-lucide-terminal-square" class="size-3" />
           CLI
         </NuxtLink>
-        <span class="text-[10px]" style="color: var(--text-tertiary);">
+        <span class="t-small" style="color: var(--text-tertiary);">
           {{ formatRelativeTime(project.lastActivity) || 'No activity' }}
         </span>
       </div>

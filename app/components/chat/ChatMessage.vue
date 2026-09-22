@@ -14,7 +14,7 @@ defineProps<{
   <!-- User message -->
   <div v-if="message.role === 'user'" class="flex justify-end chat-msg-enter">
     <div
-      class="max-w-[80%] rounded-2xl rounded-br-md px-4 py-2.5 text-[13px] leading-relaxed"
+      class="max-w-[80%] rounded-2xl rounded-br-md px-4 py-2.5 t-ui leading-relaxed"
       style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.1); color: var(--text-primary); font-family: var(--font-sans);"
     >
       {{ message.content }}
@@ -53,12 +53,12 @@ defineProps<{
             :class="{ 'chat-thinking-pulse': isStreaming && activity?.type === 'thinking' }"
             style="color: var(--text-disabled);"
           />
-          <span class="text-[11px] font-mono" style="color: var(--text-disabled);">
+          <span class="t-small font-mono" style="color: var(--text-disabled);">
             {{ isStreaming && activity?.type === 'thinking' ? 'Thinking...' : 'Thought process' }}
           </span>
         </summary>
         <div
-          class="mt-1 text-[11px] leading-[1.6] whitespace-pre-wrap break-words pl-5"
+          class="mt-1 t-small leading-[1.6] whitespace-pre-wrap break-words pl-5"
           style="color: var(--text-tertiary); font-family: var(--font-mono); max-height: 200px; overflow-y: auto;"
         >{{ message.thinking }}</div>
       </details>
@@ -90,7 +90,7 @@ defineProps<{
       <!-- Rendered content -->
       <div
         v-if="message.content"
-        class="chat-prose text-[13px] leading-[1.7] break-words"
+        class="chat-prose t-ui leading-[1.7] break-words"
         :class="{ 'is-streaming': isStreaming }"
         style="color: var(--text-primary); font-family: var(--font-sans);"
         v-html="renderMarkdown(message.content)"

@@ -181,10 +181,10 @@ useUnsavedChanges(isDirty)
           <UIcon name="i-lucide-arrow-left" class="size-4" />
         </NuxtLink>
         <UIcon name="i-lucide-server" class="size-4" style="color: var(--accent);" />
-        <h1 class="text-[16px] font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">
+        <h1 class="t-body font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">
           {{ loading ? 'Loading...' : name }}
         </h1>
-        <span v-if="isDirty" class="text-[9px] font-mono px-1.5 py-px rounded-full" style="background: rgba(229, 169, 62, 0.1); color: var(--accent);">Unsaved</span>
+        <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full" style="background: rgba(229, 169, 62, 0.1); color: var(--accent);">Unsaved</span>
       </div>
       <div class="flex items-center gap-2">
         <UButton
@@ -224,19 +224,19 @@ useUnsavedChanges(isDirty)
         <div class="px-8 py-6 space-y-8">
           <!-- Basic Info -->
           <section class="space-y-4">
-            <h3 class="text-[13px] font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Basic Information</h3>
+            <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Basic Information</h3>
             <div class="grid grid-cols-2 gap-6">
               <div class="space-y-1.5">
-                <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Server Name</label>
+                <label class="t-small font-medium" style="color: var(--text-tertiary);">Server Name</label>
                 <input v-model="form.name" type="text" class="field-input w-full" />
               </div>
               <div class="space-y-1.5">
-                <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Scope</label>
+                <label class="t-small font-medium" style="color: var(--text-tertiary);">Scope</label>
                 <select v-model="form.scope" class="field-input w-full" disabled>
                   <option value="global">Global (~/.claude.json)</option>
                   <option value="project">Project (.mcp.json)</option>
                 </select>
-                <p class="text-[10px] italic opacity-60" style="color: var(--text-tertiary);">Scope cannot be changed after creation.</p>
+                <p class="t-small italic opacity-60" style="color: var(--text-tertiary);">Scope cannot be changed after creation.</p>
               </div>
             </div>
             <div class="flex items-center gap-2 pt-2">
@@ -251,10 +251,10 @@ useUnsavedChanges(isDirty)
                 </span>
               </label>
               <div class="flex flex-col">
-                <span class="text-[13px] font-medium" :class="form.disabled ? 'text-secondary' : 'text-primary'">
+                <span class="t-ui font-medium" :class="form.disabled ? 'text-secondary' : 'text-primary'">
                   {{ form.disabled ? 'Server Disabled' : 'Server Enabled' }}
                 </span>
-                <span class="text-[11px] text-tertiary opacity-60">
+                <span class="t-small text-tertiary opacity-60">
                   {{ form.disabled ? 'This server will not be loaded by Claude.' : 'This server is active and available for use.' }}
                 </span>
               </div>
@@ -263,24 +263,24 @@ useUnsavedChanges(isDirty)
 
           <!-- Transport -->
           <section class="space-y-4">
-            <h3 class="text-[13px] font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Transport Configuration</h3>
+            <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Transport Configuration</h3>
             <div class="space-y-4">
               <div class="space-y-1.5">
-                <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Transport Type</label>
+                <label class="t-small font-medium" style="color: var(--text-tertiary);">Transport Type</label>
                 <div class="flex gap-6 pt-1">
                   <label class="flex items-center gap-2 cursor-pointer group">
                     <input v-model="form.transport" type="radio" value="stdio" class="accent-accent" />
-                    <span class="text-[13px] group-hover:opacity-100 transition-opacity" :class="form.transport === 'stdio' ? 'opacity-100 font-medium' : 'opacity-60'">stdio (Local)</span>
+                    <span class="t-ui group-hover:opacity-100 transition-opacity" :class="form.transport === 'stdio' ? 'opacity-100 font-medium' : 'opacity-60'">stdio (Local)</span>
                   </label>
                   <label class="flex items-center gap-2 cursor-pointer group">
                     <input v-model="form.transport" type="radio" value="http" class="accent-accent" />
-                    <span class="text-[13px] group-hover:opacity-100 transition-opacity" :class="form.transport === 'http' ? 'opacity-100 font-medium' : 'opacity-60'">http (Streamable)</span>
+                    <span class="t-ui group-hover:opacity-100 transition-opacity" :class="form.transport === 'http' ? 'opacity-100 font-medium' : 'opacity-60'">http (Streamable)</span>
                   </label>
                   <label class="flex items-center gap-2 cursor-pointer group">
                     <input v-model="form.transport" type="radio" value="sse" class="accent-accent" />
                     <div class="flex items-center gap-1.5" :class="form.transport === 'sse' ? 'opacity-100' : 'opacity-60'">
-                      <span class="text-[13px] group-hover:opacity-100 transition-opacity" :class="form.transport === 'sse' ? 'font-medium' : ''">sse (Classic)</span>
-                      <span class="text-[9px] font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">Deprecated</span>
+                      <span class="t-ui group-hover:opacity-100 transition-opacity" :class="form.transport === 'sse' ? 'font-medium' : ''">sse (Classic)</span>
+                      <span class="t-small font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">Deprecated</span>
                     </div>
                   </label>
                 </div>
@@ -289,20 +289,20 @@ useUnsavedChanges(isDirty)
               <template v-if="form.transport === 'stdio'">
                 <div class="space-y-4">
                   <div class="space-y-1.5">
-                    <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Command</label>
-                    <input v-model="form.command" type="text" class="field-input w-full font-mono text-[13px]" placeholder="e.g. npx" />
+                    <label class="t-small font-medium" style="color: var(--text-tertiary);">Command</label>
+                    <input v-model="form.command" type="text" class="field-input w-full font-mono t-ui" placeholder="e.g. npx" />
                   </div>
                   <div class="space-y-1.5">
-                    <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">Arguments</label>
-                    <input v-model="form.argsString" type="text" class="field-input w-full font-mono text-[13px]" placeholder="e.g. -y @modelcontextprotocol/server-github" />
+                    <label class="t-small font-medium" style="color: var(--text-tertiary);">Arguments</label>
+                    <input v-model="form.argsString" type="text" class="field-input w-full font-mono t-ui" placeholder="e.g. -y @modelcontextprotocol/server-github" />
                   </div>
                 </div>
               </template>
 
               <template v-else-if="form.transport === 'sse' || form.transport === 'http'">
                 <div class="space-y-1.5">
-                  <label class="text-[11px] font-medium" style="color: var(--text-tertiary);">URL</label>
-                  <input v-model="form.url" type="text" class="field-input w-full font-mono text-[13px]" placeholder="https://example.com/sse" />
+                  <label class="t-small font-medium" style="color: var(--text-tertiary);">URL</label>
+                  <input v-model="form.url" type="text" class="field-input w-full font-mono t-ui" placeholder="https://example.com/sse" />
                 </div>
               </template>
             </div>
@@ -312,44 +312,44 @@ useUnsavedChanges(isDirty)
           <section class="space-y-4">
             <div v-if="form.transport === 'stdio'">
               <div class="flex items-center justify-between mb-2">
-                <h3 class="text-[13px] font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Environment Variables</h3>
-                <button class="text-[11px] font-medium transition-colors" style="color: var(--accent);" @click="addEnvRow">
+                <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Environment Variables</h3>
+                <button class="t-small font-medium transition-colors" style="color: var(--accent);" @click="addEnvRow">
                   + Add Row
                 </button>
               </div>
               <div class="space-y-2">
                 <div v-for="(pair, idx) in form.envPairs" :key="idx" class="flex items-center gap-2 group">
-                  <input v-model="pair.key" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="KEY" />
+                  <input v-model="pair.key" type="text" class="field-input flex-1 font-mono t-small" placeholder="KEY" />
                   <span class="text-secondary opacity-40">=</span>
-                  <input v-model="pair.value" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="VALUE" />
+                  <input v-model="pair.value" type="text" class="field-input flex-1 font-mono t-small" placeholder="VALUE" />
                   <button class="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-error/10 text-error/60 hover:text-error" @click="removeEnvRow(idx)">
                     <UIcon name="i-lucide-trash-2" class="size-3.5" />
                   </button>
                 </div>
                 <div v-if="!form.envPairs.length" class="py-4 border border-dashed rounded-xl flex flex-col items-center justify-center opacity-40" style="border-color: var(--border-subtle);">
-                  <p class="text-[12px]">No environment variables configured</p>
+                  <p class="t-small">No environment variables configured</p>
                 </div>
               </div>
             </div>
 
             <div v-else>
               <div class="flex items-center justify-between mb-2">
-                <h3 class="text-[13px] font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Headers</h3>
-                <button class="text-[11px] font-medium transition-colors" style="color: var(--accent);" @click="addHeaderRow">
+                <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Headers</h3>
+                <button class="t-small font-medium transition-colors" style="color: var(--accent);" @click="addHeaderRow">
                   + Add Row
                 </button>
               </div>
               <div class="space-y-2">
                 <div v-for="(pair, idx) in form.headerPairs" :key="idx" class="flex items-center gap-2 group">
-                  <input v-model="pair.key" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="Header Name" />
+                  <input v-model="pair.key" type="text" class="field-input flex-1 font-mono t-small" placeholder="Header Name" />
                   <span class="text-secondary opacity-40">:</span>
-                  <input v-model="pair.value" type="text" class="field-input flex-1 font-mono text-[12px]" placeholder="Value" />
+                  <input v-model="pair.value" type="text" class="field-input flex-1 font-mono t-small" placeholder="Value" />
                   <button class="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-error/10 text-error/60 hover:text-error" @click="removeHeaderRow(idx)">
                     <UIcon name="i-lucide-trash-2" class="size-3.5" />
                   </button>
                 </div>
                 <div v-if="!form.headerPairs.length" class="py-4 border border-dashed rounded-xl flex flex-col items-center justify-center opacity-40" style="border-color: var(--border-subtle);">
-                  <p class="text-[12px]">No custom headers configured</p>
+                  <p class="t-small">No custom headers configured</p>
                 </div>
               </div>
             </div>
@@ -359,8 +359,8 @@ useUnsavedChanges(isDirty)
           <section class="space-y-6 pt-8 border-t" style="border-color: var(--border-subtle);">
             <div class="flex items-center justify-between">
               <div class="space-y-1">
-                <h3 class="text-[13px] font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Capabilities</h3>
-                <p class="text-[11px] opacity-40">Discovered tools, resources, and prompts from this server.</p>
+                <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Capabilities</h3>
+                <p class="t-small opacity-40">Discovered tools, resources, and prompts from this server.</p>
               </div>
               <UButton
                 icon="i-lucide-refresh-cw"
@@ -374,7 +374,7 @@ useUnsavedChanges(isDirty)
 
             <div v-if="loadingCapabilities" class="py-12 flex flex-col items-center justify-center gap-3">
               <UIcon name="i-lucide-loader-2" class="size-6 animate-spin" style="color: var(--accent);" />
-              <span class="text-[12px] opacity-60">Connecting to server...</span>
+              <span class="t-small opacity-60">Connecting to server...</span>
             </div>
 
             <div v-else-if="capabilities" class="space-y-8">
@@ -386,8 +386,8 @@ useUnsavedChanges(isDirty)
                 >
                   <div class="flex items-center gap-2">
                     <UIcon name="i-lucide-wrench" class="size-4 opacity-60 text-accent" />
-                    <span class="text-[13px] font-semibold">Tools</span>
-                    <span class="text-[11px] font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.tools.length }}</span>
+                    <span class="t-ui font-semibold">Tools</span>
+                    <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.tools.length }}</span>
                   </div>
                   <UIcon 
                     :name="isToolsCollapsed ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'" 
@@ -398,7 +398,7 @@ useUnsavedChanges(isDirty)
                   <div v-if="capabilities.tools.length" class="grid gap-3">
                     <div v-for="tool in (capabilities.tools as any[])" :key="tool.name" class="p-4 rounded-xl border group/tool hover:border-accent/40 transition-all min-w-0" style="background: var(--surface-base); border-color: var(--border-subtle);">
                       <div class="flex items-center justify-between mb-2 gap-4">
-                        <div class="font-mono text-[13px] font-bold text-accent truncate min-w-0" :title="tool.name">{{ tool.name }}</div>
+                        <div class="font-mono t-ui font-bold text-accent truncate min-w-0" :title="tool.name">{{ tool.name }}</div>
                         
                         <div v-if="getToolCategory(tool) !== 'unknown'" class="flex items-center gap-1 bg-surface-raised/50 p-0.5 rounded-lg border border-transparent group-hover/tool:border-border-subtle transition-all shrink-0">
                           <button 
@@ -423,15 +423,15 @@ useUnsavedChanges(isDirty)
                           </button>
                         </div>
                       </div>
-                      <div class="text-[12px] leading-relaxed" style="color: var(--text-secondary);">{{ tool.description }}</div>
+                      <div class="t-small leading-relaxed" style="color: var(--text-secondary);">{{ tool.description }}</div>
                       <div v-if="tool.inputSchema" class="mt-3 pt-3 border-t border-dashed" style="border-color: var(--border-subtle);">
-                        <div class="text-[10px] uppercase tracking-wider font-semibold opacity-40 mb-2">Input Schema</div>
-                        <pre class="text-[10px] p-2 rounded-lg font-mono overflow-x-auto" style="background: var(--surface-raised); color: var(--text-tertiary);">{{ JSON.stringify(tool.inputSchema.properties || {}, null, 2) }}</pre>
+                        <div class="t-small uppercase tracking-wider font-semibold opacity-40 mb-2">Input Schema</div>
+                        <pre class="t-small p-2 rounded-lg font-mono overflow-x-auto" style="background: var(--surface-raised); color: var(--text-tertiary);">{{ JSON.stringify(tool.inputSchema.properties || {}, null, 2) }}</pre>
                       </div>
                     </div>
                   </div>
                   <div v-else class="py-8 border border-dashed rounded-xl flex flex-col items-center justify-center opacity-40" style="border-color: var(--border-subtle);">
-                    <p class="text-[12px]">No tools discovered</p>
+                    <p class="t-small">No tools discovered</p>
                   </div>
                 </div>
               </div>
@@ -444,8 +444,8 @@ useUnsavedChanges(isDirty)
                 >
                   <div class="flex items-center gap-2">
                     <UIcon name="i-lucide-database" class="size-4 opacity-60 text-success" />
-                    <span class="text-[13px] font-semibold">Resources</span>
-                    <span class="text-[11px] font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.resources.length }}</span>
+                    <span class="t-ui font-semibold">Resources</span>
+                    <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.resources.length }}</span>
                   </div>
                   <UIcon 
                     :name="isResourcesCollapsed ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'" 
@@ -455,13 +455,13 @@ useUnsavedChanges(isDirty)
                 <div v-if="!isResourcesCollapsed">
                   <div v-if="capabilities.resources.length" class="grid gap-3">
                     <div v-for="resource in (capabilities.resources as any[])" :key="resource.uri" class="p-4 rounded-xl border hover:border-success/40 transition-all" style="background: var(--surface-base); border-color: var(--border-subtle);">
-                      <div class="font-mono text-[12px] font-bold text-success mb-1">{{ resource.name }}</div>
-                      <div class="text-[11px] opacity-60 font-mono mb-2 truncate">{{ resource.uri }}</div>
-                      <div class="text-[12px]" style="color: var(--text-secondary);">{{ resource.description }}</div>
+                      <div class="font-mono t-small font-bold text-success mb-1">{{ resource.name }}</div>
+                      <div class="t-small opacity-60 font-mono mb-2 truncate">{{ resource.uri }}</div>
+                      <div class="t-small" style="color: var(--text-secondary);">{{ resource.description }}</div>
                     </div>
                   </div>
                   <div v-else class="py-8 border border-dashed rounded-xl flex flex-col items-center justify-center opacity-40" style="border-color: var(--border-subtle);">
-                    <p class="text-[12px]">No resources discovered</p>
+                    <p class="t-small">No resources discovered</p>
                   </div>
                 </div>
               </div>
@@ -474,8 +474,8 @@ useUnsavedChanges(isDirty)
                 >
                   <div class="flex items-center gap-2">
                     <UIcon name="i-lucide-terminal" class="size-4 opacity-60 text-primary" />
-                    <span class="text-[13px] font-semibold">Prompts</span>
-                    <span class="text-[11px] font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.prompts.length }}</span>
+                    <span class="t-ui font-semibold">Prompts</span>
+                    <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.prompts.length }}</span>
                   </div>
                   <UIcon 
                     :name="isPromptsCollapsed ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'" 
@@ -485,24 +485,24 @@ useUnsavedChanges(isDirty)
                 <div v-if="!isPromptsCollapsed">
                   <div v-if="capabilities.prompts.length" class="grid gap-3">
                     <div v-for="prompt in (capabilities.prompts as any[])" :key="prompt.name" class="p-4 rounded-xl border hover:border-primary/40 transition-all" style="background: var(--surface-base); border-color: var(--border-subtle);">
-                      <div class="font-mono text-[12px] font-bold text-primary mb-1">{{ prompt.name }}</div>
-                      <div class="text-[12px]" style="color: var(--text-secondary);">{{ prompt.description }}</div>
+                      <div class="font-mono t-small font-bold text-primary mb-1">{{ prompt.name }}</div>
+                      <div class="t-small" style="color: var(--text-secondary);">{{ prompt.description }}</div>
                       <div v-if="prompt.arguments?.length" class="mt-3 flex flex-wrap gap-2">
-                        <span v-for="arg in prompt.arguments" :key="arg.name" class="text-[10px] font-mono px-1.5 py-px rounded-md border" :title="arg.description" style="background: var(--surface-raised); border-color: var(--border-subtle);">
+                        <span v-for="arg in prompt.arguments" :key="arg.name" class="t-small font-mono px-1.5 py-px rounded-md border" :title="arg.description" style="background: var(--surface-raised); border-color: var(--border-subtle);">
                           {{ arg.name }}{{ arg.required ? '*' : '' }}
                         </span>
                       </div>
                     </div>
                   </div>
                   <div v-else class="py-8 border border-dashed rounded-xl flex flex-col items-center justify-center opacity-40" style="border-color: var(--border-subtle);">
-                    <p class="text-[12px]">No prompts discovered</p>
+                    <p class="t-small">No prompts discovered</p>
                   </div>
                 </div>
               </div>
             </div>
             <div v-else class="py-12 border border-dashed rounded-2xl flex flex-col items-center justify-center gap-3 opacity-40" style="border-color: var(--border-subtle);">
               <UIcon name="i-lucide-alert-circle" class="size-6" />
-              <p class="text-[12px] text-center max-w-[200px]">Failed to connect to server or no capabilities discovered.</p>
+              <p class="t-small text-center max-w-[200px]">Failed to connect to server or no capabilities discovered.</p>
             </div>
           </section>
         </div>
@@ -521,11 +521,11 @@ useUnsavedChanges(isDirty)
     <Teleport to="body">
       <div v-if="showDeleteConfirm" class="fixed inset-0 z-50 flex items-center justify-center" style="background: rgba(0,0,0,0.4); backdrop-filter: blur(2px);">
         <div class="rounded-2xl p-6 max-w-sm w-full mx-4 space-y-4 shadow-xl" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-          <h3 class="text-[15px] font-semibold" style="color: var(--text-primary);">Delete MCP Server?</h3>
-          <p class="text-[13px]" style="color: var(--text-secondary);">This will permanently delete the configuration for <span class="font-mono font-bold">{{ name }}</span> and cannot be undone.</p>
+          <h3 class="t-body font-semibold" style="color: var(--text-primary);">Delete MCP Server?</h3>
+          <p class="t-ui" style="color: var(--text-secondary);">This will permanently delete the configuration for <span class="font-mono font-bold">{{ name }}</span> and cannot be undone.</p>
           <div class="flex gap-2 justify-end pt-2">
-            <button class="px-3 py-1.5 rounded-lg text-[12px] font-medium hover-bg" style="color: var(--text-tertiary);" @click="showDeleteConfirm = false">Cancel</button>
-            <button class="px-3 py-1.5 rounded-lg text-[12px] font-medium" style="background: var(--error); color: white;" @click="handleDelete">Delete Forever</button>
+            <button class="px-3 py-1.5 rounded-lg t-small font-medium hover-bg" style="color: var(--text-tertiary);" @click="showDeleteConfirm = false">Cancel</button>
+            <button class="px-3 py-1.5 rounded-lg t-small font-medium" style="background: var(--error); color: white;" @click="handleDelete">Delete Forever</button>
           </div>
         </div>
       </div>

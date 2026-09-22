@@ -93,6 +93,16 @@ COPY --chown=bun:bun engineering/commands ./engineering/commands
 # is indistinguishable from "no product matched".
 COPY --chown=bun:bun engineering/registry ./engineering/registry
 
+# And the plugin manifest. Two readers already expect it and silently got
+# nothing: teamSync reports `shippedVersion` from
+# engineering/.claude-plugin/plugin.json, which is absent from the image, so a
+# container always answered null; and the Plugins page reads an install record
+# that names a directory holding this manifest. Without it the page is
+# permanently empty on a team instance while the plugin's agents, skills and
+# commands are demonstrably installed - the page right about the record and
+# wrong about the instance.
+COPY --chown=bun:bun engineering/.claude-plugin ./engineering/.claude-plugin
+
 # And its scripts. The evidence step is instructed to run
 # `node engineering/scripts/assemble-bundle.mjs`, and a real run reported back:
 # "assemble-bundle.mjs is not installed anywhere in this Agent Manager
@@ -115,6 +125,42 @@ COPY --chown=bun:bun engineering/schemas ./engineering/schemas
 # above this one fails SILENTLY: existsSync simply returns false and the run
 # carries on with less than it should have.
 COPY --chown=bun:bun engineering/recipes ./engineering/recipes
+
+# And the guardrail hooks — the plan gate, the test lock and the secrets guard.
+# agentHooks.ts resolves them from the installed plugin first and falls back to
+# this copy, and in a container that fallback is the only path that works: the
+# staged installed_plugins.json records the HOST's installPath
+# (/home/sandeep/.claude/...), which does not exist in here. Without this COPY
+# neither path resolves and preflight fails every run with "the guardrail hooks
+# are on neither the installed plugin nor the copy shipped at
+# /app/engineering/hooks" — accurate, and entirely about a missing COPY.
+COPY --chown=bun:bun engineering/hooks ./engineering/hooks
+
+# And the compound-engineering skills Runbook C's Plan, Implement Fix, Code
+# Review and Push + PR steps read at run time (agentCaller.ts, CE_SKILLS_DIR).
+# ceSkillsDir resolves them from an installed compound-engineering plugin first
+# and falls back to this copy, so an instance needs no `claude plugin install`
+# in its config directory to run the runbook - a fresh container, a CI-built
+# image (whose docker/claude-config is empty) and a team instance all get them.
+# Pinned to a commit, not a branch: the skills are prompts the pipeline is
+# judged by, and a silent upstream change would change every run's method.
+# The commit is upstream's release tag compound-engineering-v3.26.2; bump both
+# ARGs together to move to a newer release. Fetched shallow by sha - one
+# round trip, ~2s - and only skills/ and LICENSE (MIT) are kept; the rest of
+# the repository is docs, a site and its own tooling.
+ARG CE_PLUGIN_REV=0ec66db4e9f7391c6df9e363b65c664265ccd538
+ARG CE_PLUGIN_VERSION=3.26.2
+RUN set -eu; \
+    git init --quiet /tmp/ce; \
+    git -C /tmp/ce remote add origin https://github.com/EveryInc/compound-engineering-plugin.git; \
+    git -C /tmp/ce fetch --quiet --depth 1 origin "${CE_PLUGIN_REV}"; \
+    git -C /tmp/ce checkout --quiet FETCH_HEAD -- skills LICENSE; \
+    mkdir -p /app/vendor/compound-engineering; \
+    mv /tmp/ce/skills /tmp/ce/LICENSE /app/vendor/compound-engineering/; \
+    printf '%s %s\n' "${CE_PLUGIN_VERSION}" "${CE_PLUGIN_REV}" > /app/vendor/compound-engineering/VERSION; \
+    rm -rf /tmp/ce; \
+    test -f /app/vendor/compound-engineering/skills/ce-plan/SKILL.md; \
+    chown -R bun:bun /app/vendor
 
 COPY --chown=bun:bun docker/claude-config /root/.claude
 

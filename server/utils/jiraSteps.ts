@@ -41,6 +41,19 @@ export interface JiraStepConfig {
  * Matching is case-insensitive on both sides, which is why ASECRM's ALL-CAPS
  * "DEV DONE", "READY FOR QA" and "QA DONE" need no entry of their own.
  */
+/**
+ * Status names for comparison: lowercased, punctuation flattened to spaces.
+ *
+ * Projects spell the same status differently — CSUP's is "Dev. Done", with a
+ * period, against a runbook that asks for "Dev Done". An exact lowercase
+ * compare misses that and the step reports "offers no transition to Dev Done or
+ * a known synonym" while listing "Dev. Done" among the available ones, which
+ * reads as a bug in the matcher because it is one. Adding "dev. done" to the
+ * synonyms below would fix that project and wait to be rediscovered on the next
+ * one; normalising fixes the class.
+ */
+const norm = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
 const STATUS_SYNONYMS: Record<string, string[]> = {
   'dev done': ['dev done', 'development done', 'ready for review', 'in review', 'code review', 'review', 'resolved', 'fixed'],
   'in progress': ['in progress', 'in development', 'in dev', 'start progress', 'doing'],
@@ -131,11 +144,101 @@ async function attachArtifacts(run: WorkflowRun, key: string, fetchImpl: FetchLi
  * and no In Progress still has exactly one way of saying work has begun, or
  * none, and the category tells us which.
  */
-const INTENT_CATEGORY: Record<string, 'indeterminate'> = { 'in progress': 'indeterminate' }
+const INTENT_CATEGORY: Record<string, 'indeterminate'> = {
+  'in progress': 'indeterminate',
+  // "Dev Done" had no category, so it was matched by name alone: a project
+  // spelling it anything unexpected got "offers no transition to Dev Done"
+  // and the ticket sat where it was. It resolves by category now, like the
+  // start intent.
+  //
+  // 'indeterminate' for BOTH, deliberately, and this is the safety property
+  // of the whole resolver: Jira sorts every status into new / indeterminate /
+  // done, and nothing here may ever auto-select a `done` one. CSUP-7516 sits
+  // in "New" offering exactly two transitions — "Close as invalid" and
+  // "Cancel" — both `done`. A resolver that "tried harder" on a done-category
+  // fallback would close a customer's ticket as invalid because a pipeline
+  // could not find a status it liked. Handing work over is an in-progress
+  // move; closing a ticket is a person's decision.
+  'dev done': 'indeterminate',
+}
 /** Among several in-progress statuses, the one that reads as development work. */
 const WORK_WORDS = /progress|develop|\bdev\b|implement|start|work|doing/i
+/** And the one that reads as work handed on for checking. */
+const REVIEW_WORDS = /review|dev\s*\.?\s*done|development done|resolved|fixed|verif|\bqa\b|test/i
+/** The disambiguator for each intent, when a project offers several in-progress statuses. */
+const WORDS_FOR: Record<string, RegExp> = { 'in progress': WORK_WORDS, 'dev done': REVIEW_WORDS }
 
 interface Transition { id: string, name: string, to?: { name?: string, statusCategory?: { key?: string } } }
+
+/**
+ * What this step should do with the ticket, decided from the ticket's OWN
+ * workflow rather than from a status name someone typed into a runbook.
+ *
+ * One resolver, two callers: preflight asks it before the run starts and the
+ * step asks it again when it runs. They used to implement the same chain
+ * separately, which is how they came to disagree — the step treats "nothing to
+ * do" as a normal outcome and carries on, while preflight failed the whole run
+ * for it.
+ *
+ * Order: the configured name or one of its synonyms; then the one transition
+ * whose target is in the intent's category; then the one whose name reads like
+ * the intent. Anything ambiguous, and anything that would land in `done`,
+ * resolves to nothing — and nothing is a legitimate answer, not an error.
+ */
+export function resolveTransition(
+  target: string,
+  transitions: Transition[],
+  current?: { name: string, category?: string } | null,
+): { hit?: Transition, already?: boolean, needsCurrent?: boolean, why: string } {
+  const want = norm(target)
+  const candidates = (STATUS_SYNONYMS[want] ?? [want]).map(norm)
+  const named = matchTransition(target, transitions)
+  if (named) return { hit: named, why: `"${target}" reaches "${named.to?.name ?? named.name}"` }
+
+  const category = INTENT_CATEGORY[want]
+  // Past the name match, the current status is load-bearing: a ticket already
+  // in the target state has no transition back to it, and the category
+  // fallback would move it a second time. `needsCurrent` lets the caller fetch
+  // it only on this path — see moveTicket, which spends one request on the
+  // name-match path and two here.
+  if (category && current === undefined) return { needsCurrent: true, why: 'the current status decides this one' }
+  // "Already there" has to mean already in THIS intent's half of the work, not
+  // merely somewhere in `indeterminate`. Both intents share that category, so
+  // a bare category compare made a Dev Done step no-op on every ticket sitting
+  // in In Progress — which is every ticket a run has just worked on.
+  const intentWords = WORDS_FOR[want]
+  const alreadyByCategory = (name: string) => !intentWords || intentWords.test(name)
+  if (current && (candidates.includes(norm(current.name))
+    || (category && current.category === category && alreadyByCategory(current.name)))) {
+    return { already: true, why: `already in "${current.name}"` }
+  }
+  const available = () => transitions.map(t => t.to?.name ?? t.name).join(', ') || 'none'
+  if (!category) {
+    return { why: `no transition named "${target}" (or a known synonym), and no category is registered for that intent; available: ${available()}` }
+  }
+  const inCategory = transitions.filter(t => t.to?.statusCategory?.key === category)
+  const words = WORDS_FOR[want]
+  // Jira's `indeterminate` covers both "work started" and "work handed on", so
+  // the category alone cannot tell the two intents apart. A project offering a
+  // single in-progress transition to "In Progress" would otherwise satisfy a
+  // "Dev Done" step by category and report the work handed over when it had
+  // only been started. When the sole candidate reads as the OTHER intent, that
+  // is no answer at all.
+  const other = want === 'dev done' ? WORK_WORDS : REVIEW_WORDS
+  const readsAsOther = (t: Transition) => other.test(t.to?.name ?? '') || other.test(t.name)
+  const plausible = inCategory.filter(t => !readsAsOther(t) || (words ? words.test(t.to?.name ?? '') || words.test(t.name) : false))
+  if (plausible.length === 1) return { hit: plausible[0], why: `"${target}" resolves by status category to "${plausible[0]!.to?.name}"` }
+  if (inCategory.length >= 1 && plausible.length === 0) {
+    const names = inCategory.map(t => `"${t.to?.name ?? t.name}"`).join(', ')
+    return { why: `the in-progress transitions from here (${names}) read as the other half of the work, not as "${target}"` }
+  }
+  const worded = words ? plausible.filter(t => words.test(t.to?.name ?? '') || words.test(t.name)) : []
+  if (worded.length === 1) return { hit: worded[0], why: `"${target}" resolves to "${worded[0]!.to?.name}"` }
+  if (inCategory.length > 1) {
+    return { why: `${inCategory.length} transitions lead to an in-progress status (${inCategory.map(t => `"${t.to?.name ?? t.name}"`).join(', ')}), none of them unambiguously "${target}"` }
+  }
+  return { why: `no transition from here leads anywhere safe to move it to; available: ${available()}` }
+}
 
 /**
  * Is `target` reachable from where the ticket is now? The same question
@@ -150,27 +253,20 @@ export async function transitionReachable(run: WorkflowRun, key: string, target:
   if (!listed.ok) return { ok: false, detail: `could not read the transitions of ${key} (HTTP ${listed.status})` }
   const transitions = (((await listed.json()) as { transitions?: Transition[] })?.transitions) ?? []
   const current = await currentStatus(issueUrl, headers, fetchImpl)
-  const hit = matchTransition(target, transitions)
-  if (hit) return { ok: true, detail: `"${target}" reaches "${hit.to?.name ?? hit.name}" from "${current?.name ?? 'the current status'}"` }
-  const want = target.trim().toLowerCase()
-  const candidates = STATUS_SYNONYMS[want] ?? [want]
-  if (current && (candidates.includes(current.name.toLowerCase()) || (INTENT_CATEGORY[want] && current.category === INTENT_CATEGORY[want]))) {
-    return { ok: true, detail: `${key} is already in "${current.name}"` }
-  }
-  const inCategory = INTENT_CATEGORY[want] ? transitions.filter(t => t.to?.statusCategory?.key === INTENT_CATEGORY[want]) : []
-  if (inCategory.length === 1) return { ok: true, detail: `"${target}" resolves by status category to "${inCategory[0]!.to?.name}"` }
-  const working = inCategory.filter(t => WORK_WORDS.test(t.to?.name ?? '') || WORK_WORDS.test(t.name))
-  if (working.length === 1) return { ok: true, detail: `"${target}" resolves to "${working[0]!.to?.name}"` }
-  const available = transitions.map(t => t.to?.name ?? t.name).join(', ') || 'none'
-  return { ok: false, detail: `${key} is in "${current?.name ?? 'an unknown status'}" and offers no transition to "${target}" or a known synonym; available: ${available}` }
+  const r = resolveTransition(target, transitions, current)
+  if (r.hit) return { ok: true, detail: `${r.why} from "${current?.name ?? 'the current status'}"` }
+  if (r.already) return { ok: true, detail: `${key} is ${r.why}` }
+  // Not reachable is not a failure of the run. The step reports it and the
+  // work goes on: fixing the bug never depended on the bookkeeping.
+  return { ok: false, detail: `${key} is in "${current?.name ?? 'an unknown status'}" and ${r.why}; the step will leave the ticket where it is and say so.` }
 }
 
 /** The configured name, then its synonyms, against the target status and then the transition name. */
 function matchTransition(target: string, transitions: Transition[]): Transition | undefined {
-  const want = target.trim().toLowerCase()
-  const candidates = STATUS_SYNONYMS[want] ?? [want]
-  const byTo = (n: string) => transitions.find(t => (t.to?.name ?? '').toLowerCase() === n)
-  const byName = (n: string) => transitions.find(t => t.name.toLowerCase() === n)
+  const want = norm(target)
+  const candidates = (STATUS_SYNONYMS[want] ?? [want]).map(norm)
+  const byTo = (n: string) => transitions.find(t => norm(t.to?.name ?? '') === n)
+  const byName = (n: string) => transitions.find(t => norm(t.name) === n)
   for (const n of candidates) { const hit = byTo(n) ?? byName(n); if (hit) return hit }
   return undefined
 }
@@ -184,40 +280,28 @@ async function moveTicket(run: WorkflowRun, key: string, target: string, fetchIm
   const listed = await fetchImpl(url, { headers })
   if (!listed.ok) return `Could not read the transitions of ${key} (HTTP ${listed.status}); the ticket was not moved.`
   const transitions = (((await listed.json()) as { transitions?: Transition[] })?.transitions) ?? []
-  const want = target.trim().toLowerCase()
-  // The configured name first, then its synonyms, matching each against the
-  // target status and then the transition name. This is how "Dev Done" lands
-  // on a project whose workflow calls the same state "Ready for Review".
-  const candidates = STATUS_SYNONYMS[want] ?? [want]
-  let hit: Transition | undefined = matchTransition(target, transitions)
-  const category = INTENT_CATEGORY[want]
-  if (!hit) {
-    // Already there? A ticket has no transition back to the status it is already
-    // in, and needs none. This is not specific to the in-progress case any more:
-    // a rework loop re-entering the fix step re-runs every Jira step behind it,
-    // and without this each one reports a failure line for a ticket that is
-    // exactly where it is supposed to be.
-    const current = await currentStatus(issueUrl, headers, fetchImpl)
-    if (current && (candidates.includes(current.name.toLowerCase()) || (category && current.category === category))) {
-      return `${key} is already in "${current.name}"; left as is.`
-    }
-    if (category) {
-      const inCategory = transitions.filter(t => t.to?.statusCategory?.key === category)
-      const working = inCategory.filter(t => WORK_WORDS.test(t.to?.name ?? '') || WORK_WORDS.test(t.name))
-      hit = inCategory.length === 1 ? inCategory[0] : working.length === 1 ? working[0] : undefined
-      if (!hit && inCategory.length > 1) {
-        return `${key} offers no transition to "${target}" (or a known synonym) from "${current?.name ?? 'its current status'}", and ${inCategory.length} of its transitions lead to an in-progress status (${inCategory.map(t => `"${t.to?.name ?? t.name}"`).join(', ')}), none of them unambiguously the start of development; left as is. Name the one this project uses on the step's status in the workflow builder.`
-      }
-    }
+  // The same resolver preflight used, so the two cannot drift apart.
+  //
+  // The current status is read only when a category is registered for this
+  // intent, and then BEFORE resolving rather than as a retry: a ticket a
+  // developer already moved by hand has no transition back to where it is, and
+  // the category fallback would otherwise resolve past that fact and move it a
+  // second time. Where no category applies, the status cannot change the answer
+  // and the read is skipped.
+  let r = resolveTransition(target, transitions, undefined)
+  if (r.needsCurrent) r = resolveTransition(target, transitions, await currentStatus(issueUrl, headers, fetchImpl))
+  if (r.already) return `${key} is ${r.why}; left as is.`
+  if (!r.hit) {
+    return `${key} could not be moved to "${target}": ${r.why}. Left as is - the ticket's own workflow offers no safe next step, which is not a problem with this run. Name the status this project uses on the step, or move it by hand.`
   }
-  if (!hit) {
-    const available = transitions.map(t => t.to?.name ?? t.name).join(', ') || 'none'
-    return `${key} offers no transition to "${target}" (or a known synonym) from its current status; available: ${available}. Left as is; edit the step's status in the workflow builder if this project names it differently.`
-  }
+  const hit = r.hit
   const to = hit.to?.name ?? hit.name
   const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify({ transition: { id: hit.id } }) })
   if (!res.ok) return `Moving ${key} to "${to}" failed (HTTP ${res.status}): ${(await res.text().catch(() => '')).slice(0, 300)}. The ticket was not moved.`
-  return `Moved ${key} to "${to}" (transition "${hit.name}"${hit.to?.name?.toLowerCase() !== want && !candidates.includes((hit.to?.name ?? '').toLowerCase()) ? ', the only in-progress status this project offers from here' : ''}).`
+  // Why this status, in the resolver's own words: a move that came from the
+  // category rather than the configured name must say so, or a reader cannot
+  // tell a deliberate resolution from a coincidence.
+  return `Moved ${key} to "${to}" (transition "${hit.name}"; ${r.why}).`
 }
 
 /** The ticket's status now, with Jira's category key; null when it cannot be read. */

@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { readStore } from '../../utils/productStore'
 import { blocking, validateProducts } from '../../utils/registryValidate'
 
@@ -10,7 +11,9 @@ import { blocking, validateProducts } from '../../utils/registryValidate'
  * registry has three warnings" indistinguishable from "the check itself
  * failed".
  */
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
+  // Reads the whole store to check it; the Check button is an operator tool.
+  await requireCapability(event, 'configure')
   const store = await readStore()
   const problems = validateProducts(store.products)
   return {

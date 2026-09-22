@@ -30,7 +30,7 @@ function testServer(name: string) {
   <div class="flex flex-col">
     <PageHeader title="MCP Servers">
       <template #trailing>
-        <span class="font-mono text-[12px] text-meta mr-4">{{ servers.length }}</span>
+        <span class="font-mono t-small text-meta mr-4">{{ servers.length }}</span>
       </template>
       <template #right>
         <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
@@ -39,13 +39,13 @@ function testServer(name: string) {
     </PageHeader>
 
     <div class="px-6 py-4 flex-1">
-      <p class="text-[13px] mb-6 leading-relaxed text-label max-w-2xl">
+      <p class="t-ui mb-6 leading-relaxed text-label max-w-2xl">
         Manage Model Context Protocol (MCP) servers. Global servers are available across all your projects, while project servers are scoped to your current working directory.
       </p>
 
       <div v-if="error" class="rounded-xl px-4 py-3 mb-6 flex items-start gap-3 border-error bg-error-subtle">
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5 text-error" />
-        <span class="text-[12px] text-error">{{ error }}</span>
+        <span class="t-small text-error">{{ error }}</span>
       </div>
 
       <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -55,7 +55,7 @@ function testServer(name: string) {
       </div>
       <div v-else-if="servers.length === 0" class="flex flex-col items-center justify-center py-12 border border-dashed rounded-xl border-subtle">
         <UIcon name="i-lucide-server" class="size-8 text-meta mb-3" />
-        <p class="text-[13px] text-secondary">No MCP servers configured.</p>
+        <p class="t-ui text-secondary">No MCP servers configured.</p>
       </div>
       <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <NuxtLink
@@ -67,27 +67,27 @@ function testServer(name: string) {
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 mb-1">
-                <h3 class="text-[14px] font-semibold text-primary font-display truncate" :class="{ 'opacity-50': server.disabled }">{{ server.name }}</h3>
+                <h3 class="t-body font-semibold text-primary font-display truncate" :class="{ 'opacity-50': server.disabled }">{{ server.name }}</h3>
                 <span
-                  class="text-[10px] px-1.5 py-0.5 rounded font-medium tracking-wide uppercase"
+                  class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase"
                   :class="server.scope === 'global' ? 'bg-accent-subtle text-accent border border-accent-subtle' : 'bg-surface-raised text-secondary border border-subtle'"
                 >
                   {{ server.scope }}
                 </span>
-                <span v-if="server.transport" class="text-[10px] px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-surface-raised text-meta border border-subtle">
+                <span v-if="server.transport" class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-surface-raised text-meta border border-subtle">
                   {{ server.transport }}
                 </span>
-                <span v-if="server.transport === 'sse'" class="text-[9px] font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">
+                <span v-if="server.transport === 'sse'" class="t-small font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">
                   Deprecated
                 </span>
-                <span v-if="server.disabled" class="text-[10px] px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-error/10 text-error border border-error/20">
+                <span v-if="server.disabled" class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-error/10 text-error border border-error/20">
                   Disabled
                 </span>
               </div>
-              <div v-if="server.transport === 'stdio'" class="text-[12px] font-mono text-meta truncate" :title="server.command + ' ' + (server.args?.join(' ') || '')" :class="{ 'opacity-50': server.disabled }">
+              <div v-if="server.transport === 'stdio'" class="t-small font-mono text-meta truncate" :title="server.command + ' ' + (server.args?.join(' ') || '')" :class="{ 'opacity-50': server.disabled }">
                 {{ server.command }} <span v-if="server.args?.length">{{ server.args.join(' ') }}</span>
               </div>
-              <div v-else class="text-[12px] font-mono text-meta truncate" :title="server.url" :class="{ 'opacity-50': server.disabled }">
+              <div v-else class="t-small font-mono text-meta truncate" :title="server.url" :class="{ 'opacity-50': server.disabled }">
                 {{ server.url }}
               </div>
             </div>
@@ -108,7 +108,7 @@ function testServer(name: string) {
 
           <div v-if="(server.env && Object.keys(server.env).length) || (server.headers && Object.keys(server.headers).length)" class="mt-auto pt-3 border-t border-subtle flex items-center gap-2" :class="{ 'opacity-50': server.disabled }">
             <UIcon :name="server.transport === 'stdio' ? 'i-lucide-key' : 'i-lucide-shield-check'" class="size-3 text-meta" />
-            <span class="text-[11px] text-meta">
+            <span class="t-small text-meta">
               {{ server.transport === 'stdio' ? `Has ${Object.keys(server.env || {}).length} env variable(s)` : `Has ${Object.keys(server.headers || {}).length} header(s)` }}
             </span>
           </div>
@@ -128,8 +128,8 @@ function testServer(name: string) {
       <template #content>
         <div class="p-6 space-y-4 bg-overlay rounded-2xl border border-subtle">
           <h3 class="text-page-title">Import MCP Config</h3>
-          <p class="text-[12px] text-secondary opacity-80 leading-relaxed">
-            Upload a <code class="font-mono text-[11px] px-1 py-px rounded bg-surface-raised">.json</code> file (e.g., your <code class="font-mono text-[11px] px-1 py-px rounded bg-surface-raised">~/.claude.json</code> or <code class="font-mono text-[11px] px-1 py-px rounded bg-surface-raised">claude_desktop_config.json</code>). Servers will be merged into your global configuration.
+          <p class="t-small text-secondary opacity-80 leading-relaxed">
+            Upload a <code class="font-mono t-small px-1 py-px rounded bg-surface-raised">.json</code> file (e.g., your <code class="font-mono t-small px-1 py-px rounded bg-surface-raised">~/.claude.json</code> or <code class="font-mono t-small px-1 py-px rounded bg-surface-raised">claude_desktop_config.json</code>). Servers will be merged into your global configuration.
           </p>
           <FileImport
             type="mcp"

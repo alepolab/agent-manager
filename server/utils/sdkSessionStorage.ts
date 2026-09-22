@@ -3,7 +3,7 @@ import { existsSync, createReadStream } from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import os from 'node:os'
-import { getClaudeDir } from './claudeDir'
+import { getClaudeDir, projectDirFor, projectsDirCandidates } from './claudeDir'
 import type { NormalizedMessage } from '~/types'
 
 /**
@@ -19,7 +19,7 @@ export async function loadSdkSessionMessages(
     offset?: number
   } = {}
 ): Promise<{ messages: NormalizedMessage[]; total: number; hasMore: boolean }> {
-  const projectDir = path.join(getClaudeDir(), 'projects', projectName)
+  const projectDir = projectDirFor(projectName)
 
   if (!existsSync(projectDir)) {
     console.warn(`[SDK Session] Project directory not found: ${projectDir}`)
@@ -98,7 +98,7 @@ export async function loadSdkSessionMessages(
  * Returns the project name if found, null otherwise.
  */
 export async function detectSdkSession(sessionId: string): Promise<string | null> {
-  const projectsDir = path.join(getClaudeDir(), 'projects')
+  const projectsDir = projectsDirCandidates().find(existsSync) ?? projectsDirCandidates()[0]!
 
   if (!existsSync(projectsDir)) {
     return null

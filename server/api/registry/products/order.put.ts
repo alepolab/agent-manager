@@ -1,5 +1,5 @@
 import { reorder, StaleStoreError } from '../../../utils/productStore'
-import { requireUser } from '../../../utils/session'
+import { requireUser, requireCapability } from '../../../utils/session'
 import { createLogger } from '../../../utils/log'
 
 const log = createLogger('registry')
@@ -14,6 +14,7 @@ const log = createLogger('registry')
  * stops resolving.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const user = await requireUser(event)
   const body = await readBody<{ keys?: unknown, mtimeMs?: number }>(event)
   if (!Array.isArray(body?.keys) || body.keys.some(k => typeof k !== 'string')) {

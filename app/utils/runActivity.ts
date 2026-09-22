@@ -7,9 +7,20 @@
  * uses. See scripts/test-run-activity.mjs.
  */
 import type { RunStep, WorkflowRun } from '~~/shared/types/run'
+// Explicit `.ts`, like every other relative import that the plain-node tests
+// have to resolve (see runStatus.ts importing runClock.ts the same way).
+import { SETTLED_STATUSES } from './runStatus.ts'
 
-/** A step that will never change again; the same set the store settles on. */
-const SETTLED = new Set(['completed', 'failed', 'skipped'])
+/**
+ * A step that will never change again — the one definition, imported.
+ *
+ * There used to be two. This file excluded `stopped` and treated `failed` as
+ * not-done; runStatus.ts counted both. The live card read one and the run panel
+ * the other, so the same run could report two different counts beside two
+ * progress bars. Either definition is defensible on its own; having both is not,
+ * because the number is the same number to whoever is reading it.
+ */
+const SETTLED = SETTLED_STATUSES
 
 /**
  * The step to name on a live run.
@@ -26,9 +37,17 @@ export function currentStep(run: WorkflowRun): RunStep | undefined {
     ?? run.steps.find(s => !SETTLED.has(s.status))
 }
 
-/** Steps behind it, for "3/11". `skipped` counts as done: the run passed it. */
+/**
+ * Steps behind it, for "3/11": the ones that are finished, however they finished.
+ *
+ * `failed` counts now. It did not, on the reasoning that a failure is not
+ * progress — true, but this number sits next to a progress bar that already
+ * colours each step by its own outcome, so the bar says how they went and the
+ * count says how many are done. Excluding failures made the count disagree with
+ * the panel's, and a run that is over reported as still having steps to go.
+ */
 export function stepsDone(run: WorkflowRun): number {
-  return run.steps.filter(s => SETTLED.has(s.status) && s.status !== 'failed').length
+  return run.steps.filter(s => SETTLED.has(s.status)).length
 }
 
 /**

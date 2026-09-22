@@ -1,7 +1,11 @@
 import { detectSdkSession } from '../../../utils/sdkSessionStorage'
 import { renameClaudeCodeSession } from '../../../utils/claudeCodeHistory'
+import { requireCapability } from '../../../utils/session'
 
 export default defineEventHandler(async (event) => {
+  // `configure`: this route mutates the instance, and carried no authorisation check —
+  // the auth middleware proves WHO the caller is, never WHAT they may do.
+  await requireCapability(event, 'configure')
   const sessionId = getRouterParam(event, 'sessionId')
   const body = await readBody(event)
   const { summary } = body

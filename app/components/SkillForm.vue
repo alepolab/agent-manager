@@ -73,12 +73,12 @@ async function save() {
     <div v-if="mode === 'edit' && initial?.filePath" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-base border border-border-subtle group transition-colors hover:border-accent/30">
       <UIcon name="i-lucide-file-text" class="size-3.5 text-secondary group-hover:text-accent transition-colors" />
       <div class="flex flex-col min-w-0">
-        <span class="text-[9px] font-mono text-meta uppercase tracking-wider">File Location</span>
-        <span class="text-[11px] font-mono text-text-secondary truncate select-all">{{ initial.filePath }}</span>
+        <span class="t-small font-mono text-meta uppercase tracking-wider">File Location</span>
+        <span class="t-small font-mono text-text-secondary truncate select-all">{{ initial.filePath }}</span>
       </div>
     </div>
 
-    <p class="text-[12px] leading-relaxed text-label">
+    <p class="t-small leading-relaxed text-label">
       Skills are specific capabilities that can be added to agents. Define what this skill does and when it should be used.
     </p>
 
@@ -120,7 +120,7 @@ async function save() {
         <span
           v-for="agent in initial.agents"
           :key="agent.slug"
-          class="text-[10px] font-mono px-2 py-0.5 rounded bg-badge-subtle-bg text-text-tertiary border border-border-subtle"
+          class="t-small font-mono px-2 py-0.5 rounded bg-badge-subtle-bg text-text-tertiary border border-border-subtle"
         >
           {{ agent.name }}
         </span>
@@ -136,8 +136,8 @@ async function save() {
           class="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-surface-base border border-border-subtle hover:border-accent/30 transition-all group"
         >
           <UIcon name="i-lucide-server" class="size-3.5 text-secondary group-hover:text-accent transition-colors" />
-          <span class="text-[11px] font-medium">{{ initial.mcpServer.name }}</span>
-          <span class="text-[9px] font-mono text-meta uppercase ml-1">{{ initial.mcpServer.scope }}</span>
+          <span class="t-small font-medium">{{ initial.mcpServer.name }}</span>
+          <span class="t-small font-mono text-meta uppercase ml-1">{{ initial.mcpServer.scope }}</span>
         </NuxtLink>
       </div>
       <span class="field-hint mt-1.5">This skill appears to be associated with an MCP server.</span>

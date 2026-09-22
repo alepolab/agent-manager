@@ -85,7 +85,7 @@ async function onDelete(schedule: ScheduleRow) {
   <div>
     <PageHeader title="Schedules">
       <template #trailing>
-        <span class="text-[12px] text-meta">{{ schedules.length }}</span>
+        <span class="t-small text-meta">{{ schedules.length }}</span>
       </template>
       <template #right>
         <UButton label="New Schedule" icon="i-lucide-plus" size="sm" @click="openCreate" />
@@ -93,7 +93,7 @@ async function onDelete(schedule: ScheduleRow) {
     </PageHeader>
 
     <div class="px-6 py-4">
-      <p class="text-[13px] mb-4 leading-relaxed text-label">
+      <p class="t-ui mb-4 leading-relaxed text-label">
         Starts a workflow run on a cron expression, with its inputs stated up front. A schedule
         works in its own directory unless you point it at a checkout. A fire missed while the
         server was down does not replay. You can also schedule a workflow from its own page.
@@ -105,7 +105,7 @@ async function onDelete(schedule: ScheduleRow) {
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ error }}</span>
+        <span class="t-small" style="color: var(--error);">{{ error }}</span>
       </div>
 
       <div v-if="loading && !schedules.length" class="space-y-3">
@@ -114,7 +114,7 @@ async function onDelete(schedule: ScheduleRow) {
 
       <div v-else-if="!schedules.length" class="flex flex-col items-center justify-center py-16 space-y-3">
         <UIcon name="i-lucide-calendar-clock" class="size-8 text-meta" />
-        <p class="text-[13px] text-label">Nothing scheduled yet.</p>
+        <p class="t-ui text-label">Nothing scheduled yet.</p>
         <UButton label="New Schedule" icon="i-lucide-plus" size="sm" @click="openCreate" />
       </div>
 

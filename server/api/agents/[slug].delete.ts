@@ -1,9 +1,11 @@
+import { requireCapability } from '../../utils/session'
 import { invalidate } from '../../utils/memo'
 import { unlink } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolveAgentFilePath } from '../../utils/agentUtils'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   invalidate('agents'); invalidate('relationships')
   const slug = getRouterParam(event, 'slug')!
   const filePath = resolveAgentFilePath(slug)

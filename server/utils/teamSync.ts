@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile, cp } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { parse } from 'yaml'
 import { resolveClaudePath } from './claudeDir.ts'
@@ -123,16 +123,95 @@ const appliedPath = () => resolveClaudePath('.team-applied.json')
  * repo and nothing here. Saying so is the difference between an honest result
  * and a green link that does nothing where the operator is looking.
  */
-export async function pluginInstall(): Promise<{ version: string, installPath: string } | null> {
-  const p = resolveClaudePath('plugins', 'installed_plugins.json')
+export const PLUGIN_ID = 'alepo-engineering@alepo-engineering'
+
+/** Where the install record lives; every reader of it goes through here. */
+const installedPluginsPath = () => resolveClaudePath('plugins', 'installed_plugins.json')
+
+export async function pluginInstall(): Promise<{ version: string, installPath: string, scope: string } | null> {
+  const p = installedPluginsPath()
   if (!existsSync(p)) return null
   try {
     const data = JSON.parse(await readFile(p, 'utf-8'))
-    const entry = data?.plugins?.['alepo-engineering@alepo-engineering']?.[0]
-    return entry?.installPath ? { version: String(entry.version ?? ''), installPath: entry.installPath } : null
+    const entry = data?.plugins?.[PLUGIN_ID]?.[0]
+    return entry?.installPath ? { version: String(entry.version ?? ''), installPath: entry.installPath, scope: String(entry.scope ?? 'user') } : null
   } catch {
     return null
   }
+}
+
+/**
+ * The plugins this image carries, and where each one lives in it.
+ *
+ * `compound-engineering` is not under engineering/ - it is a third party's,
+ * fetched at build time to /app/vendor - but both are the same thing from a
+ * reader's point of view: a plugin whose files are on this instance, updated
+ * by rebuilding the image.
+ */
+const shippedPlugins = (): { id: string, path: string, version: () => Promise<string> }[] => [
+  {
+    id: PLUGIN_ID,
+    path: shippedDir(),
+    version: async () => String((await readJsonOr<{ version?: string }>(join(shippedDir(), '.claude-plugin', 'plugin.json')))?.version ?? ''),
+  },
+  {
+    // `ceSkillsDir` already reads this record and falls back to the same
+    // directory, so recording it changes where nothing resolves from - only
+    // whether the page can see it.
+    id: 'compound-engineering@compound-engineering',
+    path: join(process.cwd(), 'vendor', 'compound-engineering'),
+    // Upstream ships a VERSION file - "3.26.2 <sha>" - not a plugin.json.
+    version: async () => (await readOr(join(process.cwd(), 'vendor', 'compound-engineering', 'VERSION')))?.trim().split(/\s+/)[0] ?? '',
+  },
+]
+
+/**
+ * Record the copies baked into the image as the installs they already are.
+ *
+ * The Plugins page, its detail route and `sourceOf` below all read one file:
+ * CLAUDE_DIR/plugins/installed_plugins.json. A team container installs no
+ * plugin through the marketplace - there is no `claude` binary in the image
+ * and /api/marketplace/sources/add shells out to one - so that file never
+ * existed and the page was permanently empty, while both plugins' skills were
+ * demonstrably on the instance and being read on every run. The page was right
+ * about the record and wrong about the instance.
+ *
+ * Scope is 'shipped', not 'user', and the distinction is the honest part:
+ * these update when the IMAGE is rebuilt, never when someone reinstalls a
+ * plugin. `promoteToTeam` reads that field to decide whether merging a
+ * promotion PR can change this box - see its note.
+ *
+ * Per id, not per file: an entry an operator already owns is left exactly as
+ * it is, and one that is merely absent is added beside it.
+ */
+async function registerShippedPlugins(): Promise<void> {
+  const p = installedPluginsPath()
+  const current = (await readJsonOr<{ plugins: Record<string, unknown[]> }>(p)) ?? { plugins: {} }
+  const now = new Date().toISOString()
+  const added: { id: string, path: string }[] = []
+
+  for (const { id, path, version } of shippedPlugins()) {
+    if (current.plugins?.[id]) continue      // an install already owns this id
+    if (!existsSync(path)) continue          // not in this image: nothing honest to record
+    current.plugins = current.plugins ?? {}
+    current.plugins[id] = [{ scope: 'shipped', installPath: path, version: await version(), installedAt: now, lastUpdated: now }]
+    added.push({ id, path })
+  }
+  if (!added.length) return
+
+  await mkdir(dirname(p), { recursive: true })
+  await writeFile(p, JSON.stringify(current, null, 2))
+
+  // The page reads `enabled` from settings.json and defaults it to FALSE, so
+  // recording the install alone would list a plugin as present and switched
+  // off - the opposite of true, since these arm every run. Merge the flags in
+  // rather than writing the file whole: settings.json also carries the
+  // statusline and permission policy.
+  const settingsPath = resolveClaudePath('settings.json')
+  const settings = (await readJsonOr<Record<string, any>>(settingsPath)) ?? {}
+  settings.enabledPlugins = { ...(settings.enabledPlugins ?? {}), ...Object.fromEntries(added.map(a => [a.id, true])) }
+  await writeFile(settingsPath, JSON.stringify(settings, null, 2))
+  console.log(`[teamSync] recorded ${added.length} shipped plugin(s): ${added.map(a => `${a.id} at ${a.path}`).join(', ')}`)
 }
 
 async function readOr(path: string): Promise<string | null> {
@@ -210,6 +289,9 @@ interface ReconcileOptions {
 
 /** Compare, and when `apply` is true, write. Returns the state after the call. */
 async function reconcile(apply: boolean, { by = 'instance', only, login }: ReconcileOptions = {}): Promise<TeamStatus> {
+  // Before the record is read, not after: the boot that seeds the instance is
+  // the boot that should show the plugin, not the one after it.
+  if (apply) await registerShippedPlugins()
   const plugin = await pluginInstall()
   const agentsDir = resolveClaudePath('agents')
   const skillsDir = resolveClaudePath('skills')

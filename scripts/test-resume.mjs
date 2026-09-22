@@ -144,4 +144,67 @@ for (const [label, present] of [['transcript present', true], ['transcript gone'
 }
 
 rmSync(root, { recursive: true, force: true })
+// ── a step that declares continuesSession inherits its PREDECESSOR's session ──
+// The default is a cold start per step: a new session, and the repository read
+// from nothing. For two phases of one piece of work — plan it, then build it —
+// that discards everything the first phase learned and pays to learn it again.
+{
+  await clear(); transcript()
+  mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+  const chained = { slug: 'chain-demo', name: 'Chain demo', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Plan', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Build', next: ['c'], continuesSession: true },
+    // Fresh by design: a reviewer inside the builder's session reviews its own
+    // work from inside its own assumptions.
+    { id: 'c', agentSlug: 'agent-c', label: 'Review', next: [] },
+  ] }
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'chain-demo.json'),
+    JSON.stringify({ name: chained.name, description: '', steps: chained.steps, createdAt: new Date().toISOString() }, null, 2))
+
+  const seen = {}
+  runner.setAgentCaller(async (slug, input, dir, opts = {}) => {
+    seen[slug] = { input, resume: opts.resume }
+    opts.onSession?.(SESSION, PROJECT)
+    return { output: `out ${slug}`, model: 'm', usage: null, sessionId: SESSION }
+  })
+  let r = await runner.startRun({ workflow: chained, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  // waitForSettled resolves from inside publish(), ahead of the disk write, so
+  // the settled run is the one it returns — re-reading the store races it.
+  assert.equal(r.status, 'completed', JSON.stringify(r.steps.map(x => x.label + ':' + x.status)))
+
+  assert.equal(seen['agent-a'].resume, undefined, 'the first step of the chain starts a session')
+  assert.equal(seen['agent-b'].resume, SESSION, 'a step declaring continuesSession continues its predecessor instead of starting cold')
+  assert.doesNotMatch(seen['agent-b'].input, /Run artifacts|Work in:/,
+    'and it is not re-sent the header its predecessor already has')
+  assert.equal(seen['agent-c'].resume, undefined,
+    'a step that declares nothing still starts fresh: independence is the default')
+}
+
+// ── the inheritance is refused when the answer would be a guess ───────────────
+// A step joining several branches has no "the" session to continue, and a
+// transcript that is gone cannot be resumed. Both fall back to a cold start,
+// which is always correct and only more expensive.
+{
+  await clear(); transcript(false)
+  mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+  const fan = { slug: 'fan-demo', name: 'Fan demo', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'A', next: ['c'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'B', next: ['c'] },
+    { id: 'c', agentSlug: 'agent-c', label: 'Join', next: [], continuesSession: true },
+  ] }
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'fan-demo.json'),
+    JSON.stringify({ name: fan.name, description: '', steps: fan.steps, createdAt: new Date().toISOString() }, null, 2))
+  const seen = {}
+  runner.setAgentCaller(async (slug, input, dir, opts = {}) => {
+    seen[slug] = { resume: opts.resume }
+    opts.onSession?.(SESSION, PROJECT)
+    return { output: `out ${slug}`, model: 'm', usage: null, sessionId: SESSION }
+  })
+  let r = await runner.startRun({ workflow: fan, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(seen['agent-c'].resume, undefined,
+    'two predecessors and a missing transcript both mean: start fresh, do not guess')
+}
+
 console.log('resume: a step continues where it was, and an interruption never costs it a visit')

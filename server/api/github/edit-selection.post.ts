@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { readdir, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -6,6 +7,7 @@ import { syncGithubImportSymlinks } from '../../utils/githubSkillSymlinks'
 import type { SkillFrontmatter } from '~/types'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const { owner, repo, selectedItems, type } = await readBody<{
     owner: string
     repo: string

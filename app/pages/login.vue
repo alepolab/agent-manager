@@ -15,14 +15,14 @@ onMounted(async () => {
           <UIcon name="i-lucide-bot" class="size-5" style="color: var(--accent);" />
         </div>
         <div>
-          <div class="text-[15px] font-semibold" style="color: var(--text-primary);">Agent Manager</div>
-          <div class="text-[12px] text-label">Alepo engineering</div>
+          <div class="t-body font-semibold" style="color: var(--text-primary);">Agent Manager</div>
+          <div class="t-small text-label">Alepo engineering</div>
         </div>
       </div>
-      <p class="text-[13px] leading-relaxed text-label">
+      <p class="t-ui leading-relaxed text-label">
         Sign in with your GitHub account. Membership of the alepolab organisation is required, and runs you start push and open pull requests as you.
       </p>
-      <p v-if="error" class="text-[12px] rounded-lg px-3 py-2" style="background: rgba(248, 113, 113, 0.08); color: var(--error);">{{ error }}</p>
+      <p v-if="error" class="t-small rounded-lg px-3 py-2" style="background: rgba(248, 113, 113, 0.08); color: var(--error);">{{ error }}</p>
       <UButton label="Sign in with GitHub" icon="i-lucide-github" block to="/api/auth/login" external />
     </div>
   </div>

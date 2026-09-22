@@ -62,13 +62,13 @@ function onStop() {
     data-testid="run-bar"
   >
     <template v-if="run">
-      <span class="text-[11px] font-mono uppercase" :style="{ color: RUN_STATUS_COLOR[run.status] }" aria-live="polite">
+      <span class="t-small font-mono uppercase" :style="{ color: RUN_STATUS_COLOR[run.status] }" aria-live="polite">
         {{ runStatusLabel(run.status) }}
       </span>
       <div class="w-40"><RunProgressBar :steps="run.steps" /></div>
-      <span class="text-[11px] text-label font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
-      <span v-if="current" class="text-[11px] text-label truncate max-w-[16rem]">{{ current }}</span>
-      <span class="text-[11px] text-label font-mono tabular-nums">{{ elapsed }}</span>
+      <span class="t-small text-label font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
+      <span v-if="current" class="t-small text-label truncate max-w-[16rem]">{{ current }}</span>
+      <span class="t-small text-label font-mono tabular-nums">{{ elapsed }}</span>
       <div class="flex items-center gap-1 ml-auto">
         <UButton v-if="run.status === 'paused'" size="xs" icon="i-lucide-play" label="Continue" @click="emit('continue')" />
         <!-- The bar has no room for the drafts and their prompts, and a bare
@@ -87,7 +87,7 @@ function onStop() {
       </div>
     </template>
     <template v-else>
-      <span class="text-[11px] text-label">
+      <span class="t-small text-label">
         Last run {{ runs[0]?.status }}, {{ new Date(runs[0]?.startedAt ?? 0).toLocaleString() }}
       </span>
       <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-panel-right" label="Previous runs" class="ml-auto" @click="emit('details')" />

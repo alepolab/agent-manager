@@ -54,26 +54,26 @@ watch(() => props.selectedIndex, (newIdx) => {
             class="size-3.5 shrink-0"
             :style="{ color: idx === selectedIndex ? 'var(--accent)' : 'var(--text-tertiary)' }"
           />
-          <span class="font-mono text-[13px] font-semibold truncate" :style="{ color: idx === selectedIndex ? 'var(--text-primary)' : 'var(--text-secondary)' }">
+          <span class="font-mono t-ui font-semibold truncate" :style="{ color: idx === selectedIndex ? 'var(--text-primary)' : 'var(--text-secondary)' }">
             /{{ item.name }}
           </span>
-          <span v-if="item.argumentHint" class="text-[11px] font-mono truncate" style="color: var(--text-tertiary);">
+          <span v-if="item.argumentHint" class="t-small font-mono truncate" style="color: var(--text-tertiary);">
             {{ item.argumentHint }}
           </span>
-          <span v-if="item.type === 'builtin'" class="text-[8px] font-bold uppercase tracking-wider px-1.5 py-px rounded ml-auto" style="background: rgba(139, 92, 246, 0.1); color: #8b5cf6;">
+          <span v-if="item.type === 'builtin'" class="t-small font-bold uppercase tracking-wider px-1.5 py-px rounded ml-auto" style="background: rgba(139, 92, 246, 0.1); color: #8b5cf6;">
             Built-in
           </span>
-          <span v-else-if="item.type === 'skill'" class="text-[8px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-accent/10 text-accent ml-auto">
+          <span v-else-if="item.type === 'skill'" class="t-small font-bold uppercase tracking-wider px-1.5 py-px rounded bg-accent/10 text-accent ml-auto">
             Skill
           </span>
-          <span v-else-if="item.type === 'command'" class="text-[8px] font-bold uppercase tracking-wider px-1.5 py-px rounded ml-auto" style="background: rgba(6, 182, 212, 0.1); color: #06b6d4;">
+          <span v-else-if="item.type === 'command'" class="t-small font-bold uppercase tracking-wider px-1.5 py-px rounded ml-auto" style="background: rgba(6, 182, 212, 0.1); color: #06b6d4;">
             Command
           </span>
-          <span v-if="item.directory" class="text-[9px] font-mono px-1.5 py-px rounded-full badge-subtle opacity-60">
+          <span v-if="item.directory" class="t-small font-mono px-1.5 py-px rounded-full badge-subtle opacity-60">
             {{ item.directory }}
           </span>
         </div>
-        <p v-if="item.description" class="text-[11px] mt-0.5 line-clamp-1 opacity-70 pl-5 text-tertiary">
+        <p v-if="item.description" class="t-small mt-0.5 line-clamp-1 opacity-70 pl-5 text-tertiary">
           {{ item.description }}
         </p>
       </button>

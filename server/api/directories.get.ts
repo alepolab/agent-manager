@@ -1,8 +1,29 @@
 import { readdirSync, statSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, sep } from 'node:path'
 import { homedir } from 'node:os'
+import { getClaudeDir } from '../utils/claudeDir'
+import { workspaceRoot } from '../utils/workspace'
+import { requireCapability } from '../utils/session'
 
-export default defineEventHandler((event) => {
+/**
+ * Browse for a working directory, within the trees this app is about.
+ *
+ * Previously listed any directory on the host, starting from `/`, for any
+ * signed-in user and with no capability check — the directory index that made
+ * an unguarded file read trivially exploitable.
+ */
+function allowedRoots(): string[] {
+  return [getClaudeDir(), workspaceRoot(), process.env.AGENT_RUNS_DIR || '', homedir()]
+    .filter(Boolean)
+    .map(d => resolve(d))
+}
+
+function within(target: string, root: string): boolean {
+  return target === root || target.startsWith(root.endsWith(sep) ? root : root + sep)
+}
+
+export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const query = getQuery(event)
   const input = (query.path as string || '').replace(/^~/, homedir())
 
@@ -21,14 +42,19 @@ export default defineEventHandler((event) => {
     prefix = input.slice(dirToList.length).replace(/^\//, '').toLowerCase()
   }
 
+  const resolved = resolve(dirToList)
+  if (!allowedRoots().some(root => within(resolved, root))) {
+    throw createError({ statusCode: 403, message: 'That directory is outside the directories this app serves.' })
+  }
+
   try {
-    const entries = readdirSync(dirToList, { withFileTypes: true })
+    const entries = readdirSync(resolved, { withFileTypes: true })
     const dirs = entries
       .filter(e => e.isDirectory() && !e.name.startsWith('.'))
       .filter(e => !prefix || e.name.toLowerCase().startsWith(prefix))
       .slice(0, 15)
       .map(e => {
-        const full = resolve(dirToList, e.name)
+        const full = resolve(resolved, e.name)
         // Check if this directory has subdirectories (for showing expandability)
         let hasChildren = false
         try {

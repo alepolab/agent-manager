@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { getSchedule, deleteSchedule } from '../../utils/scheduleConfig.ts'
 import { deleteScheduleState } from '../../utils/scheduleState.ts'
 
@@ -14,6 +15,7 @@ import { deleteScheduleState } from '../../utils/scheduleState.ts'
  * schedule's croner job on its own. Nothing here touches a job directly.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const id = getRouterParam(event, 'id')!
   const schedule = await getSchedule(id)
   if (!schedule) throw createError({ statusCode: 404, message: 'Schedule not found' })

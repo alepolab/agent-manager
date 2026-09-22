@@ -100,7 +100,7 @@ function toggleTool(tool: AgentTool) {
     <div class="space-y-3">
       <div class="flex items-center justify-between">
         <h3 class="text-page-title">New Agent</h3>
-        <span class="text-[11px] font-mono text-meta">{{ step }}/{{ totalSteps }}</span>
+        <span class="t-small font-mono text-meta">{{ step }}/{{ totalSteps }}</span>
       </div>
       <!-- Progress bar -->
       <div class="h-1 rounded-full overflow-hidden" style="background: var(--badge-subtle-bg);">
@@ -114,7 +114,7 @@ function toggleTool(tool: AgentTool) {
 
     <!-- Step 1: Name & Purpose -->
     <div v-if="step === 1" class="space-y-4">
-      <p class="text-[12px] text-label leading-relaxed">
+      <p class="t-small text-label leading-relaxed">
         What should this agent be called, and what will it help you with?
       </p>
 
@@ -178,18 +178,18 @@ function toggleTool(tool: AgentTool) {
               />
             </div>
             <div>
-              <span class="text-[13px] font-medium">{{ opt.label }}</span>
-              <p class="text-[11px] text-label mt-0.5">{{ opt.desc }}</p>
+              <span class="t-ui font-medium">{{ opt.label }}</span>
+              <p class="t-small text-label mt-0.5">{{ opt.desc }}</p>
             </div>
           </button>
         </div>
       </div>
 
       <ExampleBlock title="See what a good agent looks like">
-        <div class="space-y-1.5 text-[11px]" style="color: var(--text-secondary);">
+        <div class="space-y-1.5 t-small" style="color: var(--text-secondary);">
           <p><strong>Name:</strong> email-drafter</p>
           <p><strong>Instructions:</strong> "You are an email drafting assistant. Help the user write clear, professional emails. Before drafting, ask about the recipient, goal, and tone..."</p>
-          <p class="text-[10px]" style="color: var(--text-tertiary);">Good instructions are specific about behavior, tone, and rules.</p>
+          <p class="t-small" style="color: var(--text-tertiary);">Good instructions are specific about behavior, tone, and rules.</p>
         </div>
       </ExampleBlock>
 
@@ -220,8 +220,8 @@ function toggleTool(tool: AgentTool) {
               />
             </div>
             <div>
-              <span class="text-[13px] font-medium">{{ opt.label }}</span>
-              <p class="text-[11px] text-label mt-0.5">{{ opt.desc }}</p>
+              <span class="t-ui font-medium">{{ opt.label }}</span>
+              <p class="t-small text-label mt-0.5">{{ opt.desc }}</p>
             </div>
           </button>
         </div>
@@ -251,7 +251,7 @@ function toggleTool(tool: AgentTool) {
             >
               <UIcon :name="tool.icon" class="size-3.5" />
             </div>
-            <div class="text-[12px] font-medium" :style="{ color: frontmatter.tools?.includes(tool.value) ? 'var(--text-primary)' : 'var(--text-secondary)' }">
+            <div class="t-small font-medium" :style="{ color: frontmatter.tools?.includes(tool.value) ? 'var(--text-primary)' : 'var(--text-secondary)' }">
               {{ tool.label }}
             </div>
             <UIcon v-if="frontmatter.tools?.includes(tool.value)" name="i-lucide-check" class="size-3 ml-auto" style="color: var(--accent);" />
@@ -262,7 +262,7 @@ function toggleTool(tool: AgentTool) {
 
     <!-- Step 3: Capabilities (Skills) -->
     <div v-else-if="step === 3" class="space-y-4">
-      <p class="text-[12px] text-label leading-relaxed">
+      <p class="t-small text-label leading-relaxed">
         Preload specific skills to give this agent domain knowledge and specialized capabilities from the start.
       </p>
 
@@ -289,9 +289,9 @@ function toggleTool(tool: AgentTool) {
       >
         <div class="flex items-center gap-2 text-info">
           <UIcon name="i-lucide-info" class="size-3.5" />
-          <span class="text-[11px] font-medium uppercase tracking-wider">Tip</span>
+          <span class="t-small font-medium uppercase tracking-wider">Tip</span>
         </div>
-        <p class="text-[11px] leading-relaxed text-info/80">
+        <p class="t-small leading-relaxed text-info/80">
           Preloading skills is better than having the agent discover them during execution. It makes the agent faster and more reliable for specific tasks.
         </p>
       </div>
@@ -299,7 +299,7 @@ function toggleTool(tool: AgentTool) {
 
     <!-- Step 4: Instructions -->
     <div v-else-if="step === 4" class="space-y-4">
-      <p class="text-[12px] text-label leading-relaxed">
+      <p class="t-small text-label leading-relaxed">
         Tell <strong class="text-body">{{ frontmatter.name }}</strong> how to behave. What tone should it use? What rules should it follow? You can always edit this later.
       </p>
 

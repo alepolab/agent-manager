@@ -34,3 +34,33 @@ docker/claude-config/
 test-results/
 playwright-report/
 docker-compose.override.yml
+
+# oh-my-agent runtime (local artifacts — do not commit)
+.agents/oma-config.local.cue
+.agents/oma-config.local.yaml
+.antigravitycli/
+.agents/results/
+.agents/state/
+.agents/backup/
+.migration-backup/
+.qwen/tmp/
+
+# oh-my-agent vendor projections — generated from the .agents/ SSOT.
+# Regenerate with: bunx oh-my-agent@latest link
+.claude/
+.codex/
+.cursor/
+.grok/
+.qwen/
+.zcode/
+.serena/
+.mcp.json
+.github/mcp.json
+.github/prompts/
+.github/skills/
+AGENTS.md
+
+# Agent scratch (plan gate B2 state, hook markers) — never shared
+.agent/
+.agents/plan.md
+.agents/source-edited

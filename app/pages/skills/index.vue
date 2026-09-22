@@ -28,7 +28,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
   <div>
     <PageHeader title="Skills">
       <template #trailing>
-        <span class="font-mono text-[12px] text-meta">{{ skills.length }}</span>
+        <span class="font-mono t-small text-meta">{{ skills.length }}</span>
       </template>
       <template #right>
         <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
@@ -37,7 +37,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
     </PageHeader>
 
     <div class="px-6 py-4">
-      <p class="text-[13px] mb-4 leading-relaxed text-label">
+      <p class="t-ui mb-4 leading-relaxed text-label">
         Specific capabilities that can be added to agents and invoked as slash commands.
       </p>
 
@@ -56,7 +56,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
         style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
       >
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="text-[12px]" style="color: var(--error);">{{ error }}</span>
+        <span class="t-small" style="color: var(--error);">{{ error }}</span>
       </div>
 
       <div v-if="loading" class="space-y-1">
@@ -75,14 +75,14 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
           <UIcon name="i-lucide-sparkles" class="size-3.5 shrink-0" style="color: var(--accent);" />
 
           <!-- Name -->
-          <span class="text-[13px] font-medium w-44 shrink-0 truncate">
+          <span class="t-ui font-medium w-44 shrink-0 truncate">
             {{ skill.frontmatter.name }}
           </span>
 
           <!-- Context badge -->
           <span
             v-if="skill.frontmatter.context"
-            class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
+            class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
           >
             {{ skill.frontmatter.context }}
           </span>
@@ -90,7 +90,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
           <!-- Plugin badge -->
           <span
             v-if="skill.source === 'plugin' && skill.pluginName"
-            class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-accent"
+            class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-accent"
           >
             plugin: {{ skill.pluginName }}
           </span>
@@ -98,7 +98,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
           <!-- MCP badge -->
           <span
             v-if="skill.mcpServer"
-            class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge"
+            class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge"
             style="background: rgba(99, 102, 241, 0.1); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.2);"
           >
             mcp: {{ skill.mcpServer.name }}
@@ -107,7 +107,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
           <!-- Agent badge -->
           <span
             v-else-if="skill.frontmatter.agent"
-            class="text-[10px] font-mono px-1.5 py-px rounded-full shrink-0 badge badge-agent"
+            class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-agent"
           >
             agent: {{ skill.frontmatter.agent }}
           </span>
@@ -119,10 +119,24 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
             :title="`Preloaded by: ${skill.agents.map(a => a.name).join(', ')}`"
           >
             <span
-              class="text-[10px] font-mono px-1.5 py-px rounded-full badge badge-subtle flex items-center gap-1"
+              class="t-small font-mono px-1.5 py-px rounded-full badge badge-subtle flex items-center gap-1"
             >
               <UIcon name="i-lucide-user" class="size-2.5" />
               <span v-if="skill.agents.length > 1">({{ skill.agents.length }})</span>
+            </span>
+          </div>
+
+          <!-- Read at run time, not preloaded: the catalogue and ce skills -->
+          <div
+            v-if="skill.readBy?.length"
+            class="flex items-center gap-1 shrink-0"
+            :title="`Read at run time by: ${skill.readBy.map(a => a.name).join(', ')} (from disk, not inlined into the prompt)`"
+          >
+            <span
+              class="t-small font-mono px-1.5 py-px rounded-full badge badge-subtle flex items-center gap-1"
+            >
+              <UIcon name="i-lucide-book-open" class="size-2.5" />
+              <span>{{ skill.readBy.length }}</span>
             </span>
           </div>
 
@@ -133,7 +147,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
           />
 
           <!-- Description -->
-          <span class="flex-1 text-[12px] truncate text-label">
+          <span class="flex-1 t-small truncate text-label">
             {{ skill.frontmatter.description }}
           </span>
 
@@ -149,12 +163,12 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
 
       <!-- Empty state: search miss -->
       <div v-else-if="searchQuery" class="flex flex-col items-center justify-center py-16">
-        <p class="text-[13px] text-label">No skills match your search.</p>
+        <p class="t-ui text-label">No skills match your search.</p>
       </div>
 
       <!-- Empty state: no skills -->
       <div v-else class="flex flex-col items-center justify-center py-12 space-y-5">
-        <div class="rounded-lg p-4 bg-card max-w-sm w-full text-[12px] text-label leading-relaxed space-y-1">
+        <div class="rounded-lg p-4 bg-card max-w-sm w-full t-small text-label leading-relaxed space-y-1">
           <div class="flex items-center gap-2">
             <UIcon name="i-lucide-cpu" class="size-3.5" style="color: var(--accent);" />
             <span>code-reviewer</span>
@@ -171,7 +185,7 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
             <span class="text-meta">skill</span>
           </div>
         </div>
-        <p class="text-[13px] text-label">Skills teach agents specific capabilities. Link a skill to an agent to extend what it can do.</p>
+        <p class="t-ui text-label">Skills teach agents specific capabilities. Link a skill to an agent to extend what it can do.</p>
         <div class="flex items-center gap-2">
           <UButton label="Create a skill" size="sm" @click="() => { showCreateModal = true }" />
           <UButton label="Import from GitHub" size="sm" variant="outline" to="/explore?tab=imported" />

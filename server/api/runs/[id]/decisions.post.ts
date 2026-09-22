@@ -1,7 +1,7 @@
 import { getRun } from '../../../utils/workflowRunStore'
 import { continueRun } from '../../../utils/workflowRunner'
 import { applyReviewDecisions, ReviewError } from '../../../utils/runReview'
-import { currentUser } from '../../../utils/session'
+import { currentUser, requireCapability } from '../../../utils/session'
 import { appendRunAudit } from '../../../utils/runArtifacts'
 import type { ReviewDecision } from '../../../../shared/types/runReview'
 
@@ -26,6 +26,8 @@ const applying = new Set<string>()
  * request the client retried after a timeout.
  */
 export default defineEventHandler(async (event) => {
+  // Deciding which entries to act on IS answering the gate.
+  await requireCapability(event, 'answerGate')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ decisions?: ReviewDecision[], note?: string }>(event)
   const run = await getRun(id)

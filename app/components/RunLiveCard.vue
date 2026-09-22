@@ -51,10 +51,11 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
   <div class="px-4 py-3 flex flex-col gap-2" style="border-top: 1px solid var(--border-subtle);">
     <!-- Identity and the numbers that place the run, on one line. -->
     <div class="flex items-baseline gap-3 flex-wrap">
-      <NuxtLink :to="`/runs/${run.id}`" class="text-[13px] font-medium hover:underline">{{ headline }}</NuxtLink>
-      <span class="text-[11px] text-meta">{{ run.workflowName }}</span>
-      <span v-if="run.product?.name" class="text-[11px] text-meta">{{ run.product.name }}</span>
-      <span class="ml-auto flex items-center gap-3 text-[11px] text-label font-mono tabular-nums">
+      <!-- What is running, not which workflow it happens to use. -->
+      <NuxtLink :to="`/runs/${run.id}`" class="t-head hover:underline">{{ headline }}</NuxtLink>
+      <span class="t-small text-meta">{{ run.workflowName }}</span>
+      <span v-if="run.product?.name" class="t-small text-meta">{{ run.product.name }}</span>
+      <span class="ml-auto flex items-center gap-3 t-small text-label font-mono tabular-nums">
         <span>{{ queued ? `waiting ${waitedFor}` : elapsed }}</span>
         <span v-if="run.usage && !queued">${{ run.usage.usd.toFixed(2) }}</span>
         <span>{{ queued ? `${run.steps.length} steps` : `${done}/${run.steps.length} steps` }}</span>
@@ -64,7 +65,7 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
     <RunProgressBar :steps="run.steps" />
 
     <!-- What the agent is doing. This is the whole point of the card. -->
-    <div v-if="question" class="flex items-center gap-2 text-[12px]">
+    <div v-if="question" class="flex items-center gap-2 t-small">
       <UIcon :name="reviewing ? 'i-lucide-gavel' : 'i-lucide-hand'" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR.paused }" />
       <span :style="{ color: RUN_STATUS_COLOR.paused }">{{ reviewing ? 'Waiting on your decisions:' : 'Waiting for you:' }}</span>
       <span class="text-label truncate">{{ question }}</span>
@@ -74,29 +75,29 @@ const headline = computed(() => props.run.ticketKey || props.run.initialPrompt.s
     <!-- A queued run: say what it is waiting for, not "step 1 of 7". Without
          this branch currentStep() falls through to the first pending step and
          the card reads as though work had begun. -->
-    <div v-else-if="queued" class="flex items-center gap-2 text-[12px] min-w-0">
+    <div v-else-if="queued" class="flex items-center gap-2 t-small min-w-0">
       <UIcon name="i-lucide-hourglass" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR.queued }" />
       <span :style="{ color: RUN_STATUS_COLOR.queued }">Waiting for a slot</span>
       <span v-if="load" class="text-label truncate">in {{ load.name }} — {{ load.inFlight }} of {{ load.maxConcurrent }} running</span>
       <span v-else class="text-label truncate">in {{ run.group || 'the default group' }}</span>
     </div>
 
-    <div v-else-if="current" class="flex items-center gap-2 text-[12px] min-w-0">
+    <div v-else-if="current" class="flex items-center gap-2 t-small min-w-0">
       <UIcon
         :name="run.status === 'running' ? 'i-lucide-play' : 'i-lucide-pause'"
         class="size-3.5 shrink-0"
         :style="{ color: RUN_STATUS_COLOR[run.status] }"
       />
       <span class="font-medium truncate">{{ current.label }}</span>
-      <span class="text-meta font-mono text-[11px] truncate">{{ current.agentSlug }}</span>
-      <span v-if="current.visits > 1" class="text-meta text-[11px]">visit {{ current.visits }}</span>
+      <span class="text-meta font-mono t-small truncate">{{ current.agentSlug }}</span>
+      <span v-if="current.visits > 1" class="text-meta t-small">visit {{ current.visits }}</span>
     </div>
 
     <!-- The moving parts, kept on their own line so the step name stays readable. -->
     <!-- Telemetry, so only for a run that has actually called an agent. A
          queued run would otherwise report "no activity reported yet", which is
          true and reads as a stall. -->
-    <div v-if="current && !question && !queued" class="flex items-center gap-3 text-[11px] text-meta font-mono">
+    <div v-if="current && !question && !queued" class="flex items-center gap-3 t-small text-meta font-mono">
       <span v-if="current.lastTool" class="truncate">{{ current.lastTool }}</span>
       <span v-if="current.assistantMessages">{{ current.assistantMessages }} msgs</span>
       <span v-if="quietLabel" :style="quiet ? { color: RUN_STATUS_COLOR.paused } : undefined">

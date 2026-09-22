@@ -1,3 +1,4 @@
+import { requireCapability } from '../../utils/session'
 import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -10,6 +11,7 @@ import {
 import { gitClone } from '../../utils/gitOps'
 
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const { url } = await readBody<{ url: string }>(event)
 
   if (!url || typeof url !== 'string') {

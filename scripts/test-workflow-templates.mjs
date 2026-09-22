@@ -361,18 +361,26 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.notDeepEqual(fresh.map(s => s.id), first.map(s => s.id), 'a length mismatch regenerates rather than half-reusing')
 }
 
-// Every sdlc agent must declare its own turn budget. Omitting it silently
-// inherits DEFAULT_MAX_TURNS (10) — and a real DEVOPS-15 run died with
-// `error_max_turns` because sdlc-ticket-intake, the step that reads the ticket
-// AND explores an unfamiliar repo AND writes three artifacts, had the smallest
-// budget of any step purely by accident of omission. An inherited default is
-// invisible in the template; an explicit number is not.
+// No sdlc agent declares a turn budget any more, and that inverts an older
+// rule rather than relaxing it.
+//
+// The old rule existed because omitting maxTurns silently inherited
+// DEFAULT_MAX_TURNS (10): a real DEVOPS-15 run died on `error_max_turns`
+// because sdlc-ticket-intake — which reads the ticket AND explores an
+// unfamiliar repo AND writes three artifacts — had the smallest budget in the
+// pipeline purely by accident of omission. The fix then was "declare it".
+//
+// The defaults are now gone, so absence means absence: an undeclared step runs
+// until it finishes and cannot die on a number nobody chose for it. Declaring
+// one is opt-in, and the one agent that does is the Jira tracker, whose job
+// genuinely is a single turn.
 {
-  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-'))) {
-    const mt = a.frontmatter.maxTurns
-    assert.ok(typeof mt === 'number' && Number.isInteger(mt) && mt > 0,
-      `${a.id} must declare maxTurns explicitly rather than inheriting the default`)
+  for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-jira-tracker')) {
+    assert.equal(a.frontmatter.maxTurns, undefined,
+      `${a.id} must not declare a turn budget: they were removed deliberately, and a reintroduced one can fail a step for a reason unrelated to its work`)
   }
+  assert.equal(AGENT_TEMPLATES.find(t => t.id === 'sdlc-jira-tracker').frontmatter.maxTurns, 1,
+    'a step that moves a ticket may still say it is one-shot')
 }
 
 // Absence must be as hard to claim as presence. A real DEVOPS-15 run halted the
@@ -558,10 +566,15 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   {
     const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
     const pr = runbook.steps.find(s => s.agentTemplateId === 'sdlc-evidence-and-pr')
-    assert.notEqual(pr.approval, true, 'the default Runbook A opens the PR without a human gate — a broken run halts earlier, so the gate only ever paused healthy runs')
+    // b409c5e dropped this gate because it "only ever paused healthy runs" — true,
+    // and now the reason to keep it: a healthy run pausing for a person IS the
+    // human workflow. The throughput objection it was dropped for does not apply,
+    // because the budget clock banks execution time only (shared/utils/runClock.ts),
+    // so a run waiting at a gate overnight is not charged for the wait.
+    assert.equal(pr.approval, true, 'Runbook A opens the PR only after a person approves the diff')
     const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
     const made = materializeTemplateSteps(runbook, slugs)
-    assert.notEqual(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and no gate flag is materialised')
+    assert.equal(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and the gate survives materialisation into a real workflow')
     for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) assert.ok(a.body.includes('PIPELINE-ASK:'), `${a.id} must know it may ask the operator`)
 
     // Runbook A's senders. A send-back names a step by label, so a label that is
@@ -578,15 +591,16 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
   assert.ok(evidence.body.includes('Which branch the pull request targets'),
     'the evidence step must know which branch to target')
-  // The team's standard flow, in the words the runner header also uses: work
-  // starts from develop; a production bug is a hotfix from main, merged back
-  // into ci-release and develop; a QA bug is a hotfix from ci-release, merged
-  // back into develop. The evidence step targets the header's base, never
-  // retargeting on its own judgement.
-  assert.ok(/from \*\*develop\*\*/.test(evidence.body), 'a task or a development bug enters at develop')
-  assert.ok(/hotfix from\s+\*\*main\*\*/.test(evidence.body), 'a production bug is a hotfix from main')
-  assert.ok(/main is merged into ci-release and develop/.test(evidence.body), 'and main is merged back afterwards')
-  assert.ok(/hotfix from\s+\*\*ci-release\*\*/.test(evidence.body), 'a QA bug is a hotfix from ci-release')
+  // Develop-first, in the words the runner header also uses: every kind of
+  // work, a production or QA bug included, starts from develop; hotfix flow
+  // only where a product's registry names the branch. The evidence step
+  // targets the header's base, never retargeting on its own judgement.
+  assert.ok(/starts from \*\*develop\*\*/.test(evidence.body), 'every kind of work enters at develop')
+  assert.ok(/in\s+production alike/.test(evidence.body), 'a production bug included')
+  assert.ok(!/hotfix from\s+\*\*(main|ci-release)\*\*/.test(evidence.body), 'no default hotfix from main or ci-release is taught')
+  assert.ok(/registry names a hotfix branch/.test(evidence.body), 'hotfix flow only on the registry\'s say-so')
+  const intake = AGENT_TEMPLATES.map(a => a.body).find(b => b.includes('`origin` — where the work comes from'))
+  assert.ok(intake && !/hotfix from main/.test(intake), 'intake does not tell the classifier a production bug goes to main')
   assert.ok(/Never retarget on your own/.test(evidence.body), 'the base named in the run header is the target; a person changes it, not the step')
 }
 
@@ -656,6 +670,69 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   }
   assert.match(body('sdlc-qa-manual'), /PIPELINE-REWORK: Implement Fix/, 'a failed manual case sends the run back to the implementer')
   assert.match(body('sdlc-ce-ship'), /git push -u origin/, 'the ship step is the one allowed to push')
+  // A run on the CRM container opened three pull requests and one of them —
+  // alepolab/ase_lbss#155 — held a single commit containing only
+  // `.agent/plan.md`. The plan is not a leak: the plan gate requires it beside
+  // the directory the agent works in, which on a container product is the
+  // umbrella root, so that repo legitimately carries a plan-only commit. What
+  // must not happen is opening a pull request for it: a reviewer is asked to
+  // approve agent bookkeeping, and it lands in a product's history.
+  assert.match(body('sdlc-ce-ship'), /only change is under `\.agent\/` gets NO pull request/,
+    'the ship step must not open a pull request for a repository whose only change is the plan')
+  assert.match(body('sdlc-ce-ship'), /own a changed file outside `\.agent\/`/,
+    'and must say which repositories do get one')
+}
+
+// ── a step that writes to a customer's ticket waits for a person ────────────
+// Not every Jira step: the In Progress transition at the top of a run is
+// justified by someone having started the run. The terminal one is different —
+// it moves the issue to Dev Done, comments on it, and attaches the evidence
+// bundle, which is the pipeline asserting to reporters and watchers that the
+// work is finished. A human qualifies that claim before it is made.
+{
+  for (const id of ['runbook-a-jira-to-diff', 'runbook-c-ce-ticket-to-pr']) {
+    const steps = WORKFLOW_TEMPLATES.find(t => t.id === id).steps
+    const writes = steps.filter(s => s.jira?.comment || s.jira?.attach)
+    assert.ok(writes.length, `${id} has no outcome-posting Jira step to check`)
+    for (const w of writes) {
+      assert.equal(w.approval, true,
+        `${id}: "${w.label}" comments on or attaches to the ticket and must wait for a person`)
+    }
+    // The opening transition is deliberately NOT gated: gating it would pause
+    // every run before it has done anything, for a write the operator just
+    // authorised by pressing Start.
+    const opening = steps.find(s => s.jira?.transition && !s.jira.comment && !s.jira.attach)
+    assert.notEqual(opening?.approval, true,
+      `${id}: the opening transition must not be gated — starting the run is the authorisation`)
+  }
+}
+
+// ── The gates a person answers, per intake path ───────────────────────────
+// The gate machinery (workflowRunner's `approval`) has been in place and unused:
+// a runbook with no gated step runs to a PR with no human decision in it. These
+// assert the gates the human workflow is defined by, so a step added later
+// cannot silently move or drop one.
+{
+  const gated = id => WORKFLOW_TEMPLATES.find(t => t.id === id).steps.filter(s => s.approval).map(s => s.label)
+
+  // Dev Done and QA Done are two steps here, not one: the terminal tracker was
+  // split so the board shows each transition as it happens. Both write to the
+  // ticket - one comments, one attaches the evidence - so the rule above gates
+  // both, and the intent is unchanged: no claim reaches the reporters and
+  // watchers without a person having qualified it.
+  assert.deepEqual(gated('runbook-a-jira-to-diff'), ['Jira: Dev Done', 'Evidence Bundle + PR', 'Jira: QA Done'],
+    'the bug path stops at the diff, and again before each claim the ticket makes about the work')
+
+  assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Jira: Dev Done', 'Update Stack', 'Push + PR', 'Jira: QA Done'],
+    'the feature path stops at the plan, the diff, verification before ship, and before each claim the ticket makes about the work')
+
+  // A gate only means something before the step acts. Both outward-effect steps
+  // push; approving them IS the decision to push.
+  for (const id of ['runbook-a-jira-to-diff', 'runbook-c-ce-ticket-to-pr']) {
+    const steps = WORKFLOW_TEMPLATES.find(t => t.id === id).steps
+    const pusher = steps.find(s => /PR$/.test(s.label))
+    assert.equal(pusher.approval, true, `${id}: the step that opens the PR waits for a person`)
+  }
 }
 
 // ── 15. Runbook A's Jira status chain, addressed by step `id`. ────────────

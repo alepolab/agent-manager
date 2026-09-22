@@ -271,7 +271,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
 
     <div class="px-6 py-4 space-y-4 max-w-4xl">
       <div v-if="problems.length" class="rounded-xl p-4 space-y-1 bg-card">
-        <div v-for="(p, i) in problems" :key="i" class="text-[12px] flex gap-2">
+        <div v-for="(p, i) in problems" :key="i" class="t-small flex gap-2">
           <span :style="{ color: p.severity === 'error' ? 'var(--error)' : 'var(--warning)' }">{{ p.severity === 'error' ? '✗' : '!' }}</span>
           <span>{{ p.message }}</span>
         </div>
@@ -308,7 +308,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
       <!-- Match -->
       <div class="rounded-xl p-5 space-y-4 bg-card">
         <h3 class="text-section-title">What a ticket must say to reach it</h3>
-        <p class="text-[12px] text-meta">One term per line. A project key outranks a label, which outranks a component word; between two products claiming the same text, the longer term wins.</p>
+        <p class="t-small text-meta">One term per line. A project key outranks a label, which outranks a component word; between two products claiming the same text, the longer term wins.</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div class="field-group">
             <label class="field-label">Jira projects</label>
@@ -352,7 +352,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
             <input v-model="form.branches[name as keyof typeof form.branches]" class="field-input font-mono text-xs" :placeholder="placeholder" />
           </div>
         </div>
-        <div class="text-[12px] text-meta space-y-0.5">
+        <div class="t-small text-meta space-y-0.5">
           <div v-for="row in branchPreview" :key="row.label">
             <span class="text-label">{{ row.label }}:</span> starts from <code>{{ row.choice.base }}</code>
             <template v-if="row.choice.mergeBack.length">, merged back into <code>{{ row.choice.mergeBack.join('</code>, <code>') }}</code></template>
@@ -424,7 +424,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
           <!-- Where the copy on screen came from, always: editing the plugin's
                copy silently forks it, and that has to be legible BEFORE the
                edit, not discovered later when a plugin update never arrives. -->
-          <div class="text-[11px] flex items-start gap-2">
+          <div class="t-small flex items-start gap-2">
             <span
               class="px-1.5 py-0.5 rounded shrink-0"
               :style="{
@@ -435,7 +435,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
             <span class="text-meta font-mono break-all">{{ recipe.path ?? `recipes/${key}.md — nothing here yet` }}</span>
           </div>
 
-          <div v-if="recipe.shadows" class="text-[11px] p-3 rounded-lg" :style="{ color: 'var(--warning)', background: 'var(--surface-base)' }">
+          <div v-if="recipe.shadows" class="t-small p-3 rounded-lg" :style="{ color: 'var(--warning)', background: 'var(--surface-base)' }">
             This local copy hides <span class="font-mono break-all">{{ recipe.shadows }}</span>, on this machine only.
             Nothing merges the two and nothing sends this edit back to the team: a later plugin release that corrects
             this product's bring-up will not reach you while the local copy is here.
@@ -492,7 +492,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
       <!-- Owners -->
       <div class="rounded-xl p-5 space-y-4 bg-card">
         <h3 class="text-section-title">Owners by blast radius</h3>
-        <p class="text-[12px] text-meta">
+        <p class="t-small text-meta">
           Money and protocol changes are never auto-merged, so both must name a group a person can find.
           <code>CONFIRM</code> is the deliberate marker for a field nobody has settled yet — it reads as drafted
           rather than as a typo, and the list page flags it.
@@ -510,7 +510,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Remove {{ key }}?</h3>
-          <p class="text-[13px] text-label">
+          <p class="t-ui text-label">
             Every ticket that resolved through this product stops resolving: a run started for one would have no
             repos, no branch policy and no stack. Type the key to confirm.
           </p>
@@ -527,7 +527,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Discard the local recipe for {{ key }}?</h3>
-          <p class="text-[13px] text-label">
+          <p class="t-ui text-label">
             <span class="font-mono break-all">{{ recipe?.path }}</span> is deleted and
             <template v-if="recipe?.shadows">
               <span class="font-mono break-all">{{ recipe.shadows }}</span> becomes the live recipe again.

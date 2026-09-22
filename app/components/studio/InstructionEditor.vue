@@ -84,7 +84,7 @@ function dismissSuggestion() {
           <button
             v-for="m in (['edit', 'preview'] as const)"
             :key="m"
-            class="px-2.5 py-1 text-[11px] font-medium capitalize transition-all"
+            class="px-2.5 py-1 t-small font-medium capitalize transition-all"
             :style="{
               background: mode === m ? 'var(--accent-muted)' : 'transparent',
               color: mode === m ? 'var(--accent)' : 'var(--text-disabled)',
@@ -94,10 +94,10 @@ function dismissSuggestion() {
             {{ m }}
           </button>
         </div>
-        <span class="text-[11px] font-mono" style="color: var(--text-disabled);">{{ wordCount }} words</span>
+        <span class="t-small font-mono" style="color: var(--text-disabled);">{{ wordCount }} words</span>
       </div>
       <button
-        class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all"
+        class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg t-small font-medium transition-all"
         :style="{
           background: isImproving ? 'var(--accent-muted)' : 'var(--surface-raised)',
           border: '1px solid ' + (isImproving ? 'rgba(229, 169, 62, 0.2)' : 'var(--border-subtle)'),
@@ -118,22 +118,22 @@ function dismissSuggestion() {
     >
       <div class="flex items-center gap-2">
         <UIcon name="i-lucide-sparkles" class="size-3.5" style="color: var(--accent);" />
-        <span class="text-[12px] font-medium" style="color: var(--text-primary);">Suggested improvement</span>
+        <span class="t-small font-medium" style="color: var(--text-primary);">Suggested improvement</span>
       </div>
-      <pre class="text-[12px] leading-relaxed whitespace-pre-wrap max-h-[150px] overflow-y-auto" style="color: var(--text-secondary); font-family: var(--font-mono);">{{ suggestion }}</pre>
+      <pre class="t-small leading-relaxed whitespace-pre-wrap max-h-[150px] overflow-y-auto" style="color: var(--text-secondary); font-family: var(--font-mono);">{{ suggestion }}</pre>
       <div class="flex gap-2">
-        <button class="px-3 py-1 rounded-lg text-[11px] font-medium transition-all" style="background: var(--accent); color: white;" @click="acceptSuggestion">Accept</button>
-        <button class="px-3 py-1 rounded-lg text-[11px] font-medium transition-all hover-bg" style="color: var(--text-tertiary);" @click="dismissSuggestion">Dismiss</button>
+        <button class="px-3 py-1 rounded-lg t-small font-medium transition-all" style="background: var(--accent); color: white;" @click="acceptSuggestion">Accept</button>
+        <button class="px-3 py-1 rounded-lg t-small font-medium transition-all hover-bg" style="color: var(--text-tertiary);" @click="dismissSuggestion">Dismiss</button>
       </div>
     </div>
 
-    <div v-if="improveError" class="shrink-0 mx-4 mt-2 text-[11px] rounded-lg px-3 py-2" style="background: rgba(248, 113, 113, 0.06); color: var(--error);">{{ improveError }}</div>
+    <div v-if="improveError" class="shrink-0 mx-4 mt-2 t-small rounded-lg px-3 py-2" style="background: rgba(248, 113, 113, 0.06); color: var(--error);">{{ improveError }}</div>
 
     <!-- Edit mode -->
     <textarea
       v-if="mode === 'edit'"
       :value="modelValue"
-      class="flex-1 min-h-0 w-full resize-none bg-transparent text-[13px] leading-relaxed outline-none p-4"
+      class="flex-1 min-h-0 w-full resize-none bg-transparent t-ui leading-relaxed outline-none p-4"
       style="color: var(--text-primary); font-family: var(--font-mono);"
       :placeholder="placeholder"
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
@@ -147,10 +147,10 @@ function dismissSuggestion() {
     >
       <div
         v-if="renderedHtml"
-        class="text-[13px] leading-[1.7]"
+        class="t-ui leading-[1.7]"
         v-html="renderedHtml"
       />
-      <p v-else-if="!modelValue.trim()" class="text-[13px]" style="color: var(--text-disabled);">Nothing to preview yet.</p>
+      <p v-else-if="!modelValue.trim()" class="t-ui" style="color: var(--text-disabled);">Nothing to preview yet.</p>
       <div v-else class="flex items-center justify-center h-20">
         <UIcon name="i-lucide-loader-2" class="size-4 animate-spin" style="color: var(--text-tertiary);" />
       </div>

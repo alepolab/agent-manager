@@ -205,6 +205,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Preflight's "git identity" check runs `git var GIT_COMMITTER_IDENT` and
+      # fails a run on a host with no identity, correctly: the agents could not
+      # commit. Every real host has one (agents-ui mounts ~/.gitconfig); a bare
+      # runner does not, so five suites that build a healthy run failed that
+      # check instead of the one they test (red on main since #88).
+      - name: Give git an identity, as every agent-manager host has
+        run: |
+          git config --global user.name "agent-manager CI"
+          git config --global user.email "ci@agent-manager.invalid"
+
       - name: Run every test-*.mjs suite
         run: |
           set -uo pipefail

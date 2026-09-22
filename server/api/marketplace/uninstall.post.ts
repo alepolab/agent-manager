@@ -1,4 +1,6 @@
+import { requireCapability } from '../../utils/session'
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const { plugin } = await readBody<{ plugin: string }>(event)
 
   if (!plugin) {

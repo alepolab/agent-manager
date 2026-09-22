@@ -1,6 +1,6 @@
 import { createProduct } from '../../../utils/productStore'
 import { blocking, validateProduct } from '../../../utils/registryValidate'
-import { requireUser } from '../../../utils/session'
+import { requireUser, requireCapability } from '../../../utils/session'
 import { createLogger } from '../../../utils/log'
 
 const log = createLogger('registry')
@@ -10,6 +10,7 @@ const KEY = /^[a-z0-9]+(-[a-z0-9]+)*$/
  *  entry lands is a routing decision, and the end is the only place that
  *  changes nothing about the products already there. */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const user = await requireUser(event)
   const body = await readBody<{ key?: string, product?: Record<string, any>, comment?: string, mtimeMs?: number }>(event)
   const key = body?.key?.trim()

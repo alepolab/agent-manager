@@ -30,7 +30,7 @@ async function doAdd() {
 <template>
   <div class="p-6 space-y-4 bg-overlay">
     <h3 class="text-page-title">Add Marketplace</h3>
-    <p class="text-[12px] text-label leading-relaxed">
+    <p class="t-small text-label leading-relaxed">
       Add a marketplace source to discover and install plugins. You can use the shorthand format (owner/repo) or a full URL.
     </p>
 
@@ -47,7 +47,7 @@ async function doAdd() {
 
     <div
       v-if="error"
-      class="rounded-lg px-3 py-2 text-[12px]"
+      class="rounded-lg px-3 py-2 t-small"
       style="background: rgba(248, 113, 113, 0.06); color: var(--error); border: 1px solid rgba(248, 113, 113, 0.12);"
     >
       {{ error }}

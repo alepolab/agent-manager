@@ -1,3 +1,4 @@
+import { requireCapability } from '../../../utils/session'
 import { getSchedule } from '../../../utils/scheduleConfig.ts'
 import { fireSchedule } from '../../../utils/scheduleRunner.ts'
 
@@ -13,6 +14,8 @@ import { fireSchedule } from '../../../utils/scheduleRunner.ts'
  * 204, so the caller sees whether a run started, was skipped, or errored.
  */
 export default defineEventHandler(async (event) => {
+  // Firing a schedule by hand starts a run, and costs what one costs.
+  await requireCapability(event, 'startRun')
   const id = getRouterParam(event, 'id')!
   const schedule = await getSchedule(id)
   if (!schedule) throw createError({ statusCode: 404, message: 'Schedule not found' })

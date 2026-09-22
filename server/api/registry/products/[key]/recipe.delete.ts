@@ -1,5 +1,5 @@
 import { deleteRecipe } from '../../../../utils/recipeStore'
-import { requireUser } from '../../../../utils/session'
+import { requireUser, requireCapability } from '../../../../utils/session'
 import { createLogger } from '../../../../utils/log'
 
 const log = createLogger('registry')
@@ -7,6 +7,7 @@ const log = createLogger('registry')
 /** Remove the local recipe, so whatever it shadowed is live again. Never the
  *  plugin's copy or the shipped one; those are not this app's to delete. */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const user = await requireUser(event)
   const key = getRouterParam(event, 'key')!
   try {

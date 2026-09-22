@@ -4,7 +4,7 @@ import { loadWorkflowSteps } from '../../utils/workflowRunStore.ts'
 import { scheduleProjectDir } from '../../utils/scheduleRunStarter.ts'
 import { canonicalProjectDir } from '../../utils/workspace.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../shared/utils/workflowParameters.ts'
-import { currentUser } from '../../utils/session'
+import { currentUser, requireCapability } from '../../utils/session'
 import type { Schedule } from '../../../shared/types/schedule.ts'
 
 function slugify(name: string): string {
@@ -28,6 +28,7 @@ const ID = /^[a-z0-9]+(-[a-z0-9]+)*$/
  * below. Turning something off must always succeed.
  */
 export default defineEventHandler(async (event) => {
+  await requireCapability(event, 'configure')
   const body = await readBody<Partial<Schedule>>(event)
   const user = await currentUser(event)
 

@@ -22,7 +22,7 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 | PR Checks + Review | `sdlc-pr-follow-up` | Reviewer checklist answered, checks watched, automated-review blockers fixed and pushed until the PR is mergeable |
 | Jira: Dev Done | `sdlc-jira-tracker` | Runner-executed: ticket moved from In Progress to Dev Done (matched to the project's own workflow), outcome comment posted, and the run's evidence files attached. Both Jira steps write only when `JIRA_POST_ENABLED=1` |
 
-**Runbook C: ce ticket to QA-proven PR.** The same intake, stack, security and Jira steps, with the middle built on the compound-engineering skills (`ce-plan`, `ce-work`, `ce-code-review`, `ce-commit-push-pr`, read from the installed plugin at run time) and QA as the gate. Every run works in its own git worktree beside the clone (`<repo>@<branch>`), so the developer's checkout is never switched under them:
+**Runbook C: ce ticket to QA-proven PR.** The same intake, stack, security and Jira steps, with the middle built on the compound-engineering skills (`ce-plan`, `ce-work`, `ce-code-review`, `ce-commit-push-pr`, read at run time from the installed plugin, or from the copy the image ships under `/app/vendor/compound-engineering`) and QA as the gate. Every run works in its own git worktree beside the clone (`<repo>@<branch>`), so the developer's checkout is never switched under them:
 
 | Step | Agent | Produces |
 |------|-------|----------|

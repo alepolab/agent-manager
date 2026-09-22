@@ -83,7 +83,7 @@ async function onDelete(schedule: ScheduleRow) {
 <template>
   <div class="p-6 space-y-3">
     <div class="flex items-start justify-between gap-4">
-      <p class="text-[13px] leading-relaxed text-label max-w-2xl">
+      <p class="t-ui leading-relaxed text-label max-w-2xl">
         Starts this workflow on a cron expression, with its inputs stated up front. A schedule
         works in its own directory unless you point it at a checkout, and a fire missed while the
         server was down does not replay.
@@ -105,7 +105,7 @@ async function onDelete(schedule: ScheduleRow) {
          dragged node, so this watches the declaration only. -->
     <div
       v-if="parametersDirty"
-      class="rounded-lg px-3 py-2 text-[12px] flex items-start gap-2"
+      class="rounded-lg px-3 py-2 t-small flex items-start gap-2"
       style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.16); color: var(--warning);"
     >
       <UIcon name="i-lucide-alert-triangle" class="size-4 shrink-0 mt-0.5" />
@@ -119,7 +119,7 @@ async function onDelete(schedule: ScheduleRow) {
 
     <div
       v-if="justCreated"
-      class="rounded-lg px-3 py-2 text-[12px] flex items-start gap-2"
+      class="rounded-lg px-3 py-2 t-small flex items-start gap-2"
       style="background: var(--accent-muted); border: 1px solid var(--border-subtle);"
     >
       <UIcon name="i-lucide-info" class="size-4 shrink-0 mt-0.5" style="color: var(--accent);" />
@@ -134,8 +134,8 @@ async function onDelete(schedule: ScheduleRow) {
 
     <div v-else-if="!rows.length" class="flex flex-col items-center justify-center py-12 space-y-3">
       <UIcon name="i-lucide-calendar-clock" class="size-8 text-meta" />
-      <p class="text-[13px] text-label">This workflow is not scheduled.</p>
-      <p class="text-[12px] text-meta max-w-md text-center">
+      <p class="t-ui text-label">This workflow is not scheduled.</p>
+      <p class="t-small text-meta max-w-md text-center">
         A schedule starts a run on a cron expression with its inputs stated up front — either in a
         directory of its own, or in a checkout you name.
       </p>
