@@ -34,11 +34,42 @@ async function refresh() {
     files.value = await $fetch<{ name: string, size: number }[]>(`/api/runs/${props.runId}/artifacts`)
     listError.value = null
     await loadIndex()
+    // Open the one that matters, rather than "Pick a file on the left".
+    //
+    // This pane already knows the answer: artifacts.json labels every file
+    // with a kind, and KIND_ORDER puts `summary` first precisely because that
+    // is the reviewer's order of work. Making the human choose from forty to
+    // two hundred filenames anyway is what turns evidence into "long
+    // scattered artifacts" — under time pressure a reviewer opens the first
+    // PLAUSIBLE name, not the right one.
+    if (!selected.value) {
+      const first = firstWorthReading()
+      if (first) await open(first)
+    }
   } catch (e: any) {
     files.value = []
     listError.value = e?.data?.message || e?.message || 'Could not load the evidence list'
   }
 }
+/**
+ * The file a reviewer should land on: the summary, else the plan, else
+ * whatever sorts first by the order they work in. `artifacts.json` itself is
+ * never it — it is the index, not evidence.
+ */
+function firstWorthReading(): string | null {
+  const readable = files.value.filter(f => f.name !== 'artifacts.json')
+  if (!readable.length) return null
+  for (const kind of ['summary', 'plan']) {
+    const hit = readable.find(f => index.value[f.name]?.kind === kind)
+    if (hit) return hit.name
+  }
+  // No index (a run predating it) or no summary: fall back to the kind order
+  // rather than to alphabetical, which would open `adversarial.md` first.
+  const ranked = [...readable].sort((a, b) =>
+    KIND_ORDER.indexOf(index.value[a.name]?.kind ?? 'other') - KIND_ORDER.indexOf(index.value[b.name]?.kind ?? 'other'))
+  return ranked[0]?.name ?? null
+}
+
 const ext = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
 /** Evidence a reviewer looks at rather than reads. Fetching one as text produced
  *  mojibake and the console highlighted it as source; a QA run's four
@@ -213,7 +244,10 @@ const hasIndex = computed(() => Object.keys(index.value).length > 0)
 const visible = computed(() => {
   const q = fileSearch.value.trim().toLowerCase()
   return files.value.filter(f =>
-    (!kindFilter.value || index.value[f.name]?.kind === kindFilter.value)
+    // The index is not evidence. It was listed under "Other" in the very list
+    // it exists to organise — noise in every bundle.
+    f.name !== 'artifacts.json'
+    && (!kindFilter.value || index.value[f.name]?.kind === kindFilter.value)
     && (!q || f.name.toLowerCase().includes(q)),
   )
 })
