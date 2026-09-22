@@ -19,10 +19,9 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'product-race-'))
 
 const store = await import('../server/utils/productStore.ts')
 
-const product = (repo) => ({
-  repo,
-  branches: { bug: 'develop' },
-})
+function product(repo) {
+  return { repo, branches: { bug: 'develop' } }
+}
 
 // ── 1. Two concurrent creates of one key ──────────────────────────────────
 {
