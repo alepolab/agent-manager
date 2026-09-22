@@ -78,4 +78,16 @@ const failed = renderRunSummary(
 )
 assert.ok(failed.includes('stopped at "Write the fix"'), 'a reader must learn where it stopped without opening a file')
 
+// A line a light model wrote for a step beats the first-line heuristic, and the
+// page says so — an interpreted sentence must never read as the agent's own words.
+const interpreted = renderRunSummary(base, {
+  step_gists: { 'write-the-fix': 'It changed three files so the fee is closed once the charge succeeds.' },
+})
+assert.ok(interpreted.includes('> It changed three files so the fee is closed once the charge succeeds.'))
+assert.ok(interpreted.includes('written by a light model'), 'an interpreted page says it was interpreted')
+// Steps with no gist keep the heuristic: a partial answer must not blank them.
+assert.ok(interpreted.includes('> Reproduced the fault on a clean stack'))
+// And with none of them, the page is exactly what it always was.
+assert.ok(!renderRunSummary(base, {}).includes('written by a light model'))
+
 console.log('ok - the run summary reads like a person wrote it, and never overstates the outcome')

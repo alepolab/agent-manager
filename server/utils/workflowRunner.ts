@@ -83,7 +83,18 @@ export function setEnvResolver(fn: EnvResolver) { envResolver = fn }
 // not yet wired. setAgentCaller() is kept so tests can still substitute a
 // stub without touching the real SDK.
 let agentCaller: AgentCaller = callAgent
-export function setAgentCaller(fn: AgentCaller) { agentCaller = fn }
+/**
+ * Substituting the caller also turns OFF light interpretation, and that is not
+ * a convenience: a run whose agents are stubbed must not reach a live model for
+ * a risk floor or a summary line. Without this, every harness in this file's
+ * suite pays a real model call per classifying step — one of them timed out at
+ * fifteen seconds waiting for exactly that. The deterministic path is what a
+ * stubbed run is FOR.
+ */
+export function setAgentCaller(fn: AgentCaller) {
+  agentCaller = fn
+  if (fn !== callAgent) process.env.AGENT_LIGHT_INTERPRET = '0'
+}
 /** Exposed for tests: the exact function reference executeNode will call next. */
 export function getAgentCaller() { return agentCaller }
 /** True unless a test has overridden the caller with setAgentCaller(). */
@@ -1114,7 +1125,21 @@ async function adoptClassification(
     const since = run.baseCommit ?? headBefore
     if (since) {
       try {
-        floor = floorFrom(await changedPathsSince(cwd, since))
+        const paths = await changedPathsSince(cwd, since)
+        floor = floorFrom(paths)
+        // What the paths MEAN, where their shape proves nothing — money
+        // arithmetic lives in ordinary Java, which no path rule can catch. The
+        // stronger of the two wins, so this can only ever raise oversight; if
+        // the model is unavailable the rules floor stands exactly as before.
+        const { agentFloorFrom } = await import('./lightAgent.ts')
+        const read = await agentFloorFrom(paths)
+        if (read && (BLAST_RADIUS_ORDER as string[]).includes(read)) {
+          const asClass = read as BlastRadius
+          if (!floor || BLAST_RADIUS_ORDER.indexOf(asClass) > BLAST_RADIUS_ORDER.indexOf(floor)) {
+            logLine(l, run, rec, `a light read of the touched files raises the risk floor to \`${asClass}\`; the path rules alone said ${floor ?? 'nothing'}`)
+            floor = asClass
+          }
+        }
       } catch (err) {
         logLine(l, run, rec, `could not read the diff to classify this run: ${err instanceof Error ? err.message : String(err)}`)
       }

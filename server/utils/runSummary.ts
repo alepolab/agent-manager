@@ -63,7 +63,14 @@ function when(ts: number | undefined): string {
  * the summary a person wants. Anything longer is the evidence, and the evidence
  * is what this file exists to spare them.
  */
-function gist(step: RunStep): string {
+function gist(step: RunStep, interpreted?: Record<string, unknown>): string {
+  // A line a light model wrote for this step, when one exists. Preferred over
+  // the first-line heuristic below for the reason the heuristic is a heuristic:
+  // it is right when an agent opens with its conclusion and useless when it
+  // opens with "I'll start by reading the files", and nothing makes an agent do
+  // the former. See enhanceRunSummary.
+  const read = interpreted?.[step.stepId]
+  if (typeof read === 'string' && read.trim()) return firstSentence(read)
   const raw = (step.output ?? '').trim()
   if (!raw) return step.error ? firstSentence(step.error) : ''
   for (const line of raw.split('\n')) {
@@ -142,6 +149,33 @@ function pullRequests(meta: Record<string, unknown>): { repo: string, pr: string
 }
 
 /**
+ * The evidence a run left, in words rather than filenames — the counts come
+ * from `meta.artifacts.kinds`, which artifactIndex.ts measured. Absent (not an
+ * empty phrase) for a run that predates the index, so an old summary never
+ * claims a run left nothing when the truth is that nobody counted.
+ */
+const KIND_WORDS: Record<string, string> = {
+  'test-red': 'failing-test runs', 'test-green': 'passing-test runs', 'qa': 'QA and regression runs',
+  'review': 'reviews', 'oracle': 'oracle runs', 'deploy': 'deployment logs', 'pr': 'pull-request records',
+  'docs': 'documentation checks', 'evidence': 'investigation notes', 'patch': 'patches',
+  'media': 'screenshots, videos or traces', 'result': 'agent reports', 'plan': 'plans',
+  'decision': 'decision records', 'contract': 'interface contracts', 'script': 'scripts',
+  'log': 'command logs', 'summary': 'summary files', 'other': 'other files',
+}
+
+function evidenceKinds(meta: Record<string, unknown>): string | undefined {
+  const artifacts = meta.artifacts
+  if (!artifacts || typeof artifacts !== 'object') return undefined
+  const kinds = (artifacts as Record<string, unknown>).kinds
+  if (!kinds || typeof kinds !== 'object') return undefined
+  const parts = Object.entries(kinds as Record<string, number>)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([k, n]) => `${n} ${KIND_WORDS[k] ?? k}`)
+  return parts.length ? parts.join(', ') : undefined
+}
+
+/**
  * The headline: what a reader should take away before reading anything else.
  *
  * A pull request is the only unambiguous evidence that work left the machine,
@@ -166,6 +200,9 @@ function verdict(run: WorkflowRun, prs: { repo: string, pr: string }[]): string 
 }
 
 export function renderRunSummary(run: WorkflowRun, meta: Record<string, unknown> = {}): string {
+  const stepGists = meta.step_gists && typeof meta.step_gists === 'object' && !Array.isArray(meta.step_gists)
+    ? meta.step_gists as Record<string, unknown>
+    : undefined
   const prs = pullRequests(meta)
   const cost = summarizeRunCost(run)
   const lastStepEnd = run.steps.reduce((max, s) => Math.max(max, s.completedAt ?? 0), 0)
@@ -214,7 +251,7 @@ export function renderRunSummary(run: WorkflowRun, meta: Record<string, unknown>
     const took = s.startedAt && s.completedAt ? ` · ${duration(s.completedAt - s.startedAt)}` : ''
     const retried = s.visits > 1 ? ` · retried ${s.visits - 1}×` : ''
     lines.push(`**${i + 1}. ${s.label}** — ${word}${took}${retried}`)
-    const g = gist(s)
+    const g = gist(s, stepGists)
     if (g) lines.push(`> ${g}`)
     if (s.status === 'skipped' && s.skipReason) lines.push(`> Skipped because: ${firstSentence(s.skipReason)}`)
     // Work that is on nobody's branch. It reads as an ordinary completed step
@@ -253,10 +290,72 @@ export function renderRunSummary(run: WorkflowRun, meta: Record<string, unknown>
   lines.push('## Where the detail is', '')
   lines.push(`Everything this run produced is in \`${runArtifactsDir(run.id)}\`.`)
   lines.push('`steps/` holds one file per step above, with the full transcript; `meta.json` holds the machine-readable facts this page was written from.')
+  const kinds = evidenceKinds(meta)
+  if (kinds) {
+    lines.push('')
+    lines.push(`It left ${kinds}. \`artifacts.json\` says what each file is and which step wrote it; \`node scripts/find-evidence.mjs --run ${run.id} --kind <kind>\` searches them.`)
+  }
   lines.push('')
   lines.push(`_Written automatically when the run finished. Run id \`${run.id}\`._`)
+  if (stepGists) lines.push('_The one-line description under each step was written by a light model reading that step\'s own output._')
 
   return lines.join('\n')
+}
+
+const GIST_SYSTEM = `You describe what each step of an automated software pipeline did, for a reader who is not an engineer.
+
+You are given a JSON object: step id -> {label, output}. The output is what the agent that ran that step wrote.
+
+Answer with ONE JSON object: the same step ids as keys, and for each, ONE plain sentence saying what that step actually achieved or found. Under 25 words. No jargon where a plain word exists. Say what changed or what was learned, not what tools were used. If a step's output shows it did not finish or found nothing, say that plainly.
+
+JSON only, no prose, no code fence.`
+
+/**
+ * Rewrite the summary with a line per step that a non-engineer can read.
+ *
+ * Runs in the BACKGROUND after the summary is already written, and is pure
+ * upside: without it the page keeps the first-line heuristic it has always had.
+ * The gists are stored in meta.json (`step_gists`) rather than held in memory,
+ * so a later re-render — the run page, a recovery, a rebuilt bundle — gets the
+ * same sentences without asking again.
+ *
+ * What is sent is the pipeline's own agent output, which a Claude model wrote
+ * in the first place; no new disclosure boundary is crossed by a second one
+ * reading it back. Output is truncated per step: this wants the conclusion, and
+ * a full transcript would cost more than the sentence is worth.
+ */
+export async function enhanceRunSummary(run: WorkflowRun): Promise<number> {
+  const dir = runArtifactsDir(run.id)
+  const metaPath = join(dir, 'meta.json')
+  let meta: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(metaPath, 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) meta = parsed
+  } catch {
+    return 0
+  }
+  const input: Record<string, { label: string, output: string }> = {}
+  for (const s of run.steps) {
+    const text = (s.output ?? s.error ?? '').trim()
+    if (!text) continue
+    input[s.stepId] = { label: s.label, output: text.slice(0, 1200) }
+  }
+  if (!Object.keys(input).length) return 0
+
+  const { askLight, parseJsonObject } = await import('./lightAgent.ts')
+  const answer = parseJsonObject(await askLight(GIST_SYSTEM, JSON.stringify(input), { timeoutMs: 60_000 }))
+  if (!answer) return 0
+  const gists: Record<string, string> = {}
+  for (const [stepId, line] of Object.entries(answer)) {
+    if (typeof line === 'string' && line.trim() && input[stepId]) gists[stepId] = line.trim()
+  }
+  if (!Object.keys(gists).length) return 0
+
+  meta.step_gists = gists
+  await writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`)
+  await writeFile(join(dir, SUMMARY_FILE), `${renderRunSummary(run, meta)}\n`)
+  log.debug('run summary interpreted', { runId: run.id, steps: Object.keys(gists).length })
+  return Object.keys(gists).length
 }
 
 /** Write (or rewrite) the summary beside the run's other artifacts. */

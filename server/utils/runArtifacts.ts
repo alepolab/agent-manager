@@ -517,6 +517,16 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   // finds on disk; this write's own bytes are the one thing it cannot count
   // itself, the same self-reference every "size of this file" figure has.
   merged.artifacts = await measureArtifacts(dir)
+  // What each of those files IS, and which step wrote it — see
+  // artifactIndex.ts. Best-effort like the summary and the index below: a
+  // classification is a convenience, the evidence is the record.
+  try {
+    const { writeArtifactIndex } = await import('./artifactIndex.ts')
+    const index = await writeArtifactIndex(dir, run)
+    merged.artifacts = { ...(merged.artifacts as object), ...index }
+  } catch (e) {
+    log.warn('artifact index not written', { runId: run.id, error: String(e) })
+  }
 
   await writeFile(path, JSON.stringify(merged, null, 2))
   // The one file in here a person reads. Written last, from the reconciled
@@ -537,6 +547,29 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   } catch (e) {
     log.warn('run index not updated', { runId: run.id, error: String(e) })
   }
+  // Interpretation, in the background and deliberately unawaited: the rules
+  // index above is already written and complete, so a light model reading the
+  // names it could not classify is pure upside. A run never waits for it, never
+  // fails on it, and `scripts/enhance-evidence-index.mjs` re-runs it for any run
+  // whose process exited before it landed.
+  void (async () => {
+    try {
+      const { enhanceArtifactIndex } = await import('./artifactIndex.ts')
+      const changed = await enhanceArtifactIndex(dir)
+      if (changed) log.debug('artifact index interpreted', { runId: run.id, changed })
+    } catch (e) {
+      log.warn('artifact index not interpreted', { runId: run.id, error: String(e) })
+    }
+    // Second, and after the index on purpose: this one rewrites RUN-SUMMARY.md
+    // from meta.json, so it must read a meta the index pass has finished with.
+    try {
+      const { enhanceRunSummary } = await import('./runSummary.ts')
+      const steps = await enhanceRunSummary(run)
+      if (steps) log.debug('run summary interpreted', { runId: run.id, steps })
+    } catch (e) {
+      log.warn('run summary not interpreted', { runId: run.id, error: String(e) })
+    }
+  })()
   if (contractMissing.length) {
     log.warn('run is missing evidence-bundle contract files', { runId: run.id, missing: contractMissing })
   }
