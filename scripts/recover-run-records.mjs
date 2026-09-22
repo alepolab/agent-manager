@@ -25,7 +25,11 @@ import { join } from 'node:path'
 const write = process.argv.includes('--write')
 
 const { resolveClaudePath } = await import('../server/utils/claudeDir.ts')
-const { agentRunsRoot, runArtifactsDir } = await import('../server/utils/runArtifacts.ts')
+// finalizeRunArtifacts was called below without ever being imported, so the
+// try/catch around it turned a missing binding into one printed line per run
+// and the grading step silently never ran — on 348 records in one pass here.
+// The catch was there for a filesystem failure, and it swallowed a typo.
+const { agentRunsRoot, runArtifactsDir, finalizeRunArtifacts } = await import('../server/utils/runArtifacts.ts')
 
 const recordsDir = resolveClaudePath('workflow-runs')
 const root = agentRunsRoot()

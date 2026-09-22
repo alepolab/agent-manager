@@ -1,8 +1,9 @@
 import { requireCapability } from '../../../utils/session'
 import { startRun } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
-import { findRunInWorkspace } from '../../../utils/workflowRunStore'
+import { findRunInWorkspace, listRuns } from '../../../utils/workflowRunStore'
 import { runWorkspace } from '../../../utils/workspace'
+import { capacityFor } from '../../../utils/runCapacity'
 import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
@@ -25,6 +26,21 @@ export default defineEventHandler(async (event) => {
   // The check has to come after the user is known, because an unset projectDir
   // resolves to that developer's own workspace root.
   const user = await currentUser(event)
+
+  // The instance-wide ceiling, checked before the workspace lock because it is
+  // the coarser refusal: the lock answers "not in THIS directory", and this
+  // answers "not on this instance at all". Forty runs against forty different
+  // directories pass the lock forty times and are still forty concurrent agent
+  // pipelines on one machine and one account's rate limit.
+  const capacity = capacityFor(await listRuns())
+  if (!capacity.ok) {
+    throw createError({
+      statusCode: 429,
+      message: capacity.reason!,
+      data: { live: capacity.live, limit: capacity.limit },
+    })
+  }
+
   const workspace = runWorkspace({ projectDir: body.projectDir, startedBy: user?.login })
   const active = await findRunInWorkspace(workspace)
   if (active) {

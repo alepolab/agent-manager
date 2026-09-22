@@ -52,6 +52,24 @@ async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
   await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), runBudget } } as any)
   toast.add({ title: 'Run budget saved for new runs', color: 'success' })
 }
+/**
+ * The instance-wide ceiling on live runs. Blank clears it.
+ *
+ * Rejects a non-positive value rather than writing it: a cap of 0 would refuse
+ * every run on an instance whose operator was trying to remove the cap, and
+ * "no limit" is expressed by an empty field, not by a zero.
+ */
+async function setMaxConcurrentRuns(raw: string) {
+  const n = Math.floor(Number(raw))
+  const value = raw.trim() && Number.isFinite(n) && n > 0 ? n : undefined
+  if (raw.trim() && value === undefined) {
+    toast.add({ title: 'A run limit must be 1 or more; leave it blank for no limit', color: 'error' })
+    return
+  }
+  await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), maxConcurrentRuns: value } } as any)
+  toast.add({ title: value ? `At most ${value} run${value === 1 ? '' : 's'} at once` : 'Run limit removed', color: 'success' })
+}
+
 const viewMode = ref<'structured' | 'raw'>('structured')
 const showRemoveConfirm = ref(false)
 const repoToRemove = ref<{ owner: string; repo: string; type: 'skills' | 'agents'; count: number } | null>(null)
@@ -535,6 +553,28 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <option value="">Default (each agent's own)</option>
               <option v-for="o in MODEL_OPTIONS.filter(o => o.value)" :key="o.value" :value="o.value">{{ o.label }} · {{ o.desc }}</option>
             </select>
+          </div>
+          <!-- The run budget caps ONE run. This caps how many there are — a
+               different hazard, and the one nothing refused: forty runs against
+               forty directories pass the workspace lock forty times. -->
+          <div class="flex items-start justify-between gap-4 py-3">
+            <div class="min-w-0 flex-1 max-w-2xl">
+              <div class="t-ui font-medium">Run capacity</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
+                How many runs may be live on this instance at once, counting paused ones — they still hold a checkout
+                and a budget. Blank means no limit. A run refused by this gets a clear message and is not queued.
+                AGENT_MAX_CONCURRENT_RUNS on the instance overrides it and cannot be raised from here.
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <input
+                type="number" min="1" step="1" class="field-input t-small" style="width: 6rem; flex: none;"
+                placeholder="no limit" aria-label="Maximum concurrent runs"
+                :value="(settings as any)?.agentManager?.maxConcurrentRuns ?? ''"
+                @change="setMaxConcurrentRuns(($event.target as HTMLInputElement).value)"
+              />
+              <span class="t-small text-label">runs</span>
+            </div>
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
             <div class="min-w-0 flex-1 max-w-2xl">
