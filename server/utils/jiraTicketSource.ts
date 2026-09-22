@@ -25,6 +25,8 @@
  * where that throw is intentionally swallowed into "this cycle found
  * nothing", the same tolerance it already gives the file-backed stub.
  */
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { adfToPlainText } from './adf.ts'
 import { planBriefFor } from './planBrief.ts'
 import { resolveJiraCredentials, jiraAuthHeader } from './jiraCredentials.ts'
@@ -167,16 +169,41 @@ function credentialsFrom(env: Record<string, string>) {
   return resolveJiraCredentials()
 }
 
-export interface JiraIssueView { key: string, summary: string, description: string, labels: string[], url: string }
+export interface JiraAttachment {
+  id: string
+  filename: string
+  mimeType: string
+  size: number
+  /** Jira's authenticated download URL. Not fetchable without the same credentials. */
+  content: string
+}
+
+export interface JiraIssueView {
+  key: string
+  summary: string
+  description: string
+  labels: string[]
+  url: string
+  /**
+   * What is attached to the ticket.
+   *
+   * A screenshot on a ticket is frequently the whole specification — the
+   * defect, the layout, the error dialog — and the run never saw it: the
+   * issue fetch asked for summary, description and labels, so an agent
+   * working a ticket whose description says "see attached" was working from
+   * nothing.
+   */
+  attachments: JiraAttachment[]
+}
 
 /** One issue by key, as the pipeline wants to read it. Throws on any HTTP or credential failure. */
 export async function viewIssue(key: string, env: Record<string, string> = {}, fetchImpl: FetchLike = fetch): Promise<JiraIssueView> {
   const creds = credentialsFrom(env)
-  const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,labels`, {
+  const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,labels,attachment`, {
     headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' },
   })
   if (!res.ok) throw new Error(`Jira issue ${key} failed (HTTP ${res.status}): ${await describeError(res)}`)
-  const issue = await res.json() as JiraIssue & { fields?: { labels?: string[] } }
+  const issue = await res.json() as JiraIssue & { fields?: { labels?: string[], attachment?: JiraAttachment[] } }
   const f = issue.fields ?? {}
   return {
     key: issue.key ?? key,
@@ -184,6 +211,10 @@ export async function viewIssue(key: string, env: Record<string, string> = {}, f
     description: adfToPlainText(f.description).trim(),
     labels: Array.isArray(f.labels) ? f.labels.map(String) : [],
     url: `${creds.baseUrl}/browse/${issue.key ?? key}`,
+    attachments: (Array.isArray(f.attachment) ? f.attachment : []).map(a => ({
+      id: String(a.id), filename: String(a.filename), mimeType: String(a.mimeType ?? ''),
+      size: Number(a.size ?? 0), content: String(a.content ?? ''),
+    })).filter(a => a.filename && a.content),
   }
 }
 
@@ -205,6 +236,10 @@ export function ticketText(issue: JiraIssueView): string {
     issue.labels.length ? `Labels: ${issue.labels.join(', ')}` : '',
     '',
     issue.description,
+    ...(issue.attachments?.length
+      ? ['', `Attachments (${issue.attachments.length}) — downloaded into ${TICKET_FILES_DIR}/ in this run's working directory, read them before you start:`,
+         ...issue.attachments.map(a => `  ${TICKET_FILES_DIR}/${a.filename.replace(/[/\\]/g, '_')}  (${a.mimeType}, ${Math.round(a.size / 1024)} KB)`)]
+      : []),
     ...(brief ? [brief] : []),
   ].filter((l, i) => l !== '' || i === 3).join('\n')
 }
@@ -251,4 +286,61 @@ export async function expandTicketKey(prompt: string, env: Record<string, string
   } catch {
     return null
   }
+}
+
+/** Where a run keeps the ticket's own files. Git-excluded by ensureRunBranch's `.agent/*`. */
+export const TICKET_FILES_DIR = '.agent/ticket'
+
+export interface DownloadedAttachment { filename: string, path: string, mimeType: string, size: number }
+
+/**
+ * Pull a ticket's attachments into the run's worktree so an agent can open them.
+ *
+ * A screenshot is often the whole specification — the defect, the layout, the
+ * error dialog — and it was unreachable: agents have no shell and no Jira
+ * access, and Jira's attachment URLs need the same credentials the fetch
+ * needed. So a ticket whose description said "see attached" gave the run
+ * nothing, and nothing anywhere said a file had been skipped.
+ *
+ * Written under `.agent/ticket/`, which `ensureRunBranch` already excludes
+ * from git, so a screenshot can never be committed into the customer's
+ * repository by a step that runs `git add -A`.
+ *
+ * Best effort per file and never throws: one unreadable attachment must not
+ * fail a run, and a partial set is worth more than none. What failed is
+ * returned as a reason so the prompt can say so rather than leaving a silent
+ * gap.
+ */
+export async function downloadAttachments(
+  issue: JiraIssueView,
+  worktree: string,
+  env: Record<string, string> = {},
+  fetchImpl: FetchLike = fetch,
+): Promise<{ saved: DownloadedAttachment[], failed: { filename: string, reason: string }[] }> {
+  const saved: DownloadedAttachment[] = []
+  const failed: { filename: string, reason: string }[] = []
+  if (!issue.attachments?.length) return { saved, failed }
+
+  const creds = credentialsFrom(env)
+  const dir = join(worktree, TICKET_FILES_DIR)
+  await mkdir(dir, { recursive: true })
+
+  for (const a of issue.attachments) {
+    // A filename from a ticket is untrusted input: it reaches a path join, so
+    // a traversal in it would write outside the run's own directory.
+    const safe = a.filename.replace(/[/\\]/g, '_').replace(/\.\.+/g, '_').replace(/^[.\s]+/, '_') || 'attachment'
+    try {
+      const res = await fetchImpl(a.content, {
+        headers: { Authorization: jiraAuthHeader(creds) },
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!res.ok) { failed.push({ filename: a.filename, reason: `HTTP ${res.status}` }); continue }
+      const path = join(dir, safe)
+      await writeFile(path, Buffer.from(await res.arrayBuffer()))
+      saved.push({ filename: safe, path, mimeType: a.mimeType, size: a.size })
+    } catch (err) {
+      failed.push({ filename: a.filename, reason: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  return { saved, failed }
 }

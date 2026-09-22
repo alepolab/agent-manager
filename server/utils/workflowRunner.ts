@@ -51,6 +51,7 @@ import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { isJiraPostingEnabled } from './jiraCredentials.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
+import { viewIssue, downloadAttachments } from './jiraTicketSource.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 const log = createLogger('runner')
@@ -2436,6 +2437,31 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // The run's own worktree, beside the clone: every step from here works
   // there, and the clone stays on whatever branch the developer left it on.
   run.projectDir = worktrees[0] ?? checkout
+
+  // Every run, every ticket: whatever is attached to the ticket comes down
+  // into the worktree before any agent starts.
+  //
+  // A screenshot on a ticket is often the whole specification — the defect,
+  // the layout, the error dialog — and it was unreachable. Agents have no
+  // shell and no Jira access, and Jira's attachment URLs need the same
+  // credentials the issue fetch needed, so a ticket whose description said
+  // "see attached" handed the run nothing and said nothing about it either.
+  //
+  // Best effort, never fatal: a ticket with no attachments costs one field
+  // that viewIssue already asks for, and an attachment that will not download
+  // is reported in the log rather than failing a run over a file.
+  if (run.ticketKey) {
+    try {
+      const issue = await viewIssue(run.ticketKey, await envResolver(run.startedBy))
+      if (issue.attachments.length) {
+        const { saved, failed } = await downloadAttachments(issue, run.projectDir, await envResolver(run.startedBy))
+        if (saved.length) log.info('ticket attachments', { runId: run.id, ticket: run.ticketKey, saved: saved.map(s => s.filename) })
+        if (failed.length) log.warn('ticket attachments could not be fetched', { runId: run.id, failed })
+      }
+    } catch (err) {
+      log.warn('ticket attachments unavailable', { runId: run.id, ticket: run.ticketKey, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
   run.workType = run.workType ?? classified?.work_type
   run.blastRadius = run.blastRadius ?? classified?.blast_radius
   run.origin = run.origin ?? classified?.origin
