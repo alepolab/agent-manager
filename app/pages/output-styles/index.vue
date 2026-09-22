@@ -93,7 +93,7 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
               </p>
             </div>
             
-            <div v-if="style.path" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div v-if="style.path" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
               <UButton
                 icon="i-lucide-edit-2"
                 variant="ghost"

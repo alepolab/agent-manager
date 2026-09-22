@@ -101,7 +101,7 @@ function handleOpenFile(filePath: string) {
               <!-- Copy button - inside bubble, bottom right, show on hover -->
               <button
                 v-if="msg.content"
-                class="absolute bottom-1.5 right-2 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                class="absolute bottom-1.5 right-2 p-1 rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
                 style="background: rgba(255, 255, 255, 0.15);"
                 title="Copy to clipboard"
                 @click="copyUserMessage(msg.id, msg.content!)"

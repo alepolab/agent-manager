@@ -31,8 +31,38 @@ async function testJira() {
   testResult.value = null
   try {
     testResult.value = await $fetch<{ ok: boolean, message: string }>('/api/me/jira-test', { method: 'POST' })
+  } catch (e: any) {
+    // With no catch the spinner simply stopped and nothing appeared, which
+    // reads exactly like a test that passed quietly. A connection test whose
+    // failure is silent is worse than no test: it is the one control on this
+    // page whose whole job is to tell you the credential does not work.
+    testResult.value = { ok: false, message: e.data?.message || e.message || 'Could not reach Jira' }
   } finally {
     testing.value = false
+  }
+}
+
+/**
+ * Forget the stored token.
+ *
+ * The server has supported this since it was written — me.put.ts says "an
+ * empty token clears it" and saveProfile honours it — but `save()` only sends
+ * the field when the box is non-empty, so nothing could ever reach it. A
+ * person whose token was revoked at Atlassian, or who is leaving the team,
+ * had no way to stop runs from continuing to act as them.
+ */
+async function clearJiraToken() {
+  saving.value = true
+  try {
+    await $fetch('/api/me', { method: 'PUT', body: { jiraToken: '' } })
+    jiraToken.value = ''
+    testResult.value = null
+    await load()
+    toast.add({ title: 'Jira token removed', color: 'success' })
+  } catch (e: any) {
+    toast.add({ title: 'Could not remove the token', description: e.data?.message || e.message, color: 'error' })
+  } finally {
+    saving.value = false
   }
 }
 </script>
@@ -66,6 +96,17 @@ async function testJira() {
         <div class="flex items-center gap-2">
           <UButton label="Save" size="sm" :loading="saving" @click="save" />
           <UButton label="Test connection" size="sm" variant="soft" :loading="testing" :disabled="!me?.profile.hasJiraToken" @click="testJira" />
+          <!-- Sits after the two routine actions, not between them: removing
+               the credential is the rare act on this page. -->
+          <UButton
+            v-if="me?.profile.hasJiraToken"
+            label="Remove stored token"
+            size="sm"
+            variant="ghost"
+            color="error"
+            :loading="saving"
+            @click="clearJiraToken"
+          />
           <span v-if="testResult" class="t-small" :style="{ color: testResult.ok ? 'var(--success)' : 'var(--error)' }">{{ testResult.message }}</span>
         </div>
       </div>
