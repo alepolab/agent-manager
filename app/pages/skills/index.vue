@@ -17,6 +17,53 @@ const filteredSkills = computed(() => {
   )
 })
 
+/**
+ * The skills this person owns, apart from the ones a plugin brought.
+ *
+ * 190 skills rendered as one flat list is fifteen screens of scroll with no
+ * heading in it, and the 34 you can actually edit or delete sit scattered
+ * among 156 that arrive and leave with their plugin. Those are different
+ * kinds of thing — one you maintain, the other you inherit — and the list
+ * gave no way to tell them apart or to look at only one.
+ *
+ * Search deliberately stays flat: when you are looking for a known name, a
+ * match is a match and which group it came from is not the question.
+ */
+const ownSkills = computed(() => filteredSkills.value.filter(s => s.source !== 'plugin'))
+
+/** Plugin skills by the plugin that supplied them, so each collapses to a line. */
+const pluginGroups = computed(() => {
+  const groups = new Map<string, typeof skills.value>()
+  for (const s of filteredSkills.value) {
+    if (s.source !== 'plugin') continue
+    const key = s.pluginName || 'plugin'
+    const list = groups.get(key) ?? []
+    list.push(s)
+    groups.set(key, list)
+  }
+  return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+})
+
+const searching = computed(() => !!searchQuery.value.trim())
+
+/**
+ * The list as sections, so the row markup exists once.
+ *
+ * Yours is open; each plugin's is a closed line you can expand. Fifteen
+ * screens becomes about three, and the group you can act on is the one you
+ * land on.
+ */
+const sections = computed(() => {
+  if (searching.value) {
+    // The count is the badge's job; repeating it in the label reads as two
+    // different numbers until you notice they are the same one.
+    return [{ key: 'results', label: `matching “${searchQuery.value.trim()}”`, skills: filteredSkills.value, open: true }]
+  }
+  const out = [{ key: 'own', label: 'Yours', skills: ownSkills.value, open: true }]
+  for (const [name, list] of pluginGroups.value) out.push({ key: `plugin:${name}`, label: name, skills: list, open: false })
+  return out.filter(s => s.skills.length)
+})
+
 onMounted(() => {
   fetchSkills({ workingDir: workingDir.value })
 })
@@ -61,10 +108,18 @@ onMounted(() => {
         <SkeletonRow v-for="i in 5" :key="i" />
       </div>
 
-      <!-- Skill list -->
-      <div v-else-if="filteredSkills.length" class="space-y-1">
+      <!-- Skill list, in sections. One flat list of 190 was fifteen screens
+           with no heading in it, and the 34 you maintain were scattered among
+           156 that come and go with their plugin. -->
+      <div v-else-if="filteredSkills.length" class="space-y-2">
+        <details v-for="section in sections" :key="section.key" :open="section.open">
+          <summary class="t-small cursor-pointer focus-ring rounded px-1 py-1 flex items-center gap-2">
+            <span class="font-medium" style="color: var(--text-primary);">{{ section.label }}</span>
+            <span class="font-mono text-meta">{{ section.skills.length }}</span>
+          </summary>
+          <div class="space-y-1 mt-1">
         <NuxtLink
-          v-for="skill in filteredSkills"
+          v-for="skill in section.skills"
           :key="skill.slug"
           :to="`/skills/${skill.slug}`"
           class="flex items-center gap-3 px-3 py-2.5 rounded-lg group focus-ring hover-row"
@@ -157,6 +212,8 @@ onMounted(() => {
             />
           </div>
         </NuxtLink>
+          </div>
+        </details>
       </div>
 
       <!-- Empty state: search miss -->
