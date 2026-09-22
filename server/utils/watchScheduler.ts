@@ -128,6 +128,16 @@ export async function reconcile(watch: Watch): Promise<void> {
 export interface CycleResult {
   dispatched: string[]
   skipped: string[]
+  /**
+   * Why this cycle did nothing, when it did nothing on purpose.
+   *
+   * Absent means the cycle genuinely ran and found no work. Present means it
+   * never contacted the source at all — and those are opposite answers to
+   * "is my JQL right?", which is the question the Poll now button exists to
+   * answer. Without this the button reported success in green for a poll
+   * that never happened.
+   */
+  refused?: 'disabled' | 'no-owner' | 'source-failed'
   failed: string[]
 }
 
@@ -159,7 +169,7 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
   const failed: string[] = []
 
   if (!watch.enabled) {
-    return { dispatched, skipped, failed }
+    return { dispatched, skipped, failed, refused: 'disabled' }
   }
 
   // A watch with no owner cannot produce a working run, so it must not produce
@@ -182,7 +192,7 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
       watchId: watch.id,
       remedy: 'open the watch on the Watches page and save it while signed in; the signed-in user becomes its owner',
     })
-    return { dispatched, skipped, failed }
+    return { dispatched, skipped, failed, refused: 'no-owner' }
   }
 
   log.debug('cycle starting', { watchId: watch.id })
@@ -202,7 +212,7 @@ export async function runCycle(watch: Watch): Promise<CycleResult> {
     log.warn('ticket source fetch failed; cycle degraded to empty', {
       watchId: watch.id, error: err instanceof Error ? err.message : String(err),
     })
-    return { dispatched, skipped, failed }
+    return { dispatched, skipped, failed, refused: 'source-failed' }
   }
 
   const state = await getWatchState(watch.id)

@@ -145,10 +145,22 @@ async function onToggleEnabled(watch: Watch, enabled: boolean) {
 async function onPoll(watch: Watch) {
   try {
     const result = await poll(watch.id)
+    // A cycle that refused is not a cycle that found nothing. This reported
+    // "dispatched 0, skipped 0, failed 0" in success green for a poll that
+    // never contacted Jira — and this button is what an operator uses to
+    // answer "is my JQL right?", so it was answering yes.
+    const REFUSED: Record<string, string> = {
+      'disabled': 'This watch is switched off, so nothing was polled. Arm it first.',
+      'no-owner': 'This watch has no owner, so its runs would have no credentials. Open it and save while signed in.',
+      'source-failed': 'The ticket source could not be reached — check the query and the Jira token on your profile.',
+    }
+    const why = (result as { refused?: string }).refused
     toast.add({
-      title: 'Poll complete',
-      description: `dispatched ${result.dispatched.length}, skipped ${result.skipped.length}, failed ${result.failed.length}`,
-      color: result.failed.length ? 'warning' : 'success',
+      title: why ? 'Nothing was polled' : 'Poll complete',
+      description: why
+        ? REFUSED[why] ?? why
+        : `dispatched ${result.dispatched.length}, skipped ${result.skipped.length}, failed ${result.failed.length}`,
+      color: why || result.failed.length ? 'warning' : 'success',
     })
     expanded.value[watch.id] = true
   } catch (e: any) {
@@ -346,6 +358,26 @@ function relativeTime(ms: number): string {
                   >
                     {{ escalatedCount(watch.id) }} escalated
                   </span>
+                  <!-- A watch the scheduler will refuse looked exactly like a
+                       working one: an ON toggle and a healthy row. The reason
+                       existed only inside the Edit modal, which nobody has a
+                       reason to open, and in a server log line. -->
+                  <span
+                    v-if="watch.enabled && !watch.createdBy"
+                    class="t-small font-mono px-1.5 py-0.5 rounded"
+                    style="background: rgba(245, 158, 11, 0.12); color: var(--warning);"
+                    title="Runs from this watch would have no credentials, so the scheduler refuses it. Open the watch and save it while signed in."
+                  >
+                    no owner — will not dispatch
+                  </span>
+                  <span
+                    v-if="watch.enabled && !watch.query?.trim()"
+                    class="t-small font-mono px-1.5 py-0.5 rounded"
+                    style="background: rgba(245, 158, 11, 0.12); color: var(--warning);"
+                    title="A Jira source with no JQL fetches nothing, and every cycle reports zero."
+                  >
+                    no query
+                  </span>
                 </div>
                 <div class="flex items-center gap-3 mt-1 t-small text-meta font-mono">
                   <span>every {{ watch.intervalSeconds }}s</span>
@@ -366,10 +398,15 @@ function relativeTime(ms: number): string {
                 :loading="polling[watch.id]"
                 @click="onPoll(watch)"
               />
+              <!-- The input is visually hidden (opacity 0, width 0) and the
+                   label holds only two decorative spans, so this control —
+                   which arms unattended dispatch of money-spending runs — had
+                   no accessible name at all. WCAG 4.1.2. -->
               <label class="field-toggle" :title="watch.enabled ? 'Enabled' : 'Disabled'">
                 <input
                   type="checkbox"
                   :checked="watch.enabled"
+                  :aria-label="`${watch.enabled ? 'Disable' : 'Enable'} the ${watch.name || watch.id} watch`"
                   @change="onToggleEnabled(watch, ($event.target as HTMLInputElement).checked)"
                 >
                 <span class="field-toggle__track">
