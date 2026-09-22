@@ -2033,12 +2033,29 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     }
     run.question = {
       stepId: gate,
-      text: `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius, gateKind)}`,
+      // The step label and nothing else.
+      //
+      // This string used to carry the gate's owner and the oversight reason
+      // concatenated onto it, and both are POLICY: identical on every row of
+      // the same class. Three screens rendered it, so every approval in a
+      // queue read the same for its first sixty characters, and the one fact
+      // that distinguished two decisions — which change, and how dangerous —
+      // was past the truncation. Both are already structured on the record
+      // (`role`, `gateKind`, `oversight`, `blastRadius`); a consumer that
+      // wants to explain the policy can compose it once, in a detail view,
+      // rather than in every row.
+      text: `Approve "${label}" to run it.`,
       ...(criteria.length ? { criteria } : {}),
       kind: 'approval',
       askedAt: Date.now(),
       ...(gateRole ? { role: gateRole } : {}),
       ...(gateKind ? { gateKind } : {}),
+      // Snapshot WHY this gate stopped, not merely what the run is classified
+      // as now. A later step may raise the class, and a reader then sees a
+      // tier that disagrees with the reason the run is on their screen.
+      // RunDecision already keeps its own blastRadius for exactly this reason.
+      oversight: oversightForGate(run.blastRadius, gateKind),
+      ...(run.blastRadius ? { blastRadius: run.blastRadius } : {}),
     }
     run.status = 'paused'
     run.currentStepIds = []

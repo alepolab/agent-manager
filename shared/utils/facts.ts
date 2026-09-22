@@ -231,3 +231,50 @@ export function describeCriterion(r: CriterionResult): string {
   if (r.status === 'blocked') return `BLOCKED ${r.id}: ${r.reasons.join('; ')} (${where})`
   return `${r.status.toUpperCase()} ${r.id}: ${r.question} (${where})`
 }
+
+export interface CriteriaSummary {
+  pass: number
+  fail: number
+  blocked: number
+  total: number
+  /**
+   * One short label for a row. Never "verified" and never "passed" where a
+   * criterion could be `blocked`: the whole point of the three-state model is
+   * that not-checked is visible, and a label that says "passed" over a set
+   * containing an unchecked item is the exact claim this module exists to
+   * stop.
+   */
+  label: string
+}
+
+/**
+ * Reduce a gate's criteria to something that fits in a table cell.
+ *
+ * Here rather than in a component because three surfaces render it — the
+ * attention queue, the row's accessibility label, and the gate detail — and
+ * three copies of a counting rule is how two of them come to disagree about
+ * whether a run is fine.
+ */
+export function summarise(criteria: CriterionResult[] | undefined): CriteriaSummary {
+  const list = criteria ?? []
+  const pass = list.filter(c => c.status === 'pass').length
+  const fail = list.filter(c => c.status === 'fail').length
+  const blocked = list.filter(c => c.status === 'blocked').length
+  const total = list.length
+  // Worst-first, because the cell has room for one fact and the reader needs
+  // the one that changes their answer.
+  const label = total === 0
+    ? 'nothing checked'
+    : fail
+      ? `${fail} failed`
+      : blocked
+        ? `${blocked} unproven`
+        : `${pass}/${total} proven`
+  return { pass, fail, blocked, total, label }
+}
+
+/** Does anything here deserve a human slowing down? */
+export function hasFriction(criteria: CriterionResult[] | undefined): boolean {
+  const { fail, blocked, total } = summarise(criteria)
+  return total === 0 || fail > 0 || blocked > 0
+}

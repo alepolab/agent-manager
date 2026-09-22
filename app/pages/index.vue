@@ -4,6 +4,7 @@ import type { Role } from '~~/shared/types/role'
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 import { oversightFor } from '~~/shared/utils/oversight'
+import { summarise, hasFriction } from '~~/shared/utils/facts'
 
 /**
  * Home answers one question: what is open, addressed to me, and how long has it
@@ -78,8 +79,18 @@ const mineToAnswer = (r: WorkflowRun) => {
   const want = r.question?.role
   return !want || !role.value || role.value === 'operator' || role.value === want
 }
+/**
+ * Runs that are stopped or broken but are NOT a decision anyone can make
+ * here: an interrupted run needs restarting, a failing pull request needs
+ * someone to look at CI. Both used to rank 1 and 2 inside a list called
+ * "Waiting on you", which trains a reader to skim the list — and the list's
+ * whole job is that it is short enough to read.
+ */
+const stalled = computed(() => runs.value
+  .filter(r => !r.dismissed && (r.status === 'interrupted' || r.ci?.status === 'failing')))
+
 const attention = computed(() => runs.value
-  .filter(r => !r.dismissed && (['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
+  .filter(r => !r.dismissed && (r.status === 'paused' || r.status === 'failed'))
   // Only gates are laned. A failed or interrupted run is not addressed to
   // anyone, and hiding it would leave it for nobody.
   .filter(r => r.status !== 'paused' || mineToAnswer(r))
@@ -89,9 +100,8 @@ const attention = computed(() => runs.value
   .sort((a, b) => {
     const rank = (r: WorkflowRun) =>
       r.status === 'paused' && mineToAnswer(r) ? 0
-      : r.status === 'failed' || r.status === 'interrupted' ? 1
-      : r.ci?.status === 'failing' ? 2
-      : 3
+      : r.status === 'failed' ? 1
+      : 2
     return rank(a) - rank(b) || waitedMs(b) - waitedMs(a)
   }))
 const dismissing = ref(false)
@@ -131,6 +141,22 @@ const mine = computed(() => runs.value
 /** A run's first line, whole. Cutting at 60 characters in the markup produced
  *  "... routing f" with no ellipsis; the columns below truncate properly. */
 const headline = (r: WorkflowRun) => r.initialPrompt.split('\n')[0] ?? ''
+
+/**
+ * How much of this gate is actually proven, in one cell.
+ *
+ * Composed by shared/utils/facts.ts rather than here, so the row, the
+ * accessible name and the gate detail cannot drift into disagreeing about
+ * whether a run is fine.
+ */
+const proof = (r: WorkflowRun) => summarise(r.question?.criteria)
+/**
+ * Is there anything here a person can add value on? This — not "money vs
+ * ui_parsing" — is the honest discriminator, and it is what decides whether a
+ * row is allowed to look routine.
+ */
+const friction = (r: WorkflowRun) =>
+  r.status === 'paused' && (riskOf(r) === 'justify' || hasFriction(r.question?.criteria) || (r.reworks ?? 0) > 0)
 const ticket = ref('')
 const starting = ref(false)
 /** Where the registry would route this ticket; shown before Start so the wrong stack is never a surprise. */
@@ -183,6 +209,12 @@ async function startFromTicket() {
 const ask = (r: WorkflowRun): string => {
   if (r.status === 'paused') {
     if (r.question?.reason === 'budget') return 'Out of budget — approve more, or stop it'
+    // NOT `question.text`. That string is the same for every approval of the
+    // same class — it opens with the verb and the gate's own name, and the
+    // one fact that tells two decisions apart is past the truncation. What a
+    // person needs first is WHICH CHANGE, which the run has carried all along
+    // as the ticket's own headline.
+    if (r.question?.kind === 'approval') return headline(r) || 'Waiting for your approval'
     return r.question?.text || 'Paused — open it to see why'
   }
   if (r.status === 'failed') return r.error || `Failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`
@@ -306,11 +338,6 @@ const minedEmpty = computed(() => (can('startRun')
            page telling people their own job title, every load, forever. The
            "view as" switcher is an operator's occasional tool and belongs with
            the other role settings, not above the queue. -->
-      <div v-if="viewingAs" class="flex flex-wrap items-center gap-2 t-small rounded-lg px-3 py-2" style="background: var(--accent-muted); border: 1px solid var(--accent);">
-        <span style="color: var(--text-primary);">You are seeing this as a <span class="font-mono">{{ role }}</span>. Controls you normally have are hidden.</span>
-        <button class="ml-auto underline focus-ring" :disabled="switching" @click="lookAs(null)">Back to your own view</button>
-      </div>
-
       <form v-if="can('startRun')" class="rounded-xl p-4 flex flex-wrap items-end gap-3" :class="attention.length || escalated.length ? 'order-2' : 'order-1'" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
         <div class="flex-1 min-w-[16rem]">
           <label class="field-label" for="ticket">Start a run from a ticket</label>
@@ -329,10 +356,20 @@ const minedEmpty = computed(() => (can('startRun')
             <summary class="cursor-pointer focus-ring">{{ otherNotes.length }} more thing(s) to know before this runs</summary>
             <span v-for="n in otherNotes" :key="n.text" class="block mt-1" :style="{ color: noteColour(n.level) }">{{ n.text }}</span>
           </details>
-          <label class="flex items-center gap-2 cursor-pointer mt-2" title="A failed step or an aborting monitor still stops the run.">
-            <input v-model="autoRun" type="checkbox" class="shrink-0" :disabled="!runbook">
-            <span class="field-label mb-0">Don't stop at gates</span>
-          </label>
+          <!-- "Don't stop at gates" was here, ticked by default, and it did
+               not do that: the gate branch in workflowRunner.ts:2014 never
+               consults `autoRun`, so gates fire either way. A control whose
+               label promises to disable the product's core safeguard, which
+               is on by default and has no such effect, is worse than no
+               control — it teaches that gates are optional and then surprises
+               the person when a run stops.
+
+               `autoRun` remains on the API, where it means what it always
+               meant: keep executing between steps without a human clicking
+               start each time. That is a runner concern, not a decision a
+               person should be asked to make while typing a ticket key.
+               shared/utils/oversight.ts already decides gating per step, with
+               better information than whoever starts the run has. -->
         </div>
         <UButton
           type="submit" :label="starting ? 'Starting…' : 'Start run'" icon="i-lucide-play" :loading="starting"
@@ -368,25 +405,35 @@ const minedEmpty = computed(() => (can('startRun')
             v-for="r in attention" :key="r.id"
             class="attn-row t-ui"
             :class="[`attn-row--${waitTier(r)}`, { 'attn-row--mine': r.status === 'paused' && mineToAnswer(r) }]"
-            :style="{ '--rail': RUN_STATUS_COLOR[r.status] }"
+            :style="{ '--rail': friction(r) ? (riskOf(r) === 'justify' ? 'var(--error)' : 'var(--warning)') : 'var(--border-emphasis)' }"
           >
+            <!-- The rail carries CONSEQUENCE, not status. It used to carry
+                 RUN_STATUS_COLOR, which after moving non-decisions out of this
+                 list encodes a fact the icon already gives — and spending the
+                 one full-height channel on it left nothing to make the rare
+                 dangerous row stand out. -->
             <span class="attn-rail" aria-hidden="true" />
-            <UIcon :name="kindIcon(r)" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }" />
+            <UIcon :name="kindIcon(r)" class="size-3.5 shrink-0" style="color: var(--text-tertiary);" />
             <!-- The status word is gone from the row, so it goes into the
                  accessible name instead: dropping a channel must not drop it
                  from the accessibility tree. -->
             <NuxtLink
               :to="`/runs/${r.id}`" class="attn-key focus-ring"
-              :aria-label="`${statusWord(r.status)} — ${r.ticketKey || headline(r)}: ${ask(r)}`"
+              :aria-label="`${statusWord(r.status)} — ${r.ticketKey || headline(r)}: ${ask(r)}. ${r.status === 'paused' && r.question?.criteria?.length ? proof(r).label + '.' : ''} Waiting ${shortWait(waitedMs(r))}.`"
             >{{ r.ticketKey || headline(r) }}</NuxtLink>
             <span class="attn-ask" :title="ask(r)">{{ ask(r) }}</span>
+            <!-- What is actually proven. The one cell that distinguishes
+                 "checked" from "said", which until now was only visible after
+                 opening the run. -->
+            <span class="attn-proof tabular" :title="proof(r).total ? `${proof(r).pass} proven, ${proof(r).fail} failed, ${proof(r).blocked} unproven` : 'nothing was checked'">{{ r.status === 'paused' && r.question?.criteria?.length ? proof(r).label : '' }}</span>
+            <!-- The class as a WORD at the row's own size, and ONLY when it is
+                 owner-gated. A chip shrinks the one thing that must be big, and
+                 marking every row means a mark means nothing. -->
             <span
-              v-if="r.blastRadius && riskOf(r) !== 'auto'"
-              class="attn-risk t-label" :class="{ 'attn-risk--justify': riskOf(r) === 'justify' }"
-              :title="riskOf(r) === 'justify' ? 'Owner-gated: approving needs a written reason' : 'Stops for a person'"
+              v-if="riskOf(r) === 'justify'"
+              class="attn-class" :title="'Owner-gated: approving needs a written reason'"
             >{{ r.blastRadius }}</span>
             <span v-else />
-            <RunProgressBar :steps="r.steps" />
             <span class="attn-wait tabular" :title="`Waiting ${shortWait(waitedMs(r))}`">{{ shortWait(waitedMs(r)) }}</span>
             <span class="attn-act">
               <UButton v-if="r.status === 'paused' && mineToAnswer(r)" size="xs" variant="soft" label="Answer" :to="`/runs/${r.id}`" />
@@ -419,33 +466,23 @@ const minedEmpty = computed(() => (can('startRun')
            configuration, linking to four pages already in the sidebar — is gone.
            Nothing on a triage screen is decided by "31 commands", and it was a
            third of the page width below the primary action. -->
-      <div class="order-3">
-        <section>
-          <h2 class="text-section-label mb-2">{{ minedTitle }}</h2>
-          <!-- Branches on the error, like the queue above it does. This said
-               "No runs started by you yet" when the fetch had failed — the same
-               defect as the queue's, twelve lines away and still live. -->
-          <p v-if="loadError && !mine.length" class="t-ui" style="color: var(--error);">Could not load your runs.</p>
-          <p v-else-if="loaded && !mine.length" class="t-ui text-label">{{ minedEmpty }}</p>
-          <!-- Grid, not flex: the progress bar used to sit wherever the title
-               ended, so it landed in a different place on every row. Fixed
-               columns line the four fields up down the list. -->
-          <div v-else class="space-y-1">
-            <NuxtLink
-              v-for="r in mine" :key="r.id" :to="`/runs/${r.id}`"
-              class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 t-small focus-ring"
-              style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
-            >
-              <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ statusWord(r.status) }}</span>
-              <span class="truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
-              <RunProgressBar :steps="r.steps" />
-              <span
-                class="text-label text-right whitespace-nowrap"
-                :title="`Started ${new Date(r.startedAt).toLocaleString()}`"
-              >{{ ago(runLastActivityAt(r)) }}</span>
-            </NuxtLink>
-          </div>
-        </section>
+      <!-- "Recent" was here: /runs?mine=1 with fewer columns and a SECOND
+           state vocabulary — coloured status words, where the queue above
+           uses a rail and an icon. The same run appeared in both lists under
+           two different visual languages, so a reader had to re-identify it.
+           This page's own header comment already records that a copy of
+           /runs was removed from it once.
+
+           What survives is the part a triage screen owes the reader: a way
+           out to the full history, and the runs that are stopped or broken
+           but are nobody's decision — which used to rank 1 and 2 inside a
+           list called "Waiting on you". -->
+      <div class="order-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <NuxtLink to="/runs?mine=1" class="t-small underline focus-ring text-label">{{ minedTitle }} &rsaquo;</NuxtLink>
+        <NuxtLink
+          v-if="stalled.length" to="/runs?status=interrupted"
+          class="t-small underline focus-ring" style="color: var(--text-secondary);"
+        >{{ stalled.length }} stopped or failing &rsaquo;</NuxtLink>
       </div>
     </div>
   </div>
