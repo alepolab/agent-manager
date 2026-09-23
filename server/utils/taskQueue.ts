@@ -176,6 +176,34 @@ export async function dispatch(startRun: StartRunFn): Promise<DispatchResult> {
   return result
 }
 
+/**
+ * Take a task out of the queue for good.
+ *
+ * `skipped` was the only way to shelve one, and it is the wrong shape for a
+ * task that should never have been queued: a skipped task still counts as
+ * settled, so anything waiting on it is released and runs against a dependency
+ * nobody ever satisfied. Removal takes it out of the graph entirely, and the
+ * tasks that depended on it hold instead - which is the honest state.
+ *
+ * A running task is refused: its run is live, and deleting the row would leave
+ * that run with nothing to report back to.
+ */
+export async function removeTask(id: string): Promise<{ removed: QueueTask, orphaned: string[] } | null> {
+  const q = await readQueue()
+  const task = q.tasks.find(t => t.id === id)
+  if (!task) return null
+  if (task.status === 'running') {
+    throw new Error(`${id} is running as ${task.runId?.slice(0, 8) ?? 'a run'}. Stop that run first, then remove it.`)
+  }
+  q.tasks = q.tasks.filter(t => t.id !== id)
+  // Named, not repaired. Rewriting other tasks' deps to route around a removed
+  // one is a guess about intent; saying which tasks now wait on something that
+  // is gone lets the person make that call.
+  const orphaned = q.tasks.filter(t => t.deps?.includes(id)).map(t => t.id)
+  await writeQueue(q)
+  return { removed: task, orphaned }
+}
+
 /** Move a single task out of the way, or back into the queue. */
 export async function setTaskStatus(id: string, status: QueueTask['status'], note?: string): Promise<QueueTask | null> {
   const q = await readQueue()

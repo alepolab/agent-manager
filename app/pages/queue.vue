@@ -68,6 +68,36 @@ async function retry(task: Row) {
   }
 }
 
+// Removal is not undoable from this page, so the button arms before it fires.
+// A second click within the window commits; anything else disarms it. This is
+// deliberately not window.confirm(), which blocks the whole tab and cannot be
+// styled, driven or tested.
+const arming = ref<string | null>(null)
+let disarm: ReturnType<typeof setTimeout> | undefined
+function armRemove(task: Row) {
+  clearTimeout(disarm)
+  if (arming.value === task.id) { arming.value = null; return remove(task) }
+  arming.value = task.id
+  disarm = setTimeout(() => { arming.value = null }, 4000)
+}
+onBeforeUnmount(() => clearTimeout(disarm))
+
+// Says what it broke rather than repairing it: a task that others depend on
+// leaves them waiting on something that no longer exists, and rewriting their
+// deps to route around it would be a guess about intent.
+async function remove(task: Row) {
+  arming.value = null
+  try {
+    const r = await $fetch<{ orphaned: string[] }>(`/api/queue/${task.id}`, { method: 'DELETE' })
+    await load()
+    toast.add(r.orphaned.length
+      ? { title: `Removed ${task.id}`, description: `${r.orphaned.join(', ')} still list it as a dependency and will not start.`, color: 'warning' }
+      : { title: `Removed ${task.id}`, color: 'success' })
+  } catch (e: any) {
+    toast.add({ title: 'Could not remove', description: e.data?.message || e.message, color: 'error' })
+  }
+}
+
 const STATUS_ORDER: QueueTask['status'][] = ['running', 'pending', 'failed', 'done', 'skipped']
 const counts = computed(() => {
   const c: Record<string, number> = {}
@@ -160,6 +190,13 @@ function why(t: Row): string {
                 v-if="t.status === 'failed' && can('startRun')"
                 label="Requeue" size="xs" variant="ghost" color="neutral" class="shrink-0"
                 @click="retry(t)"
+              />
+              <UButton
+                v-if="t.status !== 'running' && can('startRun')"
+                :label="arming === t.id ? 'Confirm' : 'Remove'"
+                :color="arming === t.id ? 'error' : 'neutral'"
+                size="xs" variant="ghost" class="shrink-0"
+                @click="armRemove(t)"
               />
             </div>
           </div>

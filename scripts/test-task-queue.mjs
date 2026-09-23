@@ -252,5 +252,42 @@ const task = (id, over = {}) => ({
   await assert.rejects(() => Q.setQueue('P', [task('9')]), /are running/)
 }
 
+// ---- Removing a task takes it out of the graph, and says what it broke ----
+// `skipped` was the only way to shelve a task, and it is the wrong shape here:
+// a skipped task counts as SETTLED, so its dependents are released and run
+// against a dependency nobody satisfied. Removal holds them instead.
+{
+  // The block above deliberately leaves '7' running; settle it so the queue
+  // can be replaced, which is the same thing setQueue refuses to do for us.
+  await Q.setTaskStatus('7', 'skipped')
+  await Q.setQueue('P', [task('10'), { ...task('11'), deps: ['10'] }])
+  const r = await Q.removeTask('10')
+  assert.equal(r.removed.id, '10', 'the task is gone')
+  assert.deepEqual(r.orphaned, ['11'], 'and the task waiting on it is named, not silently repaired')
+
+  const left = await Q.readQueue()
+  assert.equal(left.tasks.length, 1, 'only the dependent is left')
+  assert.ok(!Q.eligible(left).some(t => t.id === '11'), '11 does not become eligible just because 10 vanished')
+
+  assert.equal(await Q.removeTask('nope'), null, 'removing what is not there is a 404, not a crash')
+}
+
+// ---- A running task cannot be removed ------------------------------------
+// Its run is live; deleting the row leaves that run with nothing to settle.
+{
+  await Q.setQueue('P', [task('12')])
+  await Q.dispatch(async ([tk]) => {
+    const nr = await store.createRun({
+      workflowSlug: 'wf', workflowName: 'W', autoRun: false, initialPrompt: tk.detail,
+      watch: 'direct-invocation', projectDir: tk.projectDir,
+      steps: [{ stepId: 'a', label: 'A', agentSlug: 'x' }],
+    })
+    await store.saveRun({ ...nr, status: 'running' })
+    return nr
+  })
+  await assert.rejects(() => Q.removeTask('12'), /Stop that run first/)
+  assert.equal((await Q.readQueue()).tasks.length, 1, 'and it is still there')
+}
+
 rmSync(dir, { recursive: true, force: true })
-console.log('task queue: the whole project is listed, dependencies and capacity gate it, one checkout takes one run at a time, and a settled run frees the next')
+console.log('task queue: the whole project is listed, dependencies and capacity gate it, one checkout takes one run at a time, a settled run frees the next, and a removed task holds its dependents rather than releasing them')
