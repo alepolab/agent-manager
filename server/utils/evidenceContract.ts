@@ -61,6 +61,70 @@ export async function missingContractFiles(dir: string): Promise<string[]> {
 export const ADVERSARIAL_REQUIRED_FOR = new Set(['money', 'protocol'])
 
 /**
+ * What a visual check left behind, counted off the disk.
+ *
+ * A visual verdict is the one review result in this pipeline that was still
+ * accepted as prose: a step could write "Visual QA: PASS" having opened
+ * nothing, and every schema check passed because no schema ever asked for the
+ * picture. The same rule the oracle already lives under applies here - an
+ * agent may not self-report a fact a tool can compute - so the images, traces
+ * and accessibility reports are counted where they either exist or do not.
+ *
+ * Counted, never written: a runner that produced a screenshot to satisfy its
+ * own check would be manufacturing evidence.
+ */
+export interface VisualEvidence {
+  images: string[]
+  traces: string[]
+  reports: string[]
+}
+
+const IMAGE_RE = /\.(png|jpe?g|webp)$/i
+const TRACE_RE = /(^|[-_.])trace.*\.zip$|\.webm$/i
+const A11Y_RE = /(axe|a11y|accessibility)[-_.\w]*\.(json|xml|html)$/i
+
+export async function visualEvidence(dir: string): Promise<VisualEvidence> {
+  const images: string[] = []
+  const traces: string[] = []
+  const reports: string[] = []
+  async function walk(d: string, rel: string): Promise<void> {
+    let entries
+    try {
+      entries = await readdir(d, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const name = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) await walk(join(d, entry.name), name)
+      else if (entry.isFile()) {
+        if (IMAGE_RE.test(entry.name)) images.push(name)
+        else if (TRACE_RE.test(entry.name)) traces.push(name)
+        else if (A11Y_RE.test(entry.name)) reports.push(name)
+      }
+    }
+  }
+  await walk(dir, '')
+  return { images, traces, reports }
+}
+
+/**
+ * Whether this run ran a visual step and has nothing visual to show for it.
+ *
+ * Asked only of a run whose workflow actually carries one: demanding a
+ * screenshot from a backend-only pipeline is the false demand that teaches an
+ * agent to ignore the real ones, which is the mistake `BUNDLE_CONTRACT_FILES`
+ * already makes when pointed at a workflow that was never going to write them.
+ */
+export function owesVisualEvidence(run: WorkflowRun, evidence: VisualEvidence): boolean {
+  const hasVisualStep = run.steps.some(s => /visual/i.test(s.agentSlug) || /visual/i.test(s.label))
+  if (!hasVisualStep) return false
+  const ran = run.steps.some(s => (/visual/i.test(s.agentSlug) || /visual/i.test(s.label)) && s.status === 'completed')
+  if (!ran) return false
+  return !evidence.images.length && !evidence.traces.length
+}
+
+/**
  * Whether this run owes an adversarial report it has not produced.
  *
  * Reported, NEVER written. The schema asks for a two-node rerun, an

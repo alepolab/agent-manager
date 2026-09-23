@@ -148,10 +148,14 @@ export function browserSurface(workspace: string): BrowserSurface {
     catch { /* skip */ }
   }
 
+  // A checkout with no Playwright config is not a checkout with no way to look:
+  // `agent-browser` is installed in this image and drives the running app
+  // directly, against the address in stack-facts.json. Saying so is the
+  // difference between "no trace was possible" and "nobody opened the page".
   const summary = playwright
-    ? `Playwright config found${uiFiles.length ? '' : ', though no UI files were seen at the top level'} — a trace is expected unless the change has no UI surface.`
+    ? `Playwright config found${uiFiles.length ? '' : ', though no UI files were seen at the top level'} — a trace is expected unless the change has no UI surface. \`agent-browser\` is also available for opening the running application itself.`
     : uiFiles.length
-      ? 'No Playwright config found in this checkout, but UI files are present — say which you checked before reporting n/a.'
+      ? 'No Playwright config found in this checkout, but UI files are present — open the running application with `agent-browser` at the address in stack-facts.json, screenshot it and read the image, and say which routes you checked before reporting n/a.'
       : 'No Playwright config and no UI files found in this checkout — `TRACE: n/a` is the expected outcome, and this sentence is the reason to give.'
 
   return { playwright, uiFiles, summary }

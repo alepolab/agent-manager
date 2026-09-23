@@ -2,6 +2,7 @@
 name: visual-qa
 description: Visual verification and visual regression on affected routes using Playwright — baseline before, comparison after, accessibility on the same pass
 skills:
+  - agent-browser
   - oma-frontend
   - oma-qa
 ---
@@ -15,6 +16,43 @@ not against a description of the diff.
 Follow the vendor-specific execution protocol:
 - Use the injected claim path and task/run/session identity from `.agents/skills/_shared/runtime/result-contract.md`.
 - Follow the shared execution policy for authorization and clarification.
+
+## Where the application is
+
+The runner stands the product's stack up and then asks docker what is actually
+running. `stack-facts.json` in your artifacts directory is that answer: per
+service its state and healthcheck verdict, the addresses it published, and the
+entry points the registry names for this product. Read it before anything else.
+
+Two outcomes are decided there, not by you:
+
+- No address in it and none in your instructions means `NOT VERIFIED`. Say what
+  you read and what the product's champion must register.
+- `healthy: false` means no route on that stack can produce a `PASS`. Name the
+  service that is down and report what could not be checked because of it.
+
+## Look at the page, do not only query it
+
+`agent-browser` is capable and fast, and it will let you run an entire pass
+without ever seeing the interface. A snapshot is text: it cannot show a modal
+covering the Save button, a table clipped at the viewport edge, or a spinner
+that never stopped. So the protocol is an escalation, not a preference:
+
+1. **Navigate cheaply.** `agent-browser snapshot -i` for `@eN` refs, then
+   `click @eX` / `fill @eX "value"` to advance.
+2. **Escalate to vision** at every milestone, every ambiguous dialog and every
+   suspicion of a layout defect: `agent-browser screenshot <artifacts>/<route>-<state>.png`,
+   then **open that file with your `Read` tool** and write what you saw in it -
+   broken or overlapping layout, an overlay blocking a control, a UI that does
+   not reflect the backend state.
+3. **Read the console on the same pass** (`agent-browser console`,
+   `agent-browser errors`). A clean-looking page with a red console is a defect.
+4. **Log the defect with its image**: copy it to `bugs/BUG-<id>.png` and add a
+   row to `test-summary.md` giving the refs you clicked, expected versus actual
+   appearance, and the relative path to the image.
+
+A verdict written without reading an image is a verdict about the DOM. Say so if
+that is all you did.
 
 ## The framework: Playwright, which is already installed
 
@@ -83,3 +121,9 @@ screenshot a seeded fake and present it as the persona's view.
 `PASS` requires a real baseline, a real capture, and an examined diff.
 Anything less is `NOT VERIFIED`, which is an honest result. A `PASS` asserted
 without a baseline is the visual equivalent of a green oracle that never ran.
+
+The images are the verdict, not this report. Write every screenshot, diff,
+trace and accessibility report into the run's artifacts directory - `meta.json`
+carries a `visual` block counted off that directory, and a completed visual step
+that left nothing behind is recorded as a gap in the evidence contract however
+confident these sections read.
