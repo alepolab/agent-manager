@@ -251,6 +251,34 @@ RUN set -eux; \
 # host path cannot be rewritten — the file is mounted read-only and belongs to
 # the developer — so the container provides the path it names.
 
+# The browser automation CLI the visual steps drive.
+#
+# `agent-browser` is what the estate's agent-browser skill and the visual-qa
+# agent tell a step to use: accessibility snapshots to navigate cheaply, then a
+# screenshot on disk that the agent opens with its own Read tool and looks at.
+# Without the binary in the image that instruction has nothing behind it, and a
+# visual step falls back to reasoning about the diff - which is the failure the
+# whole visual lane exists to end. Chromium above supplies the browser it drives.
+#
+# The npm tarball ships prebuilt binaries for every platform, so only the
+# linux-x64 one is installed and nothing is downloaded at runtime. Pinned by
+# version and verified by checksum, the same rule as docker, compose and gh
+# above: a moved tag cannot change what lands in the image.
+ARG AGENT_BROWSER_VERSION=0.33.1
+ARG AGENT_BROWSER_SHA256=a74311bf035ed27918c0befe493116992215a933f532334485fe4ba1e0cb2580
+RUN set -eux; \
+    curl -fsSL "https://registry.npmjs.org/agent-browser/-/agent-browser-${AGENT_BROWSER_VERSION}.tgz" -o /tmp/agent-browser.tgz; \
+    echo "${AGENT_BROWSER_SHA256}  /tmp/agent-browser.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/agent-browser.tgz -C /tmp package/bin/agent-browser-linux-x64; \
+    install -m 0755 /tmp/package/bin/agent-browser-linux-x64 /usr/local/bin/agent-browser; \
+    rm -rf /tmp/agent-browser.tgz /tmp/package; \
+    agent-browser --version
+# The browser it drives, named rather than discovered: this image installs
+# Debian's chromium and no Google Chrome, and `--executable-path` reads this
+# variable (agent-browser --help: AGENT_BROWSER_EXECUTABLE_PATH). Leaving it to
+# search is the one ambiguity a headless run cannot recover from.
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+
 # Run as a non-root user.
 #
 # Not hygiene — a hard requirement. agentCaller.ts starts every pipeline agent
@@ -286,9 +314,19 @@ RUN set -eux; \
 # reseed, and a named volume takes its ownership from the image path it seeds
 # from. Without this directory the volume is created root-owned and the server
 # (uid 1000) cannot write a single run record.
-RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs \
+# /home/bun/.claude is here for exactly the same reason, and learned the same
+# way: compose mounts the sdk-sessions volume on it so the SDK's transcripts
+# survive a rebuild, and the first deployment that did so got a root-owned
+# volume. The server runs as uid 1000, so it could not even create `projects/`
+# inside it - /cli listed nothing and the logs filled with ENOENT on a path
+# nothing was allowed to make. An EXISTING root-owned volume is not fixed by
+# this line and must be chowned once:
+#
+#   docker run --rm -u 0 -v <project>_sdk-sessions:/home/bun/.claude \
+#     <image> chown -R 1000:1000 /home/bun/.claude
+RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs /home/bun/.claude \
     && chmod 711 /root \
-    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs
+    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs /home/bun/.claude
 USER bun
 
 # Set environment variables
