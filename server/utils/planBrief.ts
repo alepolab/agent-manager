@@ -147,10 +147,13 @@ const TICKET_TASKS: Record<string, string[]> = {
   'SASKNEPCR-33': ['F1.1', 'A2.2'],
   'SASKNEPCR-34': ['E1.1', 'E1.2', 'A1.1'],
   'SASKNEPCR-35': ['E1.1', 'E1.2', 'A1.1'],
-  // Project-level tickets, where the brief is the whole lane rather than a journey.
-  'SASKNEPCR-5': ['B1.0', 'C1.1', 'C1.2', 'B1.1', 'A1.1', 'A2.1', 'A2.2', 'F1.1', 'D2.1', 'C2.1', 'E1.1'],
-  'SASKNEPCR-7': ['T2.1', 'T2.2', 'B1.3', 'C1.3', 'D2.3', 'F1.3'],
-  'SASKNEPCR-13': ['T1.1', 'T1.2', 'T1.3', 'T3.1'],
+  // SASKNEPCR-1..21 are deliberately absent. They are the project's admin and
+  // worklog buckets - meetings, lab setup, "CR related devlopement work",
+  // documentation, cutover, lessons learnt - and carry no acceptance criteria
+  // because they exist to log hours against, not to be built. Giving one of them
+  // a lane-wide brief, as this table used to for -5, -7 and -13, turns a
+  // timesheet row into something a pipeline will try to take to a pull request.
+  // Only the journeys, -22..-35, describe work.
 }
 
 /**

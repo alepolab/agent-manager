@@ -63,8 +63,14 @@ const TICKET_FOR = {
   'C2.2': 'SASKNEPCR-27', 'C2.3': 'SASKNEPCR-27',
   'D1.1': 'SASKNEPCR-25', 'D1.2': 'SASKNEPCR-25', 'D2.1': 'SASKNEPCR-25', 'D2.2': 'SASKNEPCR-25',
   'E1.1': 'SASKNEPCR-34', 'E1.2': 'SASKNEPCR-34', 'E2.1': 'SASKNEPCR-29',
-  'B1.1': 'SASKNEPCR-5', 'B1.2': 'SASKNEPCR-5', 'B2.1': 'SASKNEPCR-5', 'B2.2': 'SASKNEPCR-5',
-  'G1.1': 'SASKNEPCR-5',
+  // The B (tax and billing) and G (notifications) lanes have NO ticket, and that
+  // gap is left visible on purpose. SASKNEPCR-1..21 are the project's admin and
+  // worklog buckets - "Alepo Internal meetings", "CR related devlopement work",
+  // "Local Lab setup" - and only -22..-35 are the customer journeys the CR is
+  // actually built from. Pointing a Jira-to-PR run at a worklog bucket gives it a
+  // ticket with no acceptance criteria to work from and posts pipeline comments
+  // onto someone's timesheet, which is what happened here. Someone has to say
+  // which ticket covers billing and notifications, or raise one.
 }
 
 

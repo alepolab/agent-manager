@@ -90,4 +90,18 @@ for (const key of planBriefTickets()) {
   assert.ok(!plain.includes('Implementation brief'), 'an unplanned ticket is unchanged')
 }
 
+// ---- Worklog buckets are not work ---------------------------------------
+// SASKNEPCR-1..21 are the project's admin rows: meetings, lab setup, "CR
+// related devlopement work", cutover, lessons learnt. They have no acceptance
+// criteria because they exist to log hours against. Three of them once carried
+// lane-wide briefs, so a Jira-to-PR run was dispatched against a timesheet
+// ticket and commented on it. Only the journeys, -22..-35, describe work.
+{
+  for (let n = 1; n <= 21; n++) {
+    const key = `SASKNEPCR-${n}`
+    assert.equal(planBriefFor(key), null, `${key} is an admin bucket and carries no brief`)
+  }
+  assert.ok(planBriefFor('SASKNEPCR-22'), 'while the first journey ticket still does')
+}
+
 console.log('plan brief: a planned ticket carries its tasks, dependencies and the rules no single ticket reveals — and an unplanned one is untouched')
