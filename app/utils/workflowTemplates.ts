@@ -1,4 +1,4 @@
-import type { WorkflowStep } from '~/types'
+import type { WorkflowParameter, WorkflowStep } from '~/types'
 import type { Role } from '~~/shared/types/role'
 
 export interface WorkflowTemplateStep {
@@ -35,7 +35,7 @@ export interface WorkflowTemplateStep {
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
   /** See WorkflowStep.produces. */
@@ -56,6 +56,9 @@ export interface WorkflowTemplate {
   description: string
   icon: string
   steps: WorkflowTemplateStep[]
+  /** See Workflow.parameters. Seeded with the workflow, unlike `group` and
+   *  `notifyChannel`, which name things configured on the instance. */
+  parameters?: WorkflowParameter[]
 }
 
 /**
@@ -178,6 +181,15 @@ export function materializeTemplateSteps(
 export const RUNBOOK_FILES: Record<string, string> = {
   'runbook-a-jira-to-diff': 'runbook-a-ticket-to-evidence-backed-pr',
   'runbook-c-ce-ticket-to-pr': 'runbook-c-ce-ticket-to-qa-proven-pr',
+  'runbook-b-feature-request-to-pr': 'runbook-b-feature-request-to-evidence-backed-pr',
+  'scan-security-to-dispatch': 'scan-security-to-dispatch',
+  'scan-functional-to-dispatch': 'scan-functional-to-dispatch',
+  'scan-tech-debt-to-dispatch': 'scan-tech-debt-to-dispatch',
+  'scan-test-gaps-to-dispatch': 'scan-test-gaps-to-dispatch',
+  'scan-e2e-to-dispatch': 'scan-e2e-to-dispatch',
+  'scan-ui-to-dispatch': 'scan-ui-to-dispatch',
+  'scan-performance-to-dispatch': 'scan-performance-to-dispatch',
+  'scan-sweep-security': 'scan-sweep-security',
 }
 
 export const workflowTemplates: WorkflowTemplate[] = [
@@ -324,6 +336,163 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // finished, to an audience of reporters, watchers and whoever is on support
       // that week. A human qualifies that claim before it is made.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-qa-done', label: 'Jira: QA Done', next: [], jira: { transition: 'QA Done', attach: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'runbook-b-feature-request-to-pr',
+    name: 'Runbook B — Feature Request to Evidence-Backed PR',
+    description: 'Paste a feature request: designs the solution, writes acceptance tests, implements task-by-task, verifies, and opens a PR carrying the evidence bundle.',
+    icon: 'i-lucide-git-pull-request-arrow',
+    steps: [
+      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-in-progress', label: 'Jira: In Progress', next: ['feature-intake'], jira: { transition: 'In Progress' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-feature-intake', id: 'feature-intake', label: 'Feature Intake', next: ['stand-up-stack'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-stack-provisioner', id: 'stand-up-stack', label: 'Stand Up Stack', next: ['technical-design'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-feature-designer', id: 'technical-design', label: 'Technical Design', next: ['acceptance-tests'], approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-feature-test-author', id: 'acceptance-tests', label: 'Acceptance Tests', next: ['implement-feature'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-feature-implementer', id: 'implement-feature', label: 'Implement Feature', next: ['verify-regression', 'browser-trace', 'security-review'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-verifier', id: 'verify-regression', label: 'Verify + Regression', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-trace-capture', id: 'browser-trace', label: 'Browser Trace', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-security-review', id: 'security-review', label: 'Security Review', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-evidence-and-pr', id: 'evidence-bundle-pr', label: 'Evidence Bundle + PR', next: ['pr-checks-review'], contextMode: 'ancestors', approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-pr-follow-up', id: 'pr-checks-review', label: 'PR Checks + Review', next: ['jira-in-review'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-in-review', label: 'Jira: In Review', next: [], jira: { transition: 'In Review', comment: true }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-security-to-dispatch',
+    name: 'Scan Security — Findings to Dispatch',
+    description: 'Scans a repository for security vulnerabilities (OWASP, CVEs, secrets, injection), triages findings, auto-approves clear-cut tickets, escalates ambiguous ones for human decision, creates Jira tickets, and dispatches to Runbook A or B.',
+    icon: 'i-lucide-shield-alert',
+    parameters: [{ name: 'projectDir', description: 'The repository checkout to scan. Leave it blank on a run started by a sweep: that child works in its own workspace and clones the repo named by `repo`.' }, { name: 'repo', description: 'The repository this run was started for, as scan-registry.yaml names it (owner/name). Set by a sweep fanning out over repositories; leave blank when you are pointing the run at a checkout yourself.' }],
+    steps: [
+      { agentTemplateId: 'sdlc-scanner-security', id: 'security-scan', label: 'Security Scan', next: ['triage-findings'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-finding-triage', id: 'triage-findings', label: 'Triage Findings', next: ['draft-tickets'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-drafter', id: 'draft-tickets', label: 'Draft Tickets', next: ['decision-gate'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-decision-gate', id: 'decision-gate', label: 'Decision Gate', next: ['create-jira-auto-approved', 'tell-reviewers'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-auto-approved', label: 'Create Jira (Auto-Approved)', next: ['dispatch-auto-approved-to-runbook-a-b'], jira: { action: 'create', source: 'approved-drafts.json' }, runWhen: { artifact: 'approved-drafts.json' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-notifier', id: 'tell-reviewers', label: 'Tell reviewers', next: ['create-jira-escalated-after-review'], runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'workflow updates', message: '{count} drafts from the security scan need a decision.' } },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-escalated-after-review', label: 'Create Jira (Escalated — After Review)', next: ['dispatch-escalated-to-runbook-a-b'], jira: { action: 'create', source: 'escalated-drafts.json' }, runWhen: { artifact: 'escalated-drafts.json' }, approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-auto-approved-to-runbook-a-b', label: 'Dispatch Auto-Approved to Runbook A/B', next: [], runWhen: { artifact: 'approved-drafts.json' }, triggerWorkflow: { source: 'approved-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-escalated-to-runbook-a-b', label: 'Dispatch Escalated to Runbook A/B', next: [], runWhen: { artifact: 'escalated-drafts.json' }, triggerWorkflow: { source: 'escalated-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-functional-to-dispatch',
+    name: 'Scan Functional — Findings to Dispatch',
+    description: 'Scans a repository for functional bugs (static analysis, build warnings, test failures, logic errors), triages findings, auto-approves clear-cut tickets, escalates ambiguous ones, creates Jira tickets, and dispatches to Runbook A or B.',
+    icon: 'i-lucide-bug',
+    parameters: [{ name: 'projectDir', description: 'The repository checkout to scan. Leave it blank on a run started by a sweep: that child works in its own workspace and clones the repo named by `repo`.' }, { name: 'repo', description: 'The repository this run was started for, as scan-registry.yaml names it (owner/name). Set by a sweep fanning out over repositories; leave blank when you are pointing the run at a checkout yourself.' }],
+    steps: [
+      { agentTemplateId: 'sdlc-scanner-functional', id: 'functional-scan', label: 'Functional Scan', next: ['triage-findings'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-finding-triage', id: 'triage-findings', label: 'Triage Findings', next: ['draft-tickets'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-drafter', id: 'draft-tickets', label: 'Draft Tickets', next: ['decision-gate'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-decision-gate', id: 'decision-gate', label: 'Decision Gate', next: ['create-jira-auto-approved', 'tell-reviewers'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-auto-approved', label: 'Create Jira (Auto-Approved)', next: ['dispatch-auto-approved-to-runbook-a-b'], jira: { action: 'create', source: 'approved-drafts.json' }, runWhen: { artifact: 'approved-drafts.json' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-notifier', id: 'tell-reviewers', label: 'Tell reviewers', next: ['create-jira-escalated-after-review'], runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'workflow updates', message: '{count} drafts from the functional scan need a decision.' } },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-escalated-after-review', label: 'Create Jira (Escalated — After Review)', next: ['dispatch-escalated-to-runbook-a-b'], jira: { action: 'create', source: 'escalated-drafts.json' }, runWhen: { artifact: 'escalated-drafts.json' }, approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-auto-approved-to-runbook-a-b', label: 'Dispatch Auto-Approved to Runbook A/B', next: [], runWhen: { artifact: 'approved-drafts.json' }, triggerWorkflow: { source: 'approved-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-escalated-to-runbook-a-b', label: 'Dispatch Escalated to Runbook A/B', next: [], runWhen: { artifact: 'escalated-drafts.json' }, triggerWorkflow: { source: 'escalated-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-tech-debt-to-dispatch',
+    name: 'Scan Tech Debt — Findings to Dispatch',
+    description: 'Scans a repository for technical debt (anti-patterns, dead code, duplication, deferred work markers, dependency hygiene), triages findings, auto-approves clear-cut tickets, escalates ambiguous ones, creates Jira tickets, and dispatches to Runbook A or B.',
+    icon: 'i-lucide-construction',
+    parameters: [{ name: 'projectDir', description: 'The repository checkout to scan. Leave it blank on a run started by a sweep: that child works in its own workspace and clones the repo named by `repo`.' }, { name: 'repo', description: 'The repository this run was started for, as scan-registry.yaml names it (owner/name). Set by a sweep fanning out over repositories; leave blank when you are pointing the run at a checkout yourself.' }],
+    steps: [
+      { agentTemplateId: 'sdlc-scanner-tech-debt', id: 'tech-debt-scan', label: 'Tech Debt Scan', next: ['triage-findings'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-finding-triage', id: 'triage-findings', label: 'Triage Findings', next: ['draft-tickets'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-drafter', id: 'draft-tickets', label: 'Draft Tickets', next: ['decision-gate'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-decision-gate', id: 'decision-gate', label: 'Decision Gate', next: ['create-jira-auto-approved', 'tell-reviewers'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-auto-approved', label: 'Create Jira (Auto-Approved)', next: ['dispatch-auto-approved-to-runbook-a-b'], jira: { action: 'create', source: 'approved-drafts.json' }, runWhen: { artifact: 'approved-drafts.json' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-notifier', id: 'tell-reviewers', label: 'Tell reviewers', next: ['create-jira-escalated-after-review'], runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'workflow updates', message: '{count} drafts from the tech debt scan need a decision.' } },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-escalated-after-review', label: 'Create Jira (Escalated — After Review)', next: ['dispatch-escalated-to-runbook-a-b'], jira: { action: 'create', source: 'escalated-drafts.json' }, runWhen: { artifact: 'escalated-drafts.json' }, approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-auto-approved-to-runbook-a-b', label: 'Dispatch Auto-Approved to Runbook A/B', next: [], runWhen: { artifact: 'approved-drafts.json' }, triggerWorkflow: { source: 'approved-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-escalated-to-runbook-a-b', label: 'Dispatch Escalated to Runbook A/B', next: [], runWhen: { artifact: 'escalated-drafts.json' }, triggerWorkflow: { source: 'escalated-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-test-gaps-to-dispatch',
+    name: 'Scan Test Gaps — Findings to Dispatch',
+    description: 'Scans a repository for test coverage gaps (missing unit tests, low coverage files, skipped tests, test quality issues), triages findings, auto-approves clear-cut tickets, escalates ambiguous ones, creates Jira tickets, and dispatches to Runbook A or B.',
+    icon: 'i-lucide-test-tube',
+    parameters: [{ name: 'projectDir', description: 'The repository checkout to scan. Leave it blank on a run started by a sweep: that child works in its own workspace and clones the repo named by `repo`.' }, { name: 'repo', description: 'The repository this run was started for, as scan-registry.yaml names it (owner/name). Set by a sweep fanning out over repositories; leave blank when you are pointing the run at a checkout yourself.' }],
+    steps: [
+      { agentTemplateId: 'sdlc-scanner-test-gaps', id: 'test-gaps-scan', label: 'Test Gaps Scan', next: ['triage-findings'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-finding-triage', id: 'triage-findings', label: 'Triage Findings', next: ['draft-tickets'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-drafter', id: 'draft-tickets', label: 'Draft Tickets', next: ['decision-gate'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-decision-gate', id: 'decision-gate', label: 'Decision Gate', next: ['create-jira-auto-approved', 'tell-reviewers'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-auto-approved', label: 'Create Jira (Auto-Approved)', next: ['dispatch-auto-approved-to-runbook-a-b'], jira: { action: 'create', source: 'approved-drafts.json' }, runWhen: { artifact: 'approved-drafts.json' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-notifier', id: 'tell-reviewers', label: 'Tell reviewers', next: ['create-jira-escalated-after-review'], runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'workflow updates', message: '{count} drafts from the test gaps scan need a decision.' } },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-escalated-after-review', label: 'Create Jira (Escalated — After Review)', next: ['dispatch-escalated-to-runbook-a-b'], jira: { action: 'create', source: 'escalated-drafts.json' }, runWhen: { artifact: 'escalated-drafts.json' }, approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-auto-approved-to-runbook-a-b', label: 'Dispatch Auto-Approved to Runbook A/B', next: [], runWhen: { artifact: 'approved-drafts.json' }, triggerWorkflow: { source: 'approved-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-escalated-to-runbook-a-b', label: 'Dispatch Escalated to Runbook A/B', next: [], runWhen: { artifact: 'escalated-drafts.json' }, triggerWorkflow: { source: 'escalated-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-e2e-to-dispatch',
+    name: 'Scan E2E — Findings to Dispatch',
+    description: 'Scans a repository for missing end-to-end test scenarios (user flows, API integration points, error scenarios, cross-browser coverage), triages findings, auto-approves clear-cut tickets, escalates ambiguous ones, creates Jira tickets, and dispatches to Runbook A or B.',
+    icon: 'i-lucide-route',
+    parameters: [{ name: 'projectDir', description: 'The repository checkout to scan. Leave it blank on a run started by a sweep: that child works in its own workspace and clones the repo named by `repo`.' }, { name: 'repo', description: 'The repository this run was started for, as scan-registry.yaml names it (owner/name). Set by a sweep fanning out over repositories; leave blank when you are pointing the run at a checkout yourself.' }],
+    steps: [
+      { agentTemplateId: 'sdlc-scanner-e2e', id: 'e2e-coverage-scan', label: 'E2E Coverage Scan', next: ['triage-findings'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-finding-triage', id: 'triage-findings', label: 'Triage Findings', next: ['draft-tickets'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-drafter', id: 'draft-tickets', label: 'Draft Tickets', next: ['decision-gate'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-decision-gate', id: 'decision-gate', label: 'Decision Gate', next: ['create-jira-auto-approved', 'tell-reviewers'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-auto-approved', label: 'Create Jira (Auto-Approved)', next: ['dispatch-auto-approved-to-runbook-a-b'], jira: { action: 'create', source: 'approved-drafts.json' }, runWhen: { artifact: 'approved-drafts.json' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-notifier', id: 'tell-reviewers', label: 'Tell reviewers', next: ['create-jira-escalated-after-review'], runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'workflow updates', message: '{count} drafts from the e2e scan need a decision.' } },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-escalated-after-review', label: 'Create Jira (Escalated — After Review)', next: ['dispatch-escalated-to-runbook-a-b'], jira: { action: 'create', source: 'escalated-drafts.json' }, runWhen: { artifact: 'escalated-drafts.json' }, approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-auto-approved-to-runbook-a-b', label: 'Dispatch Auto-Approved to Runbook A/B', next: [], runWhen: { artifact: 'approved-drafts.json' }, triggerWorkflow: { source: 'approved-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-escalated-to-runbook-a-b', label: 'Dispatch Escalated to Runbook A/B', next: [], runWhen: { artifact: 'escalated-drafts.json' }, triggerWorkflow: { source: 'escalated-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-ui-to-dispatch',
+    name: 'Scan UI — Findings to Dispatch',
+    description: 'Scans a repository for UI bugs (accessibility WCAG 2.1 AA, responsive layout, visual consistency, interactive elements, console errors), triages findings, auto-approves clear-cut tickets, escalates ambiguous ones, creates Jira tickets, and dispatches to Runbook A or B.',
+    icon: 'i-lucide-layout-dashboard',
+    parameters: [{ name: 'projectDir', description: 'The repository checkout to scan. Leave it blank on a run started by a sweep: that child works in its own workspace and clones the repo named by `repo`.' }, { name: 'repo', description: 'The repository this run was started for, as scan-registry.yaml names it (owner/name). Set by a sweep fanning out over repositories; leave blank when you are pointing the run at a checkout yourself.' }],
+    steps: [
+      { agentTemplateId: 'sdlc-scanner-ui', id: 'ui-bug-scan', label: 'UI Bug Scan', next: ['triage-findings'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-finding-triage', id: 'triage-findings', label: 'Triage Findings', next: ['draft-tickets'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-drafter', id: 'draft-tickets', label: 'Draft Tickets', next: ['decision-gate'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-decision-gate', id: 'decision-gate', label: 'Decision Gate', next: ['create-jira-auto-approved', 'tell-reviewers'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-auto-approved', label: 'Create Jira (Auto-Approved)', next: ['dispatch-auto-approved-to-runbook-a-b'], jira: { action: 'create', source: 'approved-drafts.json' }, runWhen: { artifact: 'approved-drafts.json' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-notifier', id: 'tell-reviewers', label: 'Tell reviewers', next: ['create-jira-escalated-after-review'], runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'workflow updates', message: '{count} drafts from the ui scan need a decision.' } },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-escalated-after-review', label: 'Create Jira (Escalated — After Review)', next: ['dispatch-escalated-to-runbook-a-b'], jira: { action: 'create', source: 'escalated-drafts.json' }, runWhen: { artifact: 'escalated-drafts.json' }, approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-auto-approved-to-runbook-a-b', label: 'Dispatch Auto-Approved to Runbook A/B', next: [], runWhen: { artifact: 'approved-drafts.json' }, triggerWorkflow: { source: 'approved-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-escalated-to-runbook-a-b', label: 'Dispatch Escalated to Runbook A/B', next: [], runWhen: { artifact: 'escalated-drafts.json' }, triggerWorkflow: { source: 'escalated-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-performance-to-dispatch',
+    name: 'Scan Performance — Findings to Dispatch',
+    description: 'Scans a repository for performance issues (N+1 queries, algorithmic complexity, memory/resource patterns, frontend performance, config/infra), triages findings, auto-approves clear-cut tickets, escalates ambiguous ones, creates Jira tickets, and dispatches to Runbook A or B.',
+    icon: 'i-lucide-gauge',
+    parameters: [{ name: 'projectDir', description: 'The repository checkout to scan. Leave it blank on a run started by a sweep: that child works in its own workspace and clones the repo named by `repo`.' }, { name: 'repo', description: 'The repository this run was started for, as scan-registry.yaml names it (owner/name). Set by a sweep fanning out over repositories; leave blank when you are pointing the run at a checkout yourself.' }],
+    steps: [
+      { agentTemplateId: 'sdlc-scanner-performance', id: 'performance-scan', label: 'Performance Scan', next: ['triage-findings'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-finding-triage', id: 'triage-findings', label: 'Triage Findings', next: ['draft-tickets'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ticket-drafter', id: 'draft-tickets', label: 'Draft Tickets', next: ['decision-gate'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-decision-gate', id: 'decision-gate', label: 'Decision Gate', next: ['create-jira-auto-approved', 'tell-reviewers'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-auto-approved', label: 'Create Jira (Auto-Approved)', next: ['dispatch-auto-approved-to-runbook-a-b'], jira: { action: 'create', source: 'approved-drafts.json' }, runWhen: { artifact: 'approved-drafts.json' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-notifier', id: 'tell-reviewers', label: 'Tell reviewers', next: ['create-jira-escalated-after-review'], runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'workflow updates', message: '{count} drafts from the performance scan need a decision.' } },
+      { agentTemplateId: 'sdlc-jira-creator', id: 'create-jira-escalated-after-review', label: 'Create Jira (Escalated — After Review)', next: ['dispatch-escalated-to-runbook-a-b'], jira: { action: 'create', source: 'escalated-drafts.json' }, runWhen: { artifact: 'escalated-drafts.json' }, approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-auto-approved-to-runbook-a-b', label: 'Dispatch Auto-Approved to Runbook A/B', next: [], runWhen: { artifact: 'approved-drafts.json' }, triggerWorkflow: { source: 'approved-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'dispatch-escalated-to-runbook-a-b', label: 'Dispatch Escalated to Runbook A/B', next: [], runWhen: { artifact: 'escalated-drafts.json' }, triggerWorkflow: { source: 'escalated-drafts.json', routeBy: 'work_type', routes: { bug: 'runbook-a-ticket-to-evidence-backed-pr', security: 'runbook-a-ticket-to-evidence-backed-pr', infra: 'runbook-a-ticket-to-evidence-backed-pr', feature: 'runbook-b-feature-request-to-evidence-backed-pr', change_request: 'runbook-b-feature-request-to-evidence-backed-pr' } }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'scan-sweep-security',
+    name: 'Scan Sweep — Security Across Repos',
+    description: 'Type one repository per line: starts one security scan pipeline per repo, waits for all of them, and reports what the batch produced. Point it at another scan type by changing the target workflow on its dispatch step.',
+    icon: 'i-lucide-radar',
+    parameters: [{ name: 'repos', description: 'One repository per line, as scan-registry.yaml names them (owner/name). Each line becomes one child run with its own workspace and its own budget.', required: true }],
+    steps: [
+      { agentTemplateId: 'sdlc-auto-dispatcher', id: 'one-security-scan-per-repo', label: 'One security scan per repo', next: ['report-the-sweep'], triggerWorkflow: { fromParameter: 'repos', itemParameter: 'repo', slug: 'scan-security-to-dispatch', join: true } },
+      { agentTemplateId: 'sdlc-notifier', id: 'report-the-sweep', label: 'Report the sweep', next: [], runWhen: { artifact: 'children.json' }, notify: { channel: 'workflow updates', message: '{count} repository scans finished.' } },
     ],
   },
 ]

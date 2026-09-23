@@ -50,7 +50,12 @@ assert.equal(s.pluginVersion, '0.1.0')
 assert.ok(s.agents.length >= 8 && s.agents.every(a => a.state === 'missing'), 'a fresh directory misses every team agent')
 assert.deepEqual(s.skills, [{ name: 'intent-template', state: 'missing' }])
 assert.equal(s.workflow.state, 'missing'); assert.ok(s.workflow.steps >= 8)
-assert.deepEqual(s.workflows.map(w => [w.slug, w.state]), [['runbook-a-ticket-to-evidence-backed-pr', 'missing'], ['runbook-c-ce-ticket-to-qa-proven-pr', 'missing']], 'every shipped runbook is a team item')
+{
+  const { RUNBOOK_FILES } = await import('../app/utils/workflowTemplates.ts')
+  assert.deepEqual(s.workflows.map(w => [w.slug, w.state]), Object.values(RUNBOOK_FILES).map(slug => [slug, 'missing']), 'every shipped runbook is a team item')
+  assert.ok(s.workflows.some(w => w.slug === 'runbook-b-feature-request-to-evidence-backed-pr'), 'Runbook B ships too, since the scan dispatchers route features to it')
+  assert.ok(s.workflows.some(w => w.slug === 'scan-security-to-dispatch') && s.workflows.some(w => w.slug === 'scan-sweep-security'), 'and the scan pipelines')
+}
 assert.equal(s.registry.ok, true); assert.equal(s.registry.products, 1)
 assert.ok(s.drifted > 8)
 
@@ -222,6 +227,34 @@ rmSync(bare, { recursive: true, force: true })
   const after = JSON.parse(readFileSync(wfPath, 'utf8'))
   assert.deepEqual(after.steps[0].position, { x: 40, y: 80 }, 'apply keeps the layout')
   assert.notEqual(after.steps[1].label, 'renamed locally', 'and restores the team label')
+
+  // A scan workflow carries parameters, which ship with it, and names a
+  // group, channel and checkout, which are this instance's and must survive.
+  const scanPath = join(process.env.CLAUDE_DIR, 'workflows', 'scan-security-to-dispatch.json')
+  const scan = JSON.parse(readFileSync(scanPath, 'utf8'))
+  assert.deepEqual(scan.parameters.map(p => p.name), ['projectDir', 'repo'], 'workflow parameters are seeded')
+  Object.assign(scan, { group: 'scans', notifyChannel: 'ops', workingDir: '/checkouts/crm' })
+  scan.steps[0].label = 'renamed locally'
+  writeFileSync(scanPath, JSON.stringify(scan, null, 2))
+  s = await T.teamStatus()
+  assert.equal(s.workflows.find(w => w.slug === 'scan-security-to-dispatch').state, 'drifted')
+  s = await T.teamSync()
+  const scanAfter = JSON.parse(readFileSync(scanPath, 'utf8'))
+  assert.notEqual(scanAfter.steps[0].label, 'renamed locally', 'the team steps are restored')
+  assert.deepEqual([scanAfter.group, scanAfter.notifyChannel, scanAfter.workingDir], ['scans', 'ops', '/checkouts/crm'], 'the instance settings are kept')
+  assert.equal(s.workflows.find(w => w.slug === 'scan-security-to-dispatch').state, 'ok', 'and do not read as drift')
+  delete scanAfter.parameters
+  writeFileSync(scanPath, JSON.stringify(scanAfter, null, 2))
+  s = await T.teamStatus()
+  assert.equal(s.workflows.find(w => w.slug === 'scan-security-to-dispatch').state, 'drifted', 'a dropped parameter is drift')
+  s = await T.teamSync()
+
+  // The scan registry is copied once and is the instance's thereafter.
+  const scanRegistry = join(process.env.CLAUDE_DIR, 'scan-registry.yaml')
+  assert.ok(readFileSync(scanRegistry, 'utf8').includes('scan_types:'), 'the scan registry is seeded')
+  writeFileSync(scanRegistry, 'repositories: [local]\n')
+  await T.teamSync()
+  assert.equal(readFileSync(scanRegistry, 'utf8'), 'repositories: [local]\n', 'and a local edit is never overwritten')
 
   writeFileSync(join(process.env.CLAUDE_DIR, 'agents', 'sdlc-verifier.md'), 'edited locally')
   writeFileSync(join(process.env.CLAUDE_DIR, 'agents', 'sdlc-test-author.md'), 'also edited')

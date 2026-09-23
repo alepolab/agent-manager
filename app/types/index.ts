@@ -283,7 +283,7 @@ export interface WorkflowStep {
    */
   contextMode?: 'predecessors' | 'ancestors'
   /** Present on a step the runner executes itself, without a model: move the ticket, post the outcome comment, or both. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string }
   /**
    * This step writes tests and code together, so the plugin's test lock (armed the
    * moment source is edited) must not block it: the runner writes the unlock file
