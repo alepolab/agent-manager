@@ -40,7 +40,8 @@ watch(() => props.open, (val) => {
 </script>
 
 <template>
-  <UModal :open="open" @update:open="emit('update:open', $event)">
+  <UModal :open="open" title="Run workflow"
+      description="Pick the inputs this run starts with, then start it." @update:open="emit('update:open', $event)">
     <template #content>
       <div class="p-6 space-y-4 bg-overlay">
         <h3 class="text-page-title">Run Workflow</h3>

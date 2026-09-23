@@ -18,6 +18,19 @@ const raw = ref('')
 const loading = ref(false)
 const mode = ref<'rendered' | 'raw'>('rendered')
 const wrap = ref(true)
+/**
+ * Read the evidence full screen.
+ *
+ * Escape leaves, because a fixed overlay with no keyboard exit is a trap — and
+ * it is cleared when the file changes so a reader is never left full screen
+ * looking at something they did not choose.
+ */
+const fullscreen = ref(false)
+if (import.meta.client) {
+  const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape' && fullscreen.value) fullscreen.value = false }
+  onMounted(() => document.addEventListener('keydown', onEsc))
+  onUnmounted(() => document.removeEventListener('keydown', onEsc))
+}
 const search = ref('')
 const rendered = ref('')
 const copied = ref(false)
@@ -33,11 +46,43 @@ async function refresh() {
   try {
     files.value = await $fetch<{ name: string, size: number }[]>(`/api/runs/${props.runId}/artifacts`)
     listError.value = null
+    await loadIndex()
+    // Open the one that matters, rather than "Pick a file on the left".
+    //
+    // This pane already knows the answer: artifacts.json labels every file
+    // with a kind, and KIND_ORDER puts `summary` first precisely because that
+    // is the reviewer's order of work. Making the human choose from forty to
+    // two hundred filenames anyway is what turns evidence into "long
+    // scattered artifacts" — under time pressure a reviewer opens the first
+    // PLAUSIBLE name, not the right one.
+    if (!selected.value) {
+      const first = firstWorthReading()
+      if (first) await open(first)
+    }
   } catch (e: any) {
     files.value = []
     listError.value = e?.data?.message || e?.message || 'Could not load the evidence list'
   }
 }
+/**
+ * The file a reviewer should land on: the summary, else the plan, else
+ * whatever sorts first by the order they work in. `artifacts.json` itself is
+ * never it — it is the index, not evidence.
+ */
+function firstWorthReading(): string | null {
+  const readable = files.value.filter(f => f.name !== 'artifacts.json')
+  if (!readable.length) return null
+  for (const kind of ['summary', 'plan']) {
+    const hit = readable.find(f => index.value[f.name]?.kind === kind)
+    if (hit) return hit.name
+  }
+  // No index (a run predating it) or no summary: fall back to the kind order
+  // rather than to alphabetical, which would open `adversarial.md` first.
+  const ranked = [...readable].sort((a, b) =>
+    KIND_ORDER.indexOf(index.value[a.name]?.kind ?? 'other') - KIND_ORDER.indexOf(index.value[b.name]?.kind ?? 'other'))
+  return ranked[0]?.name ?? null
+}
+
 const ext = (name: string) => name.slice(name.lastIndexOf('.') + 1).toLowerCase()
 /** Evidence a reviewer looks at rather than reads. Fetching one as text produced
  *  mojibake and the console highlighted it as source; a QA run's four
@@ -178,9 +223,66 @@ function shortName(path: string): string {
   return `${name.slice(0, MAX - tail - 1)}…${name.slice(-tail)}`
 }
 
+/**
+ * What each file IS, from the run's own `artifacts.json` (artifactIndex.ts).
+ * Without it this list is 200+ one-off names under a single `.` heading, which
+ * is how a reviewer ends up opening files at random to find the oracle. Absent
+ * for a run that predates the index — the directory grouping below is the
+ * fallback, unchanged.
+ */
+const index = ref<Record<string, { kind: string, step?: string, ticket?: string }>>({})
+async function loadIndex() {
+  try {
+    const rows = JSON.parse(await $fetch<string>(fileUrl('artifacts.json'), { responseType: 'text' }))
+    const map: Record<string, { kind: string, step?: string, ticket?: string }> = {}
+    for (const r of rows) if (r?.name && r?.kind) map[r.name] = { kind: r.kind, step: r.step, ticket: r.ticket }
+    index.value = map
+  } catch { index.value = {} }
+}
+
+const KIND_LABEL: Record<string, string> = {
+  'summary': 'Summary', 'plan': 'Plan', 'decision': 'Decisions', 'contract': 'Contracts',
+  'oracle': 'Oracle', 'test-red': 'Failing tests', 'test-green': 'Passing tests', 'qa': 'QA',
+  'review': 'Reviews', 'deploy': 'Deployment', 'pr': 'Pull request', 'docs': 'Docs',
+  'evidence': 'Investigation', 'patch': 'Patches', 'media': 'Screens & traces',
+  'result': 'Agent reports', 'script': 'Scripts', 'log': 'Logs', 'other': 'Other',
+}
+/** The order a reviewer works in: what was decided, what proved it, what shipped. */
+const KIND_ORDER = ['summary', 'plan', 'decision', 'contract', 'oracle', 'test-red', 'test-green', 'qa', 'review', 'evidence', 'patch', 'media', 'result', 'deploy', 'pr', 'docs', 'script', 'log', 'other']
+
+const kindFilter = ref<string | null>(null)
+const fileSearch = ref('')
+const hasIndex = computed(() => Object.keys(index.value).length > 0)
+
+const visible = computed(() => {
+  const q = fileSearch.value.trim().toLowerCase()
+  return files.value.filter(f =>
+    // The index is not evidence. It was listed under "Other" in the very list
+    // it exists to organise — noise in every bundle.
+    f.name !== 'artifacts.json'
+    && (!kindFilter.value || index.value[f.name]?.kind === kindFilter.value)
+    && (!q || f.name.toLowerCase().includes(q)),
+  )
+})
+
+/** Counts for the filter row, from every file — not from the filtered view, or
+ *  choosing one kind would erase the evidence that the others exist. */
+const kindCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const f of files.value) {
+    const k = index.value[f.name]?.kind
+    if (k) counts[k] = (counts[k] ?? 0) + 1
+  }
+  return KIND_ORDER.filter(k => counts[k]).map(k => ({ kind: k, label: KIND_LABEL[k] ?? k, n: counts[k]! }))
+})
+
 const groups = computed(() => {
   const g: Record<string, { name: string, size: number }[]> = {}
-  for (const f of files.value) { const dir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '.'; (g[dir] ??= []).push(f) }
+  if (hasIndex.value) {
+    for (const f of visible.value) (g[index.value[f.name]?.kind ?? 'other'] ??= []).push(f)
+    return KIND_ORDER.filter(k => g[k]?.length).map(k => [KIND_LABEL[k] ?? k, g[k]!] as [string, typeof files.value])
+  }
+  for (const f of visible.value) { const dir = f.name.includes('/') ? f.name.slice(0, f.name.lastIndexOf('/')) : '.'; (g[dir] ??= []).push(f) }
   return Object.entries(g).sort(([a], [b]) => a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b))
 })
 const size = (n: number) => n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`
@@ -214,16 +316,40 @@ defineExpose({ refresh })
         <button class="underline focus-ring" style="color: var(--error);" @click="refresh">Try again</button>
       </div>
       <p v-else-if="!files.length" class="text-label">Nothing written yet.</p>
+      <!-- Categorisation and search over the bundle. A run leaves 40-200 files
+           with names invented per run, and until this row existed the only way
+           to find the oracle among them was to recognise its filename. -->
+      <template v-if="files.length">
+        <input v-model="fileSearch" class="field-input t-small py-0.5 w-full" placeholder="Filter files by name" aria-label="Filter evidence files by name">
+        <div v-if="kindCounts.length" class="flex flex-wrap gap-1">
+          <button
+            class="px-1.5 py-0.5 rounded t-small focus-ring"
+            :style="{ background: kindFilter === null ? 'var(--accent-muted)' : 'transparent', border: '1px solid var(--border-subtle)' }"
+            @click="kindFilter = null"
+          >All {{ files.length }}</button>
+          <button
+            v-for="k in kindCounts" :key="k.kind"
+            class="px-1.5 py-0.5 rounded t-small focus-ring"
+            :style="{ background: kindFilter === k.kind ? 'var(--accent-muted)' : 'transparent', border: '1px solid var(--border-subtle)' }"
+            @click="kindFilter = kindFilter === k.kind ? null : k.kind"
+          >{{ k.label }} {{ k.n }}</button>
+        </div>
+        <p v-if="!visible.length" class="text-label">No file matches.</p>
+      </template>
       <div v-for="[dir, list] in groups" :key="dir">
-        <div v-if="dir !== '.'" class="font-mono t-small text-label mt-1">{{ dir }}/</div>
+        <div v-if="dir !== '.'" class="t-small text-label mt-1" :class="hasIndex ? 'text-section-label' : 'font-mono'">{{ hasIndex ? dir : `${dir}/` }}</div>
         <button v-for="f in list" :key="f.name" class="w-full flex items-center gap-2 px-2 py-1 rounded text-left focus-ring" :style="{ background: selected === f.name ? 'var(--accent-muted)' : 'transparent', color: selected === f.name ? 'var(--text-primary)' : 'var(--text-secondary)' }" @click="open(f.name)">
-          <span class="font-mono truncate" :title="f.name">{{ shortName(f.name) }}</span>
+          <span class="font-mono truncate" :title="index[f.name]?.step ? `${f.name} — written during: ${index[f.name]!.step}` : f.name">{{ shortName(f.name) }}</span>
           <span class="ml-auto text-label whitespace-nowrap">{{ size(f.size) }}</span>
         </button>
       </div>
     </div>
 
-    <div class="min-h-0 flex flex-col rounded-lg" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <div
+      class="min-h-0 flex flex-col rounded-lg"
+      :class="fullscreen ? 'fixed inset-0 z-50 rounded-none' : ''"
+      style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+    >
       <div class="px-3 py-1.5 t-small flex items-center gap-2 flex-wrap" style="border-bottom: 1px solid var(--border-subtle);">
         <span class="font-mono truncate max-w-[40%]" :title="selected ?? ''">{{ selected ?? 'Select a file' }}</span>
         <template v-if="selected">
@@ -235,6 +361,15 @@ defineExpose({ refresh })
           <label class="flex items-center gap-1 text-label"><input v-model="wrap" type="checkbox" /> wrap</label>
           <button class="text-label underline" @click="copy">{{ copied ? 'Copied' : 'Copy' }}</button>
           <a :href="`/api/runs/${runId}/artifacts/${selected.split('/').map(encodeURIComponent).join('/')}`" target="_blank" rel="noopener" class="underline text-label">Open raw</a>
+          <!-- The viewer is a pane inside a page inside a panel, so a summary
+               or a test report is read through a letterbox. Reading the
+               evidence IS the reviewer's job; it should get the screen. -->
+          <button
+            class="ml-auto underline text-label focus-ring"
+            :aria-pressed="fullscreen"
+            :title="fullscreen ? 'Back to the run page (Esc)' : 'Read this full screen'"
+            @click="fullscreen = !fullscreen"
+          >{{ fullscreen ? 'Exit full screen' : 'Full screen' }}</button>
         </template>
       </div>
 

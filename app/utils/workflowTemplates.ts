@@ -1,5 +1,7 @@
 import type { WorkflowStep } from '~/types'
 import type { Role } from '~~/shared/types/role'
+import type { GateKind } from '~~/shared/utils/oversight'
+import type { EdgeCondition } from '~~/shared/utils/workflowGraph'
 
 export interface WorkflowTemplateStep {
   agentTemplateId: string
@@ -9,15 +11,19 @@ export interface WorkflowTemplateStep {
    * Absent means "the next step in array order", which is how every template
    * behaved before graphs were expressible here.
    */
-  next?: string[]
+  next?: (string | { to: string, when?: EdgeCondition })[]
   /** `agentTemplateId` of the agent that reviews this step's output. */
   monitorSlug?: string
   /** How many times this step may run in one execution. */
   maxVisits?: number
   /** See WorkflowStep.approval. */
   approval?: boolean
+  /** The runner enforces this step's stated Review Result; see parseReviewVerdict. */
+  verdict?: boolean
   /** See WorkflowStep.gateRole. */
   gateRole?: Role
+  /** See WorkflowStep.gateKind. Raises the oversight floor for story/spec/security gates. */
+  gateKind?: GateKind
   /** See WorkflowStep.ownerRole. Whose work the step is; grants nothing. */
   ownerRole?: Role
   /** See WorkflowStep.pr. The runner pushes the branch and opens the PR. */
@@ -32,6 +38,10 @@ export interface WorkflowTemplateStep {
   testsUnlocked?: boolean
   /** Hand this step the review its pull request collected. See WorkflowStep.reviewComments. */
   reviewComments?: boolean
+  /** Bring the product's stack up before this step. See WorkflowStep.stack. */
+  stack?: 'up'
+  /** Drive deploy.sh for this step. See WorkflowStep.deploy. */
+  deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }
 }
 
 export interface WorkflowTemplate {
@@ -89,10 +99,18 @@ export function materializeTemplateSteps(
       agentSlug: agentSlugByTemplateId[step.agentTemplateId]!,
       label: step.label,
       ...(step.approval ? { approval: true } : {}),
+      // A review step's stated verdict is enforced by the runner. Carried like
+      // the flags below: dropping it here would disarm the gate silently, which
+      // is how a `FAIL` came to ship five runs in a row.
+      ...(step.verdict ? { verdict: true } : {}),
       // Only meaningful alongside `approval`, but carried whenever the template
       // sets it: a step that declares whose gate it is should not silently lose
       // that when someone later toggles `approval` back on.
       ...(step.gateRole ? { gateRole: step.gateRole } : {}),
+      // In this whitelist for the reason the comment below gives: a story or
+      // security gate that loses its kind here silently reverts to blast-radius
+      // tiering, which for a `docs`-class change means it never fires at all.
+      ...(step.gateKind ? { gateKind: step.gateKind } : {}),
       // Carried for the same reason gateRole is: a step that declares whose
       // work it is must not lose that on the way to the workflow the runner
       // reads. A field missing from this whitelist is dropped in silence -
@@ -101,9 +119,19 @@ export function materializeTemplateSteps(
       ...(step.ownerRole ? { ownerRole: step.ownerRole } : {}),
     }
     if (step.next) {
+      // A conditional edge names its target by agentTemplateId exactly as a
+      // bare one does; only the `when` rides along. Translating the target and
+      // dropping the condition would silently turn a branch back into an
+      // unconditional fan-out, which is the failure this whole whitelist is
+      // written to prevent.
       const resolved = step.next
-        .map(target => stepIdByTemplateId[target])
-        .filter((id): id is string => id !== undefined)
+        .map((target) => {
+          const to = typeof target === 'string' ? target : target.to
+          const id = stepIdByTemplateId[to]
+          if (id === undefined) return undefined
+          return typeof target === 'string' || !target.when ? id : { to: id, when: target.when }
+        })
+        .filter((e): e is string | { to: string, when: EdgeCondition } => e !== undefined)
 
       // If every declared target was filtered out, this step's `next` becoming `[]`
       // would silently truncate the workflow here (buildGraph treats an explicit
@@ -131,6 +159,8 @@ export function materializeTemplateSteps(
     // A field missing from this whitelist is dropped in silence - which is how
     // jira.after once lived in the template and was absent from the seeded JSON.
     if (step.reviewComments) materialized.reviewComments = true
+    if (step.stack) materialized.stack = step.stack
+    if (step.deploy) materialized.deploy = step.deploy
     if (step.testsUnlocked) materialized.testsUnlocked = true
     if (step.continuesSession) materialized.continuesSession = true
     return materialized
@@ -170,6 +200,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'debug-investigator',
         label: 'Reproduce & Failing Test',
         next: ['pm-planner'],
+        // A defect is reproduced against the product RUNNING, so this step gets
+        // the stack - stood up by the runner from the infra repo's published
+        // contract, the same way every other workflow gets one, and never by an
+        // agent improvising a compose command. A run whose product registers no
+        // stack is told so and works without one; nothing is invented for it.
+        stack: 'up',
         // This step owns the tests, and only this step: it writes the failing
         // regression test that proves the defect, and the test-lock guardrail
         // then freezes tests for every step after it. Unlocking the implementer
@@ -214,6 +250,11 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'qa-reviewer',
         label: 'Verify',
+        // Its stated Review Result is enforced by the runner, like the csup
+        // Verify step: SBN-4091's verification found "the branch the PR step
+        // would push contains only failing tests and zero production code" and
+        // the run carried on to Refine and Docs regardless.
+        verdict: true,
         next: ['refactor-engineer'],
         contextMode: 'ancestors',
         approval: true,
@@ -341,6 +382,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
         // the lock is enforced by reading the diff, not by the unlock file.
         testsUnlocked: true,
         monitorSlug: 'qa-reviewer',
+        // A defect is reproduced against a running product, and this is the step
+        // that reproduces it. The runner brings the stack up from the infra
+        // repo's own compose file and takes it down when the run settles, so the
+        // agent never has to work out which profile to start or remember to
+        // clean up - see server/utils/stackRecipe.ts.
+        stack: 'up',
       },
       // 4. GATE 1 of 3 - the plan. Joins both collect lanes and reads their
       // evidence. The DEVELOPER answers: it is their scope and their next step.
@@ -394,6 +441,10 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'qa-reviewer',
         label: 'Verify, Security & Regression',
         ownerRole: 'qa',
+        // Its FAIL is the gate. Five runs opened a pull request over exactly
+        // this step's "Review Result: FAIL"; the approval flag below only ever
+        // asked a PERSON, and a run classified `auto` asks nobody.
+        verdict: true,
         next: ['docs-curator'],
         contextMode: 'ancestors',
         approval: true,
@@ -402,6 +453,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
       {
         agentTemplateId: 'db-engineer',
         label: 'Data & Migration Review',
+        // CSUP-7514's data review reported "Two hard blockers I could not
+        // clear" and the run shipped regardless. Enforced now that
+        // `db-engineer` carries the same `## Review Result:` output contract
+        // `qa-reviewer` does — a step must not be held to a format its agent
+        // never declares, which is why the two landed together.
+        verdict: true,
         // Schema and migration cost lands on other teams and on future runs,
         // which is the architect's business even though no gate fires here yet.
         ownerRole: 'architect',
@@ -460,6 +517,247 @@ export const workflowTemplates: WorkflowTemplate[] = [
         approval: true,
         gateRole: 'developer',
         maxVisits: 3,
+      },
+    ],
+  },
+  {
+    id: 'oma-sdlc-jira-to-pr',
+    name: 'SDLC: Jira to PR (full lifecycle)',
+    description: 'Every phase from ticket to opened pull request: story enrichment and readiness, scenario and spec, backend and UI architecture, stack, baselines, build, the full test matrix, and a multi-persona blind review round.',
+    icon: 'i-lucide-route',
+    // The full-lifecycle template. Three things distinguish it from the two
+    // above, and each closes a gap the SDLC surface audit named:
+    //
+    //  1. It has a FRONT. Story enrichment, readiness and spec run before any
+    //     implementation step, so a feature ticket has a checkable definition
+    //     of done. Without this the pipeline is bug-shaped and a story with no
+    //     reproducible failure has nothing for it to prove.
+    //  2. Its gates declare `gateKind`. A story, spec or security gate cannot
+    //     be tiered by blast radius - see shared/utils/oversight.ts - so these
+    //     carry a floor and fire even on a `docs`-class change. Every other
+    //     gate tiers exactly as before.
+    //  3. The review round is MULTI-PERSONA and runs in parallel. Security, UI
+    //     architecture and end-user personas are separate lanes that join at
+    //     VERIFY, so each lens forms its finding without seeing the others'.
+    //
+    // The environment stage drives BOTH orchestration surfaces the estate has:
+    // the product's compose stack locally, and the infra repo's own ansible
+    // entrypoint against dev. `deploy.sh --step deploy --env dev` brings the
+    // dev environment to its declared state and is followed - by the runner,
+    // not by an agent - with the script's own `status` read, so a later step
+    // tests against a verified environment rather than an assumed one. dev is
+    // the only environment that runs unattended, which is the infra repo's own
+    // published rule; staging and prod stop at a gate in deployStep.ts before
+    // a single argument is assembled.
+    //
+    // What a dev deploy here IS: the environment brought to its declared image
+    // tags. What it is NOT: this run's branch - that is not built until CI
+    // builds it, and a step claiming otherwise would be claiming to test code
+    // that was never deployed.
+    //
+    // STILL NOT WIRED, deliberately: release and rollback. A run is a budgeted,
+    // container-owning process and a release is a calendar event spanning many
+    // tickets; holding a run open across one deadlocks the CI poller (which
+    // only inspects settled runs) and defers every teardown hung off a terminal
+    // status. Those phases belong to a separate, ticket-scoped record keyed by
+    // merged sha.
+    steps: [
+      // ---- Stage 1: intake and understanding -------------------------------
+      // Every agentTemplateId appears exactly ONCE in this template. The
+      // materializer resolves `next` by agentTemplateId and documents that a
+      // repeat makes the last step win as the translation target - so a
+      // template naming `qa-reviewer` for both spec and verify would silently
+      // route the spec step's predecessors at the verify step. Intake and
+      // classification therefore sit with the business analyst, who is already
+      // reading the ticket, and planning owns scenarios.
+      {
+        agentTemplateId: 'business-analyst',
+        label: 'Intake, Classification, Enrichment & Readiness',
+        ownerRole: 'developer',
+        next: ['research-explorer', 'pm-planner'],
+        jira: { transition: 'In Progress' },
+        // The first floored gate. A story that cannot be made ready goes back
+        // to a person rather than becoming an agent's guess, and "is this the
+        // right thing to build" is a question no blast radius can answer.
+        approval: true,
+        gateRole: 'product-owner',
+        gateKind: 'story',
+      },
+      {
+        agentTemplateId: 'research-explorer',
+        label: 'Prior Art & Duplicate Search',
+        next: ['pm-planner'],
+      },
+
+      // ---- Stage 2: specification -------------------------------------------
+      {
+        agentTemplateId: 'pm-planner',
+        label: 'Scenarios, Acceptance Rows & Test Strategy',
+        next: ['architecture-reviewer', 'ui-architect'],
+        contextMode: 'ancestors',
+        // Positive, negative and boundary scenarios, each bound to a runnable
+        // case, plus which test class proves which row. Floored for the same
+        // reason as the story gate, and asked of the product owner because the
+        // question is "do these rows, all passing, mean the ticket is done".
+        approval: true,
+        gateRole: 'product-owner',
+        gateKind: 'spec',
+        testsUnlocked: true,
+      },
+
+      // ---- Stage 3: design ---------------------------------------------------
+      {
+        agentTemplateId: 'architecture-reviewer',
+        label: 'Backend Architecture & Impact',
+        next: ['tf-infra-engineer'],
+        contextMode: 'ancestors',
+        approval: true,
+        gateRole: 'architect',
+        gateKind: 'design',
+      },
+      {
+        agentTemplateId: 'ui-architect',
+        label: 'UI Architecture & Design-System Review',
+        next: ['tf-infra-engineer'],
+        contextMode: 'ancestors',
+      },
+
+      // ---- Stage 4-5: environment and baselines ------------------------------
+      {
+        agentTemplateId: 'tf-infra-engineer',
+        label: 'Stack Up, Dev Deploy & Environment Verification',
+        next: ['debug-investigator'],
+        stack: 'up',
+        // No `app`: the runner passes the run's own product, and deployStep.ts
+        // refuses an app the infra checkout has no ansible role for. Naming one
+        // here would deploy that product for every ticket, whatever the run is
+        // about - which is exactly the failure deploy.sh's own crm default has.
+        deploy: { env: 'dev', step: 'deploy' },
+        contextMode: 'ancestors',
+      },
+      {
+        agentTemplateId: 'debug-investigator',
+        label: 'Failing Oracle & Visual Baseline',
+        next: ['backend-engineer', 'frontend-engineer'],
+        // Owns the oracle; every later step is locked out of it. The visual
+        // baseline is captured here for the same reason the oracle is: a
+        // comparison with no before is a screenshot, not a verification.
+        testsUnlocked: true,
+        contextMode: 'ancestors',
+      },
+
+      // ---- Stage 6: build ----------------------------------------------------
+      {
+        agentTemplateId: 'backend-engineer',
+        label: 'Implement Backend',
+        ownerRole: 'developer',
+        next: ['db-engineer'],
+        monitorSlug: 'refactor-engineer',
+        maxVisits: 3,
+      },
+      {
+        agentTemplateId: 'frontend-engineer',
+        label: 'Implement Frontend',
+        ownerRole: 'developer',
+        next: ['visual-qa'],
+        monitorSlug: 'refactor-engineer',
+        maxVisits: 3,
+      },
+      {
+        agentTemplateId: 'db-engineer',
+        label: 'Schema & Migration',
+        next: ['security-reviewer'],
+        contextMode: 'ancestors',
+      },
+
+      // ---- Stage 7-8: test matrix and the blind review round -----------------
+      // Four lanes, joined at VERIFY. They run in parallel so no lens sees
+      // another's finding before forming its own.
+      {
+        agentTemplateId: 'visual-qa',
+        label: 'UI, Visual & Accessibility Testing',
+        next: ['persona-reviewer'],
+        // `ancestors`, not `predecessors`: this step's address to open comes
+        // from the environment stage, which is not its immediate predecessor.
+        // With `predecessors` it saw the frontend implementation and nothing
+        // about the stack that implementation has to be viewed on - a visual
+        // check with no URL can only ever report NOT VERIFIED.
+        contextMode: 'ancestors',
+      },
+      {
+        agentTemplateId: 'security-reviewer',
+        label: 'Security Review & Security Testing',
+        next: ['qa-reviewer'],
+        contextMode: 'ancestors',
+        // Threshold-routed rather than tiered: an authz, crypto, personal-data,
+        // payment or dependency change reaches security however small its
+        // blast radius, and the approval carries a written reason.
+        approval: true,
+        gateRole: 'security',
+        gateKind: 'security',
+      },
+      {
+        agentTemplateId: 'persona-reviewer',
+        label: 'End-User Persona Reviews',
+        next: ['qa-reviewer'],
+        contextMode: 'predecessors',
+      },
+
+      // ---- Verify, escalate, ship --------------------------------------------
+      {
+        agentTemplateId: 'qa-reviewer',
+        label: 'Verify: Unit, Integration, Negative & Regression',
+        // The first conditional branch in a shipped template, and the reason
+        // conditional edges exist. A verdict step that FAILs used to end the
+        // run: correct when a refusal has nowhere to go, wasteful when the
+        // step that can fix it is right there. On FAIL the work goes back to
+        // the backend implementation, bounded by that step's maxVisits; on
+        // PASS it carries on. Only one arm is ever taken, and the arm not
+        // taken is skipped rather than left pending, so nothing downstream
+        // waits on a step that will not run.
+        next: [
+          { to: 'backend-engineer', when: 'fail' },
+          { to: 'cto-reviewer', when: 'pass' },
+        ],
+        contextMode: 'ancestors',
+        // `verdict` is what makes the branch legible: the step must open with
+        // Review Result: PASS / WARNING / FAIL, and the runner routes on it
+        // rather than on prose a regex has to guess at.
+        verdict: true,
+        // QA, and never the actor who answered the implementation gate.
+        approval: true,
+        gateRole: 'qa',
+        gateKind: 'verify',
+      },
+      {
+        agentTemplateId: 'cto-reviewer',
+        label: 'CTO Escalation (threshold only)',
+        next: ['docs-curator'],
+        contextMode: 'ancestors',
+        // Tiered, NOT floored. This must stay rare: a gate that fires on
+        // everything teaches reviewers to approve without reading, which is
+        // the failure shared/utils/oversight.ts exists to prevent. On a cheap
+        // tier it does not stop at all.
+        approval: true,
+        gateRole: 'cto',
+      },
+      {
+        agentTemplateId: 'docs-curator',
+        label: 'Docs, Evidence Bundle & Pull Request',
+        next: [],
+        contextMode: 'ancestors',
+        pr: true,
+        approval: true,
+        // `operator`, not `manager`, and not by preference: `manager` carries
+        // `answerGate: false` in shared/types/role.ts — it reads progress and
+        // changes nothing — so a gate owned by it is answerable only by an
+        // operator whose 403 would name the wrong owner. The CSUP template
+        // reached the same conclusion. Note this contradicts
+        // .agents/workflows/runbook-a/resources/phase-gates.md, which names
+        // Manager as SHIP_GATE's owner; the role model is the one that runs.
+        gateRole: 'operator',
+        gateKind: 'ship',
+        jira: { transition: 'Dev Done', comment: true, attach: true },
       },
     ],
   },

@@ -1,4 +1,5 @@
 import type { WorkflowRun, RunDecision } from '../types/run'
+import { lastKnownActivity } from './runClock.ts'
 
 /**
  * Gate decisions: recording them, and reading what they cost in human time.
@@ -43,6 +44,10 @@ export function recordDecision(
     at,
     by,
     verdict,
+    // Carried so separation of duties can ask "who answered the implementation
+    // gate on this run" without re-deriving it from a step label a template
+    // rename would invalidate.
+    ...(question.gateKind ? { gateKind: question.gateKind } : {}),
     // Clamped at zero rather than trusted: askedAt comes from the server that
     // raised the gate, and a negative wait would be a clock artefact, not a fact.
     waitedMs: Math.max(0, at - question.askedAt),
@@ -55,7 +60,11 @@ export function recordDecision(
 }
 
 /**
- * Milliseconds this run has spent waiting on people at gates, over its whole life.
+ * Milliseconds this run has spent waiting on PEOPLE, over its whole life.
+ *
+ * "At gates" was the old wording and the old behaviour, and it was too narrow:
+ * a run paused with no question is waiting on a person just as surely as one
+ * stopped at an approval.
  *
  * The figure the manager board exists to show, and the one nothing computed: a
  * run's wall clock minus `activeMs` says how long it was not executing, but not
@@ -66,6 +75,17 @@ export function humanWaitMs(run: WorkflowRun): number {
   // A gate open right now has not been decided, so it is in no decision yet;
   // its wait is still accruing, and omitting it would report the most stuck run
   // on the board as the cheapest.
-  const open = run.question ? Math.max(0, Date.now() - run.question.askedAt) : 0
+  const open = run.question
+    ? Math.max(0, Date.now() - run.question.askedAt)
+    // A run can be paused with NO question: with autoRun off the wave loop
+    // stops between waves and waits for someone to press Continue. That is a
+    // person the pipeline is waiting on, and it counted as zero — so a run
+    // sitting three days for a click scored no human time at all, and the
+    // board's one headline figure under-reported exactly the runs a cautious
+    // operator produces. The wait began at the run's last activity, which is
+    // the only timestamp a bare pause leaves behind.
+    : run.status === 'paused'
+      ? Math.max(0, Date.now() - lastKnownActivity(run))
+      : 0
   return decided + open
 }

@@ -117,14 +117,16 @@ function testServer(name: string) {
     </div>
 
     <!-- Add Server Modal -->
-    <UModal v-model:open="isAddModalOpen">
+    <UModal v-model:open="isAddModalOpen" title="Add MCP server"
+      description="Connect an MCP server by command or URL.">
       <template #content>
         <AddMcpModal @close="isAddModalOpen = false" @add="onAddServer" />
       </template>
     </UModal>
 
     <!-- Import Modal -->
-    <UModal v-model:open="showImportModal">
+    <UModal v-model:open="showImportModal" title="Import MCP config"
+      description="Paste an MCP configuration to add its servers.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay rounded-2xl border border-subtle">
           <h3 class="text-page-title">Import MCP Config</h3>

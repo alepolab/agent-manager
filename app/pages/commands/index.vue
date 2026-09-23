@@ -146,7 +146,8 @@ const filteredCount = computed(() =>
       </div>
     </div>
 
-    <UModal v-model:open="showCreateModal">
+    <UModal v-model:open="showCreateModal" title="New command"
+      description="Create a slash command. It opens for editing once saved.">
       <template #content>
         <CommandForm
           @saved="(c) => { showCreateModal = false; router.push(`/commands/${c.slug}`) }"

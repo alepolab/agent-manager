@@ -1,14 +1,14 @@
 import {
   buildGraph, initRunState, readyNodes, markRunning, markCompleted, markFailed, maxVisitsOf,
-  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseHalt, parseSkip, parseWiden, parseRework,
-  monitorPrompt, MAX_CONCURRENCY, ancestorsOf,
-  type WorkflowGraph, type RunState,
+  skipPending, isFinished, armNode, canRevisit, joinInputs, parseVerdict, parseReviewVerdict, parseHalt, parseSkip, parseWiden, parseRework, parseNotDone,
+  monitorPrompt, MAX_CONCURRENCY, ancestorsOf, edgeKey,
+  type WorkflowGraph, type RunState, type StepOutcome, type GraphEdge,
 } from '../../shared/utils/workflowGraph.ts'   // relative, not an alias: the node
                                                // test scripts import this file
                                                // directly and cannot resolve ~~/
 import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } from '../../shared/utils/runClock.ts'
 import type { Role } from '../../shared/types/role.ts'
-import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
+import { defaultBudget, absoluteUsdCeiling, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, findActiveRun, findRunInWorkspace, findRunForTicket, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
@@ -16,13 +16,21 @@ import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
-import { captureBaseline } from './gitFacts.ts'
-import { checkTestLock, headOf } from './testLock.ts'
+import { captureBaseline, workingTreeDirty, uncommittedPatch } from './gitFacts.ts'
+import { shipIntegrity, describeShipFindings, type ShipFinding } from './shipIntegrity.ts'
+import { recordCommandLine, forgetRun } from './commandLedger.ts'
+import { checkTestLock, headOf, changedPathsSince } from './testLock.ts'
+import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/utils/classification.ts'
 import { collectReviewComments } from './reviewComments.ts'
+import { resolveStackRecipe, StackError } from './stackRecipe.ts'
+import { stackUp, stackDown } from './stackLifecycle.ts'
+import { verifyStack, type StackFacts } from './stackHealth.ts'
+import { planDeploy, runDeploy, DeployError } from './deployStep.ts'
 import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane } from './workspace.ts'
+import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout, laneBranchFor, ensureLane, mergeLane, removeLane, cleanupRunWorktree } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+import { criteriaForGate } from './gateCriteria.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -32,17 +40,19 @@ import { runPreflight as realPreflight, preflightFailure, type PreflightReport, 
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, transcriptPath } from './claudeDir.ts'
-import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
+import { oversightFor, oversightForGate, oversightReason, needsJustification, gateAsks, BLAST_RADIUS_ORDER, type BlastRadius, type GateKind } from '../../shared/utils/oversight.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
-  markArtifactsUnusable,
+  markArtifactsUnusable, recordClassification,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
+import { isJiraPostingEnabled } from './jiraCredentials.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
+import { viewIssue, downloadAttachments } from './jiraTicketSource.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
 
 const log = createLogger('runner')
@@ -77,7 +87,18 @@ export function setEnvResolver(fn: EnvResolver) { envResolver = fn }
 // not yet wired. setAgentCaller() is kept so tests can still substitute a
 // stub without touching the real SDK.
 let agentCaller: AgentCaller = callAgent
-export function setAgentCaller(fn: AgentCaller) { agentCaller = fn }
+/**
+ * Substituting the caller also turns OFF light interpretation, and that is not
+ * a convenience: a run whose agents are stubbed must not reach a live model for
+ * a risk floor or a summary line. Without this, every harness in this file's
+ * suite pays a real model call per classifying step — one of them timed out at
+ * fifteen seconds waiting for exactly that. The deterministic path is what a
+ * stubbed run is FOR.
+ */
+export function setAgentCaller(fn: AgentCaller) {
+  agentCaller = fn
+  if (fn !== callAgent) process.env.AGENT_LIGHT_INTERPRET = '0'
+}
 /** Exposed for tests: the exact function reference executeNode will call next. */
 export function getAgentCaller() { return agentCaller }
 /** True unless a test has overridden the caller with setAgentCaller(). */
@@ -86,7 +107,7 @@ export function isRealAgentCallerActive() { return agentCaller === callAgent }
 interface WorkflowLike {
   slug: string
   name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, gateRole?: Role, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, continuesSession?: boolean }[]
+  steps: { id: string, agentSlug: string, label: string, next?: (string | GraphEdge)[], monitorSlug?: string, maxVisits?: number, approval?: boolean, verdict?: boolean, gateRole?: Role, gateKind?: GateKind, ownerRole?: Role, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, pr?: boolean, testsUnlocked?: boolean, reviewComments?: boolean, stack?: 'up', deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, continuesSession?: boolean }[]
 }
 
 export interface StartRunOpts {
@@ -104,6 +125,12 @@ export interface StartRunOpts {
   autoRun: boolean
   projectDir?: string
   startedBy?: string
+  /**
+   * Why this ticket is being run again although a completed run already did it.
+   * Required to start a second run on the same ticket — see findRunForTicket:
+   * CSUP-7514 was solved twice in two codebases because nothing asked.
+   */
+  rerunReason?: string
 }
 
 /** In-memory scheduling state, keyed by run id. Lost on restart — which is
@@ -201,7 +228,7 @@ async function flushLogs(runId: string): Promise<void> {
   await Promise.all(mine.map(k => logChains.get(k)?.catch(() => {})))
   for (const k of mine) logChains.delete(k)
 }
-function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
+function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string, kind?: 'text' | 'tool' | 'result') {
   const stamped = `${new Date().toISOString().slice(11, 19)} ${line}`
   const tail = (l.logs[rec.stepId] ??= [])
   tail.push(stamped)
@@ -217,6 +244,13 @@ function logLine(l: Live, run: WorkflowRun, rec: RunStep, line: string) {
   logChains.set(path, (logChains.get(path) ?? Promise.resolve())
     .then(() => appendFile(path, stamped + '\n'))
     .catch(() => {}))
+  // The same line, parsed into the record of what this run actually executed.
+  // Every tool call an agent makes already passes through here as a line
+  // carrying its command; until now that was written to a log nothing read. See
+  // commandLedger.ts for what the gates then ask of it — and note that `kind`
+  // is load-bearing: a line the AGENT typed reads exactly like a tool call, and
+  // only the block it came from tells them apart.
+  recordCommandLine(run.id, rec.stepId, line, kind, l.laneDirs[rec.stepId] ?? run.projectDir)
   for (const fn of logSubscribers.get(run.id) ?? []) {
     try { fn(rec.stepId, stamped) } catch { /* a broken listener must not stop the run */ }
   }
@@ -258,8 +292,20 @@ function extendBudget(run: WorkflowRun): void {
   const extended = {
     maxMinutes: Math.max(run.budget.maxMinutes, Math.ceil(runElapsedMinutes(run)) + fresh.maxMinutes),
     maxTokens: Math.max(run.budget.maxTokens, spent.input_tokens - (spent.cached_tokens ?? 0) + spent.output_tokens + fresh.maxTokens),
+    // Money is extended like the rest, and then clamped: continuing a gate
+    // grants another allowance, it does not grant an unlimited one. Four real
+    // runs had their caps ratcheted this way with nothing watching the total.
+    // The ceiling caps the EXTENSION, never the budget a run is already
+    // operating under: clamping downward would strand a run mid-flight the
+    // moment someone clicked continue, on an instance whose configured cap is
+    // above the ceiling. Raise-only, bounded.
+    maxUsd: Math.max(
+      run.budget.maxUsd ?? 0,
+      Math.min(absoluteUsdCeiling(), (spent.usd ?? 0) + (fresh.maxUsd ?? 0)),
+    ),
   }
-  if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes) {
+  if (extended.maxTokens !== run.budget.maxTokens || extended.maxMinutes !== run.budget.maxMinutes
+    || extended.maxUsd !== run.budget.maxUsd) {
     log.info('operator extends the run budget', { runId: run.id, from: run.budget, to: extended })
     run.budget = extended
   }
@@ -310,10 +356,184 @@ function budgetExceeded(run: WorkflowRun): string | null {
   const u = computeUsage(run)
   const tokens = u.input_tokens - (u.cached_tokens ?? 0) + u.output_tokens
   if (tokens > b.maxTokens) return `Budget exceeded: ${tokens.toLocaleString()} uncached tokens over the ${b.maxTokens.toLocaleString()} token cap.`
+  // Money last because it is the cap an operator set in the units they think
+  // in; the two above are proxies for it that have never once fired first.
+  if (b.maxUsd && (u.usd ?? 0) > b.maxUsd) {
+    return `Budget exceeded: $${(u.usd ?? 0).toFixed(2)} spent over the $${b.maxUsd.toFixed(2)} cap.`
+  }
   return null
 }
 
+/**
+ * Take down the stack this run started, once, and record that it happened.
+ *
+ * Idempotent by `stackStopped`: publish() runs on every status transition and a
+ * run can reach a terminal status more than once (a stop after a failure), and
+ * `docker compose down` twice is harmless but a second attempt that fails would
+ * overwrite an accurate record with a confusing one.
+ *
+ * Never throws. A teardown that fails must not change the run's outcome - the
+ * work is done either way - but it is recorded so nobody has to guess whether
+ * containers are still up.
+ */
+async function takeStackDown(run: WorkflowRun): Promise<void> {
+  if (!run.stackStarted || run.stackStopped) return
+  try {
+    const recipe = await resolveStackRecipe({ compose: `alepo-dev-team-infra/${run.stackStarted}` })
+    const result = await stackDown(recipe, { runId: run.id })
+    run.stackStopped = result.summary
+    log.info('stack taken down with the run', { runId: run.id, product: run.stackStarted, ok: result.ok })
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    run.stackStopped = `Taking the ${run.stackStarted} stack down failed: ${why}. It may still be running; check with docker ps.`
+    log.warn('could not take the stack down', { runId: run.id, product: run.stackStarted, error: why })
+  }
+}
+
+/**
+ * Posting the ticket outcome, behind a seam so tests never reach Jira.
+ * Defaults to the real notifier.
+ */
+type TicketPoster = typeof notifyTicketOutcome
+let ticketPoster: TicketPoster | null = null
+export function setTicketPoster(fn: TicketPoster | null) { ticketPoster = fn }
+const postTicketOutcome: TicketPoster = (...args) => (ticketPoster ?? notifyTicketOutcome)(...args)
+
+/** Records that the comment has landed, so no later boot re-owes it. */
+async function clearNotifyIntent(run: WorkflowRun): Promise<void> {
+  if (run.ticketNotifyPending !== true) return
+  run.ticketNotifyPending = false
+  await saveRun(run)
+}
+
+/**
+ * Finishes ticket notifications a dead process owed.
+ *
+ * publish() saves the terminal status before it posts, because the comment
+ * renders from finalized artifacts - the PR URLs it quotes are written by
+ * finalizeRunArtifacts, which must run first. That ordering means a process
+ * death between the two leaves a run recorded as finished whose ticket was
+ * never told, and a settled run is never re-published, so nothing retries.
+ *
+ * Rather than reorder and post a comment that cannot name the PR, the INTENT
+ * is written with the terminal status and cleared only once the comment is
+ * really on the ticket. This sweep, run at boot, is what clears it. A repeat
+ * is safe because notifyTicketOutcome reads its own marker first.
+ */
+export async function completePendingTicketNotifications(): Promise<{ notified: string[], failed: string[] }> {
+  const out = { notified: [] as string[], failed: [] as string[] }
+  for (const run of await listRuns()) {
+    if (run.ticketNotifyPending !== true || !run.ticketKey) continue
+    try {
+      const result = await postTicketOutcome({ id: run.watch, name: run.workflowName }, run.ticketKey, run)
+      if (result.posted) {
+        await clearNotifyIntent(run)
+        out.notified.push(run.id)
+        log.info('finished a ticket notification the previous process owed', { runId: run.id, ticketKey: run.ticketKey })
+      } else {
+        // Still owed: posting is disabled, or Jira refused. Left on the record
+        // rather than dropped, because dropping it is the silent loss this
+        // whole mechanism exists to prevent.
+        out.failed.push(run.id)
+      }
+    } catch (err) {
+      out.failed.push(run.id)
+      log.warn('could not finish an owed ticket notification', {
+        runId: run.id, ticketKey: run.ticketKey,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * A run that says it shipped must be able to show the work.
+ *
+ * Checked here, in publish, for the same reason finalize is: there are
+ * six-plus places a run reaches a terminal status and a check at each site is
+ * one that gets forgotten. Only a run about to be recorded `completed` is
+ * asked — a failed or stopped run is already telling the truth.
+ *
+ * The downgrade is deliberate and is the whole point: three real runs finished
+ * `completed` while their fix sat on an unmerged lane branch, two commits ahead
+ * of the pushed branch, or on no branch with a pull request at all. Every one
+ * of them read as success on the runs page and in its Jira comment.
+ */
+/**
+ * The risk class of a run nothing classified, measured from what it changed.
+ *
+ * Six of thirteen runs carried no class at all and two carried one that did not
+ * match the diff — a 1,850-line change that added a server-side call to an
+ * external address API was recorded `ui_parsing`. Oversight, review depth and
+ * customer notification all key off this field, so an absent one is not a
+ * neutral default: it is every gate firing on a guess. The floor is computed
+ * from the paths git says the run touched, the same function intake's own
+ * proposal is checked against, and recorded with its provenance so nobody reads
+ * it as a step's own claim.
+ */
+async function classifyFromDiff(run: WorkflowRun): Promise<void> {
+  if (run.blastRadius || !run.projectDir || !run.baseCommit) return
+  try {
+    const floor = floorFrom(await changedPathsSince(run.projectDir, run.baseCommit))
+    if (!floor) return
+    run.blastRadius = floor
+    run.classSource = 'floor-only'
+    log.info('blast radius measured from the diff at the end of the run', { runId: run.id, blastRadius: floor })
+  } catch (err) {
+    // Unmeasurable stays unclassified, which oversight already treats as the
+    // most cautious answer. A guess here would be worse than the absence.
+    log.warn('could not measure a blast radius from the diff', { runId: run.id, error: String(err) })
+  }
+}
+
+async function enforceShipIntegrity(run: WorkflowRun): Promise<void> {
+  if (run.status !== 'completed' || run.shipIntegrity) return
+  // Read from the RECORD, not from live state: a run resumed after a restart
+  // has no Live object here, and "was this workflow meant to ship?" must not
+  // depend on whether the process that started it is still alive.
+  const expectPr = run.expectsPr === true
+  let meta: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) meta = parsed
+  } catch { /* no meta yet: the git checks below still answer */ }
+  let findings: ShipFinding[]
+  try {
+    // Plus anywhere the ledger saw this run write outside its own checkout —
+    // repoDirsOf can only enumerate the places a run is SUPPOSED to write, and
+    // a3cb9d37's frontend fix sat in a repository it had never heard of.
+    let strayDirs: string[] = []
+    try {
+      const { readCommandLedger, strayWork } = await import('./commandLedger.ts')
+      strayDirs = run.projectDir
+        ? strayWork(await readCommandLedger(run.id), run.projectDir).map(s => s.dir)
+        : []
+    } catch { /* no ledger: the checks below still answer for the known repos */ }
+    findings = await shipIntegrity(run, expectPr, meta, strayDirs)
+  } catch (err) {
+    // A check that cannot run must not invent a verdict in either direction.
+    log.warn('ship integrity could not be checked', { runId: run.id, error: String(err) })
+    return
+  }
+  run.shipIntegrity = findings
+  if (!findings.length) return
+  run.status = 'failed'
+  run.error = `The work this run reports is not reachable. ${describeShipFindings(findings)}`
+  log.warn('run downgraded from completed: its work is not reachable', {
+    runId: run.id, problems: findings.map(f => f.problem),
+  })
+}
+
 async function publish(run: WorkflowRun) {
+  if (TERMINAL_STATUSES.includes(run.status)) {
+    await classifyFromDiff(run)
+    await enforceShipIntegrity(run)
+    // In-flight command bookkeeping for a finished run: the file on disk is the
+    // record from here, and these maps would otherwise grow for the life of the
+    // process.
+    forgetRun(run.id)
+  }
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
   // and there are too many terminal branches for per-site bookkeeping to stay
@@ -323,6 +543,17 @@ async function publish(run: WorkflowRun) {
   if (run.status === 'running') startRunClock(run)
   else settleRunClock(run)
   run.usage = computeUsage(run)
+  // The intent to notify is written WITH the terminal status, in the same
+  // saveRun below - not after the post. A process that dies before posting
+  // then leaves a record that still says the comment is owed.
+  // Only when posting is actually on. With JIRA_POST_ENABLED unset the comment
+  // is rendered and recorded but deliberately never sent, so nothing is owed -
+  // marking it pending would have every run on an ordinary machine accrue a
+  // debt that each boot then re-renders forever.
+  if (TERMINAL_STATUSES.includes(run.status) && run.ticketKey && !run.ticketCommented
+    && run.ticketNotifyPending === undefined && isJiraPostingEnabled()) {
+    run.ticketNotifyPending = true
+  }
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
     await saveRun(run)
@@ -335,7 +566,36 @@ async function publish(run: WorkflowRun) {
     // finalizeRunArtifacts is a read-merge-write, so repeating it is harmless.
     // Placed AFTER saveRun so a failure to write artifacts can never cost us
     // the run record itself.
+    if (!TERMINAL_STATUSES.includes(run.status) && EVIDENCE_FINAL_STATUSES.includes(run.status)) {
+      // An interrupted run: its evidence is finalized, nothing else is. No
+      // teardown (a resume needs the stack), no ticket comment (the run has not
+      // ended), no reaping (its containers may be mid-step).
+      try {
+        await flushLogs(run.id)
+        await finalizeRunArtifacts(run)
+      } catch (err) {
+        log.warn('could not finalize the artifacts of an interrupted run', { runId: run.id, error: String(err) })
+      }
+    }
     if (TERMINAL_STATUSES.includes(run.status)) {
+      // Take down whatever this run started, here for the same reason finalize
+      // is here: there are six-plus terminal branches and a teardown at each
+      // site is one that gets forgotten. A failed run is exactly when a stack
+      // is most likely to be left running, so this must not be on the happy
+      // path. Volumes are never removed - the data and seed survive.
+      await takeStackDown(run)
+      // Then whatever the run created that the stack recipe does not own:
+      // 150 GB of images, containers and build cache leaked because nothing
+      // was labelled and nothing looked. Only objects carrying THIS run's
+      // label are touched, and never a volume.
+      try {
+        const { reapRun } = await import('./dockerReap.ts')
+        const reaped = await reapRun(run.id, { apply: true })
+        if (reaped.removed.length) log.info('reaped docker objects this run created', { runId: run.id, removed: reaped.removed.length })
+      } catch (err) {
+        log.warn('could not reap this run\'s docker objects', { runId: run.id, error: String(err) })
+      }
+      await withdrawTestUnlocks(run)
       try {
         // Before finalizing: the step logs are appended asynchronously, and an
         // artifact that stops mid-burst is the only record left once the live
@@ -355,17 +615,22 @@ async function publish(run: WorkflowRun) {
         // Unless a Jira step of the workflow already posted it.
         if (run.ticketKey && !run.ticketCommented) {
           try {
-            const result = await notifyTicketOutcome(
+            const result = await postTicketOutcome(
               { id: run.watch, name: run.workflowName },
               run.ticketKey,
               run,
             )
+            // Cleared only on a real post. `posted` is also true when the
+            // marker says a previous attempt did it, which is equally a reason
+            // to stop owing it.
+            if (result.posted) await clearNotifyIntent(run)
             log.info('ticket notified', {
               runId: run.id, ticketKey: run.ticketKey,
               posted: result.posted, reason: result.reason ?? '(none)',
             })
           } catch (err) {
-            log.error('ticket notification failed; the run itself is unaffected', {
+            // The intent stays on the record, so the next boot finishes it.
+            log.error('ticket notification failed; it stays owed and the next boot will retry', {
               runId: run.id, ticketKey: run.ticketKey,
               error: err instanceof Error ? err.message : String(err),
             })
@@ -391,6 +656,34 @@ async function publish(run: WorkflowRun) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
     onRunTransition(run)
+    // A settled run frees the checkout it held and the capacity slot it
+    // occupied, which is the only moment the next queued task can start. Doing
+    // it here rather than on a timer means "one after another" needs nobody
+    // watching; `onRunSettled` never throws and never blocks this publish.
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'stopped') {
+      // Give the worktree back. Nothing did this, so an instance accumulated
+      // one directory per run it had ever executed, and a directory someone
+      // deleted by hand left a stale registration that then refused the NEXT
+      // run on that branch. Both were live here: five leftovers on disk and
+      // two repositories registering worktrees already gone.
+      //
+      // Refuses to remove one holding uncommitted work or unpushed commits —
+      // that work exists nowhere else — and says which, so a kept worktree is
+      // a stated fact rather than litter.
+      void cleanupRunWorktree(run.projectDir)
+        .then(r => log[r.removed ? 'info' : 'warn']('run worktree', { runId: run.id, removed: r.removed, reason: r.reason }))
+        .catch(() => { /* housekeeping must never fail a finished run */ })
+    }
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'stopped' || run.status === 'interrupted') {
+      // Imported here rather than at module scope on purpose: the dispatcher
+      // reaches the workflow store and the Jira client, and pulling that chain
+      // into the runner's own module graph put it in front of thirteen
+      // plain-node tests that never needed it. It is only wanted at runtime,
+      // at exactly this moment.
+      void import('./queueDispatcher.ts')
+        .then(m => m.onRunSettled())
+        .catch(err => console.error('[queue] could not dispatch after settle:', err instanceof Error ? err.message : err))
+    }
   })
   publishChains.set(run.id, next)
   await next
@@ -400,6 +693,19 @@ const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'completed', 'faile
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
+
+/**
+ * Statuses whose EVIDENCE is final even though the run may move again.
+ *
+ * `interrupted` is not terminal — the process died and a later boot resumes it
+ * — but its artifacts are as complete as they will ever be until that happens,
+ * and finalize is what writes the contract report, the provenance and the
+ * index row. A run that is never resumed used to be checked by nothing at all:
+ * no `contract_missing`, no index row, no summary. Teardown and the ticket
+ * comment stay behind TERMINAL_STATUSES, because those are about the run
+ * ending, not about the evidence being current.
+ */
+const EVIDENCE_FINAL_STATUSES: WorkflowRun['status'][] = [...TERMINAL_STATUSES, 'interrupted']
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
@@ -645,6 +951,25 @@ async function runMonitor(
  * code by design, so the runner writes that file for it and the reason rides
  * with the run. Never staged: nothing under .agent/ but plan.md is.
  */
+/**
+ * Where a step's test unlock may be written: its own working directory, and
+ * nowhere else.
+ *
+ * This used to also copy the unlock into the run's shared worktree, so the
+ * reason would survive the lane being removed. That made the shared `.agent`
+ * directory a channel between lanes running at the same moment: run a3cb9d37
+ * lost its client lane's work because lock state armed by the BACKEND lane was
+ * reachable from it, and the client fix ended up staged and uncommitted.
+ *
+ * A capability granted to one step must not be visible to a sibling that never
+ * earned it. The reason is preserved by withdrawTestUnlocks, which copies it
+ * into the run's own evidence when the run ends - a better home for it than a
+ * worktree that gets deleted.
+ */
+export function testUnlockTargets(run: { projectDir?: string }, workdir: string): string[] {
+  return [workdir]
+}
+
 async function unlockTests(run: WorkflowRun, label: string, workdir: string): Promise<void> {
   const body = JSON.stringify({ reason: `The "${label}" step of ${run.workflowName} writes tests and code together by design.`, run: run.id, step: label, at: new Date().toISOString() }, null, 2)
   // The hook reads the unlock relative to the directory the agent is in, so the
@@ -653,16 +978,368 @@ async function unlockTests(run: WorkflowRun, label: string, workdir: string): Pr
   // removed once its wave merges, and the unlock is also the evidence that this
   // step was allowed to touch tests and why. Losing that with the lane would
   // leave the reason nowhere on the record.
-  const targets = workdir === run.projectDir || !run.projectDir ? [workdir] : [workdir, run.projectDir]
-  for (const target of targets) {
+  // The reason is recorded with the run's evidence AS THE GRANT IS MADE, not
+  // when it is withdrawn. A lane's worktree is removed once its wave merges,
+  // taking the unlock file with it - so a copy made at teardown finds nothing,
+  // and the justification for touching tests would exist nowhere. That is the
+  // need the old copy-into-the-shared-worktree served, without making the
+  // shared directory a channel between concurrent lanes.
+  try {
+    await mkdir(runArtifactsDir(run.id), { recursive: true })
+    await writeFile(join(runArtifactsDir(run.id), 'test-unlock.json'), body)
+  } catch { /* evidence is best effort; the grant below is what the step needs */ }
+
+  for (const target of testUnlockTargets(run, workdir)) {
     const dir = join(target, '.agent')
     try {
       await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, 'test-unlock.json'), body)
+      const path = join(dir, 'test-unlock.json')
+      await writeFile(path, body)
+      // Remembered ON THE RECORD, not in memory: the capability has to be
+      // withdrawn even if this process dies and another one finishes the run.
+      if (!run.testUnlocks?.includes(path)) run.testUnlocks = [...(run.testUnlocks ?? []), path]
     } catch (err) {
       log.warn('could not write the test unlock; the plugin lock will stop the step at its first test edit', { runId: run.id, dir, error: err instanceof Error ? err.message : String(err) })
     }
   }
+}
+
+/**
+ * Withdraws the permission to edit tests when the run that earned it ends.
+ *
+ * The unlock was written into the checkout and nothing ever removed it, so
+ * every later agent working in that checkout inherited it - a capability
+ * granted to one step, for one reason, held forever afterwards. The lock only
+ * means something if it comes back.
+ *
+ * Only files this run wrote are removed, checked by the run id inside them: a
+ * lane's checkout can be shared, and deleting someone else's unlock would
+ * silently stop their step at its first test edit.
+ */
+async function withdrawTestUnlocks(run: WorkflowRun): Promise<void> {
+  for (const path of run.testUnlocks ?? []) {
+    try {
+      const body = await readFile(path, 'utf-8')
+      const owner = JSON.parse(body)?.run
+      if (owner && owner !== run.id) continue
+      // Only the permission is withdrawn. The reason was already written to the
+      // run's evidence when the grant was made, which is the only moment it is
+      // certain to still exist: a lane worktree may be gone by now.
+      await rm(path, { force: true })
+    } catch { /* already gone, or a lane removed with its worktree */ }
+  }
+  run.testUnlocks = []
+}
+
+/**
+ * What this step is allowed to do with tests, in its own input.
+ *
+ * Exactly one step of a workflow owns the tests, and the plugin's lock enforces
+ * that - but nothing ever TOLD the other steps. Run a3cb9d37 died of it: the
+ * client lane's agent wrote a new spec file in a step that does not own tests,
+ * the lock fired correctly, and its finished work sat staged and uncommitted
+ * while the run spent another twenty minutes reaching a monitor that aborted.
+ *
+ * A rule an agent is not told is a rule it discovers by being stopped halfway
+ * through committing. So the step that owns the tests is told it does, and
+ * every other step is told which step does and what to do instead - report the
+ * gap, never write the test. Silent when no step owns them, because then there
+ * is no rule to state and a false prohibition teaches agents to ignore the
+ * real ones.
+ */
+function testOwnershipNote(l: Live, step: { label: string, testsUnlocked?: boolean }): string {
+  const owner = l.workflow.steps.find(s => s.testsUnlocked === true)
+  if (!owner) return ''
+  if (step.testsUnlocked === true) {
+    return `This step owns the tests for this run: you may add and edit test files here, and the runner has written the unlock that permits it. No other step may.`
+  }
+  return `"${owner.label}" owns the tests for this run; this step does not. Do not add or edit any test file here - `
+    + 'the lock will stop the commit, and work that cannot be committed is work nobody gets. '
+    + `If you find a case that needs covering, say so in your result and name it, so "${owner.label}" or a person can add it.`
+}
+
+/**
+ * Drive deploy.sh for a step that declared a deploy.
+ *
+ * The gate is the step's own: only `dev` runs unattended, and any other
+ * environment needs this step to carry `approval: true` and for that gate to
+ * have been answered. `l.approved` holds exactly that - the ids whose gate a
+ * person has released - so a template that declares a prod deploy without a
+ * gate gets nothing executed and a step told why.
+ *
+ * Never throws: a deploy that cannot run is a fact the agent needs, not a
+ * reason to kill the run.
+ */
+/** deploy.sh steps that change the environment, and therefore owe a check of
+ *  what they left running. `status` and `logs` read and change nothing. */
+const CHANGING_DEPLOY_STEPS = new Set(['all', 'setup', 'deploy'])
+
+async function runDeployForStep(
+  l: Live, run: WorkflowRun, rec: RunStep, id: string, step: { deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, approval?: boolean },
+): Promise<string> {
+  const want = step.deploy!
+  try {
+    // The run's own product when the template names no app. deploy.sh defaults
+    // APP to crm when it is given none, so a PCRF run reaching an unnamed
+    // deploy would deploy CRM - the app is resolved here, and planDeploy
+    // refuses an app the infra repo has no role for rather than falling back.
+    const plan = await planDeploy({ env: want.env, step: want.step, app: want.app ?? run.product?.name, limit: want.limit, check: want.check })
+    // The answered gate, from the runner's own record of what a person
+    // released. Not from the step's declaration, which is what an author
+    // intended rather than what a person decided.
+    const approved = step.approval === true && l.approved.has(id)
+    const result = await runDeploy(plan, { approved, approvedBy: approved ? (run.decisions?.at(-1)?.by ?? 'a gate answer') : undefined })
+    for (const line of result.ran) logLine(l, run, rec, line)
+    logLine(l, run, rec, result.summary)
+    if (!result.ok) return `${result.summary} Do not run deploy.sh yourself - report what you could not verify without it.`
+
+    // A deploy that changed something is asked what it left behind, through the
+    // script's own read-only step. "ansible exited zero" and "the environment
+    // is serving" are different claims, and only the second one is worth
+    // anything to the step that has to test against it.
+    if (!plan.check && CHANGING_DEPLOY_STEPS.has(plan.step)) {
+      const verify = await planDeploy({ env: plan.env, step: 'status', app: want.app ?? run.product?.name, limit: want.limit })
+      const status = await runDeploy(verify, { approved, approvedBy: 'post-deploy verification' })
+      for (const line of status.ran) logLine(l, run, rec, line)
+      logLine(l, run, rec, status.summary)
+      return status.ok
+        ? `${result.summary} Post-deploy verification: ${status.summary}`
+        : `${result.summary} Post-deploy verification could not be read: ${status.summary} Treat the deployed environment as unproven and say so.`
+    }
+    return result.summary
+  } catch (err) {
+    const why = err instanceof DeployError ? err.message : `The deploy could not be planned: ${err instanceof Error ? err.message : String(err)}`
+    logLine(l, run, rec, why)
+    return why
+  }
+}
+
+/**
+ * What a money- or protocol-class run owes the evidence bundle, in the agent's
+ * own input.
+ *
+ * The schema has always required an `adversarial` object for these two classes,
+ * and nothing ever asked for one - the requirement could not even fire until
+ * classification began writing `blast_radius`. The runner deliberately does not
+ * write it: a two-node rerun, an adversarial pattern search and a mutation
+ * score are work, and a runner filling in a plausible object would be
+ * manufacturing evidence rather than collecting it.
+ *
+ * Empty for every other class. A demand that does not apply teaches an agent to
+ * ignore the ones that do.
+ */
+function adversarialDemand(run: WorkflowRun): string {
+  if (run.blastRadius !== 'money' && run.blastRadius !== 'protocol') return ''
+  return `\n\nEVIDENCE THIS RUN OWES: it is classified \`${run.blastRadius}\`, and the evidence bundle requires an `
+    + '`adversarial` object in meta.json for that class. Write it yourself into meta.json with these fields: '
+    + '`report` (what you attacked and what held), `two_node_rerun` (boolean - did the failing case rerun on a second node), '
+    + '`pattern_search` (what you searched the codebase for, e.g. other unguarded call sites of the same shape) and '
+    + '`mutation_score` (0-1, or null if you did not measure one). '
+    + 'The runner will not write this for you: it is verification work, and an invented report is worse than an absent one. '
+    + 'A bundle without it fails validation.\n'
+}
+
+/**
+ * Start the product's stack for a step that declared it needs one.
+ *
+ * Failure is reported into the step's own output rather than thrown: a stack
+ * that cannot start is a fact the step's agent has to know about - and for a
+ * run with no registered stack, no command is invented at all.
+ */
+/**
+ * The measured state of the stack, as a file a later step and a reviewer can
+ * read. Never fatal: evidence that could not be written must not take down the
+ * run whose stack it describes.
+ */
+async function writeStackFacts(run: WorkflowRun, facts: StackFacts): Promise<void> {
+  try {
+    const dir = runArtifactsDir(run.id)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'stack-facts.json'), JSON.stringify(facts, null, 2))
+  }
+  catch (err) {
+    log.warn('stack facts could not be written', { runId: run.id, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+async function bringStackUp(l: Live, run: WorkflowRun, rec: RunStep): Promise<string> {
+  const compose = run.product?.stack?.compose
+  if (!compose) {
+    const note = 'This step asked for a stack, and this run has no product with a registered stack - '
+      + 'nothing was started. Work without one; do not try to start a stack yourself.'
+    logLine(l, run, rec, note)
+    return note
+  }
+  try {
+    const recipe = await resolveStackRecipe({ compose })
+    const result = await stackUp(recipe, { runId: run.id })
+    for (const line of result.ran) logLine(l, run, rec, line)
+    logLine(l, run, rec, result.summary)
+    if (result.ok) {
+      // On the RUN, not on Live: a server that dies mid-run must still be able
+      // to find what it started, or the containers are nobody's.
+      run.stackStarted = recipe.product
+      run.stackStopped = undefined
+    }
+    if (!result.ok) return `${result.summary} Do not try to start it yourself - report what you could not verify without it.`
+
+    // `up` exiting zero is not a serving stack, and a step that assumes it is
+    // spends its budget against containers that never came up. Docker is asked
+    // what is actually running, and the answer - including the addresses it
+    // published - becomes an artifact and part of this step's input.
+    const facts = await verifyStack(recipe, { runId: run.id, urls: run.product?.stack?.urls })
+    logLine(l, run, rec, facts.summary)
+    await writeStackFacts(run, facts)
+    const where = facts.registryUrls.length || facts.endpoints.length
+      ? ` Open the application at ${[...facts.registryUrls, ...facts.endpoints].join(' or ')} - these came from the registry and from the ports docker actually published, so use them rather than assuming a port.`
+      : ''
+    return facts.healthy
+      ? `${result.summary} ${facts.summary}${where} The runner started it and will take it down when this run settles; you do not need to. Its verified state is in stack-facts.json in your artifacts directory.`
+      : `${result.summary} ${facts.summary}${where} Treat this stack as unproven: say so in your output rather than reporting a result you could not have obtained from it. Do not try to start it yourself. Its measured state is in stack-facts.json in your artifacts directory.`
+  } catch (err) {
+    // A StackError already explains itself in the terms a person needs: which
+    // file was looked for, or that .env is a human's job.
+    const note = err instanceof StackError
+      ? err.message
+      : `The stack could not be started: ${err instanceof Error ? err.message : String(err)}`
+    logLine(l, run, rec, note)
+    return note
+  }
+}
+
+/**
+ * Record what this step's output and diff say about how risky the run is.
+ *
+ * Never throws and never fails the step: a classification that cannot be
+ * computed leaves the run unclassified, which oversight.ts already treats as
+ * `stop`. Failing here would turn a git hiccup into a dead run while making the
+ * gate no safer.
+ */
+/**
+ * The question to pause on when a step changed a repository this run does not
+ * own, or null when everything landed where it should.
+ *
+ * Asked once per run: a person who has been told and continued has decided, and
+ * re-asking at every subsequent step would turn a decision into a nag. The
+ * allowed set is everywhere a run may legitimately reach — its own lanes, the
+ * products a step widened it to, and the deployment checkout its stack comes
+ * from — so the widening feature does not read as an alarm.
+ */
+async function detectStrayWork(l: Live, run: WorkflowRun, stepId: string): Promise<string | null> {
+  if (!run.projectDir || run.strayWorkAsked) return null
+  let entries
+  try {
+    const { readCommandLedger } = await import('./commandLedger.ts')
+    entries = await readCommandLedger(run.id)
+  } catch {
+    return null // no ledger, nothing to say — never a reason to stop a run
+  }
+  if (!entries.length) return null
+  const { strayWork } = await import('./commandLedger.ts')
+  const allowed = [
+    ...Object.values(l.laneDirs),
+    ...(run.product?.alsoInScope ?? []).flatMap(p => p.repos.map(r => checkoutDirFor(r, run.startedBy))),
+    ...(run.product?.stack?.compose ? [checkoutDirFor(`alepolab/${run.product.stack.compose.split('/')[0]}`, run.startedBy)] : []),
+    runArtifactsDir(run.id),
+    getClaudeDir(),
+  ]
+  const stray = strayWork(entries.filter(e => e.stepId === stepId), run.projectDir, allowed)
+  if (!stray.length) return null
+  run.strayWorkAsked = true
+  return [
+    `This run changed a repository it was not launched against.`,
+    ...stray.map(s => `  ${s.dir} — ${s.what}`),
+    ``,
+    `It is registered against ${run.product?.name ?? 'no product'}${run.product?.repos?.length ? ` (${run.product.repos.join(', ')})` : ''} and its checkout is ${run.projectDir}.`,
+    `Work done anywhere else cannot reach origin from this run: its branch, its pull request and its evidence all belong to the checkout above.`,
+    ``,
+    `Continue only if that is deliberate — otherwise stop this run and start one against the product that owns the code.`,
+  ].join('\n')
+}
+
+async function adoptClassification(
+  l: Live, run: WorkflowRun, rec: RunStep, output: string, cwd: string | undefined, headBefore: string | null,
+): Promise<void> {
+  const proposed = parseProposal(output)
+  let floor: BlastRadius | null = null
+  // Did the risk read actually run? Starts false, so a path that never reaches
+  // the read (no checkout, no baseline, a throw) is treated as "not assessed"
+  // rather than as assessed-and-clean.
+  let riskRead = false
+  if (cwd) {
+    // Against the run's own baseline, not the step's: the class describes the
+    // whole change a reviewer will be asked to approve, and a migration written
+    // three steps ago still makes this run a schema change.
+    const since = run.baseCommit ?? headBefore
+    if (since) {
+      try {
+        const paths = await changedPathsSince(cwd, since)
+        floor = floorFrom(paths)
+        // What the paths MEAN, where their shape proves nothing — money
+        // arithmetic lives in ordinary Java, which no path rule can catch. The
+        // stronger of the two wins, so this can only ever raise oversight; if
+        // the model is unavailable the rules floor stands exactly as before.
+        const { agentFloorFrom } = await import('./lightAgent.ts')
+        const read = await agentFloorFrom(paths)
+        // Whether the read HAPPENED, kept apart from what it said. An
+        // unavailable model must not read as a clean bill of health.
+        riskRead = read.read
+        if (read.class && (BLAST_RADIUS_ORDER as string[]).includes(read.class)) {
+          const asClass = read.class as BlastRadius
+          if (!floor || BLAST_RADIUS_ORDER.indexOf(asClass) > BLAST_RADIUS_ORDER.indexOf(floor)) {
+            logLine(l, run, rec, `a light read of the touched files raises the risk floor to \`${asClass}\`; the path rules alone said ${floor ?? 'nothing'}`)
+            floor = asClass
+          }
+        }
+      } catch (err) {
+        logLine(l, run, rec, `could not read the diff to classify this run: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+  if (proposed === null && floor === null) return
+
+  // A LOW class can only ever come from an agent's own proposal: floorFrom
+  // never asserts one, by design, because path evidence cannot rule danger
+  // out. So `docs` and `ui_parsing` rest entirely on the claim of the party
+  // the classification governs — and they are exactly the two classes that
+  // buy `auto`, which skips every gate in the run.
+  //
+  // That is acceptable only while the risk read is actually running: it is
+  // the one check that can look at ordinary Java and notice the money
+  // arithmetic no path rule can see. When it did NOT run, the low claim is
+  // uncorroborated by anything, and adopting it would let a model outage
+  // silently switch the pipeline's human oversight off.
+  //
+  // So leave the run unclassified instead. That is not a new policy — it
+  // reuses the one already written into oversight.ts: an unclassified run
+  // stops, because absence of evidence is not evidence of safety.
+  const LOW: BlastRadius[] = ['docs', 'ui_parsing']
+  if (!riskRead && floor === null && proposed !== null && LOW.includes(proposed)) {
+    logLine(l, run, rec,
+      `this step proposed \`${proposed}\`, but the risk read did not run and no path rule corroborates it; `
+      + 'leaving the run unclassified so its gates stop for a person rather than accepting an unchecked low class')
+    log.warn('low class proposed with no risk read; left unclassified', { runId: run.id, stepId: rec.stepId, proposed })
+    return
+  }
+
+  // An adopted class is a floor of its own from here on. A later step may raise
+  // the run's risk - it may discover the money path - but nothing may lower what
+  // the evidence already established.
+  const result = adopt({ proposed, floor })
+  if (!result.adopted) return
+
+  const held = (run.blastRadius && (BLAST_RADIUS_ORDER as string[]).includes(run.blastRadius))
+    ? run.blastRadius as BlastRadius
+    : null
+  // Already at least this risky: keep what the evidence established. A later
+  // step may RAISE the run's risk - it may discover the money path - but nothing
+  // lowers it, including a step that re-reads a smaller part of the change.
+  if (held && BLAST_RADIUS_ORDER.indexOf(held) >= BLAST_RADIUS_ORDER.indexOf(result.adopted)) return
+
+  run.blastRadius = result.adopted
+  run.classSource = result.source ?? undefined
+  logLine(l, run, rec, classProvenance(result))
+  await recordClassification(run.id, { blast_radius: result.adopted, class_source: result.source ?? undefined })
 }
 
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
@@ -707,6 +1384,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // step itself changed rather than everything the run has done so far.
   const headBefore = cwd ? await headOf(cwd) : null
 
+  // Bring the product's stack up before the agent runs, because a step that
+  // needs a stack cannot do anything without one. The lifecycle is read out of
+  // the product's own compose file, so the runner asks the infra repo how to
+  // start it rather than an agent guessing - and the stack is taken down when
+  // the run settles, in publish(), including when it fails.
+  const stackNote = step.stack === 'up' ? await bringStackUp(l, run, rec) : ''
+  const deployNote = step.deploy ? await runDeployForStep(l, run, rec, id, step) : ''
+
   // Hand this step the review its own pull request collected. Written BEFORE the
   // agent starts, because an agent cannot act on evidence that appears after it
   // finishes - which is the whole reason review comments on three real pull
@@ -732,10 +1417,27 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // already has it, and re-sending it invites the model to start over.
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
-  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
+  // The stack outcome is part of what this step is working with, so it goes to
+  // the agent rather than only into the run log - including on a resumed visit,
+  // where the header is skipped but the stack may have changed since.
+  const stackContext = stackNote ? `\n\nSTACK: ${stackNote}\n` : ''
+  const testsContext = testOwnershipNote(l, step) ? `\n\nTESTS: ${testOwnershipNote(l, step)}\n` : ''
+  // A verdict step is told the contract it is held to. Enforcing a format the
+  // agent was never given would be a trap; every reviewer in the estate already
+  // opens with this line, and now it decides whether the run continues.
+  const verdictContext = step.verdict
+    ? '\n\nVERDICT: this step owns the decision. Open your output with exactly one line — `Review Result: PASS`, `Review Result: WARNING` or `Review Result: FAIL` — before anything else. FAIL stops the run and nothing is shipped; WARNING continues and is recorded. State no verdict and the run stops: silence is not approval.\n'
+    : ''
+  const deployContext = deployNote ? `\n\nDEPLOY: ${deployNote}\n` : ''
+  // What this run's risk class obliges it to produce. Told while the step can
+  // still do the work: finding out at finalize, or from a CI validation
+  // failure, is finding out too late - a two-node rerun and a pattern search
+  // cannot be done retroactively.
+  const classContext = adversarialDemand(run)
+  const input = stackContext + testsContext + verdictContext + deployContext + classContext + (resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, cwd ? {
     dir: cwd, branch: l.laneBranches[id] ?? run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined) + body
+  } : undefined) + body)
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -804,8 +1506,21 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
   const ac = new AbortController()
   l.aborts.set(id, ac)
+  // A step that hangs used to run until the process died. SBN-4091 spent 19.8
+  // hours against a 180-minute cap with 23 minutes of agent work inside it,
+  // because the budget is only read BETWEEN steps and this step never returned
+  // to be between anything. The watchdog is the run's own remaining time, armed
+  // on the controller stopRun already uses, so a hung step ends the way an
+  // operator stop does rather than by outliving everyone's attention.
+  const leftMs = Math.max(60_000, (run.budget.maxMinutes - runElapsedMinutes(run)) * 60_000)
+  let watchdogFired = false
+  const watchdog = setTimeout(() => { watchdogFired = true; ac.abort() }, leftMs)
+  // Never hold the process open on this timer alone.
+  if (typeof watchdog.unref === 'function') watchdog.unref()
   try {
-    const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+    // The product's own toolchain, last so a registry pin wins over whatever
+    // the host's PATH would have given the agent. See ProductMatch.toolchain.
+    const userEnv = { ...await envResolver(run.startedBy).catch(() => ({})), ...(run.product?.toolchain ?? {}) }
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
     const raw = await agentCaller(step.agentSlug, input, cwd, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
@@ -817,7 +1532,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       // Loaded on demand: that module's extension-less imports do not resolve under the plain-node tests.
       void import('./claudeCodeHistory.ts').then(m => m.setSessionName(sessionId, `${run.ticketKey ?? run.workflowSlug} · ${step.label} · run ${run.id.slice(0, 8)}`)).catch(() => {})
     }, onProgress: (progress: AgentProgress) => {
-      if (progress.line) { logLine(l, run, rec, progress.line); return }
+      if (progress.line) { logLine(l, run, rec, progress.line, progress.lineKind); return }
       // Diagnostic only (see AgentProgress's doc comment) - mutated directly
       // onto the live rec and republished so the SSE stream carries it, but
       // never written to the step's persisted artifact JSON and never
@@ -921,6 +1636,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       return true
     }
 
+    // Work that landed somewhere this run does not own — checked before the
+    // step's own markers, because a step that changed the wrong repository has
+    // a bigger problem than whatever it wants to say next. Paused, not failed:
+    // the honest answers are "widen the run" or "stop and re-run against the
+    // right product", and both are a person's call. See strayWork.
+    const stray = await detectStrayWork(l, run, id)
+    if (stray) {
+      l.outputs[id] = output
+      Object.assign(rec, { status: 'waiting', output, model, usage })
+      run.question = { stepId: id, text: stray, kind: 'question', askedAt: Date.now() }
+      l.waiting = id
+      logLine(l, run, rec, stray)
+      log.warn('run changed a repository it was not launched against', { runId: run.id, stepId: id })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    }
+
     const ask = parseAsk(output)
     if (ask) {
       l.outputs[id] = output
@@ -941,6 +1673,85 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // from "it was fixed". See parseSkip for why this outcome exists.
     const skip = parseSkip(output)
 
+    // A REVIEW step's own answer, enforced.
+    //
+    // Five consecutive runs opened a pull request over their reviewer's
+    // explicit refusal. CSUP-7524's QA step said "Review Result: FAIL — 2
+    // CRITICAL" and "the client commit doesn't exist"; three steps later the
+    // run opened three pull requests and finished `completed`. CSUP-7526,
+    // CSUP-7514, CSUP-7519 and SBN-4091 are the same shape. The verdict was
+    // never hidden — it was the first line of the step's output — but the only
+    // enforceable outcomes were markers (halt, rework) the reviewers do not
+    // emit, and an `approval` gate, which asks a PERSON and therefore does
+    // nothing on a run classified `auto` or approved in a hurry.
+    //
+    // So the step's stated verdict IS the gate, checked before `step.pr` below:
+    // a refused change must not reach the code that opens a pull request.
+    //
+    // A missing verdict fails too, and that asymmetry is deliberate. The
+    // monitor path already defaults an unreadable answer to CONTINUE
+    // (parseVerdict), and treating silence as consent is exactly how a FAIL
+    // came to ship. A step that declared PIPELINE-SKIP is exempt: it examined
+    // its job and found nothing to judge.
+    // What this step decided, for its conditional out-edges to be judged
+    // against. Undefined on a step that decides nothing, in which case every
+    // out-edge is unconditional and this changes nothing.
+    let stepOutcome: StepOutcome | undefined
+    if (step.verdict && !skip) {
+      const verdict = parseReviewVerdict(output)
+      // Stating nothing is a format slip, not a refusal, so it gets the same
+      // second chance the monitor gives a RETRY: ask again, with the contract
+      // repeated, while the step still has a visit. Only then does silence
+      // stop the run. An explicit FAIL is never retried — the reviewer said
+      // what it meant, and re-asking until it relents is not oversight.
+      if (!verdict && canRevisit(l.graph, l.state, id)) {
+        try {
+          await writeStepArtifact(run, rec, run.steps.indexOf(rec), `no-verdict-${rec.visits}`)
+        } catch { /* best effort */ }
+        l.retryFeedback[id] = 'You did not state a verdict. Reply again, and open with exactly one line: `Review Result: PASS`, `Review Result: WARNING` or `Review Result: FAIL`.'
+        run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: 'the review step stated no verdict and was asked again' }]
+        l.state.status[id] = 'completed'
+        armNode(l.state, id)
+        log.warn('review step stated no verdict; asking again', { runId: run.id, stepId: id, visits: rec.visits })
+        return true
+      }
+      // A declared FAIL route turns a refusal into a PATH instead of the end
+      // of the run. Without one, a `verdict` step that says FAIL has nowhere
+      // to send the work, so stopping is the only honest thing left — which is
+      // what this did for every workflow before conditional edges existed, and
+      // still does for every workflow that declares no such edge.
+      const failRoute = verdict === 'FAIL'
+        && (l.graph.succ[id] ?? []).some(t => l.graph.conditions[edgeKey(id, t)] === 'fail')
+      if (failRoute) {
+        stepOutcome = 'fail'
+        l.outputs[id] = output
+        Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
+        markCompleted(l.graph, l.state, id, 'fail')
+        const went = (l.graph.succ[id] ?? [])
+          .filter(t => l.state.edges[edgeKey(id, t)])
+          .map(t => l.workflow.steps.find(x => x.id === t)?.label ?? t)
+        logLine(l, run, rec, `review verdict FAIL — routed to ${went.join(', ') || 'nothing'}`)
+        log.info('review step routed on FAIL', () => ({ runId: run.id, stepId: id, to: went }))
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return true
+      }
+      if (verdict === 'PASS' || verdict === 'WARNING') stepOutcome = 'pass'
+      if (verdict !== 'PASS' && verdict !== 'WARNING') {
+        const reason = verdict === 'FAIL'
+          ? `Review verdict FAIL — ${preview(output)}`
+          : `This step owns a verdict and stated none. It must open with "Review Result: PASS", "WARNING" or "FAIL"; the run stops rather than read silence as approval.`
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', output, model, usage, error: reason, completedAt: Date.now() })
+        log.warn('review step refused the work', () => ({
+          runId: run.id, stepId: id, agentSlug: step.agentSlug, verdict: verdict ?? 'none', durationMs,
+        }))
+        logLine(l, run, rec, reason)
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+      logLine(l, run, rec, `review verdict: ${verdict}`)
+    }
+
     // The pull request, BEFORE the Jira half below, so the outcome comment can
     // carry a URL the runner has actually got. A step declaring `pr` gets this
     // whether or not its agent mentioned a pull request - which is the point:
@@ -954,6 +1765,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         const result = await runPrStep(run)
         prLines = result.lines
         await recordPrUrls(run.id, result.prs)
+        // A refused pull request FAILS the step. It used to be one line among
+        // ten, which is how "no pull request was opened" came to read as a
+        // detail rather than as the run not having shipped — and why two runs
+        // whose build had failed still finished `completed`.
+        if (result.refused?.length) {
+          const reason = result.refused.map(r => `${r.repo}: ${r.reason}`).join('\n')
+          markFailed(l.state, id)
+          Object.assign(rec, { status: 'failed', output, model, usage, error: `Pull request refused — ${reason}`, completedAt: Date.now() })
+          for (const line of prLines) logLine(l, run, rec, line)
+          log.warn('pull request refused for lack of execution evidence', { runId: run.id, stepId: id, repos: result.refused.map(r => r.repo) })
+          try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+          return false
+        }
       } catch (err) {
         // Never fatal: the commits are already on the branch, and a step that
         // fails here would hide the work rather than ship it.
@@ -984,6 +1808,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       recorded = `${recorded}\n\n${note}`
     }
 
+    // What this step says it left undone, carried on the record where the
+    // summary, the evidence and a reviewer can all read it.
+    const notDone = parseNotDone(output)
+    if (notDone.length) {
+      run.notDone = [...(run.notDone ?? []).filter(e => e.stepId !== id), ...notDone.map(e => ({ ...e, stepId: id, label: rec.label }))]
+      for (const e of notDone) logLine(l, run, rec, `not done: ${e.what} — ${e.why}`)
+    }
     l.outputs[id] = recorded
     Object.assign(rec, {
       status: skip ? 'skipped' : 'completed',
@@ -996,6 +1827,18 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       outputLength: output.length, durationMs,
       inputTokens: usage?.input_tokens ?? '(none reported)', outputTokens: usage?.output_tokens ?? '(none reported)',
     }))
+
+    // THE CLASSIFICATION. oversight.ts decides whether a gate fires purely from
+    // run.blastRadius, and nothing ever wrote it: every run read as
+    // unclassified, so every gate stopped and the tiering never tiered.
+    //
+    // Runner-owned, like identity and watch, because a value the classified
+    // party can set is not a control: a step wanting to skip a gate has every
+    // incentive to call its change ui_parsing. The step's PIPELINE-CLASS line is
+    // a PROPOSAL; the floor derived from the paths it actually touched can only
+    // ever raise it, and an already-adopted class is never lowered on a later
+    // visit.
+    await adoptClassification(l, run, rec, output, cwd, headBefore)
 
     // THE TEST LOCK. The step that owns the tests may write them; every other
     // step editing a test invalidates the evidence chain of the whole run - "A
@@ -1035,6 +1878,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id))
       if (verdict === 'ABORT') {
         markFailed(l.state, id)
+        run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: `monitor aborted the step: ${preview(review)}` }]
         Object.assign(rec, { status: 'failed', model, error: 'Monitor aborted the workflow' })
         try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
         return false
@@ -1051,19 +1895,52 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
           await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`)
         } catch { /* best effort */ }
         l.retryFeedback[id] = review
+        run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: `monitor asked for another attempt: ${preview(review)}` }]
         l.state.status[id] = 'completed'
         armNode(l.state, id)
         return true
       }
+      // RETRY with no visit left. This used to fall through to markCompleted:
+      // the step was recorded `monitorVerdict: 'RETRY'` and `status:
+      // 'completed'` at the same time, its deficient output was published
+      // downstream, and nothing said so — a reviewer's "do this again" read as
+      // approval because the budget ran out. A monitor that refuses is a
+      // refusal at the last visit exactly as much as at the first.
+      if (verdict === 'RETRY') {
+        markFailed(l.state, id)
+        const node = l.graph.nodes.find(n => n.id === id)
+        const spent = `after ${rec.visits} of ${node ? maxVisitsOf(node) : rec.visits} visit(s)`
+        Object.assign(rec, {
+          status: 'failed', model,
+          error: `Monitor asked for another attempt ${spent} and there is none left: ${preview(review)}`,
+        })
+        log.warn('monitor retry had no visit left', { runId: run.id, stepId: id, visits: rec.visits })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
     }
 
-    markCompleted(l.graph, l.state, id)
+    markCompleted(l.graph, l.state, id, stepOutcome)
     // Progress clears the interruption count: only CONSECUTIVE restarts with
-    // nothing achieved in between are the loop worth pausing on.
+    // nothing achieved in between are the loop worth pausing on. `restarts`
+    // above is the durable record and is never cleared here.
     run.interruptions = 0
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
+    if (watchdogFired) {
+      markFailed(l.state, id)
+      const spent = Math.round(runElapsedMinutes(run))
+      Object.assign(rec, {
+        status: 'failed',
+        error: `The step was stopped after the run's ${run.budget.maxMinutes}-minute budget ran out (${spent} min elapsed). It produced no result.`,
+        completedAt: Date.now(),
+      })
+      run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: 'watchdog: the run ran out of time while this step was in flight' }]
+      log.warn('step aborted by the run watchdog', { runId: run.id, stepId: id, minutes: spent })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return false
+    }
     // A step that ran out of either budget - turns or wall-clock - has usually
     // done most of its work, and its log tail says how far it got. One retry
     // that starts from there is cheaper than a dead run: the budget becomes a
@@ -1088,6 +1965,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         : `Your previous attempt ran out of its ${spent} before it reported. Its last actions are above, most recent last; they usually include the command that finally worked. Do not repeat the exploration: start from what they found, finish in as few commands as possible, and end with the report.`
       l.state.status[id] = 'completed'
       armNode(l.state, id)
+      run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId: id, reason: `the step hit its own ${err.subtype === 'error_max_turns' ? 'turn' : 'duration'} limit and was retried from its log tail` }]
       log.warn('step ran out of its budget; retrying from its log tail', { runId: run.id, stepId: id, agentSlug: step.agentSlug, subtype: err.subtype, visits: rec.visits })
       return true
     }
@@ -1117,6 +1995,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return false
   } finally {
+    clearTimeout(watchdog)
     l.aborts.delete(id)
     l.steer.delete(id)
   }
@@ -1206,20 +2085,60 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // straight through the same runbook that stops hard on a money one, so
   // nobody learns to click approve without reading. See shared/utils/oversight.
   // Still-unclassified stays `stop`: absence of evidence is not evidence of safety.
+  // A step may declare what KIND of question its gate asks. Story, spec and
+  // security gates carry a floor, because the blast radius cannot answer "is
+  // this the right thing?" or "does this expose anything?" — see
+  // shared/utils/oversight.ts. A step with no `gateKind` tiers exactly as
+  // before.
   const gate = wave.find(id => stepOf(l, id)?.approval && !l.approved.has(id)
-    && oversightFor(run.blastRadius) !== 'auto')
+    && oversightForGate(run.blastRadius, (stepOf(l, id) as { gateKind?: GateKind } | undefined)?.gateKind) !== 'auto')
   if (gate) {
     const label = stepOf(l, gate)?.label ?? gate
+    const gateKind = (stepOf(l, gate) as { gateKind?: GateKind } | undefined)?.gateKind
     // Whose decision this is, from the step that declares it. A gate with no
     // `gateRole` stays everyone's, which is the old behaviour and the honest
     // default for a workflow that never said.
     const gateRole = (stepOf(l, gate) as { gateRole?: Role } | undefined)?.gateRole
+    // What the gate can actually PROVE, resolved before the person is asked.
+    // A gate screen that shows only the step's prose asks the reviewer to
+    // re-derive trust in the diff, which is the work the pipeline was supposed
+    // to remove. Never throws: a criterion that cannot be derived comes back
+    // `blocked`, which is a refusal, not a pass.
+    let criteria: Awaited<ReturnType<typeof criteriaForGate>> = []
+    try {
+      criteria = await criteriaForGate(run, run.projectDir)
+    } catch (err) {
+      log.warn('could not resolve gate criteria', { runId: run.id, error: String(err) })
+    }
     run.question = {
       stepId: gate,
-      text: `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}`,
+      // The step label and nothing else.
+      //
+      // This string used to carry the gate's owner and the oversight reason
+      // concatenated onto it, and both are POLICY: identical on every row of
+      // the same class. Three screens rendered it, so every approval in a
+      // queue read the same for its first sixty characters, and the one fact
+      // that distinguished two decisions — which change, and how dangerous —
+      // was past the truncation. Both are already structured on the record
+      // (`role`, `gateKind`, `oversight`, `blastRadius`); a consumer that
+      // wants to explain the policy can compose it once, in a detail view,
+      // rather than in every row.
+      text: `Approve "${label}" to run it.`,
+      // The step's name says what happens next; this says how to decide it, and
+      // is honest about the first gate, where nothing has run and every
+      // criterion on screen passes for free.
+      asks: gateAsks(gateKind, run.steps.some(s => s.status === 'completed')),
+      ...(criteria.length ? { criteria } : {}),
       kind: 'approval',
       askedAt: Date.now(),
       ...(gateRole ? { role: gateRole } : {}),
+      ...(gateKind ? { gateKind } : {}),
+      // Snapshot WHY this gate stopped, not merely what the run is classified
+      // as now. A later step may raise the class, and a reader then sees a
+      // tier that disagrees with the reason the run is on their screen.
+      // RunDecision already keeps its own blastRadius for exactly this reason.
+      oversight: oversightForGate(run.blastRadius, gateKind),
+      ...(run.blastRadius ? { blastRadius: run.blastRadius } : {}),
     }
     run.status = 'paused'
     run.currentStepIds = []
@@ -1456,6 +2375,29 @@ async function openLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<voi
  * the same lines is a workflow whose lanes were not disjoint, and no automatic
  * resolution here could be trusted to keep both.
  */
+/**
+ * Write a lane's uncommitted work into the run's artifacts, and answer the
+ * file name — or null when there was nothing to save, or saving failed.
+ *
+ * Best effort by design: the worktree is being kept regardless, so a failure
+ * here loses nothing that was not already safe. It must never take the wave
+ * down, which is the whole reason it swallows its own errors.
+ */
+async function saveLanePatch(run: WorkflowRun, stepId: string, laneDir: string | undefined): Promise<string | null> {
+  try {
+    const patch = await uncommittedPatch(laneDir)
+    if (!patch) return null
+    const name = `lane-uncommitted-${safeName(recOf(run, stepId)?.label ?? stepId)}.patch`
+    await writeFile(join(runArtifactsDir(run.id), name), patch)
+    return name
+  } catch (err) {
+    log.warn('could not save the lane patch', { runId: run.id, stepId, error: String(err) })
+    return null
+  }
+}
+
+const safeName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'step'
+
 async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<string | null> {
   if (!run.projectDir) return null
   let failure: string | null = null
@@ -1463,6 +2405,7 @@ async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<st
     const laneBranch = l.laneBranches[id]
     if (!laneBranch) continue
     const rec = recOf(run, id)
+    const laneDir = l.laneDirs[id]
     delete l.laneDirs[id]
     delete l.laneBranches[id]
     if (rec?.status !== 'completed') {
@@ -1472,6 +2415,37 @@ async function closeLanes(l: Live, run: WorkflowRun, wave: string[]): Promise<st
     try {
       const said = await mergeLane(run.projectDir, laneBranch)
       log.info('lane merged', { runId: run.id, stepId: id, result: said })
+      // `mergeLane` merges COMMITS. `removeLane` then runs `worktree remove
+      // --force`, which deletes everything that was not one — and run a3cb9d37
+      // lost its client fix exactly here, "staged and uncommitted", 566
+      // insertions across 5 files, with no error and no log line. So the lane
+      // is measured before it is destroyed, and a dirty one is kept: a
+      // worktree left behind is noise, and the alternative is deleting work
+      // nobody can recover.
+      // `null` is NOT "clean": workingTreeDirty answers null when it could not
+      // measure at all — no directory, not a worktree, or `git status` itself
+      // failed (a locked or corrupted index, a permission error). Reading that
+      // as clean would delete an unmeasured worktree, which is the same loss
+      // through a different door, so only a positive measurement of nothing
+      // permits the removal.
+      const left = await workingTreeDirty(laneDir)
+      if (left === null || left.length) {
+        // A copy in the run's evidence, before anything else. Keeping the
+        // worktree protects the work from this code; the patch protects it from
+        // the next person to run `worktree remove --force` by hand, which is
+        // what the message below tells them to do. SBN-4091's frontend fix was
+        // recovered from exactly this kind of artifact and from nothing else.
+        const saved = await saveLanePatch(run, id, laneDir)
+        rec.laneKept = left === null
+          ? `${laneBranch}: its worktree at ${laneDir} could not be checked for uncommitted work, so it was kept. Look before you remove it: git -C ${run.projectDir} worktree remove ${laneDir}`
+          : `${laneBranch}: ${left.length} uncommitted file(s) left in ${laneDir}. They are NOT in the run branch — commit them there or copy them out, then: git -C ${run.projectDir} worktree remove --force ${laneDir}`
+        if (saved) rec.laneKept += ` A copy of the uncommitted work is in the run's artifacts as ${saved}.`
+        log.warn('lane kept: its worktree still holds uncommitted work', {
+          runId: run.id, stepId: id, laneBranch, uncommitted: left?.length ?? 'unmeasurable', laneDir,
+        })
+        logLine(l, run, rec, rec.laneKept)
+        continue
+      }
       await removeLane(run.projectDir, laneBranch)
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err)
@@ -1531,6 +2505,31 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // The run's own worktree, beside the clone: every step from here works
   // there, and the clone stays on whatever branch the developer left it on.
   run.projectDir = worktrees[0] ?? checkout
+
+  // Every run, every ticket: whatever is attached to the ticket comes down
+  // into the worktree before any agent starts.
+  //
+  // A screenshot on a ticket is often the whole specification — the defect,
+  // the layout, the error dialog — and it was unreachable. Agents have no
+  // shell and no Jira access, and Jira's attachment URLs need the same
+  // credentials the issue fetch needed, so a ticket whose description said
+  // "see attached" handed the run nothing and said nothing about it either.
+  //
+  // Best effort, never fatal: a ticket with no attachments costs one field
+  // that viewIssue already asks for, and an attachment that will not download
+  // is reported in the log rather than failing a run over a file.
+  if (run.ticketKey) {
+    try {
+      const issue = await viewIssue(run.ticketKey, await envResolver(run.startedBy))
+      if (issue.attachments.length) {
+        const { saved, failed } = await downloadAttachments(issue, run.projectDir, await envResolver(run.startedBy))
+        if (saved.length) log.info('ticket attachments', { runId: run.id, ticket: run.ticketKey, saved: saved.map(s => s.filename) })
+        if (failed.length) log.warn('ticket attachments could not be fetched', { runId: run.id, failed })
+      }
+    } catch (err) {
+      log.warn('ticket attachments unavailable', { runId: run.id, ticket: run.ticketKey, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
   run.workType = run.workType ?? classified?.work_type
   run.blastRadius = run.blastRadius ?? classified?.blast_radius
   run.origin = run.origin ?? classified?.origin
@@ -1569,6 +2568,27 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
   const firstRepo = product?.repos?.[0]
   const projectDir = opts.projectDir ?? (firstRepo && existsSync(checkoutDirFor(firstRepo, opts.startedBy)) ? checkoutDirFor(firstRepo, opts.startedBy) : undefined)
   const ticketKey = opts.ticketKey ?? opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1]
+  // A ticket that already has a COMPLETED run is done until someone says
+  // otherwise. A failed one is the ordinary retry path and is not blocked.
+  // The escape hatch is an env var rather than a parameter because every entry
+  // point - the API, a watch dispatch, the CLI, a test harness - reaches this
+  // one function, and a per-caller flag is a flag somebody forgets to set.
+  if (ticketKey && process.env.AGENT_ALLOW_DUPLICATE_TICKET_RUNS === '1') {
+    // Loud, because an escape hatch nobody can see in the logs is how a test
+    // setting ends up in a production environment and nothing says so.
+    log.warn('duplicate-ticket guard bypassed by AGENT_ALLOW_DUPLICATE_TICKET_RUNS', { ticketKey })
+  }
+  if (ticketKey && !opts.rerunReason && process.env.AGENT_ALLOW_DUPLICATE_TICKET_RUNS !== '1') {
+    const prior = await findRunForTicket(ticketKey)
+    if (prior?.status === 'completed') {
+      throw new Error(
+        `${ticketKey} already has a completed run (${prior.id}${prior.branch ? `, branch ${prior.branch}` : ''}`
+        + `${prior.endedAt ? `, finished ${new Date(prior.endedAt).toISOString().slice(0, 10)}` : ''}). `
+        + 'Read what it produced before starting another: two runs on one ticket have already shipped two independent fixes in two codebases. '
+        + 'Pass a rerun reason to start anyway, or set AGENT_ALLOW_DUPLICATE_TICKET_RUNS=1 on an instance that runs tickets repeatedly by design.',
+      )
+    }
+  }
   // Captured BEFORE createRun, so the baseline is the project directory's
   // HEAD at the true moment execution begins — before any step, and so any
   // agent, has had a chance to touch it. See gitFacts.ts's captureBaseline
@@ -1588,6 +2608,16 @@ export async function startRun(opts: StartRunOpts): Promise<WorkflowRun> {
     ticketKey,
     projectDir,
     baseCommit,
+    // Whether this workflow ships at all, snapshotted like the steps below: the
+    // ship-integrity check must not fail a research workflow for opening no
+    // pull request, and must not be talked out of failing one that does ship by
+    // a template edited after the run started.
+    expectsPr: opts.workflow.steps.some(s => s.pr === true),
+    // The graph this run will actually execute, kept with the run. See
+    // rehydrate: a boot reseed rewrites the definitions on disk, and a resume
+    // five seconds later used to pick up the new one mid-run.
+    workflowSnapshot: opts.workflow.steps,
+    ...(opts.rerunReason ? { rerunReason: opts.rerunReason } : {}),
     // `ownerRole` is snapshotted with the rest: the run page must render whose
     // work a step is without loading the workflow, and a template edited after
     // this run started must not rewrite what this run's history says.
@@ -1657,6 +2687,14 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
     if (!frozen) { out.skipped.push(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
+    // The counter resets on progress, which is right for deciding whether to
+    // keep resuming and wrong as a record: 28 retries, restarts and aborts
+    // happened across ten real runs and every one of their records reported
+    // zero. The log below is append-only and never reset, so first-pass yield
+    // and rework rate are answerable afterwards.
+    run.restarts = [...(run.restarts ?? []), {
+      at: Date.now(), bootId: BOOT_ID, stepId: frozen.stepId, reason: 'the previous process died mid-step',
+    }]
     if (run.interruptions > MAX_INTERRUPTIONS) {
       frozen.status = 'pending'
       run.status = 'paused'
@@ -1688,6 +2726,74 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
 /** Continue a paused run. A note travels to the approved step, or to whichever step starts next. */
 /** Approving an owner-gated run without saying why. The route answers 400. */
 export class ApprovalNeedsReason extends Error {}
+
+/**
+ * Skip the step a paused run is waiting on, and carry on past it.
+ *
+ * A gate could be approved, rejected, reworked or stopped — and a reviewer who
+ * wanted none of those was stuck. The case that forced this: a Jira transition
+ * step on a run whose ticket must not move, where approving does the wrong
+ * thing, rejecting ends the run, and rework re-does work that was fine. The
+ * only remaining option was to stop a healthy run over one step nobody wanted.
+ *
+ * A skipped step is not a completed one. It is marked `skipped` in the run's
+ * steps and in the graph state, so no downstream step can read its output as
+ * evidence, and the decision goes on the record with its reason — a step that
+ * silently did not happen is the thing every gate in this estate exists to
+ * prevent.
+ *
+ * Requires a reason, always. Unlike an approval this has no blast-radius
+ * exemption: skipping is the one answer with no artifact behind it, so the
+ * sentence is the only account of why the pipeline did less than it says.
+ */
+export class SkipNeedsReason extends Error {}
+
+export async function skipStep(runId: string, reason: string): Promise<WorkflowRun | null> {
+  if (!reason?.trim()) throw new SkipNeedsReason('Say in one line why this step is being skipped: it is the only record that it did not run.')
+
+  let l = live.get(runId)
+  if (!l) {
+    const stored = await getRun(runId)
+    if (stored?.status !== 'paused') return stored
+    l = await rehydrate(stored)
+    stored.pid = process.pid
+    stored.bootId = BOOT_ID
+    await saveRun(stored)
+  }
+  if (l.running) return getRun(runId)
+  l.running = true
+  const run = await getRun(runId)
+  if (!run || run.status !== 'paused' || !run.question?.stepId) {
+    l.running = false
+    return run
+  }
+
+  const stepId = run.question.stepId
+  // A budget pause is not a step anyone can skip: there is no step waiting,
+  // only an allowance that ran out.
+  if (run.question.reason === 'budget') {
+    l.running = false
+    throw new SkipNeedsReason('This run is paused on its budget, not on a step. Grant more budget or stop the run.')
+  }
+
+  // Skipped, never completed: a completed step's output is evidence, and this
+  // one produced none.
+  markSkipped(l.graph, l.state, stepId)
+  const step = run.steps.find(s => s.stepId === stepId)
+  if (step) {
+    step.status = 'skipped'
+    step.completedAt = Date.now()
+    step.output = `Skipped by ${'an operator'}: ${reason.trim()}`
+  }
+  l.notes[stepId] = `This step was SKIPPED and did not run. Reason: ${reason.trim()}`
+
+  run.question = undefined
+  reconcileRunClock(run)
+  run.status = 'running'
+  await publish(run)
+  void driveToSettlement(l, run)
+  return run
+}
 
 export async function continueRun(runId: string, note?: string): Promise<WorkflowRun | null> {
   let l = live.get(runId)
@@ -1733,7 +2839,7 @@ export async function continueRun(runId: string, note?: string): Promise<Workflo
     // it cannot be satisfied without having read something. Reject already
     // demanded a reason; approve did not, which had it backwards — saying yes to
     // a money change is the answer that needs the justification.
-    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius) && !note?.trim()) {
+    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius, run.question.gateKind) && !note?.trim()) {
       l.running = false
       throw new ApprovalNeedsReason(
         `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
@@ -1883,6 +2989,7 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   if (l) {
     l.stopped = true
     skipPending(l.state)
+    for (const id of l.aborts.keys()) recordRestart(run, id, 'a person stopped the run while this step was in flight')
     for (const ac of l.aborts.values()) ac.abort()
   }
   for (const s of run.steps) if (s.status === 'pending' || s.status === 'waiting') s.status = 'skipped'
@@ -1915,10 +3022,34 @@ export function _dropLive(runId: string) { live.delete(runId) }
  * have armed live; their outputs and inputs come back from the record. Anything
  * not completed stays pending and unarmed until a predecessor arms it.
  */
+/**
+ * The gates a person has already answered, from the durable record.
+ *
+ * This used to be an empty set, so a restart forgot every approval: the
+ * resumed run raised the same gate at the same step and asked the same person
+ * the same question again. The decisions were on the record the whole time -
+ * `recordDecision` appends one for every answered gate - and nothing read them
+ * back.
+ *
+ * Only `approved` counts. A rejection is not permission, and a rework decision
+ * means the step is meant to run again with feedback, not to skip its gate.
+ */
+function approvalsFrom(run: WorkflowRun): Set<string> {
+  return new Set((run.decisions ?? []).filter(d => d.verdict === 'approved').map(d => d.stepId))
+}
+
 async function rehydrate(run: WorkflowRun): Promise<Live> {
   const existing = live.get(run.id)
   if (existing) return existing
-  const workflow = await loadWorkflowSteps(run.workflowSlug)
+  // The run's OWN snapshot first. On boot the seeder rewrites the workflow
+  // definitions on disk and interrupted runs resume five seconds later, so a
+  // run interrupted at step 5 of the old graph would otherwise resume against
+  // the new one — the definition changing under a run that is still inside it.
+  // Falling back to disk keeps every run recorded before the snapshot existed
+  // resumable.
+  const workflow = run.workflowSnapshot
+    ? { slug: run.workflowSlug, name: run.workflowName, steps: run.workflowSnapshot }
+    : await loadWorkflowSteps(run.workflowSlug)
   if (!workflow) {
     throw new RestartError(409, `Workflow "${run.workflowSlug}" no longer exists, so this run cannot be rebuilt`)
   }
@@ -1927,7 +3058,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   const graph = buildGraph(steps)
   const state = initRunState(graph)
   const l: Live = {
-    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: new Set(), notes: {}, steer: new Map(), laneDirs: {}, laneBranches: {},
+    workflow: aligned, graph, state, outputs: {}, lastInputs: {}, retryFeedback: {}, resumeFrom: {}, stopped: false, running: false, aborts: new Map(), logs: {}, approved: approvalsFrom(run), notes: {}, steer: new Map(), laneDirs: {}, laneBranches: {},
   }
   const header = artifactHeader(runArtifactsDir(run.id), undefined, undefined, run.id)
   // A declared skip is a settled outcome, the same as completed: a restart of a
@@ -2005,6 +3136,11 @@ const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted'
  * step's output, under the same run id and artifacts directory. The previous
  * attempt of each reset step is snapshotted the way monitor retries are.
  */
+/** Appended by every path that ends an attempt; see WorkflowRun.restarts. */
+function recordRestart(run: WorkflowRun, stepId: string, reason: string): void {
+  run.restarts = [...(run.restarts ?? []), { at: Date.now(), bootId: BOOT_ID, stepId, reason }]
+}
+
 export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string, opts: { /** The runner itself hands a running run over (a widened run); the settled-status gate is the operator's, not its. */ fromRunner?: boolean } = {}): Promise<WorkflowRun> {
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
@@ -2021,6 +3157,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
       { runId: active.id },
     )
   }
+  recordRestart(run, stepId, note ? `an operator restarted from this step: ${note}` : 'an operator restarted from this step')
   // A restart starts from what is on disk. An in-memory record left by a
   // previous attempt carries that attempt's state, and a second restart
   // scheduled against it found nothing to run and reported the run complete.

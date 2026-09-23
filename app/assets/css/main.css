@@ -309,23 +309,87 @@ body {
   padding: 0;
 }
 
+/* One budget, one axis: colour intensity encodes consequence-of-being-wrong,
+   and nothing else.
+   
+   Before this, a row carried five competing marks — a status-hued icon, a
+   status-hued rail, bold text, a hued wait figure, and a risk chip — so
+   turning any one of them up could not make the dangerous row stand out.
+   The rare item pops by making the routine one RECEDE, which means most of
+   these channels had to be given back. */
+:root { --danger-wash: color-mix(in srgb, var(--error) 6%, var(--surface-raised)); }
+.dark { --danger-wash: color-mix(in srgb, var(--error) 14%, var(--surface-raised)); }
+
+/* A control revealed by hover does not exist on a touch screen: no hover event
+   ever fires, so the reveal never happens and the control cannot be reached at
+   all. The keyboard path is the :focus / :focus-within variant on each site;
+   this is the pointer one, and the project's own standard says these pages
+   work at 375px.
+
+   Doubled class rather than !important: it beats Tailwind's `opacity-0` on
+   specificity without making the rule unoverridable. Applied only where the
+   reveal hides something you can operate — decorative overlays keep their
+   hover-only behaviour, because showing them permanently on a phone would be
+   a visual change rather than a fix. */
+@media (hover: none) {
+  .reveal-quiet.reveal-quiet { opacity: 1; }
+}
+
+/* A destructive control sitting beside a routine one: quiet at rest so it does
+   not compete, unmistakable the moment a pointer or the keyboard reaches it.
+   Same rule as above — the rare item pops because the routine one recedes. */
+.btn-danger-quiet {
+  color: var(--text-tertiary);
+  transition: color 150ms ease;
+}
+.btn-danger-quiet:hover,
+.btn-danger-quiet:focus-visible {
+  color: var(--error);
+}
+
 .attn-row {
   display: grid;
-  /* The last track holds an "Answer" button, not just an icon: at 1.75rem it
-     overflowed into the wait figure beside it. */
-  grid-template-columns: 3px 16px 7rem minmax(0, 1fr) auto 5rem 3.5rem 5rem;
+  /* 4px rail · icon · key · consequence · provability · class · wait · action.
+     The provability cell is the one that distinguishes "checked" from "said"
+     and had no column at all. */
+  grid-template-columns: 4px 16px 7.5rem minmax(0, 1fr) 7rem 5rem 3.5rem 5rem;
   align-items: center;
   column-gap: 10px;
-  min-height: 34px;
+  min-height: 40px;
   padding-right: 8px;
   border-bottom: 1px solid var(--border-subtle);
+}
+/* Size is a channel, and it was not being spent. Hue does not survive
+   greyscale, glare or peripheral vision; height does. An owner-gated row is
+   visibly taller before any colour is read. */
+.attn-row--gated { min-height: 58px; background: var(--danger-wash); }
+@media (max-width: 720px) {
+  /* A table of eight tracks does not survive a phone. Card, not grid: the
+     short fixed-width facts share a line, the consequence gets its own. */
+  .attn-row {
+    grid-template-columns: 4px minmax(0, 1fr) 5rem 3.5rem;
+    grid-template-areas:
+      'rail key   class wait'
+      'rail ask   ask   ask'
+      'rail proof proof act';
+    row-gap: 2px;
+    padding: 8px 8px 8px 0;
+  }
+  .attn-rail { grid-area: rail; }
+  .attn-key { grid-area: key; }
+  .attn-ask { grid-area: ask; white-space: normal; }
+  .attn-proof { grid-area: proof; text-align: left; }
+  .attn-class { grid-area: class; }
+  .attn-wait { grid-area: wait; }
+  .attn-act { grid-area: act; justify-content: flex-end; }
+  .attn-row > .attn-icon { display: none; }
 }
 .attn-row:last-child { border-bottom: 0; }
 .attn-row:hover { background: var(--surface-hover); }
 
-/* Hue says what state it is in; fill says whether it is yours. */
-.attn-rail { align-self: stretch; background: color-mix(in srgb, var(--rail) 30%, transparent); }
-.attn-row--mine .attn-rail { background: var(--rail); }
+/* The rail carries consequence. At 2px in dark mode a mixed-down neutral
+   reads as nothing, so the routine level uses the token at full strength. */
+.attn-rail { align-self: stretch; background: var(--rail); }
 
 .attn-key {
   font-family: var(--font-mono);
@@ -339,23 +403,35 @@ body {
 /* Ownership raises weight, not size: the row height stays constant. */
 .attn-row--mine .attn-ask { color: var(--text-primary); font-weight: 600; }
 
+/* Lateness gets WEIGHT, not the danger palette. Hueing the clock meant a
+   stale docs change looked more alarming than a fresh money one — the
+   palette was being spent on the wrong axis. */
 .attn-wait { font-family: var(--font-mono); text-align: right; color: var(--text-tertiary); }
 .attn-row--warm .attn-wait { color: var(--text-secondary); }
-.attn-row--high .attn-wait { color: var(--warning); font-weight: 600; }
-.attn-row--critical .attn-wait { color: var(--error); font-weight: 700; }
-/* Past four hours the whole row changes ground, not just its clock. */
-.attn-row--critical { background: color-mix(in srgb, var(--error) 5%, var(--surface-raised)); }
+.attn-row--high .attn-wait { color: var(--text-secondary); font-weight: 600; }
+.attn-row--critical .attn-wait { color: var(--text-primary); font-weight: 700; }
 
-/* Rendered only when the tier changes what the reader must do, so the rows that
-   carry it are unmissable. Every row wearing a risk chip is no signal at all. */
-.attn-risk {
-  padding: 1px 5px;
-  border-radius: 4px;
-  color: var(--text-secondary);
-  background: var(--badge-subtle-bg);
+/* How much of this gate is proven. Worst-first, and only ever a count —
+   never "verified", never "passed" over a set containing something unchecked. */
+.attn-proof {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The class as a word at the row's own size, not a chip. A chip shrinks the
+   one thing that has to be big; this is louder and costs nothing. Rendered
+   ONLY for an owner-gated change, so that a mark means something. */
+.attn-class {
+  color: var(--error);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
-.attn-risk--justify { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); }
 
 .attn-act { display: flex; justify-content: center; }
 /* "This is owed by you" must be visible across the room; "tidy this away" must

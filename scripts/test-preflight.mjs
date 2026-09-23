@@ -38,6 +38,12 @@ const repo = (path, branch = 'develop') => {
 const run = (over = {}) => ({ id: 'run-1', status: 'running', workflowName: 'Runbook C', workflowSlug: 'runbook-c', watch: 'direct-invocation', steps: [], startedAt: Date.now(), budget: { maxMinutes: 1, maxTokens: 1 }, ...over })
 const of = (report, name) => report.checks.find(c => c.name === name)
 const stackStep = { agentSlug: 'sdlc-stack-provisioner', label: 'Stand Up Stack' }
+// What the shipped templates actually declare: a step CARRYING `stack: 'up'`,
+// run by whichever agent the estate has. Keying on an agent slug meant every
+// check below was skipped for them - no template has named
+// `sdlc-stack-provisioner` since the estate moved to the oh-my-agent agents.
+const declaredStackStep = { agentSlug: 'tf-infra-engineer', label: 'Stack Up & Environment Verification', stack: 'up' }
+const deployStep = { agentSlug: 'tf-infra-engineer', label: 'Stack Up, Dev Deploy & Environment Verification', stack: 'up', deploy: { env: 'dev', step: 'deploy' } }
 const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches: { bug: 'develop' }, tests: {}, stack: { compose: 'alepo-dev-team-infra/pms', topology_default: '1node' }, ...over })
 
 // ── 1. a workflow that needs nothing: every optional check declares itself skipped, and nothing fails ──
@@ -69,6 +75,31 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   assert.equal(of(ok, 'deployment compose').level, 'ok', JSON.stringify(of(ok, 'deployment compose')))
   assert.equal(of(ok, 'product checkout').level, 'ok')
   assert.match(of(ok, 'product checkout').detail, /pms on develop/)
+}
+
+// ── 2b. a step that DECLARES a stack is a step that stands one up ──
+{
+  const r = await runPreflight(run({ product: product() }), [declaredStackStep])
+  assert.notEqual(of(r, 'deployment compose').level, 'skip',
+    `a declared stack step must be recognised: ${JSON.stringify(of(r, 'deployment compose'))}`)
+  const noProduct = await runPreflight(run(), [declaredStackStep])
+  assert.equal(of(noProduct, 'product').level, 'fail',
+    'and no product under a declared stack step is still a failure')
+}
+
+// ── 2c. a deploy step is checked against the infra checkout's own roles ──
+// deploy.sh defaults its app to crm, so a product with no ansible role must be
+// named here rather than discovered once ansible is already running.
+{
+  const r = await runPreflight(run({ product: product() }), [deployStep])
+  const c = of(r, 'deploy entrypoint')
+  assert.ok(c, 'a workflow that deploys must have its entrypoint checked')
+  assert.notEqual(c.level, 'fail', 'a missing infra checkout is a warning, not a dead run')
+  assert.match(c.detail, /deploy\.sh|ALEPO_INFRA_DIR|roles/, JSON.stringify(c))
+
+  const noDeploy = await runPreflight(run({ product: product() }), [declaredStackStep])
+  assert.equal(of(noDeploy, 'deploy entrypoint'), undefined,
+    'and a workflow that deploys nothing is asked nothing about deploying')
 }
 
 // ── 3. no product at all, but the workflow stands a stack up: fail, do not guess ──

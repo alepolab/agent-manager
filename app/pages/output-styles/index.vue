@@ -93,7 +93,7 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
               </p>
             </div>
             
-            <div v-if="style.path" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div v-if="style.path" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity reveal-quiet">
               <UButton
                 icon="i-lucide-edit-2"
                 variant="ghost"
@@ -126,7 +126,8 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
     </div>
 
     <!-- Add/Edit Modal -->
-    <UModal v-model:open="isModalOpen">
+    <UModal v-model:open="isModalOpen" :title="editingStyle ? 'Edit output style' : 'New output style'"
+      description="An output style changes how Claude writes its replies.">
       <template #content>
         <AddOutputStyleModal
           :initial-data="editingStyle ?? undefined"

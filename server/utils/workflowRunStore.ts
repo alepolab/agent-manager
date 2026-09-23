@@ -4,8 +4,9 @@ import { mkdir, readdir, readFile, writeFile, rename, rm } from 'node:fs/promise
 import { join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
 import { agentManagerSettings } from './appSettings.ts'
-import { runWorkspace } from './workspace.ts'
+import { runWorkspace, runLockKey } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
+import { createLogger } from './log.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 
@@ -15,8 +16,25 @@ export function defaultBudget(): RunBudget {
   return {
     maxMinutes: Number(process.env.AGENT_RUN_MAX_MINUTES) || Number(s.maxMinutes) || 180,
     maxTokens: Number(process.env.AGENT_RUN_MAX_TOKENS) || Number(s.maxTokens) || 8_000_000,
+    // Money, because tokens are not money. Every measured run spent $44-$56
+    // while using 15-25% of the 8M token cap - that cap is worth roughly $200
+    // at observed rates, so it has never once been the thing that stopped a
+    // run. A dollar figure is what an operator actually budgets in.
+    maxUsd: Number(process.env.AGENT_RUN_MAX_USD) || Number(s.maxUsd) || 60,
   }
 }
+
+/**
+ * The most a single run may EVER spend, however many times its gate is
+ * continued. `extendBudget` raises the cap in place when a person clicks
+ * continue, and four real runs show caps ratcheted to 9.9M tokens / 304 min
+ * that way - a ceiling nobody has to remember is the only kind that holds.
+ */
+export function absoluteUsdCeiling(): number {
+  return Number(process.env.AGENT_RUN_MAX_USD_CEILING) || 250
+}
+
+const log = createLogger('runner')
 
 export const RUNS_DIR_NAME = 'workflow-runs'
 
@@ -29,6 +47,29 @@ const runPath = (id: string) => join(runsDir(), `${id}.json`)
 async function ensureDir() {
   const dir = runsDir()
   if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+  await sweepStaleWrites(dir)
+}
+
+/**
+ * Remove the half-written records a killed process leaves behind.
+ *
+ * A real one is still on disk: `a3cb9d37-….json.1.c2604368.tmp`, 131 KB,
+ * holding that run as `running` under a boot id that died — beside the final
+ * record written by a different boot. Nothing ever cleans these up, they are
+ * counted by anything that reads the directory, and they are the only surviving
+ * evidence that a restart happened at all (see WorkflowRun.restarts, which now
+ * records it properly). Swept once per process, not per call: this runs on the
+ * hot path.
+ */
+let sweptStaleWrites = false
+async function sweepStaleWrites(dir: string): Promise<void> {
+  if (sweptStaleWrites) return
+  sweptStaleWrites = true
+  try {
+    const stale = (await readdir(dir)).filter(f => /\.json\.\d+\.[0-9a-f]+\.tmp$/.test(f))
+    for (const f of stale) await rm(join(dir, f), { force: true })
+    if (stale.length) log.warn('removed half-written run records left by a killed process', { count: stale.length })
+  } catch { /* the directory is the caller's problem, not this sweep's */ }
 }
 
 /** Is that process still alive? Signal 0 tests existence without signalling. */
@@ -116,6 +157,9 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     workflowName: input.workflowName,
     status: 'running',
     autoRun: input.autoRun,
+    ...(input.expectsPr ? { expectsPr: true } : {}),
+    ...(input.rerunReason ? { rerunReason: input.rerunReason } : {}),
+    ...(input.workflowSnapshot ? { workflowSnapshot: input.workflowSnapshot } : {}),
     initialPrompt: input.initialPrompt,
     watch: input.watch,
     ticketKey: input.ticketKey,
@@ -205,10 +249,38 @@ export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun |
  */
 export async function findRunInWorkspace(workspace: string, excludeRunId?: string): Promise<WorkflowRun | null> {
   const runs = await listRuns()
+  // Compared by CLONE, not by path: see runLockKey. `workspace` is still
+  // accepted as a path so every existing caller is unchanged, and is resolved
+  // to the same identity the stored runs are.
+  const live = runs.filter(r => (r.status === 'running' || r.status === 'paused') && r.id !== excludeRunId)
+  if (!live.length) return null
+  const byPath = live.find(r => runWorkspace(r) === workspace)
+  if (byPath) return byPath
+  const key = await runLockKey({ projectDir: workspace })
+  const keys = await Promise.all(live.map(r => runLockKey(r)))
+  const i = keys.findIndex(k => k === key)
+  return i === -1 ? null : live[i]!
+}
+
+/**
+ * A settled run that already did this ticket.
+ *
+ * CSUP-7514 was solved twice, six days apart, in two different codebases, for
+ * about $110 - a selfcare middleware in one run and a CRM pipeline rule in the
+ * other, each asserting root cause, neither mentioning the other. Two
+ * independent address gates now exist because nothing looked.
+ *
+ * Returns the most recent completed or failed run for the ticket. A running or
+ * paused one is already caught by the workspace lock; this is about work that
+ * has FINISHED and been forgotten.
+ */
+export async function findRunForTicket(ticketKey: string, excludeRunId?: string): Promise<WorkflowRun | null> {
+  if (!ticketKey) return null
+  const runs = await listRuns()
   return runs.find(r =>
-    (r.status === 'running' || r.status === 'paused')
-    && r.id !== excludeRunId
-    && runWorkspace(r) === workspace,
+    r.id !== excludeRunId
+    && r.ticketKey === ticketKey
+    && (r.status === 'completed' || r.status === 'failed'),
   ) ?? null
 }
 

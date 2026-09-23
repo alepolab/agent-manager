@@ -29,6 +29,17 @@ Follow the shared execution policy for authorization and clarification. State ma
 
 A scoped user edit request or assigned implementation task authorizes those corrections, regardless of entry point. Review-only requests produce findings or proposals. Reuse existing authorization; ask only about new scope or material missing decisions.
 
+## What the pull request body must carry
+
+A reviewer's five findings — three of them unresolved — existed only as prose in
+one markdown file, because the step that would have named them in the pull
+request never ran. Another run ended "two blockers remain" and named neither.
+
+1. Every residual review finding, with its id, severity and file:line.
+2. Everything the run recorded as not done (the `PIPELINE-NOT-DONE:` lines the
+   runner collects), verbatim.
+3. A link to the run's artifacts directory, never a copy of it in the repo.
+
 ## Rules
 
 1. Stay in scope — only update docs related to the assigned diff range or acceptance criteria

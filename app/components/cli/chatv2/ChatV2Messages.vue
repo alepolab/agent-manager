@@ -81,89 +81,75 @@ function handleOpenFile(filePath: string) {
       :key="group.id"
       class="message-group min-w-0"
     >
-      <!-- User Message Group -->
-      <div v-if="group.role === 'user'" class="flex justify-end min-w-0">
-        <div class="flex items-start gap-2 md:gap-3 max-w-[95%] md:max-w-[85%] min-w-0">
-          <div class="flex flex-col items-end gap-1.5 min-w-0">
-            <!-- All user messages in this group -->
-            <div
-              v-for="(msg, idx) in group.messages"
-              :key="msg.id"
-              class="group relative px-3 md:px-4 py-2 md:py-2.5 min-w-0"
-              :class="idx === 0 ? 'rounded-2xl rounded-tr-md' : 'rounded-2xl rounded-r-md'"
-              style="background: var(--accent); color: white;"
-            >
-              <div v-if="msg.images && msg.images.length > 0" class="flex flex-wrap gap-2 mb-2">
-                <img v-for="(img, i) in msg.images" :key="i" :src="img" class="max-w-[160px] md:max-w-[200px] max-h-[160px] md:max-h-[200px] rounded-lg object-contain bg-white/10" />
-              </div>
-              <div v-if="msg.content" class="t-small md:t-ui whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full" :class="{ 'pb-5': msg.content }">{{ msg.content }}</div>
+      <!-- User Message Group.
 
-              <!-- Copy button - inside bubble, bottom right, show on hover -->
-              <button
-                v-if="msg.content"
-                class="absolute bottom-1.5 right-2 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                style="background: rgba(255, 255, 255, 0.15);"
-                title="Copy to clipboard"
-                @click="copyUserMessage(msg.id, msg.content!)"
-              >
-                <UIcon
-                  :name="copiedMessageId === msg.id ? 'i-lucide-check' : 'i-lucide-copy'"
-                  class="size-3"
-                  :style="{ color: copiedMessageId === msg.id ? '#86efac' : 'rgba(255,255,255,0.7)' }"
-                />
-              </button>
-            </div>
-            <!-- Single timestamp for the group -->
-            <ClientOnly>
-              <div class="t-small md:t-small px-1" style="color: var(--text-tertiary);">
-                {{ new Date(group.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
-              </div>
-            </ClientOnly>
+           Both roles run down ONE column with one left edge, rather than the
+           usual two-sided bubble chat. A transcript here is mostly long tool
+           output and code, and right-aligning half of it while the other half
+           is full width gives the eye two measures to track and cuts the
+           readable width of whichever side is bubbled. What the reader needs
+           instead is to tell the two apart at a glance without losing the
+           line, which the rule and the label do at a fraction of the cost. -->
+      <div v-if="group.role === 'user'" class="min-w-0 pl-3 border-l-2" style="border-color: var(--accent);">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="t-small font-semibold" style="color: var(--accent);">You</span>
+          <ClientOnly>
+            <span class="t-small" style="color: var(--text-tertiary);">
+              {{ new Date(group.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+            </span>
+          </ClientOnly>
+        </div>
+        <div
+          v-for="msg in group.messages"
+          :key="msg.id"
+          class="group relative min-w-0 mb-1.5 last:mb-0"
+        >
+          <div v-if="msg.images && msg.images.length > 0" class="flex flex-wrap gap-2 mb-2">
+            <img v-for="(img, i) in msg.images" :key="i" :src="img" class="max-w-[160px] md:max-w-[200px] max-h-[160px] md:max-h-[200px] rounded-lg object-contain" style="background: var(--surface-raised);" />
           </div>
-          <!-- User Avatar -->
-          <div
-            class="size-7 md:size-8 rounded-full shrink-0 flex items-center justify-center t-small md:t-small font-semibold"
-            style="background: var(--accent); color: white;"
+          <!-- Room is reserved for the copy button on the right rather than
+               underneath: the old bubble padded every message's bottom to clear
+               an absolutely-positioned button, which read as a blank line after
+               everything the person had ever typed. -->
+          <div v-if="msg.content" class="t-ui whitespace-pre-wrap break-words overflow-wrap-anywhere pr-8" style="color: var(--text-primary);">{{ msg.content }}</div>
+          <button
+            v-if="msg.content"
+            class="absolute top-0 right-0 p-1 rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity reveal-quiet focus-ring"
+            title="Copy to clipboard"
+            @click="copyUserMessage(msg.id, msg.content!)"
           >
-            U
-          </div>
+            <UIcon
+              :name="copiedMessageId === msg.id ? 'i-lucide-check' : 'i-lucide-copy'"
+              class="size-3.5"
+              :style="{ color: copiedMessageId === msg.id ? 'var(--success)' : 'var(--text-tertiary)' }"
+            />
+          </button>
         </div>
       </div>
 
-      <!-- Assistant Message Group -->
-      <div v-else class="flex items-start gap-2 md:gap-3 min-w-0">
-        <!-- Claude Avatar -->
-        <div
-          class="size-7 md:size-8 rounded-full shrink-0 flex items-center justify-center"
-          style="background: linear-gradient(135deg, #d97706 0%, #ea580c 100%);"
-        >
-          <svg class="size-3.5 md:size-4" viewBox="0 0 24 24" fill="white">
-            <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/>
-          </svg>
+      <!-- Assistant Message Group. Same left edge as the user's, so the
+           conversation reads as one column. The avatar disc that used to sit
+           here bought nothing a label does not: there are exactly two speakers
+           and one of them is always Claude. -->
+      <div v-else class="min-w-0 pl-3 border-l-2" style="border-color: var(--border-subtle);">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="t-small font-semibold" style="color: var(--text-secondary);">Claude</span>
+          <ClientOnly>
+            <span class="t-small" style="color: var(--text-tertiary);">
+              {{ new Date(group.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+            </span>
+          </ClientOnly>
         </div>
 
-        <div class="flex-1 min-w-0 overflow-wrap-anywhere">
-          <!-- Claude Header -->
-          <div class="flex items-center gap-2 mb-1.5 md:mb-2">
-            <span class="t-small md:t-ui font-semibold" style="color: var(--text-primary);">Claude</span>
-            <ClientOnly>
-              <span class="t-small md:t-small" style="color: var(--text-tertiary);">
-                {{ new Date(group.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
-              </span>
-            </ClientOnly>
-          </div>
-
-          <!-- Messages in this group -->
-          <div class="space-y-2">
-            <ChatV2MessageItem
-              v-for="message in group.messages"
-              :key="message.id"
-              :message="message"
-              :show-timestamp="false"
-              @permission-respond="handlePermissionRespond"
-              @open-file="handleOpenFile"
-            />
-          </div>
+        <div class="space-y-2 overflow-wrap-anywhere">
+          <ChatV2MessageItem
+            v-for="message in group.messages"
+            :key="message.id"
+            :message="message"
+            :show-timestamp="false"
+            @permission-respond="handlePermissionRespond"
+            @open-file="handleOpenFile"
+          />
         </div>
       </div>
     </div>
@@ -171,27 +157,16 @@ function handleOpenFile(filePath: string) {
     <!-- Streaming indicator when streaming but no text yet -->
     <div
       v-if="isStreaming && messageGroups.length > 0 && !messageGroups[messageGroups.length - 1]?.messages.some(m => m.isStreaming)"
-      class="flex items-start gap-3"
+      class="min-w-0 pl-3 border-l-2"
+      style="border-color: var(--border-subtle);"
     >
-      <!-- Claude Avatar -->
-      <div
-        class="size-8 rounded-full shrink-0 flex items-center justify-center"
-        style="background: linear-gradient(135deg, #d97706 0%, #ea580c 100%);"
-      >
-        <svg class="size-4" viewBox="0 0 24 24" fill="white">
-          <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/>
-        </svg>
+      <div class="flex items-center gap-2 mb-1">
+        <span class="t-small font-semibold" style="color: var(--text-secondary);">Claude</span>
       </div>
-
-      <div class="flex-1">
-        <div class="flex items-center gap-2 mb-2">
-          <span class="t-ui font-semibold" style="color: var(--text-primary);">Claude</span>
-        </div>
-        <div class="flex items-center gap-2 t-ui" style="color: var(--text-secondary);">
-          <span class="thinking-dots">
-            <span>●</span><span>●</span><span>●</span>
-          </span>
-        </div>
+      <div class="flex items-center gap-2 t-ui" style="color: var(--text-secondary);">
+        <span class="thinking-dots">
+          <span>●</span><span>●</span><span>●</span>
+        </span>
       </div>
     </div>
   </div>

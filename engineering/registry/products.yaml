@@ -112,6 +112,14 @@ products:
     stack:
       compose: alepo-dev-team-infra/crm
       topology_default: 1node
+    # What the build needs, not what the host happens to have. Run 9a6ea7d0 read
+    # 6,820 "AspectJ source level is 1.5" errors as a repo defect and concluded
+    # no module here could run gradle test; that signature is what the *-api
+    # modules produce under a newer JDK. Verified 2026-09-21: under this
+    # JAVA_HOME subscriber-activity and subscriber-management both build first
+    # try. Agents inherit these variables and are told the values.
+    toolchain:
+      JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
     tests:
       unit: 'CONFIRM'
     owners:
@@ -355,6 +363,16 @@ products:
       # "LUM Selfcare" outweighs selfcarenow's "Selfcare" when a ticket says both;
       # the longest matching component word decides within a shared project.
       components: [LUM, LUM Selfcare]
+      # The customer's own name, which outranks every product word anywhere in
+      # the ticket. A ticket that says SaskTel is about SaskTel's estate
+      # whatever else it mentions, and two runs went to the wrong repository
+      # learning that: CSUP-7524 resolved to `crm` because "CRM" appeared once
+      # in an analysis sentence, and CSUP-7526 to `infra` because its
+      # Environment block names Keycloak. Both name SaskTel or Lüm in the title.
+      #
+      # Lüm is spelled with the umlaut on the tickets and in the app name; LUM
+      # alone never matched it.
+      customers: [SaskTel, Sasktel, SASKUP, "Lüm", "myLüm", Lum]
     repos: [alepolab/lum-selfcare-v1]
     branches:
       bug: develop

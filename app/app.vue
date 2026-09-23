@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ROLES, SHORT_ROLE, type Role } from '~~/shared/types/role'
+import { ROLES, ROLE_NAME, type Role } from '~~/shared/types/role'
 
 const route = useRoute()
 const { claudeDir, exists: claudeDirExists, load: loadConfig } = useClaudeDir()
@@ -48,11 +48,12 @@ const colorMode = useColorMode()
 // Labels come from shared/types/role.ts now, so a step's owner chip and this
 // picker cannot drift apart. `operator` is the one exception: in every other
 // surface it is the OPS role, and here it is the way back to being yourself.
-const pickerLabel = (r: Role) => (r === 'operator' ? 'You' : SHORT_ROLE[r])
 const viewAsRoles = computed<Role[]>(() => ['operator', ...ROLES.filter(r => r !== 'operator')])
 
 /** Switching to your own role clears the impersonation rather than setting one. */
 const switchingRole = ref(false)
+/** The banner's exit, so it does not depend on the sidebar being expanded. */
+const stopViewingAs = () => switchRole('operator')
 async function switchRole(next: string) {
   if (role.value === next) return
   switchingRole.value = true
@@ -95,19 +96,56 @@ const { settings, load: loadSettings } = useSettings()
 const { me, signOut, can, role, viewingAs, viewAs } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
 const labs = computed(() => settings.value?.agentManager?.labs === true)
+/**
+ * Ordered by how often a person goes there, not by the order the app was
+ * built in.
+ *
+ * It was Dashboard, Agents, Workflows, Runs, Board… — which is the build
+ * order, and CLAUDE.md records why: this began as "a GUI layer on top of the
+ * ~/.claude directory" and the pipeline was added later. So the six file-type
+ * browsers outranked the three screens the job actually uses, and Runs, Board
+ * and Watches — daily, daily, weekly — sat at positions 4, 5 and 6, the
+ * serial-position trough where recall is worst and where primacy and recency
+ * protect nothing.
+ *
+ * The groups are the job, in order: decide, then supervise, then author.
+ * `navSections` below draws a rule between them, so the grouping is legible
+ * rather than implied by adjacency.
+ */
 const navTopAll = [
-  { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
-  { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
-  { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
-  { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
-  { label: 'Board', icon: 'i-lucide-gauge', to: '/board' },
-  { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
-  { label: 'Team', icon: 'i-lucide-users', to: '/team' },
-  { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
-  { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },
-  { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins' },
-  { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp' },
-  { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
+  // Decide — many times a day.
+  { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/', group: 'decide' },
+  { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs', group: 'decide' },
+  { label: 'Board', icon: 'i-lucide-gauge', to: '/board', group: 'decide' },
+  // Beside Runs, not under Workflows: the queue answers "what are we doing",
+  // which is the same question Runs and Board answer at a different scale.
+  { label: 'Queue', icon: 'i-lucide-list-ordered', to: '/queue', group: 'decide' },
+  // Supervise — weekly to monthly.
+  { label: 'Watches', icon: 'i-lucide-radio', to: '/watches', group: 'supervise' },
+  { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows', group: 'supervise' },
+  { label: 'Team', icon: 'i-lucide-users', to: '/team', group: 'supervise' },
+  // Author — rarely, and never in the middle of a decision.
+  { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents', group: 'author' },
+  { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills', group: 'author' },
+  { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands', group: 'author' },
+  { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins', group: 'author' },
+  { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp', group: 'author' },
+  // Output Styles and Graph are OFF THE SIDEBAR, not deleted — both remain
+  // reachable by URL and their code is untouched.
+  //
+  // Output Styles configures the Claude Code CLI's own output formatting from
+  // a delivery control plane: a settings field promoted to a destination, and
+  // it was the only nav entry whose data was fetched and whose badge never
+  // rendered. Graph draws agent-to-skill references from the config
+  // directory; it answers no question anyone has during a run, and the one
+  // fact it holds that no list holds — an entity nothing references — is its
+  // least visible mark, a dashed border at 55% opacity that cannot be
+  // filtered to. Both were already labs-gated, which is this codebase's own
+  // admission that neither belongs beside Runs.
+  //
+  // Removing the rows rather than the files because a nav entry costs
+  // attention on every route and a file costs nothing until someone opens it,
+  // and because deleting either is not reversible by a person reading this.
 ]
 
 /**
@@ -116,22 +154,57 @@ const navTopAll = [
  * this list decides what a person is OFFERED, which is the actual complaint
  * about the old sidebar: it showed a reviewer the whole engine.
  */
-const NAV_BY_ROLE: Record<string, string[]> = {
-  developer: ['/', '/runs', '/agents', '/skills', '/commands'],
-  qa: ['/', '/runs'],
+/**
+ * Typed on `Role`, not `string`, so the compiler refuses this file until every
+ * role has an entry.
+ *
+ * It was `Record<string, string[]>`, and three roles added later —
+ * product-owner, security and cto — silently had none. The lookup below
+ * treats a miss as "no filter", so the three newest roles were each offered
+ * the FULL operator sidebar: a CTO whose job is threshold escalations was
+ * shown Plugins and MCP Servers. A restriction that fails open is not a
+ * restriction, and the whole stated purpose of this map is that "a console
+ * which shows an actor controls they must not use is describing the system
+ * rather than their job".
+ */
+const NAV_BY_ROLE: Record<Role, string[]> = {
+  developer: ['/', '/runs', '/queue', '/agents', '/skills', '/commands'],
+  qa: ['/', '/runs', '/queue'],
+  // Decides whether a story is ready and what "done" means. They start change
+  // requests, so they need the dashboard's start panel; they author nothing.
+  'product-owner': ['/', '/runs', '/board', '/queue'],
+  // Reaches a run because it touched authz, crypto, data or a dependency —
+  // never to browse the estate's configuration.
+  security: ['/', '/runs', '/queue'],
+  // Only what crosses the escalation threshold, plus the view that shows
+  // whether the threshold is set right.
+  cto: ['/', '/runs', '/board', '/queue'],
   // An architect reads across runs rather than inside one, so they are offered
   // the board and the relationship graph. Both are read-only and the API
   // refuses the writes regardless, so offering them costs nothing.
-  architect: ['/', '/runs', '/board', '/graph'],
+  // '/graph' was here and is no longer in the sidebar, so listing it granted
+  // nothing and only made this row disagree with what an architect can see.
+  architect: ['/', '/runs', '/board', '/queue'],
   // A designer reviews what a run produced. Artifacts are in `navMid` for
   // everyone, which is where their evidence lives until a design surface exists.
-  designer: ['/', '/runs'],
+  designer: ['/', '/runs', '/queue'],
   // A manager's screen is the board, not the run list with its buttons removed.
-  manager: ['/', '/board', '/runs'],
+  manager: ['/', '/board', '/runs', '/queue'],
+  // Explicit rather than implied by absence. The full sidebar is a CHOICE for
+  // the one role that configures the pipeline, not the accident of a missing
+  // key — which is what it used to be, and what let three roles inherit it.
+  operator: [],
 }
 
 const navTop = computed(() => {
-  const allowed = role.value ? NAV_BY_ROLE[role.value] : undefined
+  // An unknown role gets the NARROWEST sidebar, not the widest. `operator`
+  // holds its full list explicitly; anything unrecognised is a bug, and a bug
+  // must not grant reach.
+  // `operator` declares an empty list meaning "no restriction"; every other
+  // role restricts, and an unrecognised one gets the narrowest set rather
+  // than the widest, because a bug must not grant reach.
+  const entry = role.value ? (NAV_BY_ROLE[role.value] ?? ['/', '/runs']) : undefined
+  const allowed = entry && entry.length ? entry : undefined
   return navTopAll
     .filter(l => labs.value || l.to !== '/output-styles')
     // No role entry means operator: the full sidebar, exactly as before.
@@ -162,7 +235,7 @@ const navMid = computed(() => navMidAll.filter(l => l.key !== 'cli' || can('conf
 
 const navBottomAll = [
   { label: 'Explore', icon: 'i-lucide-compass', to: '/explore' },
-  { label: 'Graph', icon: 'i-lucide-workflow', to: '/graph' },
+
   { label: 'Settings', icon: 'i-lucide-settings', to: '/settings' },
 ]
 // Settings is configuration, so it goes with the rest of it: only an operator
@@ -177,15 +250,43 @@ function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + '/')
 }
 
-function badgeFor(to: string) {
-  if (to === '/agents') return agents.value.length || null
-  if (to === '/commands') return commands.value.length || null
-  if (to === '/skills') return skills.value.length || null
-  if (to === '/plugins') return plugins.value.length || null
-  if (to === '/workflows') return workflows.value.length || null
-  if (to === '/mcp') return mcpServers.value.length || null
-  return null
+/**
+ * One badge, on the only number that changes and the only one that asks for
+ * an act: how many decisions are waiting on you.
+ *
+ * There were six, all counting files in a directory — Agents 32, Commands 39,
+ * Skills, Plugins, Workflows, MCP — fetched once at mount and never refreshed.
+ * A signal with no variance carries no information: Agents was 32 yesterday
+ * and will be 32 tomorrow, and no one opens Agents *because* there are 32.
+ *
+ * The damage was not the six wasted rows, it was the channel. Habituation
+ * generalises across a class of signal, so six permanently-static numbers
+ * teach the eye that a small number on the right of a nav row means nothing —
+ * and then the one that does mean something is invisible when it arrives.
+ * Deleting them is what makes this one work.
+ */
+const waitingOnMe = ref(0)
+async function refreshWaiting() {
+  try {
+    const runs = await $fetch<{ status: string, dismissed?: boolean, question?: { role?: string } }[]>('/api/runs')
+    waitingOnMe.value = runs.filter(r => !r.dismissed && r.status === 'paused'
+      && (!r.question?.role || !role.value || role.value === 'operator' || role.value === r.question.role)).length
+  } catch { /* the dashboard reports the failure; a badge must not */ }
 }
+
+function badgeFor(to: string) {
+  return to === '/' && waitingOnMe.value ? waitingOnMe.value : null
+}
+onMounted(() => {
+  refreshWaiting()
+  // Ten seconds, matching the dashboard's own poll: a badge that updates less
+  // often than the page it points at would send someone to an empty queue.
+  const t = setInterval(refreshWaiting, 10_000)
+  onUnmounted(() => clearInterval(t))
+})
+// A role change narrows or widens which gates are yours, so the count has to
+// move with it — otherwise viewing-as shows another role's backlog as your own.
+watch(role, refreshWaiting)
 </script>
 
 <template>
@@ -265,9 +366,17 @@ function badgeFor(to: string) {
         <!-- Primary Nav -->
         <nav class="flex-1 pt-1 space-y-0.5 overflow-y-auto" :class="sidebarCollapsed ? 'px-1.5' : 'px-2.5'">
           <!-- Top Section -->
+          <template v-for="(link, i) in navTop" :key="link.to">
+            <!-- A rule where the job changes, so the grouping is a fact on
+                 screen rather than an inference from adjacency. Drawn from
+                 the data, so it cannot drift out of step with the order. -->
+            <div
+              v-if="i > 0 && link.group !== navTop[i - 1]?.group"
+              class="my-1.5" :class="sidebarCollapsed ? 'mx-1' : 'mx-2'"
+              style="border-top: 1px solid var(--border-subtle);"
+              aria-hidden="true"
+            />
           <NuxtLink
-            v-for="link in navTop"
-            :key="link.to"
             :to="link.to"
             class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
             :class="[
@@ -293,12 +402,13 @@ function badgeFor(to: string) {
               <span
                 v-if="badgeFor(link.to)"
                 class="font-mono t-small tabular-nums transition-colors duration-150"
-                :style="{ color: isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
+                :style="{ color: 'var(--accent)', fontWeight: 700 }"
               >
                 {{ badgeFor(link.to) }}
               </span>
             </template>
           </NuxtLink>
+          </template>
 
           <!-- Separator 1 -->
           <div class="my-3" :class="sidebarCollapsed ? 'mx-1' : 'mx-2'" style="border-top: 1px solid var(--border-subtle);" />
@@ -416,27 +526,28 @@ function badgeFor(to: string) {
              Lives here rather than on the dashboard because it is an occasional
              operator tool that was occupying the best line of the busiest page,
              and because a gate or a run list is often what you want to inspect. -->
+        <!-- Nine three-letter codes in a 3x3 grid cost four rows of permanent
+             sidebar, asked the reader to recall what ARCH and SEC mean, and
+             gave a screen reader nine loose buttons under a plain <div>. It is
+             an occasional tool: one labelled select, one row, full names. -->
         <div v-if="me?.realRole === 'operator' && !sidebarCollapsed" class="px-2.5 pb-1">
-          <div class="t-label mb-1" style="color: var(--text-disabled);">View as</div>
-          <!-- Three columns, two rows: six roles in a single strip would give
-               each label ~30px in a 200px sidebar and truncate every one. -->
-          <div
-            class="grid grid-cols-3 rounded-lg overflow-hidden"
-            style="border: 1px solid var(--border-subtle); gap: 1px; background: var(--border-subtle);"
+          <label for="view-as" class="t-label mb-1 block" style="color: var(--text-disabled);">View as</label>
+          <select
+            id="view-as"
+            class="w-full t-small rounded-lg px-2 py-1 focus-ring"
+            :style="{
+              background: viewingAs ? 'var(--accent-muted)' : 'var(--surface-raised)',
+              color: viewingAs ? 'var(--accent)' : 'var(--text-tertiary)',
+              border: '1px solid var(--border-subtle)',
+            }"
+            :value="role"
+            :disabled="switchingRole"
+            @change="switchRole(($event.target as HTMLSelectElement).value)"
           >
-            <button
-              v-for="r in viewAsRoles" :key="r"
-              class="py-1 t-label focus-ring transition-colors"
-              :style="{
-                background: role === r ? 'var(--accent-muted)' : 'var(--surface-raised)',
-                color: role === r ? 'var(--accent)' : 'var(--text-tertiary)',
-              }"
-              :title="r === 'operator' ? 'Your own role' : `See the app as a ${r}`"
-              :aria-pressed="role === r"
-              :disabled="switchingRole"
-              @click="switchRole(r)"
-            >{{ pickerLabel(r) }}</button>
-          </div>
+            <option v-for="r in viewAsRoles" :key="r" :value="r">
+              {{ r === 'operator' ? 'Operator (you)' : ROLE_NAME[r] }}
+            </option>
+          </select>
         </div>
 
         <!-- Theme toggle -->
@@ -467,6 +578,30 @@ function badgeFor(to: string) {
           @complete="onOnboardingComplete"
         />
 
+        <!-- View-as is a MODE, and a mode needs its indicator where the user
+             is looking — not 800px away in the sidebar. This banner lived
+             inside app/pages/index.vue, so on the other twenty-nine routes the
+             only evidence you were impersonating was one tinted 3-letter chip.
+
+             The mode is subtractive: it REMOVES controls. `can()` also returns
+             false while loading, so a missing Restart button is indistinguishable
+             from "still loading" and from "this run cannot be restarted" — an
+             operator who forgets reads a working gate as a broken one.
+
+             The exit lives here too. The sidebar picker is hidden when the
+             sidebar is collapsed, and it force-collapses below 767px, so on a
+             phone an impersonating operator previously had no way out except
+             navigating back to Home and knowing that is where it lives. -->
+        <div
+          v-if="viewingAs"
+          class="flex flex-wrap items-center gap-2 t-small px-4 py-2"
+          style="background: var(--accent-muted); border-bottom: 1px solid var(--accent);"
+          role="status"
+        >
+          <UIcon name="i-lucide-eye" class="size-4 shrink-0" style="color: var(--accent);" />
+          <span style="color: var(--text-primary);">Viewing as <span class="font-mono">{{ role }}</span> — controls you normally have are hidden.</span>
+          <button class="ml-auto underline focus-ring" :disabled="switchingRole" @click="stopViewingAs">Back to your own view</button>
+        </div>
         <div v-show="initialized && claudeDirExists" class="h-full">
           <NuxtPage />
         </div>
@@ -476,7 +611,7 @@ function badgeFor(to: string) {
       </main>
     </div>
     <template v-if="!isLogin">
-      <GlobalSearch />
+      <GlobalSearch v-model:open="showSearch" />
       <ChatPanel v-if="can('configure')" v-model:open="chatOpen" />
       <FileEditorSidebar v-if="!route.path.startsWith('/cli')" />
     </template>

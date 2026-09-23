@@ -8,9 +8,38 @@ const { commands } = useCommands()
 const { plugins } = usePlugins()
 const { skills } = useSkills()
 
-const open = ref(false)
+/**
+ * Owned by the parent as well as by the keyboard.
+ *
+ * This was a private ref, so the sidebar's Search button — which sets its own
+ * `showSearch` and passes nothing — did nothing at all. The button even
+ * renders the correct shortcut inside itself, so a user learned "the click is
+ * broken but the key works", and intermittent reinforcement of that kind is
+ * the hardest model to unlearn. `defineModel` gives the click and the key one
+ * piece of state to agree about.
+ */
+const open = defineModel<boolean>('open', { default: false })
 const query = ref('')
 const selectedIndex = ref(0)
+
+/**
+ * The first line of the body that contains the query, so a body hit says WHY
+ * it matched rather than just that it did.
+ *
+ * Search reached `name` and `description` only, so "which of these 32 agents
+ * mentions `mise run`?" had no answer in the product and the honest path was
+ * to leave and grep ~/.claude. The bodies are already loaded — the CRUD
+ * endpoints return them — so this costs a substring test, not a fetch.
+ */
+function bodyHit(body: string | undefined, q: string): string | null {
+  if (!body) return null
+  const at = body.toLowerCase().indexOf(q)
+  if (at === -1) return null
+  const start = body.lastIndexOf('\n', at) + 1
+  const end = body.indexOf('\n', at)
+  const line = body.slice(start, end === -1 ? undefined : end).trim()
+  return line.length > 140 ? `${line.slice(0, 137)}…` : line
+}
 
 const results = computed(() => {
   const q = query.value.toLowerCase().trim()
@@ -19,11 +48,14 @@ const results = computed(() => {
   const items: { type: string; label: string; sublabel: string; to: string; icon: string; color?: string; model?: string }[] = []
 
   for (const agent of agents.value) {
-    if (agent.frontmatter.name.toLowerCase().includes(q) || agent.frontmatter.description?.toLowerCase().includes(q)) {
+    const inBody = bodyHit((agent as { body?: string }).body, q)
+    if (agent.frontmatter.name.toLowerCase().includes(q) || agent.frontmatter.description?.toLowerCase().includes(q) || inBody) {
       items.push({
         type: 'Agent',
+        // A body match shows the matching line: the name alone would leave the
+        // reader guessing which of 32 agents mentions the thing they typed.
         label: agent.frontmatter.name,
-        sublabel: agent.frontmatter.description || '',
+        sublabel: inBody || agent.frontmatter.description || '',
         to: `/agents/${agent.slug}`,
         icon: 'i-lucide-cpu',
         color: getAgentColor(agent.frontmatter.color),
@@ -33,11 +65,12 @@ const results = computed(() => {
   }
 
   for (const cmd of commands.value) {
-    if (cmd.frontmatter.name.toLowerCase().includes(q) || cmd.frontmatter.description?.toLowerCase().includes(q)) {
+    const inBodyCommand = bodyHit((cmd as { body?: string }).body, q)
+    if (cmd.frontmatter.name.toLowerCase().includes(q) || cmd.frontmatter.description?.toLowerCase().includes(q) || inBodyCommand) {
       items.push({
         type: 'Command',
         label: `/${cmd.frontmatter.name}`,
-        sublabel: cmd.frontmatter.description || '',
+        sublabel: inBodyCommand || cmd.frontmatter.description || '',
         to: `/commands/${cmd.slug}`,
         icon: 'i-lucide-terminal',
       })
@@ -45,11 +78,12 @@ const results = computed(() => {
   }
 
   for (const skill of skills.value) {
-    if (skill.frontmatter.name.toLowerCase().includes(q) || skill.frontmatter.description?.toLowerCase().includes(q)) {
+    const inBodySkill = bodyHit((skill as { body?: string }).body, q)
+    if (skill.frontmatter.name.toLowerCase().includes(q) || skill.frontmatter.description?.toLowerCase().includes(q) || inBodySkill) {
       items.push({
         type: 'Skill',
         label: skill.frontmatter.name,
-        sublabel: skill.frontmatter.description || '',
+        sublabel: inBodySkill || skill.frontmatter.description || '',
         to: `/skills/${skill.slug}`,
         icon: 'i-lucide-sparkles',
       })
@@ -68,6 +102,17 @@ const results = computed(() => {
     }
   }
 
+  // Runs are the app's actual unit of work and were not indexed at all, so
+  // typing a ticket key returned "No results found" — indistinguishable from
+  // "that ticket does not exist". /runs already accepts ?q=, so hand the
+  // query over rather than duplicating a run index here.
+  items.push({
+    type: 'Runs',
+    label: `Search runs for "${query.value.trim()}"`,
+    sublabel: 'by ticket, workflow, product or person',
+    to: `/runs?q=${encodeURIComponent(query.value.trim())}`,
+    icon: 'i-lucide-play',
+  })
   return items.slice(0, 10)
 })
 
@@ -109,7 +154,8 @@ if (import.meta.client) {
 </script>
 
 <template>
-  <UModal v-model:open="open">
+  <UModal v-model:open="open" title="Search"
+    description="Search agents, skills, commands, workflows and runs.">
     <template #content>
       <div style="min-height: 120px; max-height: 420px;" class="bg-overlay rounded-xl overflow-hidden flex flex-col">
         <!-- Search input -->
@@ -118,7 +164,7 @@ if (import.meta.client) {
           <input
             v-model="query"
             class="flex-1 bg-transparent t-ui outline-none"
-            placeholder="Search agents, commands, skills, plugins..."
+            placeholder="Search runs, agents, skills, commands…"
             autofocus
             @keydown="onKeydown"
           />

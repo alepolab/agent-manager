@@ -1,4 +1,6 @@
 import type { Role } from './role'
+import type { GateKind, Oversight } from '../utils/oversight'
+import type { CriterionResult } from '../utils/facts'
 
 export type WorkflowRunStatus =
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
@@ -79,6 +81,12 @@ export interface RunStep {
    *  the scheduler skipped after an upstream failure - those two are very
    *  different events and the bundle must not conflate them. */
   skipReason?: string
+  /**
+   * Set when this step's lane worktree was kept instead of deleted, because it
+   * still held uncommitted work. The run branch does NOT contain it — see
+   * closeLanes. Absent on every step whose lane merged and was removed cleanly.
+   */
+  laneKept?: string
   assistantMessages?: number
   lastTool?: string
   lastActivityAt?: number
@@ -95,8 +103,22 @@ export interface RunCi {
   error?: string
 }
 
+/**
+ * Set only on a record scripts/recover-run-records.mjs rebuilt from the run's
+ * artifacts after the original was lost. It marks the record as second-hand:
+ * everything in it was read from artifacts the runner wrote, and the fields the
+ * artifacts never carried — `initialPrompt`, the workflow slug — are absent
+ * rather than reconstructed.
+ */
+export interface RunRecovery { at: number, from: string, note: string }
+
 export interface RunUsage { input_tokens: number, output_tokens: number, /** Of input_tokens, the ones read back from the prompt cache. */ cached_tokens?: number, usd: number }
-export interface RunBudget { maxMinutes: number, maxTokens: number }
+export interface RunBudget {
+  maxMinutes: number
+  maxTokens: number
+  /** Dollars. Absent on runs recorded before money was a cap; see defaultBudget. */
+  maxUsd?: number
+}
 
 /** The registry entry a run resolved to at start, or absent when nothing matched. */
 export interface ProductMatch {
@@ -110,8 +132,37 @@ export interface ProductMatch {
    *  does not produce these, because it git-ignores them. */
   modules?: Record<string, string>
   branches: Record<string, string>
-  stack: { compose: string, topology_default: string, liquibase?: boolean }
+  /**
+   * `urls` are the product's real entry points, named by its champion in the
+   * registry. A stack on the host network publishes no port through compose,
+   * so a run has no other honest way to learn where its UI answers - and a
+   * guessed address is how a visual check reports on nothing.
+   */
+  stack: { compose: string, topology_default: string, liquibase?: boolean, urls?: string[] }
   tests: Record<string, string>
+  /**
+   * Where each test class writes its MACHINE-READABLE report, and in what
+   * format, from the registry.
+   *
+   * A command alone can only ever yield a whole-suite pass/fail, which is why
+   * an acceptance row could not be scored individually. Absent for a product
+   * that has not declared one — and absent means this product cannot be
+   * scored per case, which is a registry fact rather than a per-run
+   * discovery. See engineering/registry/schemas/products.schema.json.
+   */
+  reports?: Record<string, { glob: string, format: string }>
+  /**
+   * The versions this product's build actually needs, as environment variables
+   * the agent inherits (JAVA_HOME, NODE_VERSION, …).
+   *
+   * Run 9a6ea7d0 read 6,820 "AspectJ source level is 1.5" errors from a gradle
+   * build as a defect in the repository and concluded that no module in the
+   * workspace could run `gradle test` — then opened three pull requests. That
+   * signature is what ase_lbss *-api modules produce under a newer JDK; under
+   * JDK 11 both modules build first try. A run that cannot build is a run that
+   * must say so, not one that reasons its way past the build.
+   */
+  toolchain?: Record<string, string>
   recipe?: string
   /** Products a step widened the run to, with their own stack and tests: the fault turned out to live there. */
   alsoInScope?: { name: string, repos: string[], stack?: { compose: string, topology_default: string }, tests: Record<string, string> }[]
@@ -138,7 +189,15 @@ export interface RunDecision {
   at: number
   /** GitHub login of whoever decided. */
   by: string
-  verdict: 'approved' | 'rejected' | 'sent-back'
+  /**
+   * Which gate this was, copied from the question at the moment it was
+   * answered. Separation of duties needs to ask "who answered the
+   * implementation gate on this run", and deriving that from a step label is
+   * guesswork the moment a template renames one. Absent on every decision
+   * recorded before gates declared a kind.
+   */
+  gateKind?: GateKind
+  verdict: 'approved' | 'rejected' | 'sent-back' | 'skipped'
   /** The reviewer's reason. Required for every verdict except a plain approval. */
   note?: string
   /** Milliseconds this gate waited for a person, from `question.askedAt` to `at`. */
@@ -184,6 +243,23 @@ export interface WorkflowRun {
    * base. shared/utils/oversight.ts turns this into whether a gate stops.
    */
   blastRadius?: string
+  /**
+   * Where `blastRadius` came from: `proposal` when a step's own
+   * `PIPELINE-CLASS:` line stood, `floor` when the files the change touched
+   * implied something stronger and overrode it, `floor-only` when no step
+   * proposed anything. A class without its provenance is an assertion, and the
+   * `floor` case is the one a reviewer most needs to see: it means a step
+   * understated its own change. See shared/utils/classification.ts.
+   */
+  classSource?: string
+  /**
+   * The product whose stack THIS run started, so teardown can find it even
+   * after a restart - the fact has to outlive the in-memory run state, or a
+   * server that died mid-run leaves containers nobody owns.
+   */
+  stackStarted?: string
+  /** What happened when the stack was taken down, recorded so a reader can see it did. */
+  stackStopped?: string
   /** The branch the run branch was cut from and the pull request targets (see server/utils/branchPolicy.ts). */
   baseBranch?: string
   /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
@@ -194,6 +270,24 @@ export interface WorkflowRun {
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
   ticketCommented?: boolean
+
+  /**
+   * True while the outcome comment is owed but not yet on the ticket.
+   *
+   * Written WITH the terminal status, cleared only once the comment really
+   * posted. A process that dies in between leaves this true, and the boot
+   * sweep finishes it - the alternative is a ticket that never learns its run
+   * finished, which nothing else in the system would ever notice.
+   */
+  ticketNotifyPending?: boolean
+
+  /**
+   * Paths of the `.agent/test-unlock.json` files this run wrote.
+   *
+   * On the record rather than in memory so the capability is withdrawn even
+   * when another process finishes the run. Cleared when they are removed.
+   */
+  testUnlocks?: string[]
   /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
   /**
    * What the runner checked before any agent ran: the compose file, the
@@ -207,6 +301,14 @@ export interface WorkflowRun {
    * rather than being resumed into the same wall again.
    */
   interruptions?: number
+  /**
+   * Every time this run was picked up again after the process that owned it
+   * died, appended and never reset — unlike `interruptions`, which is a
+   * consecutive counter for deciding whether to keep trying. Ten real runs
+   * carried 28 retry/restart/abort artifacts between them while every record
+   * said zero, so rework rate and first-pass yield could not be computed.
+   */
+  restarts?: { at: number, bootId: string, stepId: string, reason: string }[]
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   /**
    * Why the run is paused, and — for an approval — whose decision it is.
@@ -218,9 +320,13 @@ export interface WorkflowRun {
    * answer, which is the old behaviour and the right default for a workflow that
    * never said.
    */
-  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
+  question?: { stepId: string, text: string, /** What the person has to read, and the judgement they owe — `text` names the step, which is not the same thing. See gateAsks in shared/utils/oversight.ts. */ asks?: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** What the gate is asking, where that raises the oversight floor above the run's tier. See shared/utils/oversight.ts. */ gateKind?: GateKind, /** The oversight this gate demanded AT THE MOMENT IT ASKED. A later step may raise the run's class, and a reader would otherwise see a tier that disagrees with the reason the run stopped. */ oversight?: Oversight, /** The run's class when the gate asked, for the same reason. */ blastRadius?: string, /** Machine-derived criteria for the person answering, each carrying the source it came from. A criterion that could not be derived is `blocked`, never silently passed. See shared/utils/facts.ts. */ criteria?: CriterionResult[], /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
   projectDir?: string
   product?: ProductMatch
+  /** A person has already been asked about work landing outside this run's own
+   *  checkout. Asked once: re-asking at every later step turns a decision into a
+   *  nag, and an operator who was told and continued has decided. */
+  strayWorkAsked?: boolean
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
   startedBy?: string
   /** `projectDir`'s HEAD sha, captured by the runner (startRun, via
@@ -239,6 +345,38 @@ export interface WorkflowRun {
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
   ci?: RunCi
+  /**
+   * Whether this run's workflow declares a step that opens a pull request,
+   * copied from the workflow at creation. A research or review workflow that
+   * was never meant to ship must not be failed for not shipping, and after a
+   * restart the workflow definition may have changed under the run.
+   */
+  expectsPr?: boolean
+  /**
+   * The step graph this run executes, copied from the workflow at creation.
+   * A boot reseed rewrites the definitions on disk and interrupted runs resume
+   * five seconds later, so without this a run resumes against a graph it never
+   * started on. Typed loosely on purpose: it is the runner's own WorkflowLike
+   * step shape, which shared types deliberately do not model.
+   */
+  workflowSnapshot?: unknown[]
+  /** Why this ticket was run again although a completed run already existed. */
+  rerunReason?: string
+  /**
+   * What the run's steps said they deliberately did not do, each with the step
+   * that said it. See parseNotDone: the scope boundary used to exist only as a
+   * sentence inside one step's prose, if at all.
+   */
+  notDone?: { stepId: string, label: string, what: string, why: string }[]
+  /**
+   * What the runner could not reach when the run finished: commits that were
+   * never pushed, lane branches nobody merged, a diff with no pull request.
+   * An empty array means the checks ran and found nothing; absent means they
+   * never ran (an older run, or a run that ended some other way).
+   */
+  shipIntegrity?: { problem: 'unpushed' | 'lane-orphan' | 'no-pr' | 'dirty', repo: string, detail: string }[]
+  /** Present only on a record rebuilt from artifacts; see RunRecovery. */
+  recovered?: RunRecovery
   /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
   budget: RunBudget
   currentStepIds: string[]
@@ -368,5 +506,12 @@ export interface NewRunInput {
    *  gitFacts.ts's captureBaseline and passes it straight through; createRun
    *  carries it onto the persisted run, unmodified. */
   baseCommit?: string
+  /** See WorkflowRun.expectsPr — read off the workflow at creation, so a later
+   *  template edit cannot change what this run was meant to produce. */
+  expectsPr?: boolean
+  /** See WorkflowRun.rerunReason. */
+  rerunReason?: string
+  /** See WorkflowRun.workflowSnapshot. */
+  workflowSnapshot?: unknown[]
   steps: { stepId: string, label: string, agentSlug: string }[]
 }

@@ -30,6 +30,36 @@ export function runStatusColor(status: string): string {
   return RUN_STATUS_COLOR[status] ?? 'var(--text-disabled, #9ca3af)'
 }
 
+/**
+ * What each status is CALLED, beside what it is coloured.
+ *
+ * The colour map existed and the label map did not, so every surface invented
+ * its own wording and they diverged: /board alone called one state "Waiting on
+ * a person", "Stopped at a gate", and a raw `paused` chip, on the same screen.
+ * The same word then did double duty elsewhere for a watch that is switched
+ * off — "a run needs you now" and "this thing is inert" are not the same fact
+ * and must not share a word.
+ *
+ * `paused` deliberately reads as a demand rather than a state: it is the only
+ * status that costs a person something, and naming it after what it wants is
+ * the whole reason the board exists.
+ */
+export const RUN_STATUS_LABEL = {
+  running: 'Running',
+  paused: 'Waiting on a person',
+  completed: 'Completed',
+  failed: 'Failed',
+  stopped: 'Stopped',
+  interrupted: 'Interrupted',
+  pending: 'Pending',
+  skipped: 'Skipped',
+  waiting: 'Waiting',
+} as Record<string, string>
+
+export function runStatusLabel(status: string): string {
+  return RUN_STATUS_LABEL[status] ?? status
+}
+
 /** A run or step is "settled" when nothing further will happen to it. Note
  *  that `skipped` counts: a step the scheduler passed over is finished, not
  *  pending, and counting it as outstanding makes a halted run look like it is

@@ -278,7 +278,8 @@ useUnsavedChanges(isDirty)
     </div>
 
     <!-- Delete confirmation -->
-    <UModal v-model:open="showDeleteConfirm">
+    <UModal v-model:open="showDeleteConfirm" title="Delete command"
+      description="Permanently deletes this command. This cannot be undone.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Delete Command</h3>

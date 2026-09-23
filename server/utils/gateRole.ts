@@ -36,3 +36,4 @@ export async function requireGateRole(event: H3Event, run: WorkflowRun): Promise
     message: `This gate is ${want}'s decision to make. Your role is ${role}. Ask ${want}, or an operator.`,
   })
 }
+

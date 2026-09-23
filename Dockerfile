@@ -72,6 +72,18 @@ COPY --from=build --chown=bun:bun /app/node_modules/@anthropic-ai/claude-agent-s
 # commands and made the gap look filled on the one box that built the image.
 COPY --chown=bun:bun engineering/commands ./engineering/commands
 
+# And its agents. teamSync reads plugin agents from the shipped copy as well as
+# from the recorded install, precisely so an install that predates the image
+# cannot shadow what the image carries — and without this COPY the shipped copy
+# is an empty path, so that fallback finds nothing and the six SDLC review
+# personas seed on a developer's checkout and on no container.
+#
+# This list is an allowlist that has to be extended by hand every time
+# engineering/ grows a directory, which is how commands, hooks and skills each
+# came to be missing in turn. The comments above are three previous instances
+# of this same omission; this is the fourth.
+COPY --chown=bun:bun engineering/agents ./engineering/agents
+
 # And the product registry. Without it resolveProduct returns undefined for
 # every ticket - no repos, no branch policy, no stack profile - and the failure
 # is indistinguishable from "no product matched".
@@ -221,7 +233,51 @@ RUN set -eux; \
     tar -xzf /tmp/gh.tgz -C /tmp; \
     install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh; \
     rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_amd64"; \
+    ln -sf /usr/local/bin/gh /usr/bin/gh; \
     gh --version
+# The symlink is not tidiness. A developer's ~/.gitconfig — bind-mounted in on
+# a local desktop — names the helper by ABSOLUTE path, as `gh auth setup-git`
+# writes it:
+#
+#   [credential "https://github.com"]
+#       helper = !/usr/bin/gh auth git-credential
+#
+# gh installs to /usr/local/bin here, so every git command in this container
+# printed `/usr/bin/gh: not found` and, for a private repo, went on to fail:
+#
+#   fatal: could not read Username for 'https://github.com': No such device
+#
+# That killed real clones inside runs (104 occurrences across 35 steps). The
+# host path cannot be rewritten — the file is mounted read-only and belongs to
+# the developer — so the container provides the path it names.
+
+# The browser automation CLI the visual steps drive.
+#
+# `agent-browser` is what the estate's agent-browser skill and the visual-qa
+# agent tell a step to use: accessibility snapshots to navigate cheaply, then a
+# screenshot on disk that the agent opens with its own Read tool and looks at.
+# Without the binary in the image that instruction has nothing behind it, and a
+# visual step falls back to reasoning about the diff - which is the failure the
+# whole visual lane exists to end. Chromium above supplies the browser it drives.
+#
+# The npm tarball ships prebuilt binaries for every platform, so only the
+# linux-x64 one is installed and nothing is downloaded at runtime. Pinned by
+# version and verified by checksum, the same rule as docker, compose and gh
+# above: a moved tag cannot change what lands in the image.
+ARG AGENT_BROWSER_VERSION=0.33.1
+ARG AGENT_BROWSER_SHA256=a74311bf035ed27918c0befe493116992215a933f532334485fe4ba1e0cb2580
+RUN set -eux; \
+    curl -fsSL "https://registry.npmjs.org/agent-browser/-/agent-browser-${AGENT_BROWSER_VERSION}.tgz" -o /tmp/agent-browser.tgz; \
+    echo "${AGENT_BROWSER_SHA256}  /tmp/agent-browser.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/agent-browser.tgz -C /tmp package/bin/agent-browser-linux-x64; \
+    install -m 0755 /tmp/package/bin/agent-browser-linux-x64 /usr/local/bin/agent-browser; \
+    rm -rf /tmp/agent-browser.tgz /tmp/package; \
+    agent-browser --version
+# The browser it drives, named rather than discovered: this image installs
+# Debian's chromium and no Google Chrome, and `--executable-path` reads this
+# variable (agent-browser --help: AGENT_BROWSER_EXECUTABLE_PATH). Leaving it to
+# search is the one ambiguity a headless run cannot recover from.
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Run as a non-root user.
 #
@@ -253,9 +309,24 @@ RUN set -eux; \
 # `chown -R` over /app and /root/.claude rewrites every file into a new layer:
 # it cost 106 MB (433 -> 539) for metadata changes alone, because a layer stores
 # whole files, not the bits that differ.
-RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs \
+# /root/.claude/workflow-runs is created here, empty, for one reason: compose
+# mounts a volume of its own on it so the run records outlive the claude-config
+# reseed, and a named volume takes its ownership from the image path it seeds
+# from. Without this directory the volume is created root-owned and the server
+# (uid 1000) cannot write a single run record.
+# /home/bun/.claude is here for exactly the same reason, and learned the same
+# way: compose mounts the sdk-sessions volume on it so the SDK's transcripts
+# survive a rebuild, and the first deployment that did so got a root-owned
+# volume. The server runs as uid 1000, so it could not even create `projects/`
+# inside it - /cli listed nothing and the logs filled with ENOENT on a path
+# nothing was allowed to make. An EXISTING root-owned volume is not fixed by
+# this line and must be chowned once:
+#
+#   docker run --rm -u 0 -v <project>_sdk-sessions:/home/bun/.claude \
+#     <image> chown -R 1000:1000 /home/bun/.claude
+RUN mkdir -p /srv/agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs /home/bun/.claude \
     && chmod 711 /root \
-    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs
+    && chown bun:bun /app /srv/agent-manager /root/.agent-manager /root/.agent-manager/workflow-runs /root/.claude/workflow-runs /home/bun/.claude
 USER bun
 
 # Set environment variables

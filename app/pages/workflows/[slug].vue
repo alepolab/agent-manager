@@ -8,7 +8,7 @@ import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import type { Workflow, WorkflowStep } from '~/types'
 import { getAgentColor } from '~/utils/colors'
-import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
+import { buildGraph, edgeKey, edgeTarget, maxVisitsOf, DEFAULT_MAX_VISITS, type EdgeCondition } from '~~/shared/utils/workflowGraph'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,14 +25,15 @@ const { can } = useUser()
  * Hiding a button is a courtesy to the person; it is not a control on the edit.
  *
  * Every mutation on this canvas funnels through the five handlers below, and
- * three of them need no button at all: clicking an edge deletes it, dragging a
+ * three of them need no button at all: clicking an edge cycles its condition
+ * and eventually removes it, dragging a
  * node moves it, dropping an agent adds a step. Guarding the markup alone would
  * leave all three reachable. The server refuses the Save that would persist any
  * of it, so the damage was never permanent — but a canvas that silently discards
  * your edits on reload is a worse answer than one that does not accept them.
  */
 const readOnly = computed(() => !can('configure'))
-const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote, reject, rework } = useWorkflowRun(slug)
+const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote, reject, skip, rework } = useWorkflowRun(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
@@ -196,11 +197,48 @@ const nodes = computed(() => {
   return [...stepNodes, ...monitorNodes]
 })
 
+/**
+ * What each edge condition looks like on the canvas.
+ *
+ * Semantic colour, separate from the accent: a reader has to be able to tell
+ * the refusal arm from the success arm at a glance, and an accent-coloured
+ * branch says only "this is an edge".
+ */
+const CONDITION_COLOUR: Record<EdgeCondition, string> = {
+  pass: 'var(--success, #2f855a)',
+  fail: 'var(--error, #c53030)',
+  approved: 'var(--success, #2f855a)',
+  rejected: 'var(--error, #c53030)',
+  default: 'var(--text-tertiary, #718096)',
+}
+const CONDITION_LABEL: Record<EdgeCondition, string> = {
+  pass: 'on PASS',
+  fail: 'on FAIL',
+  approved: 'if approved',
+  rejected: 'if rejected',
+  default: 'otherwise',
+}
+/**
+ * Clicking an edge walks it round this ring. Deleting used to be the only
+ * thing a click did, and there was nowhere at all to express a condition —
+ * which is why every workflow on this canvas was an unconditional fan-out.
+ * Cycling keeps one interaction, reaches delete at the end of the ring, and
+ * makes an accidental click recoverable rather than destructive.
+ */
+const CONDITION_RING: (EdgeCondition | undefined)[] = [undefined, 'pass', 'fail', 'default']
+
 const edges = computed<Edge[]>(() => {
   const g = graph.value
   const flowEdges = workflowSteps.value.flatMap(step =>
     (g.succ[step.id] ?? []).map((target) => {
       const isBack = g.backEdges.has(edgeKey(step.id, target))
+      // A conditional edge is drawn as a branch, not as one arm of a parallel
+      // fan-out, because those are different things and the canvas was showing
+      // them identically: several plain links out of a step all fire at once,
+      // while conditional links are alternatives and only one is taken.
+      const when = g.conditions[edgeKey(step.id, target)]
+      const colour = when ? CONDITION_COLOUR[when] : isBack ? 'var(--warning, #e5a93e)' : 'var(--accent)'
+      const loopLabel = isBack ? `loop ≤${maxVisitsOf(stepById(target) ?? { id: target })}` : undefined
       return {
         id: `e-${step.id}-${target}`,
         source: step.id,
@@ -208,13 +246,19 @@ const edges = computed<Edge[]>(() => {
         sourceHandle: isBack ? 'loop' : 'out',
         targetHandle: 'in',
         type: isBack ? 'smoothstep' : 'default',
-        animated: !isBack,
-        label: isBack ? `loop ≤${maxVisitsOf(stepById(target) ?? { id: target })}` : undefined,
-        labelStyle: { fill: 'var(--warning, #e5a93e)', fontSize: '10px' },
+        // A branch is not animated: animation reads as "this flows", and only
+        // one of these will.
+        animated: !isBack && !when,
+        label: when ? (loopLabel ? `${CONDITION_LABEL[when]} · ${loopLabel}` : CONDITION_LABEL[when]) : loopLabel,
+        labelStyle: { fill: colour, fontSize: '10px', fontWeight: when ? 600 : 400 },
+        labelBgStyle: { fill: 'var(--surface, #fff)' },
+        labelBgPadding: [4, 2] as [number, number],
         style: isBack
-          ? { stroke: 'var(--warning, #e5a93e)', strokeWidth: 1.5 }
-          : { strokeDasharray: '5 5', stroke: 'var(--accent)' },
-        markerEnd: { type: MarkerType.ArrowClosed, color: isBack ? 'var(--warning, #e5a93e)' : 'var(--accent)' },
+          ? { stroke: colour, strokeWidth: 1.5 }
+          : when
+            ? { stroke: colour, strokeWidth: 2 }
+            : { strokeDasharray: '5 5', stroke: colour },
+        markerEnd: { type: MarkerType.ArrowClosed, color: colour },
       }
     }),
   )
@@ -248,16 +292,36 @@ function onConnect({ source, target }: { source: string, target: string }) {
   workflowSteps.value = workflowSteps.value.map((s) => {
     if (s.id !== source) return s
     const next = s.next ?? []
-    return next.includes(target) ? s : { ...s, next: [...next, target] }
+    // Compare by target: an entry may be a bare id OR { to, when }, and
+    // `includes` on the raw entry would never match a conditional one — so
+    // dragging the same link twice would silently add a duplicate edge.
+    return next.some(e => edgeTarget(e) === target) ? s : { ...s, next: [...next, target] }
   })
 }
 
 function onEdgeClick({ edge }: { edge: { id: string, source: string, target: string } }) {
   if (readOnly.value || isRunning.value || edge.id.startsWith('m-')) return
   materializeEdges()
-  workflowSteps.value = workflowSteps.value.map(s =>
-    s.id === edge.source ? { ...s, next: (s.next ?? []).filter(id => id !== edge.target) } : s,
-  )
+  workflowSteps.value = workflowSteps.value.map((s) => {
+    if (s.id !== edge.source) return s
+    const next = s.next ?? []
+    const current = next.find(e => edgeTarget(e) === edge.target)
+    if (current === undefined) return s
+    const when = typeof current === 'string' ? undefined : current.when
+    const at = CONDITION_RING.indexOf(when)
+    const nextWhen = CONDITION_RING[(at + 1) % (CONDITION_RING.length + 1)]
+    // Past the end of the ring the edge is removed, which is where a click
+    // used to land immediately.
+    if (at === CONDITION_RING.length - 1) {
+      return { ...s, next: next.filter(e => edgeTarget(e) !== edge.target) }
+    }
+    return {
+      ...s,
+      next: next.map(e => (edgeTarget(e) === edge.target
+        ? (nextWhen ? { to: edge.target, when: nextWhen } : edge.target)
+        : e)),
+    }
+  })
 }
 
 function onNodeDragStop({ node }: { node: { id: string, position: { x: number, y: number } } }) {
@@ -531,8 +595,10 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           </div>
         </div>
         <div class="px-3 py-2 t-small leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-tertiary);">
-          Click or drag an agent to add a step. Drag a handle to link steps. Several links out of one step run in parallel; a link back to an
-          earlier step loops. Click a link to delete it.
+          Click or drag an agent to add a step. Drag a handle to link steps. Several plain links out of one step run in
+          parallel; a link back to an earlier step loops. Click a link to make it conditional &mdash; <span style="color: var(--success, #2f855a);">on&nbsp;PASS</span>,
+          <span style="color: var(--error, #c53030);">on&nbsp;FAIL</span>, otherwise &mdash; and once more to remove it. A step that
+          states a verdict takes only the arm matching it, so a review can send work back instead of ending the run.
         </div>
       </div>
 
@@ -632,7 +698,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
           :logs="logs"
           @continue="(n) => continueRun(n)"
           @respond="respond"
-          @reject="reject"
+          @reject="reject" @skip="skip"
           @rework="rework"
           @note="sendNote"
           @stop="stop"
@@ -653,7 +719,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     />
 
     <!-- Step settings -->
-    <UModal :open="!!settingsStepId" @update:open="settingsStepId = $event ? settingsStepId : null">
+    <UModal :open="!!settingsStepId" :title="settingsStep?.label ?? 'Step settings'" description="Settings for this step: who owns it, what it runs, and whether it stops for a decision." @update:open="settingsStepId = $event ? settingsStepId : null">
       <template #content>
         <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">{{ settingsStep.label }}</h3>
@@ -724,7 +790,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     </UModal>
 
     <!-- Mobile agent picker -->
-    <UModal v-model:open="showMobileAgentPicker">
+    <UModal v-model:open="showMobileAgentPicker" title="Add agent"
+      description="Pick an agent to add as a step in this workflow.">
       <template #content>
         <div class="p-4 space-y-3 bg-overlay">
           <h3 class="text-page-title">Add Agent</h3>

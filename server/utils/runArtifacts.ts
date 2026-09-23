@@ -1,15 +1,19 @@
-import { workspaceRootFor, browserSurface } from './workspace.ts'
+import { workspaceRootFor, browserSurface, nestedRepos } from './workspace.ts'
 import { getClaudeDir } from './claudeDir.ts'
 import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { computeFixFacts } from './gitFacts.ts'
+import { computeFixFacts, type ComputedFix } from './gitFacts.ts'
 import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import { resolveClaudePath } from './claudeDir.ts'
 import { createLogger } from './log.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep, ProductMatch } from '~~/shared/types/run'
+import {
+  missingContractFiles, owesAdversarialReport, missingCore,
+  appBuildSha, stepGraphHash, perStepModels, priorRunsFor, measureArtifacts,
+} from './evidenceContract.ts'
 
 /**
  * The literal the fix-implementer writes into `meta.json`'s `fix.repos[].pr`
@@ -220,6 +224,11 @@ function runnerOwned(run: WorkflowRun) {
     // resolveInstalledPluginVersion's doc comment for why the agent could
     // never compute this correctly itself.
     plugin_version: resolveInstalledPluginVersion(),
+    // What the run said it left undone, and what the runner could not reach.
+    // Both are runner-owned for the same reason identity and cost are: an
+    // agent's prose is where they used to live, and prose is not a record.
+    ...(run.notDone?.length ? { not_done: run.notDone } : {}),
+    ...(run.shipIntegrity ? { ship_integrity: run.shipIntegrity } : {}),
     cost: {
       ...tokenTotals(run),
       attempts: Math.max(1, ...run.steps.map(s => s.visits ?? 1)),
@@ -280,6 +289,18 @@ async function reconcileFix(
   const { repos: _repos, files_changed: _fc, lines_changed: _lc, merge_order: _mo, ...restFix } = existingFix ?? {}
 
   const computed = await computeFixFacts(run.projectDir, run.baseCommit).catch(() => null)
+  // Every OTHER checkout under the run's own — the module repos of a multi-repo
+  // product — measured the same way and by the same rule: git or nothing.
+  //
+  // Without this, `files_changed` was the projectDir's alone while `repos`
+  // listed three. CSUP-7509's meta reported one file and 244 lines, and that
+  // one file was `.agent/plan.md`: the real change lived in two repositories
+  // nothing measured. Three other runs are the same shape.
+  const nested: ComputedFix[] = []
+  for (const dir of run.projectDir ? nestedRepos(run.projectDir) : []) {
+    const one = await computeFixFacts(dir, run.baseCommit).catch(() => null)
+    if (one && one.repo !== computed?.repo) nested.push(one)
+  }
 
   if (computed) {
     log.debug('fix facts computed from git', {
@@ -296,8 +317,17 @@ async function reconcileFix(
     // Every OTHER repo the agent reported (not the one git just computed)
     // is outside what this run's projectDir can verify — kept as-is rather
     // than discarded, the same way a matching entry's `pr` already is.
-    const otherRepos = priorRepos.filter(r => !(r && r.repo === computed.repo))
-    const repos = [...otherRepos, repoEntry]
+    // A nested repo git COULD measure replaces the agent's entry for it; one it
+    // could not is still the agent's self-report, unchanged.
+    const measuredNames = new Set(nested.map(n => n.repo))
+    const otherRepos = priorRepos.filter(r => !(r && (r.repo === computed.repo || measuredNames.has(r.repo as string))))
+    const nestedEntries = nested.map((n) => {
+      const prior = priorRepos.find(r => r && r.repo === n.repo)
+      const entry: Record<string, unknown> = { repo: n.repo, commits: n.commits }
+      if (prior && typeof prior.pr === 'string') entry.pr = prior.pr
+      return entry
+    })
+    const repos = [...otherRepos, repoEntry, ...nestedEntries]
 
     const repoNames = new Set(repos.map(r => r.repo))
     const priorMergeOrder = Array.isArray(existingFix?.merge_order)
@@ -316,8 +346,10 @@ async function reconcileFix(
       ...restFix,
       ...(mergeOrderCoherent ? { merge_order: priorMergeOrder } : {}),
       repos,
-      files_changed: computed.files_changed,
-      lines_changed: computed.lines_changed,
+      // Summed across every repository the runner measured, so the number a
+      // reviewer sizes the change by is the whole change.
+      files_changed: computed.files_changed + nested.reduce((n, x) => n + x.files_changed, 0),
+      lines_changed: computed.lines_changed + nested.reduce((n, x) => n + x.lines_changed, 0),
     }
   }
 
@@ -394,6 +426,28 @@ export async function writeStepArtifact(
  * Re-assert the runner's facts over whatever the agents merged in, and
  * survive a meta.json an agent corrupted: the runner's own record is the
  * floor this whole design rests on, so it must not be lost to a bad write.
+ *
+ * The bundle contract (which files a run owes) and the meta.json core schema
+ * are defined in evidenceContract.ts, not here — this file is one of its
+ * callers, kept for the read-merge-write it already owns.
+ *
+ * Why the contract check used to look honoured on far fewer runs than it
+ * should have, found while moving it here: `contract_missing` is only ever
+ * written by THIS function, called from workflowRunner.ts's `publish()` only
+ * when `run.status` is in `TERMINAL_STATUSES` — `completed`, `failed`,
+ * `stopped`. `interrupted` (workflowRunStore.ts, set on a run whose process
+ * died mid-step) is a real `WorkflowRunStatus` but is NOT in that list; a run
+ * that never gets resumed back to a real terminal status stays `interrupted`
+ * forever and this function never runs for it, so it never gets a
+ * `contract_missing` key at all — not `[]`, absent, indistinguishable from a
+ * run that predates this check. `scripts/recover-run-records.mjs` is the
+ * other gap: it rebuilds a lost RUN RECORD from a run's surviving artifacts
+ * but never calls this function, so a recovered run's meta.json is frozen at
+ * whatever it held when the original process died, before finalize ever ran
+ * — recovering the record does not retroactively grade the evidence. Neither
+ * is fixable from this file (`TERMINAL_STATUSES` and the recovery script are
+ * both outside its ownership on this change); both are reported here so the
+ * gap is at least named where the next reader will look for it.
  */
 export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   const dir = runArtifactsDir(run.id)
@@ -412,7 +466,122 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   if (fix === undefined) delete merged.fix
   else merged.fix = fix
 
+  // Runner-owned, like identity and cost: it is a fact about the directory the
+  // runner can see for itself, and finalize is the last moment anyone looks.
+  // What is in this bundle that somebody must think about before copying it,
+  // and the roots every absolute path inside it was written against — 426 files
+  // name /home/sandeep and 295 name a container path, on a machine where
+  // neither may exist when the bundle is read.
+  try {
+    const { scanSensitivity } = await import('./evidenceContract.ts')
+    const sensitivity = await scanSensitivity(dir)
+    if (sensitivity) merged.sensitivity = sensitivity
+  } catch { /* a label is never worth failing a run over */ }
+  merged.path_roots = {
+    workspace: workspaceRootFor(run.startedBy),
+    artifacts: dir,
+    claude_dir: getClaudeDir(),
+  }
+  const contractMissing = await missingContractFiles(dir)
+  // `adversarial` is a meta key rather than a file, but it is the same class of
+  // gap - something the bundle requires and this run did not produce - so it is
+  // reported in the same place a reader already looks.
+  if (owesAdversarialReport(run, merged)) contractMissing.push('adversarial')
+  // The same rule applied to the one verdict that was still prose. A run whose
+  // visual step completed without leaving a single image or trace has told a
+  // reviewer what the interface looks like and shown them nothing.
+  try {
+    const { visualEvidence, owesVisualEvidence } = await import('./evidenceContract.ts')
+    const visual = await visualEvidence(dir)
+    merged.visual = visual
+    if (owesVisualEvidence(run, visual)) contractMissing.push('visual evidence (a screenshot or a trace)')
+  } catch { /* counting evidence is never worth failing a run over */ }
+  merged.contract_missing = contractMissing
+  // The wider schema floor every run should meet, regardless of workflow —
+  // see evidenceContract.ts's REQUIRED_CORE_KEYS doc comment for why this is
+  // deliberately a different, smaller list than the bundle contract above.
+  merged.core_missing = missingCore(run, merged)
+
+  // Provenance: which workflow, which exact step graph, which app build, and
+  // which model each step actually ran — a run's aggregate `model` string
+  // (above, in runnerOwned) had already disagreed with a per-step reality in
+  // at least one real run once two models both touched the same fix.
+  merged.workflow_slug = run.workflowSlug
+  merged.step_graph_sha256 = stepGraphHash(run)
+  const buildSha = appBuildSha()
+  if (buildSha) merged.build_sha = buildSha
+  else delete merged.build_sha
+  const stepModels = perStepModels(run)
+  if (stepModels) merged.step_models = stepModels
+  else delete merged.step_models
+
+  // Read BEFORE this run's own row is appended to the index below, so a
+  // run's own first appearance never lists itself.
+  const priorRuns = await priorRunsFor(run.ticketKey, run.id)
+  if (priorRuns) merged.prior_runs = priorRuns
+  else delete merged.prior_runs
+
+  // Measured, not estimated — see measureArtifacts's doc comment. Taken
+  // before this write so the number reflects what a pruner/reviewer actually
+  // finds on disk; this write's own bytes are the one thing it cannot count
+  // itself, the same self-reference every "size of this file" figure has.
+  merged.artifacts = await measureArtifacts(dir)
+  // What each of those files IS, and which step wrote it — see
+  // artifactIndex.ts. Best-effort like the summary and the index below: a
+  // classification is a convenience, the evidence is the record.
+  try {
+    const { writeArtifactIndex } = await import('./artifactIndex.ts')
+    const index = await writeArtifactIndex(dir, run)
+    merged.artifacts = { ...(merged.artifacts as object), ...index }
+  } catch (e) {
+    log.warn('artifact index not written', { runId: run.id, error: String(e) })
+  }
+
   await writeFile(path, JSON.stringify(merged, null, 2))
+  // The one file in here a person reads. Written last, from the reconciled
+  // meta.json above, and never allowed to take the run down with it: a summary
+  // is a convenience, the evidence is the record.
+  try {
+    const { writeRunSummary } = await import('./runSummary.ts')
+    await writeRunSummary(run)
+  } catch (e) {
+    log.warn('run summary not written', { runId: run.id, error: String(e) })
+  }
+  // One row per run, so "which run touched this repo?" is a query rather than
+  // thirteen files opened by hand. Same best-effort rule as the summary: an
+  // index is a convenience, the artifacts are the record.
+  try {
+    const { updateRunIndex } = await import('./runIndex.ts')
+    await updateRunIndex(run, merged)
+  } catch (e) {
+    log.warn('run index not updated', { runId: run.id, error: String(e) })
+  }
+  // Interpretation, in the background and deliberately unawaited: the rules
+  // index above is already written and complete, so a light model reading the
+  // names it could not classify is pure upside. A run never waits for it, never
+  // fails on it, and `scripts/enhance-evidence-index.mjs` re-runs it for any run
+  // whose process exited before it landed.
+  void (async () => {
+    try {
+      const { enhanceArtifactIndex } = await import('./artifactIndex.ts')
+      const changed = await enhanceArtifactIndex(dir)
+      if (changed) log.debug('artifact index interpreted', { runId: run.id, changed })
+    } catch (e) {
+      log.warn('artifact index not interpreted', { runId: run.id, error: String(e) })
+    }
+    // Second, and after the index on purpose: this one rewrites RUN-SUMMARY.md
+    // from meta.json, so it must read a meta the index pass has finished with.
+    try {
+      const { enhanceRunSummary } = await import('./runSummary.ts')
+      const steps = await enhanceRunSummary(run)
+      if (steps) log.debug('run summary interpreted', { runId: run.id, steps })
+    } catch (e) {
+      log.warn('run summary not interpreted', { runId: run.id, error: String(e) })
+    }
+  })()
+  if (contractMissing.length) {
+    log.warn('run is missing evidence-bundle contract files', { runId: run.id, missing: contractMissing })
+  }
   log.debug('meta.json reconciled with runner-owned facts', { runId: run.id, hasFix: fix !== undefined })
 }
 
@@ -466,6 +635,35 @@ export async function recordPrUrls(runId: string, prs: { repo: string, url: stri
     // A meta.json that cannot be read is already reported by finalize; losing
     // the URL here must not fail the step that just opened a real PR.
     log.warn('could not record pull request urls', { runId, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+/**
+ * The run's own classification, written into meta.json by the RUNNER.
+ *
+ * meta.json has always had a place for `blast_radius`; the field was left to
+ * whichever agent felt like filling it, so it stayed empty on every run and
+ * oversight.ts read every run as unclassified. This is the writer, and it is
+ * runner-owned for the same reason `identity` and `watch` are: a value the
+ * classified party can set is not a control.
+ *
+ * Merge-writes like recordPrUrls, and a meta.json that cannot be read is logged
+ * rather than thrown: losing the class must not fail the step that just earned
+ * it, and finalize already reports an unreadable meta.
+ */
+export async function recordClassification(
+  runId: string,
+  cls: { blast_radius?: string, class_source?: string, work_type?: string, origin?: string },
+): Promise<void> {
+  const path = join(runArtifactsDir(runId), 'meta.json')
+  try {
+    const meta = JSON.parse(await readFile(path, 'utf-8')) as Record<string, unknown>
+    const next = { ...meta }
+    for (const [k, v] of Object.entries(cls)) if (v !== undefined) next[k] = v
+    await writeFile(path, `${JSON.stringify(next, null, 2)}\n`)
+    log.info('classification recorded in meta', { runId, ...cls })
+  } catch (err) {
+    log.warn('could not record the classification', { runId, error: err instanceof Error ? err.message : String(err) })
   }
 }
 
@@ -532,6 +730,18 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // trace and no explanation twice, and the monitor called it exactly that:
     // "silence without explanation".
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
+    '',
+    // Said here because the PR gate now enforces it, and a rule an agent meets
+    // only as a refusal at the ship step is a rule it pays for twice.
+    'Build and test in the product\'s own container, through the stack the runner',
+    'started for this run or the project\'s own container build target — `docker',
+    'compose -f <compose file> run --rm <service> <build command>`, a compose',
+    'build target, or `docker build`. A toolchain installed on this host is not',
+    'the one the product ships with, so a green host build proves nothing about',
+    'the artifact a customer runs, and the pull-request step refuses a change',
+    'whose only passing build ran on the host. Never start, stop or restart a',
+    'stack yourself and never run deploy.sh: the runner owns both, and what it',
+    'started is described in stack-facts.json in this directory.',
     ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. This directory is a git worktree the runner made for this run, beside the clone and sharing its repository and remote, with the same done for every module repository nested under it: work here and only here, and leave the clone itself alone. Commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The PR step pushes that branch and opens the pull request on that repository against the branch policy.${checkout.policy ? ` ${checkout.policy}` : ''}`] : []),
     '',
     // "It is not there" halted a whole run and was wrong. The provisioner
@@ -579,7 +789,13 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       ...(product.multiRepo ? ['Multi-repo: yes. Every repo listed gets its own branch, commit and PR; plan.md must give a merge order and nothing merges until every PR in the set is approved.'] : []),
       `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
+      ...(product.stack?.urls?.length
+        ? [`Stack entry points: ${product.stack.urls.join(', ')} — registry facts, and the addresses a UI check opens. When the runner started the stack for this run, stack-facts.json in this directory carries what docker actually reported, including the ports it published.`]
+        : []),
       `Tests: ${Object.entries(product.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,
+      ...(product.toolchain && Object.keys(product.toolchain).length
+        ? [`Toolchain: ${Object.entries(product.toolchain).map(([k, v]) => `${k}=${v}`).join(' ')} — already set in your environment. Build with these; a build failure under a different one says nothing about this repository.`]
+        : []),
       ...(product.recipe ? [`Recipe: ${product.recipe}`] : []),
       ...(product.alsoInScope ?? []).flatMap(p => [
         '',
@@ -592,6 +808,46 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     )
   }
   if (startedBy) lines.push('', `Started by: ${startedBy}. Pushes, pull requests and Jira comments run under this developer's tokens.`)
+  // The scope boundary, asked for where the step can still answer it. Every
+  // marker the runner reads is documented at the point of use except this one,
+  // which is new — and a marker no agent is told about is a marker nothing
+  // emits. CSUP-7524 ended "two blockers remain" and named neither.
+  lines.push(
+    '',
+    '## What you did not do',
+    '',
+    'Anything you deliberately left undone goes on its own line, exactly:',
+    '',
+    '    PIPELINE-NOT-DONE: <what> — <why>',
+    '',
+    'One line per item. The runner records them on the run, the summary prints',
+    'them and the pull request body carries them. "Out of scope for this lane"',
+    'is a reason; leaving it in prose where nobody can read it is not.',
+    '',
+    '## A blocker you find yourself',
+    '',
+    'If you discover that this run cannot do its job as set up — the wrong',
+    'product was resolved, the checkout is not the repository the ticket is',
+    'about, the environment you need does not exist — say so on its own line,',
+    'exactly:',
+    '',
+    '    PIPELINE-HALT: <what is wrong>',
+    '',
+    'That stops the run for a person. Run a3cb9d37 diagnosed its own wrong-product',
+    'checkout, wrote it up as a T0 blocker in prose, and carried on for 72 minutes',
+    'into a branch its work could never reach origin from. A blocker described in',
+    'prose is a blocker nobody acted on.',
+    '',
+    '## What you claim, you must have run',
+    '',
+    'Every command you run is recorded. A gate reads that record before this run',
+    'is allowed to open a pull request: source changes need a project build that',
+    'succeeded, and any .sql file in the change must have been executed against a',
+    'database. Compiling a few files by hand against a jar is not a build of the',
+    'module, and a remediation script that has never been run is a guess about a',
+    'schema. If you cannot run the build or the script here, say so with',
+    'PIPELINE-NOT-DONE rather than describing it as done.',
+  )
   lines.push('', '---', '')
   return lines.join('\n')
 }

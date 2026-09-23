@@ -35,6 +35,34 @@ s = await W.checkoutState(repo)
 assert.equal(s.dirty, 2, 'files inside an untracked directory are counted, not the directory')
 assert.deepEqual(s.dirtyFiles, ['new-dir/x.txt', 'new-dir/y.txt'], 'paths are whole, including the first line whose status column starts with a space')
 
+// ---- Parked work stays visible after it is parked ------------------------
+// Parking used to announce the recovery command in a confirm() that closed on
+// the click and a toast that faded, then the row read "clean" again. The only
+// trace of the work was a stash nothing in the UI mentioned.
+assert.deepEqual(s.stashes, [], 'a checkout that never stashed reports none, rather than omitting the field')
+{
+  const parked = await W.stashCheckout(repo, 'sandeep')
+  assert.equal(parked.stashed, true)
+  const after = await W.checkoutState(repo)
+  assert.equal(after.dirty, 0, 'parking clears the tree, which is the whole point')
+  assert.equal(after.stashes.length, 1, 'and the parked work is still reported, so it can be found again')
+  assert.match(after.stashes[0].subject, /parked by sandeep/, 'named with who parked it, not an opaque WIP line')
+  assert.match(after.stashes[0].ref, /^stash@\{0\}$/, 'and by the ref `git stash pop` acts on')
+  // Put it back so the rest of the file sees the tree it expects.
+  git(repo, ['stash', 'pop'])
+  assert.equal((await W.checkoutState(repo)).dirty, 2, 'and popping restores exactly what was parked')
+}
+{
+  const clean = join(root, 'clean-repo')
+  mkdirSync(clean); git(clean, ['init', '--quiet', '-b', 'main'])
+  git(clean, ['config', 'user.email', 't@x']); git(clean, ['config', 'user.name', 't'])
+  writeFileSync(join(clean, 'a.txt'), 'a\n'); git(clean, ['add', '.']); git(clean, ['commit', '--quiet', '-m', 'init'])
+  const r = await W.stashCheckout(clean, 'sandeep')
+  assert.equal(r.stashed, false, 'nothing to park is not an error')
+  assert.equal((await W.checkoutState(clean)).stashes.length, 0, 'and it invents no stash')
+  rmSync(clean, { recursive: true, force: true })
+}
+
 const mod = join(repo, 'modules', 'administrator'); mkdirSync(mod, { recursive: true }); git(mod, ['init', '--quiet', '-b', 'main']); git(mod, ['config', 'user.email', 't@x']); git(mod, ['config', 'user.name', 't']); writeFileSync(join(mod, 'm.txt'), 'm\n'); git(mod, ['add', '.']); git(mod, ['commit', '--quiet', '-m', 'init'])
 const wt = W.worktreeDirFor(repo, 'fix/CSUP-1-abcdef12')
 assert.equal(wt, `${repo}@fix-CSUP-1-abcdef12`, 'the run worktree sits beside the clone, named after it and the branch')
@@ -90,4 +118,94 @@ const bad = await W.artifactsWritable()
 assert.equal(bad.ok, false); assert.ok(bad.error, 'the reason travels with the verdict')
 
 rmSync(root, { recursive: true, force: true })
+// ---- A settled run gives its worktree back, unless work would be lost ----
+// Nothing did this, so an instance accumulated one directory per run it had
+// ever executed — and a directory removed by hand left a stale registration
+// that then refused the NEXT run on that branch.
+{
+  const clone = join(root, 'ws', 'cleanup-repo')
+  mkdirSync(clone, { recursive: true })
+  git(clone, ['init', '--quiet', '-b', 'main'])
+  git(clone, ['config', 'user.email', 't@x']); git(clone, ['config', 'user.name', 't'])
+  writeFileSync(join(clone, 'a.txt'), 'a\n'); git(clone, ['add', '.']); git(clone, ['commit', '--quiet', '-m', 'init'])
+
+  // Clean and with nothing of its own: taken back.
+  const [clean] = await W.ensureRunBranch(clone, 'fix/X-1-aaaaaaaa')
+  assert.ok(existsSync(clean))
+  let r = await W.cleanupRunWorktree(clean)
+  assert.equal(r.removed, true, 'a clean worktree is returned')
+  assert.ok(!existsSync(clean), 'and the directory is gone')
+  assert.equal(git(clone, ['worktree', 'list']).split('\n').length, 1, 'with no registration left behind')
+
+  // Uncommitted work lives nowhere else: kept, with the reason.
+  const [dirty] = await W.ensureRunBranch(clone, 'fix/X-2-bbbbbbbb')
+  writeFileSync(join(dirty, 'wip.txt'), 'half a fix\n')
+  r = await W.cleanupRunWorktree(dirty)
+  assert.equal(r.removed, false, 'a worktree holding uncommitted work is NEVER removed')
+  assert.match(r.reason, /uncommitted/)
+  assert.ok(existsSync(join(dirty, 'wip.txt')), 'and the work is still there')
+
+  // Commits that reached no remote are equally unrecoverable: kept.
+  const [committed] = await W.ensureRunBranch(clone, 'fix/X-3-cccccccc')
+  writeFileSync(join(committed, 'done.txt'), 'a fix\n')
+  git(committed, ['add', '.']); git(committed, ['commit', '--quiet', '-m', 'the fix'])
+  r = await W.cleanupRunWorktree(committed)
+  assert.equal(r.removed, false, 'a local-only commit is not thrown away either')
+  assert.match(r.reason, /not on any remote|not pushed/)
+
+  // A directory already deleted by hand: the stale registration is what blocks
+  // the next run, and clearing it is the whole job.
+  const [stale] = await W.ensureRunBranch(clone, 'fix/X-4-dddddddd')
+  rmSync(stale, { recursive: true, force: true })
+  r = await W.cleanupRunWorktree(stale)
+  assert.equal(r.removed, true)
+  assert.match(r.reason, /stale registration pruned/)
+  assert.ok(!git(clone, ['worktree', 'list']).includes('dddddddd'), 'and the registration is gone')
+
+  // Never throws, whatever it is handed.
+  for (const nonsense of [undefined, '', '/nope', join(root, 'ws', 'not-a-worktree')]) {
+    const out = await W.cleanupRunWorktree(nonsense)
+    assert.equal(typeof out.reason, 'string', `${nonsense} yields a reason, not an exception`)
+  }
+}
+
 console.log('workspace: all assertions passed')
+
+// ── A commit made in a run worktree says which run made it ──────────────────
+//
+// Every agent commit across thirteen runs was authored by the operator, and
+// grepping every one of them for a run id returned nothing: `git log` could not
+// answer "was this agent-written?" or "where is the evidence for this line?".
+{
+  const { installRunTrailer } = await import('../server/utils/workspace.ts')
+  const repo = mkdtempSync(join(tmpdir(), 'trailer-'))
+  execFileSync('git', ['init', '-q', repo])
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo })
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo })
+  writeFileSync(join(repo, 'a.txt'), 'x\n')
+  execFileSync('git', ['add', '-A'], { cwd: repo })
+  execFileSync('git', ['commit', '-qm', 'base'], { cwd: repo })
+
+  await installRunTrailer(repo, 'fix/CSUP-1-9a6ea7d0')
+  writeFileSync(join(repo, 'b.txt'), 'y\n')
+  execFileSync('git', ['add', '-A'], { cwd: repo })
+  execFileSync('git', ['commit', '-qm', 'the fix'], { cwd: repo })
+  const body = execFileSync('git', ['log', '-1', '--format=%B'], { cwd: repo, encoding: 'utf8' })
+  assert.match(body, /Run-Id: 9a6ea7d0/, 'the commit carries its run id, so the evidence is one grep away')
+
+  // Twice is once: an amend or a rebase must not stack trailers.
+  execFileSync('git', ['commit', '-q', '--amend', '--no-edit'], { cwd: repo })
+  const amended = execFileSync('git', ['log', '-1', '--format=%B'], { cwd: repo, encoding: 'utf8' })
+  assert.equal((amended.match(/Run-Id:/g) ?? []).length, 1, 'the trailer is added once, not once per commit attempt')
+
+  // A branch that is not a run branch is left alone.
+  const plain = mkdtempSync(join(tmpdir(), 'trailer-plain-'))
+  execFileSync('git', ['init', '-q', plain])
+  await installRunTrailer(plain, 'feature/ordinary-branch')
+  assert.ok(!existsSync(join(plain, '.git', 'hooks', 'prepare-commit-msg')),
+    'no hook is installed outside a run worktree')
+  rmSync(repo, { recursive: true, force: true })
+  rmSync(plain, { recursive: true, force: true })
+}
+
+console.log('workspace: the run trailer and the scratch exclude are pinned too')

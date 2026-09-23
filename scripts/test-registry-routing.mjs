@@ -115,5 +115,131 @@ assert.equal(await branchOf('FFM-4 x'), 'develop')
 // nothing, because guessing a product is how a run stands up the wrong stack.
 assert.equal(await routes('Nothing in particular about anything'), undefined)
 
+// ── the Environment block does not decide the product ────────────────────
+// Run a3cb9d37 (CSUP-7526) spent $35.54 and 72 minutes working in the WRONG
+// REPOSITORY because of one word in boilerplate. Every CSUP ticket carries an
+// Environment section naming the deployment estate; that one read
+// "Keycloak / CRM Nodes: DC-CRM1-KC1", and `Keycloak` is an infra label. The
+// resolver matched the whole prompt, so a Selfcare billing bug resolved to
+// `infra`: every lane's worktree was cut from the devops repo, and a lane
+// committed 859 lines of the ticket's SQL onto a devops branch.
+//
+// The subject and the ticket's own Component field decide. Deployment
+// vocabulary in the environment boilerplate does not.
+{
+  const csup7526 = [
+    'CSUP-7526: Selfcare onboarding: going back a step silently replaces the $100 student promo with the $25 referral discount',
+    'URL: https://alepo.atlassian.net/browse/CSUP-7526',
+    '',
+    'Component',
+    '',
+    'Web Selfcare Portal — member onboarding',
+    '',
+    'Environment',
+    '',
+    'Target Environment: Upgrade Production',
+    'Load Balancers: DC-WSC1-LB1 / DC-WSC2-LB2',
+    'Keycloak / CRM Nodes: DC-CRM1-KC1 / DC-CRM2-KC2',
+    'Database Instance: crmdb',
+    '',
+    'Background',
+    '',
+    'Lüm Mobile offers targeted promotional incentives during the digital onboarding flow.',
+  ].join('\n')
+
+  // Asserted as the Selfcare FAMILY, not one member of it: the subject and
+  // Component say "Web Selfcare Portal" and never "LUM", so which of
+  // selfcarenow and lum-selfcare owns this ticket is a registry question for
+  // the people who own those repos - not something routing should invent. What
+  // is not in question is that it is not the deployment repo.
+  const family = ['selfcarenow', 'lum-selfcare']
+  const got = await routes(csup7526)
+  assert.ok(family.includes(got),
+    `the subject decides; the Keycloak in the Environment block must not route a Selfcare bug elsewhere - got ${got}`)
+  assert.notEqual(got, 'infra', 'a Selfcare billing bug is never devops work')
+
+  // The same ticket with the Environment BLOCK removed routes the same way,
+  // which is what makes that block the cause rather than the subject. Only
+  // those lines are dropped: the Background stays, because it is the ticket
+  // talking about its own subject rather than about the estate.
+  const withoutEstate = csup7526.split('\n').filter(l =>
+    !/Load Balancers|Keycloak \/ CRM Nodes|Database Instance|Target Environment/.test(l)).join('\n')
+  assert.equal(await routes(withoutEstate), got,
+    'the Environment block changes nothing about where this ticket goes')
+}
+
+// ── but a real infrastructure ticket still reaches infra ─────────────────
+// The fix must not be "stop matching deployment words". A DEVOPS ticket, and
+// an infra ticket whose SUBJECT names the estate, both still route to infra.
+{
+  assert.equal(await routes('DEVOPS-20: Keycloak realm import fails on the sso stack'), 'infra')
+  assert.equal(await routes([
+    'SBN-9001: Keycloak container will not start after the compose bump',
+    'URL: https://alepo.atlassian.net/browse/SBN-9001',
+    '',
+    'Component',
+    '',
+    'Deployment',
+    '',
+    'Environment',
+    '',
+    'Database Instance: crmdb',
+  ].join('\n')), 'infra', 'the estate named in the SUBJECT and Component is a real infra ticket')
+
+  // And a ticket whose Component says Selfcare while the body mentions
+  // Liquibase is still a Selfcare ticket.
+  assert.equal(await routes([
+    'CSUP-7600: LUM Selfcare checkout totals wrong after a plan change',
+    '',
+    'Component',
+    '',
+    'LUM Selfcare',
+    '',
+    'Environment',
+    '',
+    'Liquibase ran at 03:00; SSO nodes DC-CRM1-KC1',
+  ].join('\n')), 'lum-selfcare',
+  'a Component naming LUM Selfcare still outranks the estate vocabulary in the Environment block')
+}
+
+// ── the customer decides: SaskTel and Lüm always mean lum-selfcare ──────
+// Sandeep's rule, after two runs went to the wrong repo: "if i specifically
+// say selfcare now then only go to new selfcare, and whenever sasktel, or lum
+// comes in then always use lum selfcare repo".
+//
+// The customer's name is a stronger claim than any product vocabulary: a
+// ticket that says SaskTel is about SaskTel's estate whatever else it mentions.
+// CSUP-7524 proved the cost of the alternative - "Selfcare" appearing once in
+// an analysis sentence outranked the customer named in the title.
+{
+  assert.equal(await routes('CSUP-7524: SaskTel | One-time SIM/eSIM fee transactions are never closed after the fee is charged'), 'lum-selfcare',
+    'SaskTel in the subject means the LUM Selfcare repo')
+  assert.equal(await routes('CSUP-7522: Sasktel || myLüm Android app uses deprecated APIs'), 'lum-selfcare',
+    'the customer spelled Lüm, which the registry could not match before')
+  assert.equal(await routes('CSUP-7527: Lum Mobile payment endpoint migration'), 'lum-selfcare')
+
+  // The umlaut spelling ALONE, with no SaskTel and no bare "Lum" anywhere:
+  // "myLüm" never matched the registry's LUM term, because the L is preceded
+  // by a word character and the umlaut is not in it at all. Four open tickets
+  // spell the app this way.
+  assert.equal(await routes('CSUP-7530: myLüm checkout crashes on the review step'), 'lum-selfcare',
+    'the app name as the tickets actually spell it')
+
+  // Even when Selfcare vocabulary appears elsewhere in the ticket: the
+  // customer wins, which is the whole point of the rule.
+  assert.equal(await routes([
+    'CSUP-7524: SaskTel | fee transactions are never closed',
+    '',
+    'Background',
+    '',
+    'billing only exposes the lifecycle events, CRM/Selfcare create the transactions',
+  ].join('\n')), 'lum-selfcare',
+  'a Selfcare mention in the body does not outrank the customer in the title')
+
+  // And the explicit product name still reaches the other repo.
+  assert.equal(await routes('SCN-500: SelfcareNow dashboard fails to load'), 'selfcarenow',
+    'naming SelfcareNow explicitly is how a ticket reaches the new selfcare repo')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('registry routing: resolves with no plugin, infra work lands on the deployment repo')

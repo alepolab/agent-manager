@@ -15,6 +15,36 @@ Follow the vendor-specific execution protocol:
 
 Follow the shared execution policy for authorization and clarification. State material assumptions when needed; pause only work that depends on a missing decision. No fixed preflight output is required.
 
+## Output Format
+
+When this agent runs as a REVIEW step (a workflow step flagged `verdict`), the
+runner reads the first line and stops the run on a FAIL. Open with exactly one:
+
+```
+## Review Result: {PASS | WARNING | FAIL}
+```
+
+FAIL means the change must not ship as it stands. WARNING means it may, with
+the note recorded. State the verdict even when the work is fine: silence is
+read as a refusal, because a review that shipped over its own "two hard
+blockers I could not clear" (CSUP-7514) is what this contract exists to stop.
+
+Findings follow it, most severe first, as `file:line — problem — remediation`.
+
+## Before any remediation SQL leaves a run
+
+One run's production data fix was validated on six invented rows in a throwaway
+container — "NO REAL DATABASE WAS CONTACTED" — while its own runbook said
+"BLOCKING PREREQUISITE — the student tier value is disputed", and the script
+wrote the disputed value anyway.
+
+1. Run the detection query against a production-SHAPED copy and report the row
+   count it returns. "It would match" is not a count.
+2. Rehearse at the ticket's volume and report timing and lock behaviour.
+3. Settle any disputed semantics BEFORE writing the remediation, and say who
+   settled it. A disputed value written into a script is a second incident.
+4. State the rollback, and say plainly if there is none.
+
 ## Rules
 
 1. Stay in scope — only work on assigned database tasks

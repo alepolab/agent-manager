@@ -1,4 +1,29 @@
 /**
+ * Did this run commit somewhere its product does not own?
+ *
+ * Run a3cb9d37 (CSUP-7526) resolved product `infra` from one word in the
+ * ticket's Environment boilerplate, so its worktree was cut from the devops
+ * repo while the lanes did the real work in lum-selfcare-v1. The PR step was
+ * one step away from opening a pull request against a repository where
+ * nothing had changed - a PR that reads as the fix while containing none of
+ * it, on a ticket a customer is waiting on. A monitor caught that one, after
+ * $35.54 and 72 minutes; a monitor is not a mechanism.
+ *
+ * Returns the sentence to fail with, or null when there is nothing to say.
+ * Silent when nothing was committed (a run with no work is the PR step's own
+ * story to tell) and when the product is unregistered (an empty repo list
+ * cannot contradict anything).
+ */
+export function repoMismatch(productRepos: string[], committedRepos: string[]): string | null {
+  if (!productRepos.length || !committedRepos.length) return null
+  const strays = committedRepos.filter(r => !productRepos.includes(r))
+  if (!strays.length) return null
+  return `This run is registered against ${productRepos.join(', ')}, but its commits are in ${strays.join(', ')}. `
+    + 'Opening a pull request now would target a repository where nothing changed and leave the real work out of it. '
+    + 'The ticket was almost certainly routed to the wrong product: check the registry entry before re-running.'
+}
+
+/**
  * The runner pushes the run's branch and opens the pull request.
  *
  * This exists because nothing else did it. A run committed a 286-line CRM gate
@@ -51,6 +76,8 @@ export interface PrStepOptions {
   exec?: ExecLike
   /** Candidate directories, for tests. Discovered from the run checkout otherwise. */
   repoDirs?: string[]
+  /** What the run executed, for tests. Read from the run's command ledger otherwise. */
+  facts?: { builtOk: boolean, buildFailed: boolean, buildCommands: string[], sqlFilesExecuted: string[] }
 }
 
 export interface PrStepResult {
@@ -58,6 +85,81 @@ export interface PrStepResult {
   lines: string[]
   /** Only pull requests that were actually opened, or already existed. */
   prs: { repo: string, url: string }[]
+  /**
+   * A repository whose pull request this step REFUSED to open, with why. The
+   * runner fails the step on any of these: a refusal reported as one line among
+   * ten is how "no pull request was opened" came to read like a detail.
+   */
+  refused?: { repo: string, reason: string }[]
+}
+
+/** Extensions whose change has to compile before anyone is asked to review it. */
+const CODE_FILE = /\.(java|kt|scala|groovy|ts|tsx|js|jsx|vue|py|go|rb|php|cs|c|cc|cpp|h|hpp|rs|swift|m|mm)$/i
+
+/**
+ * Whether this repository's change is allowed to become a pull request, given
+ * what the run actually executed.
+ *
+ * Both runs in the 2026-09-21 review opened pull requests over a RECORDED build
+ * failure. CSUP-7524's "22/22 green" was six files compiled flat against the
+ * junit jar — the one file carrying the real wiring was compiled by nothing —
+ * and CSUP-7526 shipped a remediation script that dies on its second query
+ * because eighteen references name a column on the wrong table. Infra CI runs
+ * Ansible, bats, compose config and ShellCheck: none of them executes SQL, and
+ * a diff reads fine either way.
+ *
+ * So the precondition is evidence, not assertion: the command ledger
+ * (commandLedger.ts) is built from the tool calls the agents really made, and
+ * this asks it two questions — did a project build succeed, and was every .sql
+ * file in this diff actually fed to a database.
+ *
+ * A product with no build command configured (the registry says `CONFIRM`)
+ * cannot answer the first, and that is REPORTED as the gap it is rather than
+ * waved through: a gate that passes when it cannot see is not a gate. The
+ * escape is explicit and loud — AGENT_ALLOW_UNBUILT_PR=1 — for the operator who
+ * knows the build lives somewhere this run could not reach.
+ */
+export function prEvidenceRefusal(
+  changedFiles: string[],
+  facts: { builtOk: boolean, buildFailed: boolean, builtInContainer?: boolean, buildCommands: string[], sqlFilesExecuted: string[] },
+): string | null {
+  const code = changedFiles.filter(f => CODE_FILE.test(f))
+  const sql = changedFiles.filter(f => /\.sql$/i.test(f))
+
+  if (code.length && !facts.builtOk) {
+    const ran = facts.buildCommands.length
+      ? `The build commands this run ran were: ${facts.buildCommands.slice(0, 5).map(c => `\`${c}\``).join(', ')}`
+        + `${facts.buildFailed
+          ? ', and the last of them failed.'
+          : ', and none of them can be shown to have succeeded — an outcome the shell swallowed (`|| true`) or a result that arrived while several commands were in flight is not a pass.'}`
+      : 'No project build ran in this run for this repository — not a failed one, none. '
+        + '(If a build did run, its record is missing: check that the run\'s artifacts directory is writable.)'
+    return `${code.length} source file(s) changed and nothing in this run proves they compile. ${ran}`
+      + ' A pull request is a request for someone to merge code; this run cannot show the code builds.'
+      + ' Run the product build in the checkout, or set AGENT_ALLOW_UNBUILT_PR=1 if the build genuinely cannot run here.'
+  }
+
+  // A build on this host is a build against this host's toolchain, which is not
+  // the one the product ships. The runbook has always said so in words; until
+  // now nothing read those words, and a run that compiled against whatever JDK
+  // the container happened to carry could open a pull request on the strength
+  // of it. The stack is already stood up from the infra repo's compose file, so
+  // the product's own image is there to build in.
+  if (code.length && facts.builtOk && facts.builtInContainer === false && process.env.AGENT_ALLOW_HOST_BUILD !== '1') {
+    return `${code.length} source file(s) changed and the only build that passed ran on this host, not in the product's own container: `
+      + `${facts.buildCommands.slice(0, 5).map(c => `\`${c}\``).join(', ')}.`
+      + ' A toolchain installed here is not the one the product ships with, so a green host build says nothing about the artifact a customer runs.'
+      + ' Build through the product\'s own image - `docker compose -f <the stack\'s compose file> run --rm <service> <build command>`, its compose build target, or `docker build` - and let that be the evidence.'
+      + ' If this product genuinely has no container build, set AGENT_ALLOW_HOST_BUILD=1 and say so in the run report.'
+  }
+
+  const unexecuted = sql.filter(f => !facts.sqlFilesExecuted.includes(f.replace(/^.*\//, '')))
+  if (unexecuted.length) {
+    return `${unexecuted.length} SQL file(s) in this change were never executed against a database: ${unexecuted.slice(0, 5).join(', ')}.`
+      + ' A remediation script that has not been run is a guess about a schema.'
+      + ' Run it against a throwaway copy, or set AGENT_ALLOW_UNBUILT_PR=1 if no database is reachable here.'
+  }
+  return null
 }
 
 /** `owner/repo` from any origin URL shape, or null rather than a guess. */
@@ -92,10 +194,40 @@ function discoverRepoDirs(projectDir: string): string[] {
  * - a placeholder, or a swallowed error - is how a run once told a customer's
  * ticket that a pull request was ready at `https://example.invalid/pending`.
  */
+/**
+ * Pull requests other runs have open, by repository — read from the run index
+ * so it costs one file read rather than a scan of every run's artifacts.
+ */
+async function openPrsElsewhere(run: WorkflowRun): Promise<{ repo: string, ticket?: string, pr: string }[]> {
+  const { readRunIndex } = await import('./runIndex.ts')
+  const rows = await readRunIndex()
+  const out: { repo: string, ticket?: string, pr: string }[] = []
+  for (const row of rows) {
+    if (row.runId === run.id) continue
+    for (const pr of row.prs ?? []) out.push({ repo: pr.repo, ...(row.ticket ? { ticket: row.ticket } : {}), pr: pr.url })
+  }
+  return out
+}
+
 export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Promise<PrStepResult> {
   const exec = opts.exec ?? realExec
   const lines: string[] = []
   const prs: { repo: string, url: string }[] = []
+  const refused: { repo: string, reason: string }[] = []
+  // Read once: the ledger is append-only and every repository in this loop is
+  // judged against the same run.
+  // The raw ledger, scoped per repository below: a build that succeeded in one
+  // checkout must not vouch for untouched code in another repository of the
+  // same run.
+  const ledger = opts.facts ? [] : await (async () => {
+    const { readCommandLedger } = await import('./commandLedger.ts')
+    return readCommandLedger(run.id)
+  })()
+  const factsFor = async (dir: string) => {
+    if (opts.facts) return opts.facts
+    const { executionFacts } = await import('./commandLedger.ts')
+    return executionFacts(ledger, dir)
+  }
 
   if (!run.branch || !run.baseBranch) {
     // Inventing either is how a run opens a pull request against the wrong
@@ -109,6 +241,15 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
   }
 
   const dirs = opts.repoDirs ?? discoverRepoDirs(run.projectDir)
+
+  // Who else is already in this repository.
+  //
+  // Three pull requests landed on `ase_lbss` within four days from three
+  // independent runs, plus two more on a second repo, and no run's evidence
+  // mentioned another's branch. Nothing here blocks: merge order is a human
+  // decision. But the person reading this step's output is the last one who can
+  // make it, so they are told.
+  const concurrent = await openPrsElsewhere(run).catch(() => [])
 
   for (const dir of dirs) {
     let branch: string
@@ -128,6 +269,15 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
       continue
     }
 
+    // Before anything is pushed: does this checkout even belong to the run's
+    // product? Run a3cb9d37 was one call from opening a PR on the devops repo
+    // for a Selfcare fix that lived somewhere else entirely.
+    const mismatch = repoMismatch(run.product?.repos ?? [], [repo])
+    if (mismatch) {
+      lines.push(mismatch)
+      continue
+    }
+
     let ahead = 0
     try {
       ahead = Number(await exec('git', ['rev-list', '--count', `origin/${run.baseBranch}..HEAD`], { cwd: dir })) || 0
@@ -140,6 +290,32 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
     if (ahead === 0) {
       lines.push(`${repo}: no commits on ${run.branch} beyond origin/${run.baseBranch}; no pull request opened.`)
       continue
+    }
+
+    // What this run EXECUTED, against what this diff CHANGES. Nothing is pushed
+    // until that question is answered — see prEvidenceRefusal.
+    let changed: string[] | null = null
+    try {
+      changed = (await exec('git', ['diff', '--name-only', `origin/${run.baseBranch}...HEAD`], { cwd: dir }))
+        .split('\n').map(s => s.trim()).filter(Boolean)
+    } catch {
+      // Failing open here would skip the evidence check entirely for a repo
+      // whose diff could not be read — the one case where nobody can say what
+      // is about to be shipped.
+      refused.push({ repo, reason: `the list of changed files could not be read, so there is no way to say what this pull request would contain.` })
+      lines.push(`${repo}: NO PULL REQUEST. The diff against origin/${run.baseBranch} could not be read.`)
+      continue
+    }
+    const refusal = prEvidenceRefusal(changed, await factsFor(dir))
+    if (refusal) {
+      if (process.env.AGENT_ALLOW_UNBUILT_PR === '1') {
+        log.warn('pull request opened without execution evidence; AGENT_ALLOW_UNBUILT_PR=1', { runId: run.id, repo, refusal })
+        lines.push(`${repo}: WARNING — ${refusal} Opened anyway because AGENT_ALLOW_UNBUILT_PR=1.`)
+      } else {
+        refused.push({ repo, reason: refusal })
+        lines.push(`${repo}: NO PULL REQUEST. ${refusal}`)
+        continue
+      }
     }
 
     try {
@@ -166,6 +342,13 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
       }
       prs.push({ repo, url })
       lines.push(`${repo}: opened ${url} (${ahead} commit${ahead === 1 ? '' : 's'} into ${run.baseBranch}).`)
+      const others = concurrent.filter(c => c.repo === repo)
+      if (others.length) {
+        lines.push(
+          `${repo}: ${others.length} other pull request${others.length === 1 ? '' : 's'} from recent runs are open on this repository`
+          + ` — ${others.map(o => `${o.ticket ?? 'a run'} ${o.pr}`).join(', ')}. Nobody has decided a merge order.`,
+        )
+      }
     } catch (err) {
       // A branch that already has a PR is the common case on a restart: ask gh
       // for the existing one rather than reporting a failure a reviewer cannot act on.
@@ -181,8 +364,8 @@ export async function runPrStep(run: WorkflowRun, opts: PrStepOptions = {}): Pro
   }
 
   if (!dirs.length) lines.push('No repositories to consider for a pull request.')
-  log.info('pr step done', () => ({ runId: run.id, opened: prs.length, considered: dirs.length }))
-  return { lines, prs }
+  log.info('pr step done', () => ({ runId: run.id, opened: prs.length, considered: dirs.length, refused: refused.length }))
+  return refused.length ? { lines, prs, refused } : { lines, prs }
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err)).split('\n').slice(0, 2).join(' ').trim()

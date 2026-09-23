@@ -55,6 +55,35 @@ export function runWorkspace(run: { projectDir?: string, startedBy?: string }): 
 }
 
 /**
+ * The lock identity for a run: the clone it will write, not the path string it
+ * was handed.
+ *
+ * Two SBN-4091 runs overlapped by 43 minutes on the same repository and the
+ * guard never fired, because the second run's `projectDir` was the FIRST run's
+ * worktree - two different strings, one clone. The proof is still on disk:
+ * `pc@fix-SBN-4091-543dbc88@fix-SBN-4091-644a961b`, a worktree inside a
+ * worktree, with a lane cut inside that.
+ *
+ * `--git-common-dir` is the answer git itself gives: every worktree of one
+ * clone resolves to the same `.git` directory, so nesting cannot hide it.
+ * Falls back to the path when the directory is not a checkout at all, which is
+ * the ordinary case for a run whose product was never cloned here.
+ */
+export async function runLockKey(run: { projectDir?: string, startedBy?: string }): Promise<string> {
+  const dir = runWorkspace(run)
+  if (!existsSync(dir)) return dir
+  try {
+    // Async on purpose: this is called once per live run on every start and
+    // restart request, and a synchronous git call measured 2.35 ms each — on an
+    // instance with twenty live runs that is a 50 ms event-loop stall per
+    // request, growing with the number of runs.
+    return (await gitRaw(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim() || dir
+  } catch {
+    return dir
+  }
+}
+
+/**
  * Whether a workspace holds a git checkout — the side effect a restart cannot
  * recreate on its own.
  *
@@ -119,10 +148,14 @@ export function browserSurface(workspace: string): BrowserSurface {
     catch { /* skip */ }
   }
 
+  // A checkout with no Playwright config is not a checkout with no way to look:
+  // `agent-browser` is installed in this image and drives the running app
+  // directly, against the address in stack-facts.json. Saying so is the
+  // difference between "no trace was possible" and "nobody opened the page".
   const summary = playwright
-    ? `Playwright config found${uiFiles.length ? '' : ', though no UI files were seen at the top level'} — a trace is expected unless the change has no UI surface.`
+    ? `Playwright config found${uiFiles.length ? '' : ', though no UI files were seen at the top level'} — a trace is expected unless the change has no UI surface. \`agent-browser\` is also available for opening the running application itself.`
     : uiFiles.length
-      ? 'No Playwright config found in this checkout, but UI files are present — say which you checked before reporting n/a.'
+      ? 'No Playwright config found in this checkout, but UI files are present — open the running application with `agent-browser` at the address in stack-facts.json, screenshot it and read the image, and say which routes you checked before reporting n/a.'
       : 'No Playwright config and no UI files found in this checkout — `TRACE: n/a` is the expected outcome, and this sentence is the reason to give.'
 
   return { playwright, uiFiles, summary }
@@ -158,25 +191,42 @@ export interface CheckoutState {
   /** Uncommitted or untracked paths, counted with -uall so a new directory is not one entry. */
   dirty: number
   dirtyFiles: string[]
+  /**
+   * Stashes on this checkout, newest first.
+   *
+   * Parking work told you how to get it back in a `confirm()` that closed on
+   * the click and a toast that faded — so the only record of a long
+   * `git -C … stash pop` was gone seconds after the act, and the row went back
+   * to reading "clean" with no sign that anything had been set aside. Read
+   * from git rather than remembered in the client, so it survives a reload and
+   * is true even when someone else did the parking.
+   */
+  stashes: { ref: string, subject: string }[]
 }
 
 export async function checkoutState(path: string): Promise<CheckoutState> {
   const name = path.split('/').pop() || path
-  if (!existsSync(path)) return { path, name, exists: false, git: false, dirty: 0, dirtyFiles: [] }
-  if (!existsSync(join(path, '.git'))) return { path, name, exists: true, git: false, dirty: 0, dirtyFiles: [] }
+  if (!existsSync(path)) return { path, name, exists: false, git: false, dirty: 0, dirtyFiles: [], stashes: [] }
+  if (!existsSync(join(path, '.git'))) return { path, name, exists: true, git: false, dirty: 0, dirtyFiles: [], stashes: [] }
   try {
-    const [branch, head, status] = await Promise.all([
+    const [branch, head, status, stashList] = await Promise.all([
       git(path, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => 'no commits yet'),
       git(path, ['rev-parse', '--short', 'HEAD']).catch(() => ''),
       // Untrimmed: a leading space is the status column of the first line, not padding.
       gitRaw(path, ['status', '--porcelain', '-uall']),
+      // Cheap: reads refs/stash. Empty on a checkout that never stashed.
+      gitRaw(path, ['stash', 'list', '--format=%gd%x00%gs']).catch(() => ''),
     ])
+    const stashes = stashList.split('\n').filter(Boolean).map((l) => {
+      const [ref = '', subject = ''] = l.split('\0')
+      return { ref, subject }
+    })
     const remote = await git(path, ['remote', 'get-url', 'origin']).catch(() => undefined)
     // A nested repository shows up as one untracked directory in its parent; it is its own checkout, not a change here.
     const files = status.split('\n').filter(Boolean).map(l => l.slice(3)).filter(f => !(f.endsWith('/') && existsSync(join(path, f, '.git'))))
-    return { path, name, exists: true, git: true, branch, head, remote, dirty: files.length, dirtyFiles: files.slice(0, 20) }
+    return { path, name, exists: true, git: true, branch, head, remote, dirty: files.length, dirtyFiles: files.slice(0, 20), stashes }
   } catch {
-    return { path, name, exists: true, git: true, dirty: 0, dirtyFiles: [] }
+    return { path, name, exists: true, git: true, dirty: 0, dirtyFiles: [], stashes: [] }
   }
 }
 
@@ -244,6 +294,14 @@ export const worktreeDirFor = (checkout: string, branch: string) => `${checkout}
  * recorded it) is reused, never rebuilt over work.
  */
 export async function ensureRunBranch(path: string, branch: string, base?: string): Promise<string[]> {
+  // Serialised with every other worktree mutation on this clone: git locks the
+  // repository for add/remove/prune, so a settled run handing its worktree
+  // back while this one cuts its own made one of them fail — from a run that
+  // did nothing wrong.
+  return onClone(path, () => ensureRunBranchNow(path, branch, base))
+}
+
+async function ensureRunBranchNow(path: string, branch: string, base?: string): Promise<string[]> {
   const root = worktreeDirFor(path, branch)
   const out: string[] = []
   for (const r of [path, ...nestedRepos(path)]) {
@@ -271,6 +329,15 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
       await git(r, ['worktree', 'add', '--quiet', '-B', branch, wt, ...(start ? [start] : [])])
     }
     await excludeFromGit(wt, '.agent/evidence-run/')
+    // Everything under the scratch directory EXCEPT the plan, which the plan
+    // gate requires a run to commit. `.agent/source-edited` and
+    // `.agent/test-unlock.json` littered six worktrees and one run added its own
+    // .gitignore rule for them; the pattern pair is that policy, once, for every
+    // run. `.agent/*` rather than `.agent/`, because a negation cannot re-include
+    // a file inside an excluded DIRECTORY.
+    await excludeFromGit(wt, '.agent/*')
+    await excludeFromGit(wt, '!.agent/plan.md')
+    await installRunTrailer(wt, branch)
     out.push(wt)
   }
   return out
@@ -370,6 +437,45 @@ export function nestedRepos(path: string): string[] {
 }
 
 /** Evidence copies never reach a commit, whatever an agent stages: the path is excluded in the checkout itself. */
+/**
+ * A commit made in a run worktree says which run made it.
+ *
+ * Every agent commit across thirteen runs is authored by the operator, and
+ * `git log` cannot answer "was this agent-written?" or "where is the evidence
+ * for this line?" — grepping every run commit for a run id returns nothing. The
+ * `Co-Authored-By` trailer that was supposed to mark them is missing from four
+ * commits outright and carries a stray personal address on a fifth.
+ *
+ * A `prepare-commit-msg` hook rather than a runner-side amend: the agents commit
+ * themselves, through whatever git invocation they choose, and a hook is the one
+ * place every one of those passes through. Written into the worktree's own hooks
+ * directory, so it exists for this run and nothing else on the machine.
+ */
+export async function installRunTrailer(worktree: string, branch: string): Promise<void> {
+  const runId = branch.split('-').pop() ?? ''
+  if (!/^[0-9a-f]{6,}$/i.test(runId)) return // not a run branch: nothing to stamp
+  try {
+    const gitDir = (await git(worktree, ['rev-parse', '--path-format=absolute', '--git-dir'])).trim()
+    const hooks = join(gitDir, 'hooks')
+    await mkdir(hooks, { recursive: true })
+    const hook = join(hooks, 'prepare-commit-msg')
+    // Idempotent and additive: a message that already carries the trailer (an
+    // amend, a rebase) is left alone.
+    const body = [
+      '#!/bin/sh',
+      '# Installed by Agent Manager for this run worktree. Stamps the run id on',
+      '# every commit made here, so `git log --grep` can find the evidence.',
+      `RUN_TRAILER="Run-Id: ${runId}"`,
+      'grep -qF "$RUN_TRAILER" "$1" 2>/dev/null && exit 0',
+      'printf "\n%s\n" "$RUN_TRAILER" >> "$1"',
+      '',
+    ].join('\n')
+    await writeFile(hook, body, { mode: 0o755 })
+  } catch {
+    // A missing hook is a missing trailer, never a failed run.
+  }
+}
+
 export async function excludeFromGit(path: string, pattern: string): Promise<void> {
   // In a linked worktree `.git` is a file: info/exclude lives in the common dir, shared by every worktree of the clone.
   const gitDir = await git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => join(path, '.git'))
@@ -392,4 +498,105 @@ export async function artifactsWritable(): Promise<{ ok: boolean, path: string, 
   } catch (err) {
     return { ok: false, path, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/**
+ * Worktree mutations on one clone, serialised.
+ *
+ * git takes a lock per repository for `worktree add`, `remove` and `prune`, so
+ * two of them at once means one fails — and with groups running in parallel
+ * and a settled run handing its worktree back, that is now the ordinary case
+ * rather than a rarity. The failure is the worst kind: "could not create the
+ * run worktree", from a run that did nothing wrong.
+ *
+ * Per clone, not global: two repositories have nothing to contend over, and
+ * serialising them would make every parallel group wait on every other.
+ */
+const worktreeLocks = new Map<string, Promise<unknown>>()
+
+function onClone<T>(clone: string, work: () => Promise<T>): Promise<T> {
+  const prev = worktreeLocks.get(clone) ?? Promise.resolve()
+  const next = prev.then(work, work)
+  // Keep the chain alive but never let a rejection poison the next caller.
+  worktreeLocks.set(clone, next.then(() => {}, () => {}))
+  return next
+}
+
+export interface WorktreeCleanup { removed: boolean, reason: string }
+
+/**
+ * Remove a settled run's worktree, unless doing so would lose work.
+ *
+ * Nothing ever did this. `ensureRunBranch` cut a worktree per run and
+ * `removeLane` cleaned up lanes, but the run's own worktree stayed for ever —
+ * so an instance accumulated one directory per run it had ever executed, the
+ * checkout list grew without bound, and a directory someone deleted by hand
+ * left a STALE REGISTRATION that then refused the next run on that branch
+ * ("<path> exists and is on <branch>"). Both failure modes were live on this
+ * instance: five leftover worktrees on disk, and two repositories registering
+ * worktrees whose directories were already gone.
+ *
+ * The safety rule is the whole point, because a worktree is where a run's work
+ * lives until it is pushed:
+ *
+ *  - uncommitted changes    -> KEEP. That work exists nowhere else.
+ *  - commits not on a remote -> KEEP. The branch is local; removing the
+ *                              worktree leaves it unreachable in practice.
+ *  - otherwise               -> remove, and prune the registration.
+ *
+ * Never throws: cleanup is housekeeping, and a run that finished correctly
+ * must not be reported as failed because a directory would not delete.
+ */
+export async function cleanupRunWorktree(worktree: string | undefined): Promise<WorktreeCleanup> {
+  if (!worktree || !worktree.includes('@')) return { removed: false, reason: 'not a run worktree' }
+  const clone = worktree.split('@')[0]!
+  if (!existsSync(clone)) return { removed: false, reason: 'its clone is gone' }
+  return onClone(clone, () => cleanupNow(clone, worktree))
+}
+
+async function cleanupNow(clone: string, worktree: string): Promise<WorktreeCleanup> {
+
+  // Prune first: a registration whose directory has already been removed is
+  // the thing that blocks the next run, and it costs nothing to clear.
+  await git(clone, ['worktree', 'prune']).catch(() => '')
+  if (!existsSync(worktree)) return { removed: true, reason: 'already gone; stale registration pruned' }
+
+  try {
+    const dirty = (await gitRaw(worktree, ['status', '--porcelain', '-uall'])).split('\n').filter(Boolean)
+    if (dirty.length) return { removed: false, reason: `${dirty.length} uncommitted change(s) live only here` }
+
+    const branch = await git(worktree, ['branch', '--show-current']).catch(() => '')
+    if (branch) {
+      // `@{u}` fails when there is no upstream, which is itself the answer:
+      // nothing has been pushed, so every commit on this branch is local.
+      const unpushed = await git(worktree, ['rev-list', '--count', `@{u}..HEAD`]).catch(() => null)
+      if (unpushed === null) {
+        const local = await git(worktree, ['rev-list', '--count', `HEAD`]).catch(() => '0')
+        const base = await git(clone, ['rev-list', '--count', 'HEAD']).catch(() => '0')
+        if (Number(local) > Number(base)) return { removed: false, reason: `${Number(local) - Number(base)} commit(s) are not on any remote` }
+      } else if (Number(unpushed) > 0) {
+        return { removed: false, reason: `${unpushed} commit(s) are not pushed` }
+      }
+    }
+
+    await git(clone, ['worktree', 'remove', '--force', worktree])
+    await git(clone, ['worktree', 'prune']).catch(() => '')
+    return { removed: true, reason: 'clean and fully pushed' }
+  } catch (err) {
+    return { removed: false, reason: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Clear registrations whose directories are gone, across every checkout. The
+ *  cheap half of the fix: a stale one refuses the next run on that branch. */
+export async function pruneAllWorktrees(): Promise<number> {
+  let pruned = 0
+  for (const c of await listCheckouts()) {
+    if (!c.git || c.name.includes('@')) continue
+    const before = (await git(c.path, ['worktree', 'list']).catch(() => '')).split('\n').length
+    await git(c.path, ['worktree', 'prune']).catch(() => '')
+    const after = (await git(c.path, ['worktree', 'list']).catch(() => '')).split('\n').length
+    pruned += Math.max(0, before - after)
+  }
+  return pruned
 }

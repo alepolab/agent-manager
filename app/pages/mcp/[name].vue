@@ -304,7 +304,7 @@ useUnsavedChanges(isDirty)
                   <input v-model="pair.key" type="text" class="field-input flex-1 font-mono t-small" placeholder="KEY" />
                   <span class="text-secondary opacity-40">=</span>
                   <input v-model="pair.value" type="text" class="field-input flex-1 font-mono t-small" placeholder="VALUE" />
-                  <button class="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-error/10 text-error/60 hover:text-error" @click="removeEnvRow(idx)">
+                  <button class="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all hover:bg-error/10 text-error/60 hover:text-error reveal-quiet" aria-label="Remove this environment variable" @click="removeEnvRow(idx)">
                     <UIcon name="i-lucide-trash-2" class="size-3.5" />
                   </button>
                 </div>
@@ -326,7 +326,7 @@ useUnsavedChanges(isDirty)
                   <input v-model="pair.key" type="text" class="field-input flex-1 font-mono t-small" placeholder="Header Name" />
                   <span class="text-secondary opacity-40">:</span>
                   <input v-model="pair.value" type="text" class="field-input flex-1 font-mono t-small" placeholder="Value" />
-                  <button class="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-error/10 text-error/60 hover:text-error" @click="removeHeaderRow(idx)">
+                  <button class="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all hover:bg-error/10 text-error/60 hover:text-error reveal-quiet" aria-label="Remove this header" @click="removeHeaderRow(idx)">
                     <UIcon name="i-lucide-trash-2" class="size-3.5" />
                   </button>
                 </div>

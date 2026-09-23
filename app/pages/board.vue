@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { WorkflowRun, CostAggregate } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
-import { runElapsedMs } from '~~/shared/utils/runClock'
+import { RUN_STATUS_COLOR, runStatusLabel } from '~/utils/runStatus'
+import { runElapsedMs, lastKnownActivity } from '~~/shared/utils/runClock'
 import { humanWaitMs } from '~~/shared/utils/runDecisions'
 
 /**
@@ -52,8 +52,21 @@ const fmt = (ms: number) => {
 
 /** Runs stopped at a gate right now, longest wait first: the queue that is costing time. */
 const waiting = computed(() => runs.value
-  .filter(r => r.status === 'paused' && r.question)
-  .map(r => ({ run: r, waited: Math.max(0, now.value - (r.question?.askedAt ?? now.value)) }))
+  // `&& r.question` was here, and it hid a whole class of stuck run: with
+  // autoRun off the wave loop pauses between waves with no question at all,
+  // waiting for someone to press Continue. Those are people-waits too, and
+  // filtering them out meant the cautious operator's runs were precisely the
+  // ones the manager's board could not see.
+  .filter(r => r.status === 'paused')
+  .map(r => ({
+    run: r,
+    // A gate records when it asked. A bare pause leaves only the run's last
+    // activity, which is when the waiting actually started.
+    waited: Math.max(0, now.value - (r.question?.askedAt ?? lastKnownActivity(r))),
+    // Kept apart because they need different acts: one is a decision, the
+    // other is a click. Collapsing them sends the reader to do the wrong thing.
+    atGate: !!r.question,
+  }))
   .sort((a, b) => b.waited - a.waited))
 
 /**
@@ -110,7 +123,7 @@ const withDecisions = computed(() => runs.value.filter(r => (r.decisions?.length
         <!-- The four numbers a manager acts on. -->
         <section class="grid gap-3" style="grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));">
           <div class="rounded-xl px-4 py-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-            <div class="t-small font-mono uppercase tracking-wider text-label">Waiting on a person</div>
+            <div class="t-small font-mono uppercase tracking-wider text-label">{{ runStatusLabel('paused') }}</div>
             <div class="t-title font-medium tabular-nums" :style="{ color: waiting.length ? RUN_STATUS_COLOR.paused : 'var(--text-primary)' }">{{ waiting.length }}</div>
             <div class="t-small text-label">{{ waiting.length ? `longest ${fmt(waiting[0]!.waited)}` : 'no gate is open' }}</div>
           </div>
@@ -139,7 +152,9 @@ const withDecisions = computed(() => runs.value.filter(r => (r.decisions?.length
 
         <!-- What is stuck, and for how long. -->
         <section>
-          <h2 class="text-section-label mb-2">Stopped at a gate <span class="text-meta font-normal">{{ waiting.length }}</span></h2>
+          <!-- Was "Stopped at a gate", which named only half of what this
+               list now holds and disagreed with the tile above it. -->
+          <h2 class="text-section-label mb-2">{{ runStatusLabel('paused') }} <span class="text-meta font-normal">{{ waiting.length }}</span></h2>
           <p v-if="!waiting.length" class="t-ui text-label">Nothing is waiting on a person.</p>
           <div v-else class="space-y-1">
             <NuxtLink
@@ -148,7 +163,14 @@ const withDecisions = computed(() => runs.value.filter(r => (r.decisions?.length
               style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
             >
               <span class="truncate" style="color: var(--text-primary);">{{ w.run.ticketKey || (w.run.initialPrompt.split('\n')[0] ?? '') }}</span>
-              <span class="text-label truncate">{{ w.run.steps.find(s => s.stepId === w.run.question?.stepId)?.label ?? 'a step' }}</span>
+              <!-- What it is waiting FOR, which decides who has to do what: a
+                   gate needs a decision, a bare pause needs a click. The row
+                   used to render a step label for both, and for a run with no
+                   question that resolved to the literal words "a step". -->
+              <span class="text-label truncate">
+                <template v-if="w.atGate">{{ w.run.steps.find(s => s.stepId === w.run.question?.stepId)?.label ?? 'a gate' }}</template>
+                <template v-else>waiting to continue</template>
+              </span>
               <span class="text-right tabular-nums" :style="{ color: RUN_STATUS_COLOR.paused }">{{ fmt(w.waited) }}</span>
             </NuxtLink>
           </div>

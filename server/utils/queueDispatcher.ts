@@ -1,0 +1,101 @@
+import type { H3Event } from 'h3'
+import { dispatch, readQueue } from './taskQueue.ts'
+import { startRun } from './workflowRunner.ts'
+import { readWorkflow } from './workflows.ts'
+import { currentUser } from './session.ts'
+import { envForUser } from './users.ts'
+import { fetchTicketForPrompt } from './jiraTicketSource.ts'
+import type { DispatchResult } from '../../shared/types/queue.ts'
+
+/**
+ * Turns the next queue task into a real run.
+ *
+ * Separate from taskQueue.ts so the queue's rules — order, dependencies,
+ * capacity, the workspace lock — can be tested without a runner, a workflow on
+ * disk or a Jira round trip. This file is the only part that needs all three.
+ */
+
+/** Guards re-entry: a settle can fire while a dispatch is still mid-flight, and
+ *  two dispatchers racing would start the same task twice. */
+let inFlight: Promise<DispatchResult> | null = null
+
+export async function dispatchQueue(event?: H3Event): Promise<DispatchResult> {
+  if (inFlight) return inFlight
+  inFlight = run(event).finally(() => { inFlight = null })
+  return inFlight
+}
+
+async function run(event?: H3Event): Promise<DispatchResult> {
+  // The signed-in developer when a person pressed the button; the queue's
+  // recorded owner when the boot driver or the tick fired it. Without the
+  // second, a dispatched run has no identity and therefore no Jira token, no
+  // git credential and no name on its commits.
+  const signedIn = event ? await currentUser(event) : null
+  const login = signedIn?.login ?? (await readQueue()).owner
+  const env = await envForUser(login)
+
+  return dispatch(async (tasks) => {
+    const lead = tasks[0]!
+    const workflow = await readWorkflow(lead.workflowSlug)
+    if (!workflow?.steps?.length) throw new Error(`workflow ${lead.workflowSlug} is missing or has no steps`)
+
+    // One prompt covering the whole group, in dependency order. Each task keeps
+    // its own id and its own done-when, so a run working four of them is still
+    // accountable for four outcomes rather than one vague "did the group".
+    const body = tasks.length === 1
+      ? (lead.detail ?? lead.title)
+      : [
+          `${lead.ticketKey ?? 'Queue'} — ${tasks.length} tasks in ${lead.module ?? 'this repository'}, in this order:`,
+          '',
+          ...tasks.map((t, i) => `${i + 1}. ${t.id}: ${t.title}`),
+          '',
+          'They share one checkout, which is why they are one run. Finish each before',
+          'starting the next, and say which you completed. The detail for each follows.',
+          '',
+          ...tasks.map(t => `--- ${t.id} ---\n${t.detail ?? t.title}`),
+        ].join('\n')
+
+    // The ticket is fetched exactly as the manual start path does it, so a
+    // queued run carries the same enriched prompt a hand-started one gets.
+    const ticket = await fetchTicketForPrompt(body, env)
+    const initialPrompt = ticket.text ? `${ticket.text}\n\n---\n${body}` : body
+
+    return startRun({
+      workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
+      initialPrompt,
+      watch: 'direct-invocation',
+      ticketKey: lead.ticketKey,
+      ...(lead.productKey ? { productKey: lead.productKey } : {}),
+      // `autoRun` does NOT mean "run every gate unattended", which is what the
+      // comment that used to sit here assumed. The gate branch in
+      // workflowRunner never consults it: an `approval` step stops for a person
+      // either way, and shared/utils/oversight.ts decides whether it stops at
+      // all. All this flag controls is whether the runner continues from one
+      // wave to the next by itself (workflowRunner.ts:2291), and again after a
+      // gate has been answered (:2939).
+      //
+      // Off, a queued run therefore paused after EVERY wave and again after
+      // EVERY approval, each time with no question attached - so a person had
+      // to press Continue between steps and Approve at gates, and a run left
+      // between the two looked stranded rather than waiting. It is the same
+      // confusion that got the "Don't stop at gates" checkbox removed from the
+      // start form: a control that reads as the safeguard but is not it.
+      //
+      // The seven gates are the oversight. This is not, so it stays on.
+      autoRun: true,
+      projectDir: lead.projectDir,
+      startedBy: login,
+    })
+  })
+}
+
+/**
+ * Called when a run settles, so the next task starts without anyone pressing
+ * anything. Never throws and never blocks the caller: a queue that could fail
+ * a run's own completion path would be worse than a queue that stalls.
+ */
+export function onRunSettled(): void {
+  void dispatchQueue().catch((err) => {
+    console.error('[queue] dispatch after settle failed:', err instanceof Error ? err.message : err)
+  })
+}

@@ -20,6 +20,13 @@ async function onReject(note: string) {
     toast.add({ title: 'Run rejected', description: 'The run is stopped and your reason is on the record.', color: 'success' })
   } catch (e: any) { toast.add({ title: 'Could not reject it', description: e.data?.message || e.message, color: 'error' }) }
 }
+async function onSkip(reason: string) {
+  try {
+    await $fetch(`/api/runs/${id}/skip`, { method: 'POST', body: { reason } })
+    await load()
+    toast.add({ title: 'Step skipped', description: 'It did not run, the run continues, and your reason is on the record.', color: 'success' })
+  } catch (e: any) { toast.add({ title: 'Could not skip it', description: e.data?.message || e.message, color: 'error' }) }
+}
 async function onRework(stepId: string, note: string) {
   try {
     await rework(stepId, note)
@@ -72,7 +79,7 @@ async function onRestart(stepId: string, note?: string) {
          meant to be reading was squeezed to nothing and the page scrolled sideways. -->
     <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 page page--wide grid-cols-1 lg:grid-cols-[minmax(22rem,2fr)_minmax(0,3fr)]">
       <div class="min-h-0 overflow-y-auto pr-1">
-        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
+        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @skip="onSkip" @rework="onRework" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
       </div>
       <RunArtifacts :run-id="id" :live="live" class="min-h-0" />
     </div>

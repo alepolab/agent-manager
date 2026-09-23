@@ -251,7 +251,11 @@ for (const w of watches) {
   }
 }
 
-const ORDER = ['docs', 'ui_parsing', 'schema', 'protocol', 'money']
+// Must match BLAST_RADIUS_ORDER in shared/utils/oversight.ts exactly. It did
+// not: `deployment` was missing here, so this validator ordered a
+// deployment-class ceiling differently from the module that decides whether a
+// gate fires. Two orderings of the same enum is one too many.
+const ORDER = ['docs', 'ui_parsing', 'schema', 'deployment', 'protocol', 'money']
 for (const [name, p] of Object.entries(products)) {
   const where = `products.${name}`
 
@@ -280,6 +284,36 @@ for (const [name, p] of Object.entries(products)) {
   }
   if (!p.tests?.atdd && !p.tests?.compose_test) {
     note(where, 'has no atdd or compose_test suite, so only unit tests can serve as its oracle')
+
+  // Spec-capability, stated here rather than discovered per run.
+  //
+  // An acceptance row can only be scored per row if the product's test class
+  // writes a machine-readable report this pipeline can parse into individual
+  // cases. A command alone yields a whole-suite pass/fail, which is why a
+  // per-row verdict model cannot be built on `tests.unit` by itself. Saying so
+  // in the registry means a product opts IN to row-level scoring, instead of
+  // every run rediscovering that it cannot and drifting toward an exemption.
+  const cmds = p.tests ?? {}
+  const unresolved = Object.entries(cmds)
+    .filter(([, v]) => typeof v === 'string' && /CONFIRM/.test(v))
+    .map(([k]) => k)
+  if (unresolved.length) {
+    note(where, `test command${unresolved.length > 1 ? 's' : ''} unresolved (${unresolved.join(', ')}): not pipeline-eligible until confirmed against the product's real build`)
+  }
+  const reported = Object.keys(p.reports ?? {})
+  if (!reported.length) {
+    note(where, 'declares no machine-readable report location, so acceptance rows cannot be scored individually for this product')
+  } else {
+    // A report for a class the product does not run is a copy-paste, and it
+    // would make the product look more capable than it is.
+    const classFor = { unit: 'unit', integration: 'integration', atdd: 'atdd', regression: 'regression', ui: 'ui_trace', visual: 'visual', security: 'security' }
+    for (const cls of reported) {
+      const cmdKey = classFor[cls]
+      if (cmdKey && !cmds[cmdKey]) {
+        fail(where, `reports.${cls} is declared but tests.${cmdKey} is not, so nothing ever writes that report`)
+      }
+    }
+  }
   }
   // Money and protocol are never auto-merged, so they must name a human group.
   for (const label of ['money', 'protocol']) {

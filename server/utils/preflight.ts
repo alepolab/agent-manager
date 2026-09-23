@@ -19,11 +19,15 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { pipelineHooks } from './agentHooks.ts'
+import { slackWebhookUrl } from './integrations.ts'
 import { checkoutState } from './workspace.ts'
-import { checkoutDirFor } from './workspace.ts'
+import { checkoutDirFor, workspaceRootFor } from './workspace.ts'
+import { agentRunsRoot } from './runArtifacts.ts'
 import { transitionReachable } from './jiraSteps.ts'
 import { credentialsFor } from './ticketNotifier.ts'
 import { agentEnvFor } from './agentCaller.ts'
+import { defaultInfraDir } from './stackRecipe.ts'
+import { availableApps } from './deployStep.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -40,6 +44,34 @@ export interface PreflightSteps {
   label: string
   jira?: { transition?: string }
   testsUnlocked?: boolean
+  /** This step has the runner bring the product's stack up. */
+  stack?: 'up'
+  /** This step drives the infra repo's deploy.sh. */
+  deploy?: { env: string, step: string, app?: string }
+}
+
+/** Below this, a run is one clone or one artifacts bundle away from a full disk. */
+const LOW_DISK_GB = 20
+
+/** Free space on the filesystem holding `path`, or null when df could not say.
+ *  The nearest existing ancestor is measured, because the directory a run will
+ *  create does not exist yet on a fresh host — and its filesystem is the same one. */
+async function freeGb(path: string): Promise<{ gb: number, usedPct: number, mount: string } | null> {
+  let probe = path
+  while (probe && probe !== '/' && !existsSync(probe)) probe = join(probe, '..')
+  const { stdout } = await execFileP('df', ['-Pk', probe], { timeout: 10_000 })
+  const line = stdout.trim().split('\n').pop() ?? ''
+  const cols = line.split(/\s+/)
+  const availableKb = Number(cols[3])
+  if (!Number.isFinite(availableKb)) return null
+  return { gb: availableKb / 1024 / 1024, usedPct: Number.parseInt(cols[4] ?? '', 10) || 0, mount: cols[5] ?? probe }
+}
+
+/** `owner/repo` from any origin URL shape, or undefined rather than a guess —
+ *  a checkout with no origin cannot contradict a registry entry. */
+export function repoOf(remote: string | undefined): string | undefined {
+  const m = (remote ?? '').trim().match(/[/:]([^/:]+\/[^/]+?)(?:\.git)?\/?$/)
+  return m?.[1]
 }
 
 /** The one-line reason a run must not start, or null. */
@@ -61,7 +93,15 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
   }
 
   const repos = run.product?.repos ?? []
-  const needsStack = steps.some(s => s.agentSlug === 'sdlc-stack-provisioner')
+  // What the STEPS declare, not who runs them. This asked for an agent named
+  // `sdlc-stack-provisioner`, which no workflow in this instance has had since
+  // the estate moved to the oh-my-agent agents - so every stack check below was
+  // silently skipped on the two templates that do stand a stack up, and a run
+  // learned its deployment compose file was missing from the stack step's own
+  // failure instead of from preflight. The legacy slug is still honoured for a
+  // workflow saved before the move.
+  const needsStack = steps.some(s => s.stack === 'up' || s.agentSlug === 'sdlc-stack-provisioner')
+  const deployStep = steps.find(s => s.deploy)
   const jiraTargets = steps.filter(s => s.jira?.transition).map(s => s.jira!.transition!)
   const unlockedStep = steps.find(s => s.testsUnlocked)
 
@@ -95,6 +135,34 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
           : { name: 'deployment compose', level: 'fail', detail: `${repo} is on branch ${state.branch} and has no ${file}. Deploying from the product's own compose is not permitted, so the stack step would halt. Add it to the deployment repo, or check out a branch that has it.` }
       })
     }
+    // ── the ansible entrypoint a deploy step will drive, and the role it needs ──
+    // Both are facts on disk in the infra checkout. A run that finds out at the
+    // deploy step has already paid for every step before it, and deploy.sh
+    // defaults its app to crm rather than to this run's product.
+    if (deployStep) {
+      await guard('deploy entrypoint', async () => {
+        const infraDir = defaultInfraDir()
+        const script = join(infraDir, 'deploy', 'ansible', 'deploy.sh')
+        if (!existsSync(script)) {
+          return {
+            name: 'deploy entrypoint',
+            level: 'warn',
+            detail: `${script} is not on this host, so the ${deployStep.deploy!.env} deploy step will report that instead of deploying. Clone alepo-dev-team-infra there, or set ALEPO_INFRA_DIR.`,
+          }
+        }
+        const apps = availableApps(infraDir)
+        const app = deployStep.deploy!.app ?? run.product?.name ?? ''
+        if (!apps.length) return { name: 'deploy entrypoint', level: 'ok', detail: `${script} is present; its roles could not be listed, so the app is checked when the step runs.` }
+        return apps.includes(app)
+          ? { name: 'deploy entrypoint', level: 'ok', detail: `${script} deploys "${app}" to ${deployStep.deploy!.env} (roles/app_${app.replace(/-/g, '_')}).` }
+          : {
+              name: 'deploy entrypoint',
+              level: 'warn',
+              detail: `this workflow deploys to ${deployStep.deploy!.env}, and the infra repo has no ansible role for "${app || 'this run\'s product'}" - it deploys: ${apps.join(', ')}. `
+                + 'The deploy step will refuse rather than deploy a different product, and the rest of the run carries on.',
+            }
+      })
+    }
     // ── the product checkout, or a token to clone it with ──
     await guard('product checkout', async () => {
       if (!repos.length) return null
@@ -106,6 +174,22 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       // was already sitting in.
       if (run.projectDir && existsSync(join(run.projectDir, '.git'))) {
         const s = await checkoutState(run.projectDir)
+        // Handed is not the same as RIGHT. Run a3cb9d37 (CSUP-7526) was started
+        // against product `infra`, resolved from one word in the ticket's
+        // Environment boilerplate, and worked for 72 minutes in a devops
+        // checkout while eight of its nine tasks belonged to a Selfcare
+        // repository — its own output raised that as a T0 blocker and it
+        // carried on. This check is the cheap half: the checkout a run was
+        // handed must be a repository the product actually owns.
+        const owner = repoOf(s.remote)
+        if (owner && !repos.includes(owner)) {
+          return {
+            name: 'product checkout',
+            level: 'fail',
+            detail: `this run is registered against ${repos.join(', ')} but was handed a checkout of ${owner} (${run.projectDir}). `
+              + 'Every commit, branch and pull request would land in the wrong repository. Re-run against the right product, or fix the registry entry.',
+          }
+        }
         return { name: 'product checkout', level: 'ok', detail: `${s.name} on ${s.branch}, handed to this run${s.dirty ? `, ${s.dirty} uncommitted change(s)` : ''}` }
       }
       const dir = checkoutDirFor(repos[0]!, run.startedBy)
@@ -221,6 +305,32 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       return { name: 'test unlock', level: 'ok', detail: `.agent/ is writable in ${run.projectDir}, so "${unlockedStep.label}" can be unlocked.` }
     })
   }
+
+  // ── the two things that stop runs and no check ever looked at ─────────────
+  // Neither is ever fatal: a run on a tight disk usually finishes, and a run
+  // nobody is notified about is still a run. They are `warn` because both were
+  // invisible, and both were measured. The workspace held 40 GB with fourteen
+  // leftover worktrees on it; the artifacts directory grows without bound and
+  // nothing prunes it.
+  for (const [name, path] of [['workspace disk', workspaceRootFor(run.startedBy)], ['artifacts disk', agentRunsRoot()]] as const) {
+    await guard(name, async () => {
+      const free = await freeGb(path)
+      if (free === null) return { name, level: 'warn', detail: `df could not measure ${path}; free space on it is unknown.` }
+      return free.gb < LOW_DISK_GB
+        ? { name, level: 'warn', detail: `${free.gb.toFixed(1)} GB free on ${free.mount} (${path}), ${free.usedPct}% used. Runs clone repos, cut worktrees and write artifacts here; below ${LOW_DISK_GB} GB one of them will fail on a full disk.` }
+        : { name, level: 'ok', detail: `${free.gb.toFixed(1)} GB free on ${free.mount} (${path}), ${free.usedPct}% used` }
+    })
+  }
+  // A webhook can now also be stored on the settings page, so checking the
+  // environment variable alone would report "unset" at an instance that is
+  // configured and delivering — the same class of wrong answer, pointing the
+  // other way, as the silence this check was added to expose.
+  const slack = await slackWebhookUrl().catch(() => null)
+  add('alerting', slack ? 'ok' : 'warn',
+    slack
+      ? `A Slack webhook is configured (${process.env.SLACK_WEBHOOK_URL ? 'SLACK_WEBHOOK_URL' : 'stored on the settings page'}); a pause, a failure or a red check reaches Slack.`
+      : 'No Slack webhook is configured, so nothing about this run reaches Slack — a run paused on its budget waits until somebody happens to look. '
+        + `Set one on the settings page under Notifications, or as SLACK_WEBHOOK_URL. Every notification is still appended to notifications.jsonl under ${agentRunsRoot()}.`)
 
   const report = { at: Date.now(), checks }
   const failed = checks.filter(c => c.level === 'fail').length

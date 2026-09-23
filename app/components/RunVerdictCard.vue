@@ -211,9 +211,24 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           </span>
         </div>
 
+        <!-- Actually linked. This block's own contract, forty lines up, says
+             reports are "Linked, never summarised into a verdict" — and they
+             were rendered as inert text. At the highest-stakes read in the
+             product, "Security review" was a word: to read it a reviewer had
+             to leave the gate, cross to the artifact pane, and recognise
+             `security-review.md` among a couple of hundred filenames. This
+             card exists to stop one-click approvals; that was the hole it
+             left open. -->
         <div v-if="presentReports.length" class="flex flex-wrap gap-x-3 gap-y-1 t-small">
           <span class="text-label">Reports:</span>
-          <span v-for="r in presentReports" :key="r.file" class="font-mono">{{ r.label }}</span>
+          <a
+            v-for="r in presentReports" :key="r.file"
+            :href="`/api/runs/${run.id}/artifacts/${r.file}`"
+            target="_blank" rel="noopener"
+            class="font-mono underline focus-ring"
+            style="color: var(--accent);"
+            :title="`Open ${r.file}`"
+          >{{ r.label }}</a>
         </div>
       </template>
     </div>

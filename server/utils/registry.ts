@@ -62,6 +62,27 @@ const word = (s: string) =>
  * registry order wins a tie, and no match returns undefined: guessing a product
  * is how a run stands up the wrong stack.
  */
+/**
+ * A rendered Jira ticket's `Environment` section: the estate it runs on, not
+ * the thing it is about. Removed before matching, because every ticket in a
+ * project carries the same one and it names load balancers, Keycloak nodes and
+ * database instances that belong to no particular product's work.
+ */
+function bodyWithoutEnvironment(text: string): string {
+  return text.replace(/\n\s*Environment\s*\n[\s\S]*?(?=\n\s*(?:Background|Steps to Reproduce|Expected|Actual|Description|Impact|Attachments)\s*\n|$)/i, '\n')
+}
+
+/**
+ * The part of a ticket that states what it is about: the subject line, plus
+ * the `Component` field the reporter filled in. Empty when the text is not a
+ * rendered ticket, in which case the caller falls back to the whole thing.
+ */
+function focusOf(text: string): string {
+  const subject = text.split('\n', 1)[0] ?? ''
+  const component = text.match(/\n\s*Components?\s*\n+([^\n]+(?:\n(?!\s*\n)[^\n]+)*)/i)?.[1] ?? ''
+  return `${subject}\n${component}`.trim()
+}
+
 export async function resolveProduct(text: string): Promise<ProductMatch | undefined> {
   const reg = await loadRegistry()
   if (!reg) return undefined
@@ -78,10 +99,10 @@ export async function resolveProduct(text: string): Promise<ProductMatch | undef
   // term of its own that appears. "PCRF EMS" is a stronger claim than "PCRF",
   // and both match a ticket about the EMS — so length is what separates them.
   // 0 means the product named nothing in the text at all.
-  const specificity = (m: any) => Math.max(
+  const specificity = (m: any, haystack: string) => Math.max(
     0,
     ...[...(m.labels ?? []), ...(m.components ?? [])]
-      .filter((t: string) => word(t).test(textSansKey))
+      .filter((t: string) => word(t).test(haystack))
       .map((t: string) => t.length),
   )
 
@@ -94,12 +115,64 @@ export async function resolveProduct(text: string): Promise<ProductMatch | undef
   // component beats one matching the key alone. Tier precedence is unchanged:
   // a project match still outranks any word match, and where nothing
   // disambiguates, file order still decides.
+  // Where a ticket says what it is ABOUT, as opposed to where it runs.
+  //
+  // Run a3cb9d37 cost $35.54 and 72 minutes working in the wrong repository
+  // because of one word of boilerplate. Every CSUP ticket carries an
+  // Environment section naming the deployment estate; CSUP-7526's read
+  // "Keycloak / CRM Nodes: DC-CRM1-KC1", and `Keycloak` is an infra label. A
+  // Selfcare billing bug therefore resolved to `infra`, every lane's worktree
+  // was cut from the devops repo, and a lane committed 859 lines of that
+  // ticket's SQL onto a devops branch.
+  //
+  // The subject line and the ticket's own Component field are the claim; the
+  // Environment block is a description of the estate every ticket shares, so
+  // it decides nothing. The full text is still the last resort, because a
+  // prompt that is not a rendered ticket has no sections at all.
+  const focus = focusOf(textSansKey)
+  // The longest matching term wins here too, not file order.
+  //
+  // The project tier already worked this way - "PCRF EMS" is a stronger claim
+  // than "PCRF" - but the label and component tiers took the first entry in
+  // file order, so a ticket whose Component says "LUM Selfcare" resolved to
+  // selfcarenow purely because it is written earlier in the file. Same rule,
+  // applied consistently; ties still fall back to file order.
+  const pickIn = (haystack: string) => {
+    const scored = entries
+      .map(e => [e, specificity(e[1]?.match ?? {}, haystack)] as const)
+      .filter(([, n]) => n > 0)
+      .sort((a, b) => b[1] - a[1])
+    return scored[0]?.[0]
+  }
+
+  // The customer's name outranks everything.
+  //
+  // A ticket that says SaskTel is about SaskTel's estate whatever else it
+  // mentions, and two runs cost real money learning that: CSUP-7526 resolved
+  // to `infra` because its Environment block names Keycloak, and CSUP-7524 to
+  // `crm` because "CRM" appears once in an analysis sentence - while both name
+  // the customer in their title. Product vocabulary describes what a ticket
+  // talks about; the customer says whose estate it is.
+  //
+  // Matched against the whole text, including the Labels line, because the
+  // customer is named wherever the reporter happened to put it.
+  const customerHit = entries.find(([, p]) =>
+    ((p?.match ?? {}).customers ?? []).some((c: string) => word(c).test(text)))
+  if (customerHit) return productMatchFrom(reg.path, customerHit[0], customerHit[1])
+
   const byProject = key ? entries.filter(([, p]) => ((p?.match ?? {}).projects ?? []).includes(key)) : []
-  const best = byProject
-    .map(e => [e, specificity(e[1]?.match ?? {})] as const)
+  // Specificity is measured on the focus when the ticket has one: a product
+  // named in the subject beats one named only in the estate description.
+  const scored = byProject
+    .map(e => [e, Math.max(specificity(e[1]?.match ?? {}, focus), 0)] as const)
     .sort((a, b) => b[1] - a[1])[0]
+  const best = scored && scored[1] > 0
+    ? scored
+    : byProject.map(e => [e, specificity(e[1]?.match ?? {}, textSansKey)] as const).sort((a, b) => b[1] - a[1])[0]
   const hit = (best && best[1] > 0 ? best[0] : undefined)
     || byProject[0]
+    || pickIn(focus)
+    || pickIn(bodyWithoutEnvironment(textSansKey))
     || pick(m => (m.labels ?? []).some((l: string) => word(l).test(text)))
     || pick(m => (m.components ?? []).some((c: string) => word(c).test(text)))
   if (!hit) return undefined
@@ -118,6 +191,8 @@ function productMatchFrom(registryPath: string, name: string, p: any): ProductMa
     branches: p.branches ?? {},
     stack: p.stack,
     tests: p.tests ?? {},
+    ...(p.reports && Object.keys(p.reports).length ? { reports: p.reports } : {}),
+    ...(p.toolchain && Object.keys(p.toolchain).length ? { toolchain: p.toolchain } : {}),
     ...(existsSync(recipe) ? { recipe } : {}),
   }
 }

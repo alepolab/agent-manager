@@ -1027,7 +1027,8 @@ function scrollToMarketplace(name: string) {
       </template>
     </div>
 
-    <UModal v-model:open="showImportSkillsModal">
+    <UModal v-model:open="showImportSkillsModal" title="Import skills from GitHub"
+      description="Pick which skills from the repository to install.">
       <template #content>
         <GithubImportModal
           type="skills"
@@ -1040,7 +1041,8 @@ function scrollToMarketplace(name: string) {
       </template>
     </UModal>
 
-    <UModal v-model:open="showImportAgentsModal">
+    <UModal v-model:open="showImportAgentsModal" title="Import agents from GitHub"
+      description="Pick which agents from the repository to install.">
       <template #content>
         <GithubImportModal
           type="agents"
@@ -1053,14 +1055,16 @@ function scrollToMarketplace(name: string) {
       </template>
     </UModal>
 
-    <UModal v-model:open="showAddMarketplaceModal">
+    <UModal v-model:open="showAddMarketplaceModal" title="Add marketplace"
+      description="Add a marketplace source to browse plugins from.">
       <template #content>
         <AddMarketplaceModal @added="showAddMarketplaceModal = false; fetchSources(); fetchAvailable()" />
       </template>
     </UModal>
 
     <!-- Delete Confirmation Modal -->
-    <UModal v-model:open="showRemoveConfirm">
+    <UModal v-model:open="showRemoveConfirm" title="Remove repository?"
+      description="Deletes the local clone and unlinks everything it installed. This cannot be undone.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <div class="flex items-center gap-3">

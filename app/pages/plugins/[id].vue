@@ -350,7 +350,8 @@ if (import.meta.client) {
     </div>
 
     <!-- Uninstall confirmation -->
-    <UModal v-model:open="showUninstallConfirm">
+    <UModal v-model:open="showUninstallConfirm" title="Uninstall plugin"
+      description="Removes the plugin from this instance. This cannot be undone.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Uninstall Plugin</h3>

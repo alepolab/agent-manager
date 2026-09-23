@@ -131,6 +131,13 @@ export function renderTicketComment(input: RenderInput): string {
 export interface NotifyResult {
   comment: string
   posted: boolean
+
+  /**
+   * Set when `posted` is true because the marker says a previous attempt
+   * already did it, not because this call posted. A caller that reports "a
+   * comment was added" needs to be able to tell those apart.
+   */
+  alreadyPosted?: boolean
   artifactPath: string
   /** Why `posted` is false: the default-off gate, or a real failure message
    *  from attempting the post. Always absent when `posted` is true. */
@@ -188,6 +195,27 @@ export interface NotifySource {
 }
 
 /** The starter's own Jira identity when their profile holds one, else the instance's. The comment then reads as the developer who ran it. */
+/**
+ * True only when the marker positively records a successful post of THIS run's
+ * comment onto THIS ticket.
+ *
+ * Every uncertain case - no marker, unreadable marker, a marker for another
+ * ticket, a marker recording a FAILED post - returns false, so the comment is
+ * sent. That asymmetry is deliberate: a duplicate comment is noise a person
+ * reconciles in seconds, while a silently missing one leaves a ticket nobody
+ * knows has finished. Suppressing on uncertainty would trade the cheap failure
+ * for the expensive one.
+ */
+async function alreadyPosted(artifactPath: string, runId: string, ticketKey: string): Promise<boolean> {
+  try {
+    const raw = await readFile(artifactPath, 'utf-8')
+    const marker = JSON.parse(raw)
+    return marker?.posted === true && marker?.runId === runId && marker?.ticketKey === ticketKey
+  } catch {
+    return false
+  }
+}
+
 export async function credentialsFor(run: WorkflowRun) {
   const env = await envForUser(run.startedBy).catch(() => ({} as Record<string, string>))
   if (env.JIRA_EMAIL && env.JIRA_API_TOKEN && env.JIRA_BASE_URL) return { baseUrl: env.JIRA_BASE_URL, email: env.JIRA_EMAIL, apiToken: env.JIRA_API_TOKEN }
@@ -246,6 +274,27 @@ export async function notifyTicketOutcome(
   const dir = runArtifactsDir(run.id)
   const artifactPath = join(dir, 'jira-comment.json')
   const result: NotifyResult = { comment, posted: false, artifactPath }
+
+  // Has this exact comment already gone onto this exact ticket for this run?
+  //
+  // A run whose process died mid-step comes back as `interrupted`, and resuming
+  // re-runs the frozen step. The in-memory `ticketCommented` flag died with the
+  // process, so the second attempt used to post a second comment onto a real
+  // ticket - and because the comment renders from the run's state at the moment
+  // of posting, the two could contradict each other.
+  //
+  // The marker to prevent that was already being written here and never read.
+  // This is the read-back-before-acting pattern prStep already uses for an
+  // existing pull request, which is the only other place in the system that
+  // survives its own restart.
+  if (await alreadyPosted(artifactPath, run.id, ticketKey)) {
+    result.posted = true
+    result.alreadyPosted = true
+    // `reason` stays absent: this type documents it as the explanation for a
+    // FAILED post, and the comment is on the ticket. `alreadyPosted` is the
+    // machine-readable fact a caller needs.
+    return result
+  }
 
   if (isJiraPostingEnabled()) {
     try {

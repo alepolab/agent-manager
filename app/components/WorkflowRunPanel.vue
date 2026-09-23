@@ -5,7 +5,7 @@ import { SHORT_ROLE, ROLE_LABEL } from '~~/shared/types/role'
 import { needsJustification, oversightReason } from '~~/shared/utils/oversight'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
-const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string], rework: [stepId: string, note: string] }>()
+const emit = defineEmits<{ continue: [note?: string], stop: [], attach: [id: string], restart: [stepId: string, note?: string], clone: [], close: [], respond: [reply: string], note: [text: string], reject: [note: string], skip: [reason: string], rework: [stepId: string, note: string] }>()
 
 /**
  * What this person may do here. A reviewer holds `answerGate` and not
@@ -36,6 +36,16 @@ const mayAnswer = computed(() => can('answerGate') && mineToAnswer.value)
  *  enforces, applied here so the reviewer learns it from the button rather than
  *  from a 400 after they have already clicked. */
 const mustJustify = computed(() => needsJustification(props.run?.blastRadius))
+/** Where the class came from, in words a reviewer can act on. The wording comes
+ *  from classification.ts's own vocabulary so the page and the record agree. */
+const classSourceLine = computed(() => {
+  switch (props.run?.classSource) {
+    case 'floor': return 'raised by the files this change touched, over a lower class the step proposed'
+    case 'floor-only': return 'derived from the files this change touched; no step proposed one'
+    case 'proposal': return 'proposed by a step and not contradicted by the files it touched'
+    default: return 'source not recorded'
+  }
+})
 const canApprove = computed(() => !mustJustify.value || !!note.value.trim())
 
 /** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
@@ -58,10 +68,11 @@ const notePlaceholder = computed(() => ({
   restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
 }[noteMode.value]))
 const sent = ref<string | null>(null)
-function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'rework') {
+function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'skip' | 'rework') {
   const text = note.value.trim()
   if (kind === 'rework') { emit('rework', reworkTarget.value, text); note.value = ''; reworkTarget.value = ''; return }
   if (kind === 'reject') { emit('reject', text); note.value = ''; return }
+  if (kind === 'skip') { emit('skip', text); note.value = ''; return }
   if (kind === 'respond') emit('respond', text)
   else if (kind === 'note') { emit('note', text); sent.value = text }
   else emit('continue', text || undefined)
@@ -70,6 +81,19 @@ function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'rework') {
 
 /** Optional correction handed to whichever step is restarted next. */
 const note = ref('')
+
+/** Its own box, deliberately: the panel's `note` is shared by reply, reject,
+ *  rework and restart, and a half-typed instruction to a running agent must not
+ *  turn into the reason attached to a gate decision. */
+const steerNote = ref('')
+const steerSent = ref('')
+function sendSteer() {
+  const text = steerNote.value.trim()
+  if (!text) return
+  emit('note', text)
+  steerSent.value = text
+  steerNote.value = ''
+}
 
 /**
  * Where a send-back goes. The reviewer picks; the run never guesses.
@@ -171,7 +195,28 @@ const progress = computed(() => {
   return { done: steps.filter(s => settled.has(s.status)).length, total: steps.length }
 })
 
+/**
+ * Which step's detail is open. A running run opens its running step by itself.
+ *
+ * The live feed — the one surface that says what the agent is doing right now —
+ * used to require a click to find, and the row showed a single truncated line
+ * instead. So a person watching a run saw eleven collapsed rows and a dot, which
+ * is why "I cannot tell what is happening" and "the gates are not readable" are
+ * the same complaint. `pinned` is set the moment somebody clicks a row: their
+ * choice then outranks the follow, or the list would snap away from whatever
+ * they opened as soon as the next step started.
+ */
 const expanded = ref<string | null>(null)
+const pinned = ref(false)
+const runningStepId = computed(() => props.run?.steps.find(s => s.status === 'running')?.stepId ?? null)
+watch(runningStepId, (id) => {
+  if (!pinned.value && id) expanded.value = id
+}, { immediate: true })
+watch(() => props.run?.id, () => { pinned.value = false })
+function toggleStep(stepId: string) {
+  pinned.value = true
+  expanded.value = expanded.value === stepId ? null : stepId
+}
 /** Live output for a step, newest last; the pre scrolls to the newest line as it arrives. */
 const liveFor = (stepId: string) => props.logs?.[stepId] ?? []
 const latest = (stepId: string) => liveFor(stepId).at(-1)?.slice(9) ?? ''
@@ -260,6 +305,28 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <span v-if="!run.ci.final" class="t-label text-label">still moving</span>
     </a>
 
+    <!-- How risky this run is, and who decided that. oversight.ts turns this one
+         field into whether a gate fires at all, and the page never showed it
+         outside a gate prompt - so a reader could not tell whether a run sailed
+         through because it was genuinely a docs change or because nothing had
+         classified it.
+
+         The `floor` case is the one worth seeing: it means a step understated
+         its own change and the files it touched overruled it. -->
+    <p data-testid="run-class" :data-class-source="run.classSource ?? 'none'" class="t-small rounded-lg p-2"
+       style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <template v-if="run.blastRadius">
+        <span class="font-medium" style="color: var(--text-primary);">Risk <span class="font-mono">{{ run.blastRadius }}</span></span>
+        <span class="text-label"> — {{ classSourceLine }}</span>
+        <br><span class="text-label">{{ oversightReason(run.blastRadius) }}</span>
+      </template>
+      <template v-else>
+        <span class="font-medium" :style="{ color: 'var(--warning)' }">Unclassified</span>
+        <span class="text-label"> — no step proposed a risk class and the files touched implied none.</span>
+        <br><span class="text-label">{{ oversightReason(undefined) }}</span>
+      </template>
+    </p>
+
     <!-- When it ran. A reader asking "is this recent?" had to hover a relative
          duration or open the record. -->
     <p data-testid="run-times" class="t-small text-label">
@@ -314,6 +381,12 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
            to look like a footnote. -->
       <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
       <p class="t-head whitespace-pre-wrap" style="color: var(--text-primary);">{{ run.question.text }}</p>
+      <!-- The step's name tells a reviewer what happens next, not how to decide
+           it. This is the reading instruction, and at the first gate it says
+           plainly that there is nothing to read yet - which is the difference
+           between a reviewer who approves an empty bundle knowingly and one who
+           learns that approving without reading is what this screen is for. -->
+      <p v-if="run.question.asks" class="t-ui mt-1.5" style="color: var(--text-secondary);">{{ run.question.asks }}</p>
       <p v-if="run.blastRadius" class="t-small mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
       </p>
@@ -323,6 +396,42 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <p class="t-small text-label">
         Waiting {{ waitingLabel }}<template v-if="(run.reworks ?? 0) > 0"> · sent back {{ run.reworks }} of 2 times already</template>
       </p>
+      <!-- What the gate could actually PROVE, before it asks for a judgement.
+           This box used to show the step's prose and a Continue button, so the
+           reviewer's only way to check anything was to go and re-derive it from
+           the diff — the work the pipeline exists to remove. Each line names
+           its source, so a claim and a fact are visibly different things.
+
+           `blocked` is rendered apart from `fail` on purpose: a reviewer told
+           "failed" re-runs the fix, a reviewer told "blocked" goes and writes
+           the provider, and reporting one as the other sends them to do the
+           wrong work. -->
+      <div v-if="run.question.criteria?.length" class="mt-2 space-y-1">
+        <div class="t-label" style="color: var(--text-secondary);">What was checked</div>
+        <div
+          v-for="c in run.question.criteria"
+          :key="c.id"
+          class="flex items-start gap-2 t-small"
+        >
+          <span
+            class="font-mono shrink-0 px-1 rounded"
+            :style="{
+              color: c.status === 'pass' ? 'var(--success)' : c.status === 'fail' ? 'var(--error)' : 'var(--warning)',
+              border: `1px solid ${c.status === 'pass' ? 'var(--success)' : c.status === 'fail' ? 'var(--error)' : 'var(--warning)'}`,
+            }"
+          >{{ c.status === 'blocked' ? 'UNKNOWN' : c.status.toUpperCase() }}</span>
+          <span style="color: var(--text-primary);">
+            {{ c.question }}
+            <span v-if="c.reasons.length" style="color: var(--warning);"> — {{ c.reasons.join('; ') }}</span>
+            <span v-if="c.provenance" class="font-mono t-small" style="color: var(--text-tertiary);">
+              ({{ c.provenance.source }}<template v-if="c.provenance.head">, HEAD {{ c.provenance.head.slice(0, 8) }}</template>)
+            </span>
+          </span>
+        </div>
+        <p v-if="run.question.criteria.some(c => c.status === 'blocked')" class="t-small" style="color: var(--warning);">
+          Something here could not be checked. That is not the same as it being fine.
+        </p>
+      </div>
       <!-- Whose decision this is. Said out loud when it is not yours, because a
            panel with the controls quietly removed is indistinguishable from a
            broken one. -->
@@ -348,7 +457,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <div v-for="d in run.decisions" :key="d.at" class="flex gap-2">
         <span
           class="font-mono uppercase shrink-0"
-          :style="{ color: d.verdict === 'approved' ? STATUS_COLOR.completed : d.verdict === 'rejected' ? STATUS_COLOR.failed : STATUS_COLOR.paused }"
+          :style="{ color: d.verdict === 'approved' ? STATUS_COLOR.completed : d.verdict === 'rejected' ? STATUS_COLOR.failed : d.verdict === 'skipped' ? STATUS_COLOR.skipped : STATUS_COLOR.paused }"
         >{{ d.verdict }}</span>
         <span class="shrink-0">{{ d.label }}</span>
         <span class="text-label truncate">{{ d.by }}<template v-if="d.note">: {{ d.note }}</template></span>
@@ -428,7 +537,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
           <button
             class="flex-1 min-w-0 flex items-center gap-2 text-left py-1"
             :aria-expanded="expanded === step.stepId"
-            @click="expanded = expanded === step.stepId ? null : step.stepId"
+            @click="toggleStep(step.stepId)"
           >
             <!-- A step's status was carried by hue and nothing else: this dot was
                  the only thing separating a completed step from a failed one, so
@@ -514,6 +623,28 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             <div class="t-small text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
             <div :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="max-h-72 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);"><LogLines :lines="liveFor(step.stepId)" /></div>
           </div>
+          <!-- Say something to THIS agent, where you are already reading what it
+               is doing. The route (POST /api/runs/:id/note) delivers into the
+               live session mid-turn and has existed all along; it was a button
+               in a row of eleven at the bottom of the panel, which is not the
+               same as being able to answer an agent you are watching. -->
+          <!-- The RUN has to be live, not just the step: a run whose process
+               died keeps its step marked running, and a box offering to reach
+               that agent would take a message nothing can deliver. -->
+          <div v-if="mayDrive && step.status === 'running' && run.status === 'running'" class="flex items-start gap-1 pt-1">
+            <textarea
+              v-model="steerNote"
+              rows="1"
+              data-testid="steer-running-step"
+              class="field-input flex-1 resize-none t-small"
+              :placeholder="`Tell ${step.agentSlug} something — it arrives mid-step`"
+              :aria-label="`Send guidance to the running step ${step.label}`"
+              @keydown.meta.enter="sendSteer"
+              @keydown.ctrl.enter="sendSteer"
+            />
+            <UButton size="xs" icon="i-lucide-send" label="Send" :disabled="!steerNote.trim()" @click="sendSteer" />
+          </div>
+          <p v-if="steerSent && step.status === 'running' && run.status === 'running'" class="t-small text-label">Delivered: "{{ steerSent }}"</p>
           <pre v-if="step.output" class="t-small whitespace-pre-wrap max-h-64 overflow-auto">{{ step.output }}</pre>
           <p v-else-if="!liveFor(step.stepId).length" class="t-small text-label">No output yet.</p>
         </div>
@@ -573,6 +704,16 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
           @click="send('rework')"
         />
       </template>
+      <!-- Approve, reject, send back or stop were the only answers. Someone
+           who wanted none of them — a Jira transition on a ticket that must not
+           move — had only "stop a healthy run" left. -->
+      <UButton
+        v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget'"
+        size="xs" variant="ghost" color="neutral" icon="i-lucide-skip-forward" label="Skip this step"
+        :disabled="!note.trim()"
+        :title="note.trim() ? 'This step does not run; the run carries on past it' : 'Say why it is being skipped first'"
+        @click="send('skip')"
+      />
       <UButton
         v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget'"
         size="xs" variant="ghost" color="error" icon="i-lucide-circle-x" label="Reject run"

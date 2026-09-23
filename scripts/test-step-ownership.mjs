@@ -154,6 +154,10 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
   const fix = csup.steps.find(s => /implement fix/i.test(s.label))
   assert.ok(repro && fix, 'the reproduction and fix steps are still here')
   assert.equal(repro.monitorSlug, 'qa-reviewer', 'the reproduction is judged by an agent that never writes source')
+  // The step that reproduces a defect needs the product running. Pinned because
+  // a capability no template uses is a capability that quietly rots - the review
+  // reader was tree-shaken out of the built bundle for exactly that reason.
+  assert.equal(repro.stack, 'up', 'the reproduction step asks the runner for a running stack')
   assert.equal(fix.monitorSlug, 'qa-reviewer', 'the fix is judged for test edits by an agent that never writes source')
 }
 
@@ -205,6 +209,35 @@ const { workflowTemplates, materializeTemplateSteps } = await import('../app/uti
     true,
     'reviewComments must reach the seeded workflow, or the runner never collects the review and the step reads nothing',
   )
+}
+
+// ---- `stack` survives materialisation too ----------------------------------
+// Same trap as reviewComments and, before it, jira.after: the whitelist copies
+// named fields and drops anything else IN SILENCE. A step that asks for a stack
+// and loses the field on the way to the seeded workflow runs with no stack and
+// no complaint, which is indistinguishable from the behaviour this replaced.
+//
+// Asserted against a synthetic template rather than a shipped one, because no
+// template declares a stack yet - the carrying is what must be proven, not the
+// current template content.
+{
+  const template = {
+    id: 'synthetic-stack', name: 'Synthetic', description: 'fixture',
+    steps: [{ agentTemplateId: 'pm-planner', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  const materialized = materializeTemplateSteps(template, { 'pm-planner': 'pm-planner' })
+  assert.equal(materialized[0].stack, 'up',
+    'stack must reach the seeded workflow, or the step silently runs without the stack it asked for')
+
+  // Same for a declared deploy. Losing this field is worse than losing the
+  // others: the step runs, deploys nothing, and reports success.
+  const withDeploy = materializeTemplateSteps(
+    { id: 'synthetic-deploy', name: 'Synthetic', description: 'fixture',
+      steps: [{ agentTemplateId: 'pm-planner', label: 'Check dev', next: [], deploy: { env: 'dev', step: 'status' } }] },
+    { 'pm-planner': 'pm-planner' },
+  )
+  assert.deepEqual(withDeploy[0].deploy, { env: 'dev', step: 'status' },
+    'deploy must reach the seeded workflow, or the step reports success having deployed nothing')
 }
 
 console.log('step ownership: declared as data, carried to the run, and it decides nothing')

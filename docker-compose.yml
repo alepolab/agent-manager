@@ -61,6 +61,40 @@ services:
       # seeing a full host-started run in this container's UI requires both
       # HOST_CLAUDE_DIR and HOST_AGENT_RUNS_DIR set consistently, together.
       - ${HOST_AGENT_RUNS_DIR:-agent-runs}:/root/.agent-manager/workflow-runs
+      # The run RECORDS — one JSON per run, the thing /runs lists. They sit
+      # under CLAUDE_DIR because that is where workflowRunStore.ts puts them,
+      # and that is the problem: the redeploy sequence documented above DELETES
+      # the claude-config volume to reseed baked config, and took the run
+      # history with it. Six runs on this machine still have a full artifacts
+      # directory and no record — invisible in the UI, with the evidence
+      # sitting on disk.
+      #
+      # A volume mounted INSIDE another volume's path wins for that subtree, so
+      # the records now live in their own volume and survive the reseed. The
+      # image creates this directory bun-owned so a fresh volume seeds with the
+      # right ownership; an EXISTING deployment's records must be copied in
+      # once, or they stay hidden under the mount:
+      #   docker compose down
+      #   docker run --rm -v agent-manager_claude-config:/old \
+      #     -v agent-manager_workflow-records:/new alpine \
+      #     sh -c 'cp -a /old/workflow-runs/. /new/ 2>/dev/null || true'
+      - workflow-records:/root/.claude/workflow-runs
+      # The SDK's own session transcripts — the third thing on this list to sit
+      # on the writable layer and vanish without an error.
+      #
+      # The SDK has never read CLAUDE_DIR (that is this app's variable): it
+      # resolves CLAUDE_CONFIG_DIR, else $HOME/.claude, and HOME here is
+      # /home/bun. So everything /cli shows, everything sdkSessionStorage.ts
+      # reads, and every transcript a resumed step needs to continue from was
+      # being written to an unmounted path and destroyed by the next
+      # `docker compose build`. A 142-message agent session was lost to exactly
+      # that while verifying a UI change against it.
+      #
+      # Its own volume rather than CLAUDE_CONFIG_DIR=/root/.claude: pointing the
+      # SDK at this app's config directory would also hand it the baked agents,
+      # skills and settings.json to write back into, which is a much larger
+      # change than making transcripts survive a rebuild.
+      - sdk-sessions:/home/bun/.claude
     environment:
       - CLAUDE_DIR=/root/.claude
       - AGENT_RUNS_DIR=/root/.agent-manager/workflow-runs
@@ -78,6 +112,29 @@ services:
       # The token is passed through the environment only; it is never written
       # into the image, the volume, or any file the container keeps.
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    # Keep the logs, and keep them bounded.
+    #
+    # `docker logs agents-ui` returned FOUR lines after a container recreate:
+    # every runner log line from 8-21 Sep — thirteen days, thirteen real runs,
+    # every preflight verdict, every stack command, every agent failure — was
+    # gone, because docker's default json-file driver keeps a container's logs
+    # ON THE CONTAINER, and recreating one (a rebuild, an image bump, a compose
+    # edit) throws the old container and its whole log away. Nothing here wrote
+    # to a file, so there was no second copy: the only record of what a run did
+    # at 03:00 was in a buffer that no longer exists.
+    #
+    # This does NOT survive a recreate either — nothing in a compose logging
+    # driver can — but it does two things that matter: it caps the size so a
+    # long-lived container cannot fill the disk with one unrotated file (the
+    # default is unlimited), and it keeps five rotations instead of one, so the
+    # history reaches back past the last few minutes while the container lives.
+    # Shipping the logs somewhere that outlives the container is a separate job
+    # and deliberately not smuggled in here.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3030/api/health"]
       interval: 30s
@@ -88,3 +145,5 @@ services:
 volumes:
   claude-config:
   agent-runs:
+  workflow-records:
+  sdk-sessions:

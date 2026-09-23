@@ -67,3 +67,6 @@ AGENTS.md
 
 # Agent orchestration journals (dag runs, child sessions)
 .omo/
+
+# Coordination artifacts from a workflow run, same class as .agents/results and .agents/state.
+.agents/memory/

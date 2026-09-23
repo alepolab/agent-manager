@@ -17,10 +17,11 @@ export default defineEventHandler(async (event) => {
   if (scope === 'global') {
     filePath = join(homedir(), '.claude.json')
   } else if (scope === 'project') {
-    if (!workingDir) {
-      throw createError({ statusCode: 400, message: 'Working directory is required for project scope' })
-    }
-    filePath = join(workingDir, '.mcp.json')
+    // With no directory chosen the project is the one the server runs in,
+    // matching the listing and the delete route. Adding a project server used
+    // to fail with "Working directory is required" on an instance where
+    // nobody had ever set one — which is the default state.
+    filePath = join((typeof workingDir === 'string' && workingDir) || process.cwd(), '.mcp.json')
   } else {
     throw createError({ statusCode: 400, message: 'Invalid scope' })
   }

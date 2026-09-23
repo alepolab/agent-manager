@@ -23,9 +23,9 @@
  * alternative — unlisted means least privilege — silently demotes colleagues
  * the moment the file appears, and this instance is shared.
  */
-export type Role = 'developer' | 'qa' | 'architect' | 'designer' | 'manager' | 'operator'
+export type Role = 'product-owner' | 'developer' | 'qa' | 'architect' | 'designer' | 'security' | 'manager' | 'cto' | 'operator'
 
-export const ROLES: Role[] = ['developer', 'qa', 'architect', 'designer', 'manager', 'operator']
+export const ROLES: Role[] = ['product-owner', 'developer', 'qa', 'architect', 'designer', 'security', 'manager', 'cto', 'operator']
 
 export const DEFAULT_ROLE: Role = 'operator'
 
@@ -50,6 +50,12 @@ export interface Capabilities {
 }
 
 const CAPABILITIES: Record<Role, Capabilities> = {
+  // A product owner owns STORY_GATE and SPEC_GATE: whether the story is ready,
+  // and whether the acceptance rows mean the ticket is done. They hold
+  // `startRun` because a change request entering the pipeline is their act, and
+  // they are withheld `runEngine` for the same reason every reviewer is —
+  // deciding is not driving.
+  'product-owner': { answerGate: true, runEngine: false, startRun: true, configure: false, readAllRuns: true },
   developer: { answerGate: true, runEngine: false, startRun: true, configure: false, readAllRuns: true },
   qa: { answerGate: true, runEngine: false, startRun: false, configure: false, readAllRuns: true },
   // An architect starts spikes and contract-first work, so they hold `startRun`
@@ -60,7 +66,17 @@ const CAPABILITIES: Record<Role, Capabilities> = {
   // A designer accepts what a run produced; they do not own a scope that
   // generates runs. Exactly QA's position, and the friction is the point.
   designer: { answerGate: true, runEngine: false, startRun: false, configure: false, readAllRuns: true },
+  // Security owns SECURITY_GATE, which is threshold-routed rather than tiered:
+  // an authz, crypto, personal-data, payment or dependency change reaches them
+  // however small its blast radius. Same shape as QA — accept or send back.
+  security: { answerGate: true, runEngine: false, startRun: false, configure: false, readAllRuns: true },
   manager: { answerGate: false, runEngine: false, startRun: false, configure: false, readAllRuns: true },
+  // A CTO answers only what crosses the escalation threshold, so they hold
+  // `answerGate` where `manager` does not. Deliberately without `configure`:
+  // the role exists to decide on expensive and irreversible changes, not to
+  // own the pipeline's configuration, and an escalation path that also edits
+  // the thing it escalates from is not an escalation path.
+  cto: { answerGate: true, runEngine: false, startRun: false, configure: false, readAllRuns: true },
   operator: { answerGate: true, runEngine: true, startRun: true, configure: true, readAllRuns: true },
 }
 
@@ -87,19 +103,44 @@ export function rolesWith(capability: keyof Capabilities): Role[] {
  */
 export const SHORT_ROLE: Record<Role, string> = {
   operator: 'OPS',
+  'product-owner': 'PO',
   developer: 'DEV',
   qa: 'QA',
   architect: 'ARCH',
   designer: 'DESIGN',
+  security: 'SEC',
   manager: 'MGR',
+  cto: 'CTO',
+}
+
+/**
+ * The role's name as a person would say it, for a control with room for words.
+ *
+ * Separate from SHORT_ROLE because that one exists for columns too narrow for
+ * the word, and separate from ROLE_LABEL because that is a sentence about the
+ * job rather than a name for it. A picker needs the name.
+ */
+export const ROLE_NAME: Record<Role, string> = {
+  operator: 'Operator',
+  'product-owner': 'Product owner',
+  developer: 'Developer',
+  qa: 'QA',
+  architect: 'Architect',
+  designer: 'Designer',
+  security: 'Security',
+  manager: 'Manager',
+  cto: 'CTO',
 }
 
 /** The one-line description of each role, for the Team page and the role picker. */
 export const ROLE_LABEL: Record<Role, string> = {
+  'product-owner': 'Decides whether a story is ready and what "done" means.',
   developer: 'Decides at the diff gate on runs; cannot drive the pipeline.',
   qa: 'Verifies evidence and answers the verification gate.',
   architect: 'Decides at schema, contract and migration gates; cannot drive the pipeline.',
   designer: 'Accepts user-facing output at the design gate.',
+  security: 'Decides at the security gate on authz, crypto, data and dependency changes.',
   manager: 'Reads progress across runs. Changes nothing.',
+  cto: 'Decides only what crosses the escalation threshold: cost, precedent, reversibility.',
   operator: 'Runs the pipeline: workflows, watches, restarts, settings.',
 }

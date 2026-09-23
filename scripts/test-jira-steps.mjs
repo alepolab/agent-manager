@@ -2,7 +2,7 @@
 // say honestly what was or was not done. Every network call goes through a
 // fake fetch; nothing here reaches Jira.
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -193,6 +193,51 @@ delete process.env.JIRA_POST_ENABLED
   assert.match(notHandoff, /other half of the work/, notHandoff)
   assert.ok(!calls.some(c => c[1] === 'POST'), 'and the ticket was not moved')
   delete process.env.JIRA_POST_ENABLED
+}
+
+// 5d. a resumed run does not attach the same file twice.
+// The loop had no per-file record: die after file 3 of 7 and the ticket ends up
+// with three duplicates when the step re-runs. What is on the ticket is now
+// recorded per file, and a re-run uploads only the rest.
+{
+  process.env.JIRA_POST_ENABLED = '1'
+  process.env.JIRA_BASE_URL = 'https://example.atlassian.net'
+  process.env.JIRA_EMAIL = 'bot@example.com'
+  process.env.JIRA_API_TOKEN = 'bot-token'
+  process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'jira-attach-resume-'))
+  const run = { id: 'run-attach-resume', ticketKey: 'CSUP-7', status: 'completed' }
+  const dir = join(process.env.AGENT_RUNS_DIR, run.id, 'artifacts')
+  mkdirSync(dir, { recursive: true })
+  for (const n of ['a.txt', 'b.txt', 'c.txt']) writeFileSync(join(dir, n), n)
+
+  // First pass: b.txt fails, the other two land.
+  const first = []
+  const out1 = await runJiraStep(run, { attach: true }, async (url, init) => {
+    const name = String(init?.body?.get?.('file')?.name ?? '')
+    first.push(name)
+    return new Response('[]', { status: name === 'b.txt' ? 500 : 200 })
+  })
+  assert.equal(first.length, 3, `the first pass tries all three; tried ${JSON.stringify(first)}`)
+  assert.match(out1, /Attached 2 of 3/, `first pass summary: ${out1}`)
+
+  // The resumed step: only the one that never landed is uploaded again.
+  const second = []
+  const out2 = await runJiraStep(run, { attach: true }, async (url, init) => {
+    const name = String(init?.body?.get?.('file')?.name ?? '')
+    second.push(name)
+    return new Response('[]', { status: 200 })
+  })
+  assert.deepEqual(second, ['b.txt'],
+    `only the file that never landed is retried; the resumed step uploaded ${JSON.stringify(second)}`)
+  assert.match(out2, /already on the ticket/i, `the summary accounts for the skipped ones: ${out2}`)
+
+  // A third pass has nothing left to do.
+  const third = []
+  await runJiraStep(run, { attach: true }, async (url, init) => {
+    third.push(String(init?.body?.get?.('file')?.name ?? ''))
+    return new Response('[]', { status: 200 })
+  })
+  assert.deepEqual(third, [], `nothing is uploaded twice; the third pass uploaded ${JSON.stringify(third)}`)
 }
 
 console.log('jira steps: all checks passed')

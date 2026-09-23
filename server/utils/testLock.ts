@@ -113,21 +113,34 @@ const realExec = async (cmd: string, args: string[], opts?: { cwd?: string }) =>
  * Both halves are read: committed changes in the range AND the current working
  * tree, because a step that never committed its edit has still made it.
  */
-export async function checkTestLock(input: TestLockInput): Promise<TestLockVerdict> {
-  const exec = input.exec ?? realExec
+/**
+ * Every path a checkout changed since `since`, committed or not.
+ *
+ * Both halves are read because either alone lies: a step that never committed
+ * has still changed the tree, and a step that committed and then cleaned has
+ * still changed it. Throws rather than returning empty, so a caller can tell
+ * "nothing changed" from "the diff could not be read" - the distinction the
+ * test lock turns into `indeterminate` and the classifier turns into "no floor".
+ */
+export async function changedPathsSince(dir: string, since: string, exec?: TestLockInput['exec']): Promise<string[]> {
+  const run = exec ?? realExec
   const paths = new Set<string>()
+  // `--diff-filter` is deliberately absent: a DELETED file must count, and the
+  // default includes D.
+  const committed = await run('git', ['diff', '--name-only', `${since}..HEAD`], { cwd: dir })
+  for (const p of committed.split('\n').map(s => s.trim()).filter(Boolean)) paths.add(p)
+  const dirty = await run('git', ['status', '--porcelain'], { cwd: dir })
+  for (const line of dirty.split('\n').map(s => s.trim()).filter(Boolean)) {
+    const p = line.slice(2).trim().split(' -> ').pop()
+    if (p) paths.add(p)
+  }
+  return [...paths]
+}
 
+export async function checkTestLock(input: TestLockInput): Promise<TestLockVerdict> {
+  let paths: string[]
   try {
-    // Committed in the range. `--diff-filter` is deliberately absent: a deleted
-    // test must count, and the default includes D.
-    const committed = await exec('git', ['diff', '--name-only', `${input.since}..HEAD`], { cwd: input.dir })
-    for (const p of committed.split('\n').map(s => s.trim()).filter(Boolean)) paths.add(p)
-    // Everything still uncommitted, tracked or not.
-    const dirty = await exec('git', ['status', '--porcelain'], { cwd: input.dir })
-    for (const line of dirty.split('\n').map(s => s.trim()).filter(Boolean)) {
-      const p = line.slice(2).trim().split(' -> ').pop()
-      if (p) paths.add(p)
-    }
+    paths = await changedPathsSince(input.dir, input.since, input.exec)
   } catch (err) {
     const why = (err instanceof Error ? err.message : String(err)).split('\n')[0]!.trim()
     return {
@@ -138,7 +151,7 @@ export async function checkTestLock(input: TestLockInput): Promise<TestLockVerdi
     }
   }
 
-  const touched = testPathsIn([...paths]).sort()
+  const touched = testPathsIn(paths).sort()
 
   if (input.testsUnlocked) {
     return {

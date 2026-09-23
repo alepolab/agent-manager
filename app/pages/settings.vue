@@ -2,7 +2,19 @@
 import type { Settings, AgentModel } from '~/types'
 import { MODEL_OPTIONS } from '~/utils/models'
 
-const { settings, loading, load, save } = useSettings()
+const { settings, loading, error: loadError, load, save } = useSettings()
+// `error` was destructured off and dropped, so a failed load rendered as a
+// VALID EMPTY CONFIG: "No plugins configured", every toggle off. A reader
+// cannot tell that from a real instance with nothing set up, and the two call
+// for opposite actions.
+const { can } = useUser()
+/**
+ * GET /api/settings is unguarded; PUT requires `configure`. So a developer or
+ * QA saw every toggle and every field live, and got "Failed to save" on each
+ * one — a page that looks operable and refuses every act teaches that the app
+ * is broken rather than that this is not their screen.
+ */
+const readOnly = computed(() => !can('configure'))
 const {
   skillImports,
   agentImports,
@@ -40,6 +52,24 @@ async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
   await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), runBudget } } as any)
   toast.add({ title: 'Run budget saved for new runs', color: 'success' })
 }
+/**
+ * The instance-wide ceiling on live runs. Blank clears it.
+ *
+ * Rejects a non-positive value rather than writing it: a cap of 0 would refuse
+ * every run on an instance whose operator was trying to remove the cap, and
+ * "no limit" is expressed by an empty field, not by a zero.
+ */
+async function setMaxConcurrentRuns(raw: string) {
+  const n = Math.floor(Number(raw))
+  const value = raw.trim() && Number.isFinite(n) && n > 0 ? n : undefined
+  if (raw.trim() && value === undefined) {
+    toast.add({ title: 'A run limit must be 1 or more; leave it blank for no limit', color: 'error' })
+    return
+  }
+  await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), maxConcurrentRuns: value } } as any)
+  toast.add({ title: value ? `At most ${value} run${value === 1 ? '' : 's'} at once` : 'Run limit removed', color: 'success' })
+}
+
 const viewMode = ref<'structured' | 'raw'>('structured')
 const showRemoveConfirm = ref(false)
 const repoToRemove = ref<{ owner: string; repo: string; type: 'skills' | 'agents'; count: number } | null>(null)
@@ -105,10 +135,29 @@ async function onCheckUpdates() {
   }
 }
 
+/** The last text this page put in the box. Anything else in there is typed. */
+const rawSynced = ref('')
+const rawDirty = computed(() => rawJson.value !== rawSynced.value)
+/** A draft exists AND the saved file has moved on underneath it. */
+const rawStale = computed(() => rawDirty.value && !!settings.value
+  && JSON.stringify(settings.value, null, 2) !== rawSynced.value)
+
 watch(settings, () => syncRawJson())
 
-function syncRawJson() {
-  if (settings.value) rawJson.value = JSON.stringify(settings.value, null, 2)
+/**
+ * Put the saved settings in the editor — unless someone is mid-edit.
+ *
+ * Every structured control writes `settings`, and that write lands here. With
+ * no guard the textarea is replaced under the cursor: no warning, no undo, and
+ * nothing on screen that says a draft ever existed. Keeping the draft instead
+ * means the two can disagree, so the page says so rather than picking a
+ * winner silently.
+ */
+function syncRawJson(force = false) {
+  if (!settings.value) return
+  if (!force && rawDirty.value) return
+  rawJson.value = JSON.stringify(settings.value, null, 2)
+  rawSynced.value = rawJson.value
 }
 
 // ---- Structured field helpers ----
@@ -156,6 +205,54 @@ async function removePlugin(name: string) {
   if (!settings.value?.enabledPlugins) return
   const { [name]: _, ...rest } = settings.value.enabledPlugins as Record<string, boolean>
   await updateSetting({ enabledPlugins: rest })
+}
+
+// ---- Notifications ----
+
+interface PublicIntegrations {
+  slack: { configured: boolean, source: 'env' | 'stored' | 'none', unavailable?: string, updatedAt?: number }
+}
+const integrations = ref<PublicIntegrations | null>(null)
+const slackWebhook = ref('')
+const savingSlack = ref(false)
+const testingSlack = ref(false)
+const slackResult = ref<{ ok: boolean, message: string } | null>(null)
+
+async function loadIntegrations() {
+  try { integrations.value = await $fetch<PublicIntegrations>('/api/integrations') }
+  catch (e: any) { slackResult.value = { ok: false, message: e.data?.message || e.message } }
+}
+onMounted(loadIntegrations)
+
+async function putSlack(webhook: string, done: string) {
+  savingSlack.value = true
+  slackResult.value = null
+  try {
+    integrations.value = await $fetch<PublicIntegrations>('/api/integrations/slack', { method: 'PUT', body: { webhook } })
+    slackWebhook.value = ''
+    slackResult.value = { ok: true, message: done }
+  } catch (e: any) {
+    slackResult.value = { ok: false, message: e.data?.message || e.message }
+  } finally {
+    savingSlack.value = false
+  }
+}
+
+const saveSlack = () => putSlack(slackWebhook.value, 'Saved. Send a test message to confirm Slack accepts it.')
+const clearSlack = () => putSlack('', 'Webhook removed; notifications are written to the log only.')
+
+/** A real post, because "it is set" is the claim that was true for six weeks
+ *  while nothing arrived. Only Slack accepting a message proves delivery. */
+async function testSlack() {
+  testingSlack.value = true
+  slackResult.value = null
+  try {
+    slackResult.value = await $fetch<{ ok: boolean, message: string }>('/api/integrations/slack-test', { method: 'POST' })
+  } catch (e: any) {
+    slackResult.value = { ok: false, message: e.data?.message || e.message }
+  } finally {
+    testingSlack.value = false
+  }
 }
 
 // ---- Status line ----
@@ -240,6 +337,66 @@ async function addHook() {
   showAddHookModal.value = false
 }
 
+/**
+ * A hook runs a shell command on this machine, and deleting one used to take
+ * a single click on a control that appeared only on hover — no confirmation,
+ * no undo, and the command text gone with it. The repository remover two
+ * sections up gets a full dialog for something far easier to redo, so this is
+ * the page contradicting its own standard rather than a missing nicety.
+ */
+/**
+ * The one confirmation this page raises before an irreversible act.
+ *
+ * Generic rather than per-control because the two callers ask the identical
+ * question — "this thing will stop, here is exactly which one" — and two
+ * near-identical dialogs are how the wording drifts until one of them stops
+ * naming what it is about to remove.
+ */
+const pendingRemoval = ref<{ title: string; stops: string; subject: string; run: () => Promise<void> } | null>(null)
+
+async function confirmRemoval() {
+  const target = pendingRemoval.value
+  if (!target) return
+  pendingRemoval.value = null
+  await target.run()
+}
+
+function askRemoveHook(event: string, index: number, command: string) {
+  pendingRemoval.value = {
+    title: 'Delete this automation?',
+    stops: `${hookEventLabels[event] || event} will stop running:`,
+    subject: command,
+    run: () => removeHook(event, index),
+  }
+}
+
+function askRemovePlugin(name: string) {
+  pendingRemoval.value = {
+    title: 'Remove this plugin?',
+    stops: 'This plugin will no longer be listed here, enabled or not:',
+    subject: name,
+    run: () => removePlugin(name),
+  }
+}
+
+/**
+ * The shell command a hook entry runs.
+ *
+ * settings.json stores `{ matcher?, hooks: [{ type, command }] }`, not a bare
+ * `{ command }`. The page read `cmd.command` and fell back to
+ * `JSON.stringify(cmd)`, so the fallback fired on every real hook and each
+ * row rendered a line of escaped JSON — the one thing a reader needs from
+ * this list, the command about to run on their machine, was the hardest part
+ * of it to find.
+ */
+function hookCommandText(cmd: unknown): string {
+  if (typeof cmd === 'string') return cmd
+  const entry = cmd as { command?: string; hooks?: { command?: string }[] } | null
+  if (entry?.command) return entry.command
+  const nested = (entry?.hooks ?? []).map(h => h?.command).filter(Boolean) as string[]
+  return nested.length ? nested.join(' ; ') : JSON.stringify(cmd)
+}
+
 async function removeHook(event: string, index: number) {
   const currentHooks = (settings.value?.hooks || {}) as Record<string, unknown[]>
   const eventHooks = [...(currentHooks[event] || [])]
@@ -262,6 +419,9 @@ async function saveRaw() {
   try {
     const parsed = JSON.parse(rawJson.value)
     await save(parsed)
+    // Re-read from what was actually stored, not from what was typed: the
+    // draft is only settled once the server has agreed to it.
+    syncRawJson(true)
     toast.add({ title: 'Settings saved', color: 'success' })
   } catch (e: any) {
     toast.add({ title: 'Invalid JSON', description: e.message, color: 'error' })
@@ -296,6 +456,30 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
 <template>
   <div>
+    <!-- Two facts the page refused to state: that it could not load, and that
+         you cannot change it. Both used to render as an ordinary, operable,
+         empty settings page. -->
+    <div
+      v-if="loadError"
+      class="mx-4 mt-3 rounded-lg px-3 py-2 t-small flex items-center gap-2"
+      style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.2);"
+      role="alert"
+    >
+      <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
+      <span style="color: var(--error);">Settings could not be loaded, so nothing below reflects this instance.</span>
+      <span class="text-label truncate">{{ loadError }}</span>
+      <button class="ml-auto underline focus-ring shrink-0" style="color: var(--error);" @click="load()">Retry</button>
+    </div>
+    <div
+      v-else-if="readOnly"
+      class="mx-4 mt-3 rounded-lg px-3 py-2 t-small flex items-center gap-2"
+      style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+      role="status"
+    >
+      <UIcon name="i-lucide-lock" class="size-4 shrink-0" style="color: var(--text-tertiary);" />
+      <span style="color: var(--text-secondary);">These are the instance's settings, shown read-only. Only an operator can change them.</span>
+    </div>
+    <fieldset :disabled="readOnly" class="contents">
     <PageHeader title="Settings">
       <template #right>
         <button
@@ -305,7 +489,18 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         >
           {{ viewMode === 'structured' ? 'Raw JSON' : 'Structured' }}
         </button>
-        <UButton v-if="viewMode === 'raw'" label="Save" icon="i-lucide-save" size="sm" :loading="saving" @click="saveRaw" />
+        <!-- A draft survives a mode switch now, so the header has to admit one
+             exists: otherwise "Structured" looks like it discarded the edit. -->
+        <UButton
+          v-if="viewMode === 'raw'"
+          :label="rawDirty ? 'Save changes' : 'Save'"
+          icon="i-lucide-save"
+          size="sm"
+          :variant="rawDirty ? 'solid' : 'ghost'"
+          :loading="saving"
+          @click="saveRaw"
+        />
+        <span v-else-if="rawDirty" class="t-small text-meta">unsaved JSON draft</span>
       </template>
     </PageHeader>
 
@@ -358,6 +553,28 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <option value="">Default (each agent's own)</option>
               <option v-for="o in MODEL_OPTIONS.filter(o => o.value)" :key="o.value" :value="o.value">{{ o.label }} · {{ o.desc }}</option>
             </select>
+          </div>
+          <!-- The run budget caps ONE run. This caps how many there are — a
+               different hazard, and the one nothing refused: forty runs against
+               forty directories pass the workspace lock forty times. -->
+          <div class="flex items-start justify-between gap-4 py-3">
+            <div class="min-w-0 flex-1 max-w-2xl">
+              <div class="t-ui font-medium">Run capacity</div>
+              <div class="t-small mt-0.5 text-label leading-relaxed">
+                How many runs may be live on this instance at once, counting paused ones — they still hold a checkout
+                and a budget. Blank means no limit. A run refused by this gets a clear message and is not queued.
+                AGENT_MAX_CONCURRENT_RUNS on the instance overrides it and cannot be raised from here.
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <input
+                type="number" min="1" step="1" class="field-input t-small" style="width: 6rem; flex: none;"
+                placeholder="no limit" aria-label="Maximum concurrent runs"
+                :value="(settings as any)?.agentManager?.maxConcurrentRuns ?? ''"
+                @change="setMaxConcurrentRuns(($event.target as HTMLInputElement).value)"
+              />
+              <span class="t-small text-label">runs</span>
+            </div>
           </div>
           <div class="flex items-start justify-between gap-4 py-3">
             <div class="min-w-0 flex-1 max-w-2xl">
@@ -425,6 +642,89 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         </div>
       </div>
 
+      <!-- Notifications.
+           The runner and the CI poller have always announced a pause, a
+           failure, a red check and a gate left waiting. The only way to point
+           that at a channel was a container variable, so on an instance where
+           nobody set one the whole feature was off and nothing said so. -->
+      <div class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Notifications</h3>
+        <p class="t-small text-meta">
+          Where this instance tells a person a run needs them: paused on a gate or its budget, failed,
+          finished, or a pull request whose checks went red. Every notification is also written to
+          <span class="font-mono">notifications.jsonl</span> whether or not Slack is configured.
+        </p>
+
+        <div
+          v-if="integrations && !integrations.slack.configured"
+          class="rounded-lg px-3 py-2 t-small"
+          style="background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.25);"
+        >
+          No Slack webhook is set, so nothing reaches a channel — a run paused overnight waits until somebody looks.
+        </div>
+        <div v-else-if="integrations" class="t-small" style="color: var(--success);">
+          Slack is configured{{ integrations.slack.source === 'env' ? ' by this deployment (SLACK_WEBHOOK_URL), so it cannot be changed here' : '' }}.
+        </div>
+
+        <div class="field-group">
+          <label class="field-label">
+            Slack incoming webhook
+            <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">
+              {{ integrations?.slack.configured ? 'stored; paste a new one to replace it' : 'not stored' }}
+            </span>
+          </label>
+          <input
+            v-model="slackWebhook"
+            type="password"
+            class="field-input"
+            autocomplete="off"
+            placeholder="https://hooks.slack.com/services/..."
+            :disabled="integrations?.slack.source === 'env'"
+          />
+          <span class="field-hint">
+            Stored encrypted outside the config directory, and never shown again. Create one in Slack under Incoming Webhooks.
+          </span>
+        </div>
+
+        <p v-if="integrations?.slack.unavailable" class="t-small" style="color: var(--error);">
+          {{ integrations.slack.unavailable }}
+        </p>
+
+        <div class="flex items-center gap-2">
+          <UButton
+            label="Save webhook"
+            size="sm"
+            variant="soft"
+            :loading="savingSlack"
+            :disabled="integrations?.slack.source === 'env'"
+            @click="saveSlack"
+          />
+          <UButton
+            label="Send a test message"
+            size="sm"
+            variant="ghost"
+            color="neutral"
+            :loading="testingSlack"
+            :disabled="!integrations?.slack.configured"
+            @click="testSlack"
+          />
+          <UButton
+            v-if="integrations?.slack.source === 'stored'"
+            label="Remove webhook"
+            size="sm"
+            variant="ghost"
+            color="error"
+            :loading="savingSlack"
+            @click="clearSlack"
+          />
+          <span
+            v-if="slackResult"
+            class="t-small"
+            :style="{ color: slackResult.ok ? 'var(--success)' : 'var(--error)' }"
+          >{{ slackResult.message }}</span>
+        </div>
+      </div>
+
       <!-- Status Line -->
       <div
         class="rounded-xl p-5 space-y-4 bg-card"
@@ -480,12 +780,16 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                   <span class="field-toggle__thumb" />
                 </span>
               </label>
+              <!-- Sat 12px from the toggle in the same muted grey: one is
+                   reversible with a second click, the other deletes the entry.
+                   Separated and coloured for what it does. -->
+              <span class="w-px self-stretch" style="background: var(--border-subtle);" />
               <button
-                class="p-1.5 -m-0.5 rounded focus-ring text-meta"
-                aria-label="Remove plugin from settings"
-                @click="removePlugin(plugin.name)"
+                class="p-1.5 -m-0.5 rounded focus-ring btn-danger-quiet"
+                :aria-label="`Remove ${plugin.name} from settings`"
+                @click="askRemovePlugin(plugin.name)"
               >
-                <UIcon name="i-lucide-x" class="size-3.5" />
+                <UIcon name="i-lucide-trash-2" class="size-3.5" />
               </button>
             </div>
           </div>
@@ -588,8 +892,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                 style="background: var(--input-bg);"
               >
                 <div class="flex-1 min-w-0">
-                  <span class="font-mono t-small truncate block text-label">
-                    {{ typeof cmd === 'string' ? cmd : (cmd as any).command || JSON.stringify(cmd) }}
+                  <span class="font-mono t-small truncate block text-label" :title="hookCommandText(cmd)">
+                    {{ hookCommandText(cmd) }}
                   </span>
                   <span
                     v-if="typeof cmd === 'object' && (cmd as any).matcher"
@@ -599,10 +903,10 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
                   </span>
                 </div>
                 <button
-                  class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1.5 -m-0.5 rounded focus-ring"
+                  class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-1.5 -m-0.5 rounded focus-ring reveal-quiet"
                   style="color: var(--error);"
-                  aria-label="Delete hook"
-                  @click="removeHook(hook.event, idx)"
+                  :aria-label="`Delete the ${hookEventLabels[hook.event] || hook.event} hook that runs ${hookCommandText(cmd)}`"
+                  @click="askRemoveHook(hook.event, idx, hookCommandText(cmd))"
                 >
                   <UIcon name="i-lucide-trash-2" class="size-3.5" />
                 </button>
@@ -615,6 +919,18 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
 
     <!-- Raw JSON editor -->
     <div v-else class="px-6 py-4">
+      <!-- The draft used to be replaced under the cursor whenever anything
+           else wrote settings. It is kept now, which means it can be out of
+           date — so say which is which and let the person choose. -->
+      <div
+        v-if="rawStale"
+        class="mb-3 rounded-lg px-3 py-2 t-small flex items-center justify-between gap-3"
+        style="background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.25);"
+        role="status"
+      >
+        <span>settings.json changed while you were editing. Saving replaces it with what is in this box.</span>
+        <UButton label="Discard my edits" size="xs" variant="ghost" color="neutral" @click="syncRawJson(true)" />
+      </div>
       <div
         class="rounded-xl overflow-hidden"
         style="border: 1px solid var(--border-subtle);"
@@ -639,8 +955,40 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
       </div>
     </div>
 
+    <!-- Deleting a hook removes a shell command with no undo. It gets the same
+         confirmation the repository remover on this page already gets. -->
+    <UModal
+      :open="!!pendingRemoval"
+      :title="pendingRemoval?.title ?? 'Remove?'"
+      description="This is written to settings.json immediately and cannot be undone."
+      @update:open="(v: boolean) => { if (!v) pendingRemoval = null }"
+    >
+      <template #content>
+        <div class="p-6 space-y-4 bg-overlay">
+          <div class="flex items-center gap-3">
+            <div class="size-10 rounded-full flex items-center justify-center shrink-0" style="background: rgba(239, 68, 68, 0.1);">
+              <UIcon name="i-lucide-alert-triangle" class="size-6 text-error" />
+            </div>
+            <div>
+              <h3 class="t-body font-semibold text-primary">{{ pendingRemoval?.title }}</h3>
+              <p class="t-small text-label mt-1">This action cannot be undone.</p>
+            </div>
+          </div>
+          <div class="rounded-lg p-3 border" style="background: var(--surface-base); border-color: var(--border-subtle);">
+            <p class="t-small text-label mb-1">{{ pendingRemoval?.stops }}</p>
+            <p class="font-mono t-small break-all text-body">{{ pendingRemoval?.subject }}</p>
+          </div>
+          <div class="flex justify-end gap-2">
+            <UButton label="Keep it" variant="ghost" color="neutral" size="sm" @click="() => { pendingRemoval = null }" />
+            <UButton label="Remove" color="error" size="sm" @click="confirmRemoval" />
+          </div>
+        </div>
+      </template>
+    </UModal>
+
     <!-- Add Hook Modal -->
-    <UModal v-model:open="showAddHookModal">
+    <UModal v-model:open="showAddHookModal" title="Add Automation"
+      description="Run a shell command automatically when a specific event happens.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <h3 class="text-page-title">Add Automation</h3>
@@ -679,7 +1027,8 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
     </UModal>
 
     <!-- Delete Confirmation Modal -->
-    <UModal v-model:open="showRemoveConfirm">
+    <UModal v-model:open="showRemoveConfirm" title="Remove repository?"
+      description="Deletes the local clone and unlinks everything it installed. This cannot be undone.">
       <template #content>
         <div class="p-6 space-y-4 bg-overlay">
           <div class="flex items-center gap-3">
@@ -717,5 +1066,6 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
         </div>
       </template>
     </UModal>
+      </fieldset>
   </div>
 </template>

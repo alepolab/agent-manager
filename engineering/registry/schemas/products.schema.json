@@ -59,6 +59,14 @@
               "items": {
                 "type": "string"
               }
+            },
+            "customers": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Names of the customer whose estate this product is. Outranks every other criterion: a ticket that says SaskTel is about SaskTel's estate whatever product vocabulary it also mentions. Two runs resolved to the wrong repository before this existed - one to infra because the ticket's Environment block names Keycloak, one to crm because \"CRM\" appeared once in an analysis sentence - while both named the customer in their title. List every spelling that appears on real tickets, including accented forms: \"myL\u00fcm\" never matched a \"LUM\" term.",
+              "items": {
+                "type": "string"
+              }
             }
           }
         },
@@ -139,12 +147,30 @@
               "type": "boolean",
               "default": false,
               "description": "Whether the stack supports tag/rollbackToTag between attempts."
+            },
+            "urls": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "This product's real entry points on a stood-up stack, e.g. http://localhost:8080/lbss. Only the champion knows them: a service on the host network publishes no port through compose, so the runner derives what it can from docker and never guesses the rest. A UI or visual step given no address here reports NOT VERIFIED instead of screenshotting something it assumed.",
+              "items": {
+                "type": "string",
+                "pattern": "^https?://"
+              }
             }
           }
         },
         "build": {
           "type": "string",
           "description": "Build command. Absent means the product needs no build step before tests."
+        },
+        "toolchain": {
+          "type": "object",
+          "description": "Environment the build actually needs (JAVA_HOME, NODE_VERSION, ...), set for every agent on this product. Run 9a6ea7d0 read 6,820 'AspectJ source level is 1.5' errors from the wrong JDK as a defect in the repository, concluded nothing here could build, and opened three pull requests anyway.",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "tests": {
           "type": "object",
@@ -174,6 +200,18 @@
             "compose_test": {
               "type": "string",
               "description": "Infra oracle: a check that fails on current state and is idempotent when applied twice."
+            },
+            "integration": {
+              "type": "string",
+              "description": "Cross-module or cross-service tests. Must emit a machine-readable report named by `reports.integration`; a suite whose only output is a log cannot produce a per-scenario verdict."
+            },
+            "security": {
+              "type": "string",
+              "description": "Dependency, secret and static security checks. Required in practice for any product on an authorization, payment or personal-data path - SECURITY_GATE has nothing to read without it."
+            },
+            "visual": {
+              "type": "string",
+              "description": "Visual regression run. Playwright's own screenshot comparison; see agents/visual-qa.md for why no hosted vendor is used."
             }
           }
         },
@@ -203,6 +241,195 @@
         "suite": {
           "type": "string",
           "description": "The product suite this belongs to (e.g. bss, aaa, core). Groups products that share infrastructure stacks and recipes; informational for routing, required for none."
+        },
+        "reports": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Where each test class writes its MACHINE-READABLE report, and in what format. A command without one of these can only ever yield a whole-suite pass/fail, which is why acceptance rows cannot be scored per row. A product with no `reports` entry for a class is not spec-capable for that class - a registry fact, not a per-run discovery.",
+          "properties": {
+            "unit": {
+              "type": "object",
+              "required": [
+                "glob",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "glob": {
+                  "type": "string",
+                  "description": "Path glob, relative to the repo root, matching the report file(s) this class writes."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "surefire",
+                    "junit",
+                    "pytest",
+                    "jest",
+                    "go-json",
+                    "tap"
+                  ],
+                  "description": "How to parse it into per-case results. The trusted-root parser must read <testcase> elements, not only <testsuite> totals."
+                }
+              }
+            },
+            "integration": {
+              "type": "object",
+              "required": [
+                "glob",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "glob": {
+                  "type": "string",
+                  "description": "Path glob, relative to the repo root, matching the report file(s) this class writes."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "surefire",
+                    "junit",
+                    "pytest",
+                    "jest",
+                    "go-json",
+                    "tap"
+                  ],
+                  "description": "How to parse it into per-case results. The trusted-root parser must read <testcase> elements, not only <testsuite> totals."
+                }
+              }
+            },
+            "atdd": {
+              "type": "object",
+              "required": [
+                "glob",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "glob": {
+                  "type": "string",
+                  "description": "Path glob, relative to the repo root, matching the report file(s) this class writes."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "surefire",
+                    "junit",
+                    "pytest",
+                    "jest",
+                    "go-json",
+                    "tap"
+                  ],
+                  "description": "How to parse it into per-case results. The trusted-root parser must read <testcase> elements, not only <testsuite> totals."
+                }
+              }
+            },
+            "regression": {
+              "type": "object",
+              "required": [
+                "glob",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "glob": {
+                  "type": "string",
+                  "description": "Path glob, relative to the repo root, matching the report file(s) this class writes."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "surefire",
+                    "junit",
+                    "pytest",
+                    "jest",
+                    "go-json",
+                    "tap"
+                  ],
+                  "description": "How to parse it into per-case results. The trusted-root parser must read <testcase> elements, not only <testsuite> totals."
+                }
+              }
+            },
+            "ui": {
+              "type": "object",
+              "required": [
+                "glob",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "glob": {
+                  "type": "string",
+                  "description": "Path glob, relative to the repo root, matching the report file(s) this class writes."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "surefire",
+                    "junit",
+                    "pytest",
+                    "jest",
+                    "go-json",
+                    "tap"
+                  ],
+                  "description": "How to parse it into per-case results. The trusted-root parser must read <testcase> elements, not only <testsuite> totals."
+                }
+              }
+            },
+            "visual": {
+              "type": "object",
+              "required": [
+                "glob",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "glob": {
+                  "type": "string",
+                  "description": "Path glob, relative to the repo root, matching the report file(s) this class writes."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "surefire",
+                    "junit",
+                    "pytest",
+                    "jest",
+                    "go-json",
+                    "tap"
+                  ],
+                  "description": "How to parse it into per-case results. The trusted-root parser must read <testcase> elements, not only <testsuite> totals."
+                }
+              }
+            },
+            "security": {
+              "type": "object",
+              "required": [
+                "glob",
+                "format"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "glob": {
+                  "type": "string",
+                  "description": "Path glob, relative to the repo root, matching the report file(s) this class writes."
+                },
+                "format": {
+                  "type": "string",
+                  "enum": [
+                    "surefire",
+                    "junit",
+                    "pytest",
+                    "jest",
+                    "go-json",
+                    "tap"
+                  ],
+                  "description": "How to parse it into per-case results. The trusted-root parser must read <testcase> elements, not only <testsuite> totals."
+                }
+              }
+            }
+          }
         }
       }
     }

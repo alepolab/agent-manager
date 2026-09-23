@@ -15,7 +15,7 @@
  * nothing left registered afterwards.
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -26,6 +26,10 @@ const git = (cwd, args) => execFileP('git', args, { cwd }).then(r => r.stdout.tr
 
 // Set before the runner is imported, the way test-workflow-runner.mjs does it.
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'lanes-claude-'))
+// This harness starts many runs on the same ticket key on purpose; the
+// duplicate-ticket guard (workflowRunner.startRun) is a product rule about
+// operators, not about fixtures.
+process.env.AGENT_ALLOW_DUPLICATE_TICKET_RUNS = '1'
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'lanes-artifacts-'))
 
 const { ensureLane, mergeLane, removeLane, laneBranchFor, laneDirFor } = await import('../server/utils/workspace.ts')
@@ -246,7 +250,24 @@ try {
     // First visit in a lane (it shared the wave with the frontend step), second
     // in the run worktree (it had that wave to itself).
     assert.notEqual(visits[0], done.projectDir, 'the first visit ran in a lane')
-    assert.equal(visits[1], done.projectDir, 'the retry ran in the run worktree, its lane having merged with the wave')
+
+    // What must be true, pinned on the work rather than on the directory.
+    //
+    // The old assertion was `visits[1] === done.projectDir`, which holds only
+    // when the retry has its wave to itself - and whether it does depends on
+    // when the SIBLING step settles. On a slower machine the retry can share a
+    // wave and be given a lane, which is correct behaviour and failed the test:
+    // it went red in CI on a commit that changed nothing but the product
+    // registry, while passing four times locally including under load.
+    //
+    // The behaviour the comment above says is being pinned is that the work
+    // must survive the lane it was made in. That is what is asserted now, and
+    // it holds whichever wave the retry lands in.
+    assert.ok(existsSync(join(visits[1], 'backend-visit-1.txt')),
+      `the retry sees the first attempt's commits, so the work survived its lane; ${visits[1]} does not have them`)
+    assert.notEqual(visits[1], visits[0], 'and it is not the first attempt\'s lane, which was merged and removed')
+    assert.ok(existsSync(join(done.projectDir, 'backend-visit-1.txt')), 'both attempts are on the run branch at the end')
+    assert.ok(existsSync(join(done.projectDir, 'backend-visit-2.txt')))
     // Both attempts' commits are on the run branch: the lane did not take the
     // first attempt's work with it when it was removed.
     assert.ok(existsSync(join(done.projectDir, 'backend-visit-1.txt')), "the first attempt's commit survived its lane")
@@ -254,7 +275,126 @@ try {
     assert.equal((await git(done.projectDir, ['worktree', 'list'])).split('\n').length, 2, 'no lane outlives the retried wave')
   }
 
-  console.log('wave lanes: ok')
+  // ── a lane's test unlock stays inside that lane ─────────────────────────
+// Run a3cb9d37 (CSUP-7526, $35.54): the client lane could not commit because
+// lock state armed by the BACKEND lane was reachable from it. The unlock was
+// written into the run's shared worktree as well as the lane's own, which
+// makes that shared `.agent` directory a channel between lanes running at the
+// same moment - one lane's permission visible to a sibling that never earned
+// it, in exactly the wave where both are writing.
+//
+// The copy existed so the reason would survive the lane being removed. That is
+// now the run's evidence's job: withdrawTestUnlocks copies the reason into the
+// run artifacts when the run ends.
+{
+  const { testUnlockTargets } = await import('../server/utils/workflowRunner.ts')
+  const run = { id: 'lane-scope', projectDir: '/w/run-worktree' }
+  const lane = '/w/run-worktree__implement-client-change'
+
+  assert.deepEqual(testUnlockTargets(run, lane), [lane],
+    'a lane unlock is written ONLY in that lane; the run worktree is shared with every sibling lane')
+
+  // A step that is not in a lane works in the run's own worktree, and still
+  // gets its unlock there.
+  assert.deepEqual(testUnlockTargets(run, '/w/run-worktree'), ['/w/run-worktree'])
+
+  // A run with no checkout at all still yields the one directory it has.
+  assert.deepEqual(testUnlockTargets({ id: 'x' }, '/tmp/somewhere'), ['/tmp/somewhere'])
+}
+
+// ── A lane holding uncommitted work is kept, not deleted ──────────────────
+//
+// `mergeLane` merges COMMITS; `removeLane` then runs `worktree remove --force`,
+// which deletes everything that was not one. Run a3cb9d37 lost its client fix
+// exactly there - "T1/T5 remain staged and uncommitted at fd6e3240, 566
+// insertions across 5 files" - with no error and no log line, and the only
+// mitigation shipped for it was a sentence in a prompt.
+{
+  const dirtyFan = {
+    slug: 'lanes-dirty', name: 'Lanes Dirty',
+    steps: [
+      { id: 'd-plan', agentSlug: 'd-planner', label: 'Plan', next: ['d-back', 'd-front'] },
+      { id: 'd-back', agentSlug: 'd-backend', label: 'Implement Backend', next: ['d-done'] },
+      { id: 'd-front', agentSlug: 'd-frontend', label: 'Implement Frontend', next: ['d-done'] },
+      { id: 'd-done', agentSlug: 'd-verifier', label: 'Verify', next: [] },
+    ],
+  }
+  const project2 = join(root, 'project-dirty')
+  await execFileP('git', ['init', '-q', project2])
+  await git(project2, ['config', 'user.email', 'test@example.com'])
+  await git(project2, ['config', 'user.name', 'Test'])
+  writeFileSync(join(project2, 'app.txt'), 'start\n')
+  await git(project2, ['add', '-A'])
+  await git(project2, ['commit', '-qm', 'initial'])
+
+  const lanes = {}
+  runner.setAgentCaller(async (agentSlug, _input, cwd) => {
+    lanes[agentSlug] = cwd
+    if (agentSlug === 'd-backend') {
+      // Commits, like a well-behaved step.
+      writeFileSync(join(cwd, 'backend.txt'), 'backend\n')
+      await git(cwd, ['config', 'user.email', 'test@example.com'])
+      await git(cwd, ['config', 'user.name', 'Test'])
+      await git(cwd, ['add', '-A'])
+      await git(cwd, ['commit', '-qm', 'backend work'])
+    }
+    if (agentSlug === 'd-frontend') {
+      // Writes and never commits: a3cb9d37's client lane.
+      writeFileSync(join(cwd, 'client-fix.txt'), 'the fix nobody committed\n')
+    }
+    return `OUTPUT-OF-${agentSlug}`
+  })
+
+  const settled2 = await runner.waitForSettled(
+    (await runner.startRun({
+      workflow: dirtyFan, initialPrompt: 'CSUP-2 fix it', watch: 'direct-invocation',
+      autoRun: true, projectDir: project2,
+    })).id, 60000)
+
+  const frontRec = settled2.steps.find(s => s.stepId === 'd-front')
+  assert.ok(existsSync(join(lanes['d-frontend'], 'client-fix.txt')),
+    'a lane still holding uncommitted work must not be deleted with it inside')
+  assert.match(frontRec.laneKept ?? '', /uncommitted file\(s\)/,
+    'and the step must say so on the record, where a person and the run summary can see it')
+  // The well-behaved lane is unaffected: merged, removed, its commit on the branch.
+  assert.ok(existsSync(join(settled2.projectDir, 'backend.txt')), 'a clean lane still merges')
+  assert.equal(settled2.steps.find(s => s.stepId === 'd-back').laneKept, undefined,
+    'a clean lane is still removed and reports nothing')
+  // Keeping a lane is noise, not a failure: the run still finishes. Pinned in
+  // both directions so a later edit cannot quietly start failing runs over a
+  // stray build artifact, or stop reporting the ones that matter.
+  assert.equal(settled2.status, 'completed', 'a kept lane does not fail the run')
+  // And a copy of that work is in the run's evidence, because the message above
+  // tells a person to run `worktree remove --force` once they have taken it out
+  // - and SBN-4091 survived only because such a patch existed.
+  const patch = join(process.env.AGENT_RUNS_DIR, settled2.id, 'artifacts', 'lane-uncommitted-implement-frontend.patch')
+  assert.ok(existsSync(patch), `the uncommitted work is copied into the run artifacts (${patch})`)
+  const text = readFileSync(patch, 'utf8')
+  assert.match(text, /client-fix\.txt/, 'and the patch names the file')
+  assert.match(text, /the fix nobody committed/, 'and carries its content, not just its name')
+  assert.match(frontRec.laneKept ?? '', /lane-uncommitted-implement-frontend\.patch/,
+    'the step record points at the copy')
+
+  // An UNMEASURABLE lane is kept too. workingTreeDirty answers null when it
+  // cannot read the tree at all - a locked or corrupted index, a permission
+  // error - and reading that as "clean" would force-delete a worktree nobody
+  // checked, which is the same loss through a different door.
+  const { workingTreeDirty } = await import('../server/utils/gitFacts.ts')
+  const broken = join(root, 'broken-lane')
+  await execFileP('git', ['init', '-q', broken])
+  await git(broken, ['config', 'user.email', 'test@example.com'])
+  await git(broken, ['config', 'user.name', 'Test'])
+  writeFileSync(join(broken, 'a.txt'), 'x\n')
+  await git(broken, ['add', '-A'])
+  await git(broken, ['commit', '-qm', 'base'])
+  writeFileSync(join(broken, 'uncommitted.txt'), 'work nobody committed\n')
+  writeFileSync(join(broken, '.git', 'index'), 'not an index')
+  assert.equal(await workingTreeDirty(broken), null,
+    'a tree git cannot read reports null - NOT an empty list, which would read as clean')
+  assert.equal(await workingTreeDirty(join(root, 'no-such-dir')), null, 'and so does a directory that is not there')
+}
+
+console.log('wave lanes: ok')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

@@ -1,4 +1,6 @@
 import type { Role } from '~~/shared/types/role'
+import type { GateKind } from '~~/shared/utils/oversight'
+import type { GraphEdge } from '~~/shared/utils/workflowGraph'
 
 export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
@@ -50,7 +52,7 @@ export interface Command {
 
 export interface Settings {
   /** Agent Manager's own switches, kept under one key so Claude Code ignores them. */
-  agentManager?: { labs?: boolean, /** Per-run caps applied to new runs; an instance env var overrides them. */ runBudget?: { maxTokens?: number, maxMinutes?: number }, /** Every pipeline agent runs on this model when set; otherwise each agent's own. */ agentModel?: AgentModel }
+  agentManager?: { labs?: boolean, /** Per-run caps applied to new runs; an instance env var overrides them. */ runBudget?: { maxTokens?: number, maxMinutes?: number, /** Dollars per run. */ maxUsd?: number }, /** Every pipeline agent runs on this model when set; otherwise each agent's own. */ agentModel?: AgentModel }
   hooks?: Record<string, unknown[]>
   enabledPlugins?: Record<string, boolean>
   statusLine?: { type: string; command: string }
@@ -250,14 +252,25 @@ export interface WorkflowStep {
   id: string
   agentSlug: string
   label: string
-  /** Explicit successors. Absent means "the next step in array order" (legacy workflows). */
-  next?: string[]
+  /**
+   * Explicit successors. Absent means "the next step in array order" (legacy
+   * workflows).
+   *
+   * A bare string is an unconditional edge — several of them out of one step
+   * run in parallel, which is what every workflow written before conditions
+   * did. `{ to, when }` is taken only when this step's outcome matches, which
+   * is how a run branches: a review that FAILs can route back to the step that
+   * can fix it instead of ending the run. See shared/utils/workflowGraph.ts.
+   */
+  next?: (string | GraphEdge)[]
   /** Agent that reviews this step's output and returns CONTINUE / RETRY / ABORT. */
   monitorSlug?: string
   /** How many times this step may run in one execution. Guards cycles. Default 3. */
   maxVisits?: number
   /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
   approval?: boolean
+  /** A review step whose stated `Review Result:` the runner enforces. */
+  verdict?: boolean
   /**
    * Hand this step the review a GitHub Actions run left on the run's pull
    * request. The runner writes `review-comments.json` into the run's artifacts
@@ -265,6 +278,23 @@ export interface WorkflowStep {
    * appears after it finishes.
    */
   reviewComments?: boolean
+  /**
+   * Bring the product's stack up before this step's agent runs.
+   *
+   * The runner reads the lifecycle out of the product's own compose file in the
+   * infra repo (server/utils/stackRecipe.ts), so a step asks for a stack rather
+   * than describing how to build one. The stack is taken down when the run
+   * settles, including when it fails.
+   */
+  stack?: 'up'
+  /**
+   * Drive the infra repo's deploy.sh for this step: `{ env, step, app?, check? }`.
+   *
+   * Only `dev` runs unattended. Any other environment requires this step to
+   * carry `approval: true` AND for that gate to have been answered - the runner
+   * refuses otherwise, before assembling an ansible argument.
+   */
+  deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }
   /**
    * Whose decision this gate is. Copied onto `run.question.role` when the gate
    * fires, and enforced by the gate routes.
@@ -277,6 +307,18 @@ export interface WorkflowStep {
    * backstop for a role nobody on this instance holds.
    */
   gateRole?: Role
+  /**
+   * What KIND of question this gate asks, where that raises the oversight
+   * floor above the run's blast-radius tier.
+   *
+   * `story`, `spec` and `security` gates cannot be tiered by blast radius:
+   * the first two ask whether this is the right thing to build (which no
+   * classification predicts, and which are asked before the diff that would
+   * produce one exists), and the third is triggered by what the change
+   * touches rather than how hard it is to undo. A step without this field
+   * tiers exactly as before. See shared/utils/oversight.ts.
+   */
+  gateKind?: GateKind
   /**
    * Whose WORK this step is \u2014 a different question from whose decision its
    * gate is (`gateRole`) and from what the reader may do (`can()`).

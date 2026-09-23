@@ -5,9 +5,19 @@ import { resolveClaudePath } from './claudeDir.ts'
 export interface AgentManagerSettings {
   labs?: boolean
   /** Per-run caps for new runs; an instance env var overrides them (see defaultBudget). */
-  runBudget?: { maxTokens?: number, maxMinutes?: number }
+  runBudget?: { maxTokens?: number, maxMinutes?: number, /** Dollars per run; the cap an operator actually budgets in. */ maxUsd?: number }
   /** A model alias every pipeline agent runs on, whatever its own file declares. Absent: each agent's own choice. */
   agentModel?: string
+  /**
+   * How many runs may be live on this instance at once. Absent or 0: no cap.
+   *
+   * The workspace lock already stops two runs corrupting one checkout, but it
+   * says nothing about the total: forty runs against forty different
+   * directories are forty concurrent agent pipelines, each spending its own
+   * budget, and nothing between "start one" and "start every ticket on the
+   * board" refuses. An instance-wide ceiling is the only thing that does.
+   */
+  maxConcurrentRuns?: number
 }
 
 /**

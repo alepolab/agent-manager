@@ -3,6 +3,7 @@ import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { checkGateSeparation } from '../../../utils/gateSeparation'
 
 /** Continue a paused run. `note` reaches the step being approved, or whichever step starts next. */
 export default defineEventHandler(async (event) => {
@@ -18,6 +19,21 @@ export default defineEventHandler(async (event) => {
   // a developer could accept QA's verification of their own change.
   if (before) await requireGateRole(event, before)
   const user = await currentUser(event)
+  // And whether it is yours GIVEN what you already decided on this run: the
+  // same person must not approve an implementation and then accept its own
+  // verification. Throws a 403 naming who to ask, unless nobody else on this
+  // instance could answer — see gateSeparation.ts on why the backstop is the
+  // point rather than an exception.
+  let separation = {}
+  if (before) {
+    try {
+      separation = await checkGateSeparation(before, user?.login)
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode
+      if (status === 403) throw createError({ statusCode: 403, message: (err as Error).message })
+      throw err
+    }
+  }
   let run
   try {
     run = await continueRun(id, body?.note)
@@ -35,7 +51,14 @@ export default defineEventHandler(async (event) => {
   // wait is measured from it; the decision is then appended to the run as the
   // runner has just rewritten it, never to this stale copy.
   if (before?.question?.kind === 'approval') {
-    const decision = recordDecision(before, 'approved', user?.login ?? 'a reviewer', body?.note?.trim())
+    // The backstop leaves a trace. When one person answered both sides of a
+    // review because nobody else on this instance could, that goes ON THE
+    // RECORD rather than passing silently — the whole value of separation of
+    // duties is that its absence is visible.
+    const reviewerNote = (separation as { sameActorNote?: string }).sameActorNote
+      ? [body?.note?.trim(), `(${(separation as { sameActorNote?: string }).sameActorNote})`].filter(Boolean).join(' ')
+      : body?.note?.trim()
+    const decision = recordDecision(before, 'approved', user?.login ?? 'a reviewer', reviewerNote)
     const fresh = await getRun(id)
     if (decision && fresh) {
       fresh.decisions = [...(fresh.decisions ?? []), decision]

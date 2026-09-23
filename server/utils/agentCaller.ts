@@ -13,6 +13,42 @@ import { envForUser } from './users.ts'
 import type { AgentFrontmatter } from '~/types'
 
 /**
+ * The server's environment, minus the secrets an agent has no business holding.
+ *
+ * This used to be `...process.env` in full. Every pipeline agent therefore ran
+ * with `permissionMode: 'bypassPermissions'` AND the whole server environment,
+ * which on this instance includes `AGENT_MANAGER_SECRET` — the key that
+ * decrypts every stored developer's GitHub and Jira tokens — plus the OAuth
+ * client secret and the API token. An agent never needs any of them: its own
+ * credentials arrive through `envForUser`, which is spread over this.
+ *
+ * A DENY list rather than an allow list, deliberately. An allow list would have
+ * to enumerate every variable a product's build, test harness, stack recipe or
+ * deploy script reads, on every product, forever — and the failure mode of
+ * missing one is a run that dies in a way nobody can diagnose. The failure mode
+ * of missing a secret here is narrower and testable: add its name.
+ */
+const SECRET_ENV = [
+  'AGENT_MANAGER_SECRET',
+  'AGENT_MANAGER_API_TOKEN',
+  'GITHUB_CLIENT_SECRET',
+  'GITHUB_CLIENT_ID',
+  'NUXT_SESSION_PASSWORD',
+  'SESSION_SECRET',
+  'SLACK_WEBHOOK_URL',
+]
+
+export function allowedProcessEnv(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined) continue
+    if (SECRET_ENV.includes(k)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/**
  * Absolute path to the shipped `engineering/scripts` directory, handed to every
  * agent as `SDLC_SCRIPTS_DIR`.
  *
@@ -35,8 +71,15 @@ import type { AgentFrontmatter } from '~/types'
  * finished its fix and then halted at `git commit`.
  */
 export async function agentEnvFor(startedBy?: string): Promise<Record<string, string>> {
+  // Slot 0 was hardcoded here, and GIT_CONFIG_COUNT with it. Any git config the
+  // DEPLOYMENT passes the same way was silently dropped for every agent: the
+  // local compose file supplies `credential.helper` in slot 0, so agents ran
+  // with no credential helper at all and private clones failed with "could not
+  // read Username for 'https://github.com'" while the server process beside
+  // them cloned fine. Append instead of overwrite.
+  const slot = Number(process.env.GIT_CONFIG_COUNT) || 0
   return {
-    ...process.env as Record<string, string>,
+    ...allowedProcessEnv(),
     // The commit identity — the starter's, or the bot as the floor. It used to
     // be the caller's job alone: callAgent spreads envForUser over this, so an
     // agent always had it, and preflight — which calls this and nothing else —
@@ -60,9 +103,9 @@ export async function agentEnvFor(startedBy?: string): Promise<Record<string, st
     // agents hold no signing key and the image has no gpg: a real run
     // finished its fix and then halted at `git commit`. Environment config
     // outranks every file, so this holds for every git the agent runs.
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'commit.gpgsign',
-    GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_COUNT: String(slot + 1),
+    [`GIT_CONFIG_KEY_${slot}`]: 'commit.gpgsign',
+    [`GIT_CONFIG_VALUE_${slot}`]: 'false',
   }
 }
 
@@ -156,6 +199,15 @@ export interface AgentProgress {
   lastActivityAt: number
   /** One human-readable line for the live log: a tool call, a text excerpt or a result preview. Present only on events that carry one. */
   line?: string
+  /**
+   * WHICH KIND of block produced `line`, and the only reason this field exists:
+   * a line reading `[Bash] gradle build` can be a real tool call or an agent
+   * typing that text. They are indistinguishable once both are strings, and the
+   * command ledger gates a pull request on the difference — an agent that could
+   * narrate a successful build would be grading its own homework, which is the
+   * defect the gate was written to stop. Present whenever `line` is.
+   */
+  lineKind?: 'text' | 'tool' | 'result'
 }
 
 const LINE_MAX = 300
@@ -168,6 +220,14 @@ const squash = (s: string, max = LINE_MAX) => s.replace(/\s+/g, ' ').trim().slic
  * says what is happening (a command, a path, a pattern), never dumped whole:
  * a Write's content or a prompt's ticket text has no place in a log.
  */
+export function blockKind(block: unknown): 'text' | 'tool' | 'result' | null {
+  const type = (block as { type?: unknown })?.type
+  if (type === 'text') return 'text'
+  if (type === 'tool_use') return 'tool'
+  if (type === 'tool_result') return 'result'
+  return null
+}
+
 export function describeBlock(block: unknown): string | null {
   if (!block || typeof block !== 'object') return null
   const b = block as { type?: string, text?: string, name?: string, input?: Record<string, unknown>, content?: unknown, is_error?: boolean }
@@ -469,7 +529,8 @@ export async function callAgent(
           // Lines are never throttled: a watcher wants every command, not a sample.
           const line = describeBlock(block)
           if (line && /\bAPI Error\b/i.test(line)) lastApiError = line.trim().slice(0, 300)
-          if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
+          const kind = blockKind(block)
+          if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line, ...(kind ? { lineKind: kind } : {}) })
         }
       }
       emitProgress()
@@ -479,7 +540,8 @@ export async function callAgent(
       if (Array.isArray(content)) {
         for (const block of content) {
           const line = describeBlock(block)
-          if (line) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
+          const kind = blockKind(block)
+          if (line) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line, ...(kind ? { lineKind: kind } : {}) })
         }
       }
     }

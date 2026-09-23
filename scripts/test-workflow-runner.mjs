@@ -16,6 +16,10 @@ function git(cwd, args) {
 }
 
 process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'runner-'))
+// This harness starts many runs on the same ticket key on purpose; the
+// duplicate-ticket guard (workflowRunner.startRun) is a product rule about
+// operators, not about fixtures.
+process.env.AGENT_ALLOW_DUPLICATE_TICKET_RUNS = '1'
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'runner-artifacts-'))
 
 const runner = await import('../server/utils/workflowRunner.ts')
@@ -24,6 +28,7 @@ const runner = await import('../server/utils/workflowRunner.ts')
 // scripts/test-preflight.mjs asserts. One case below restores the real gate.
 runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 const store = await import('../server/utils/workflowRunStore.ts')
+const { recordDecision } = await import('../shared/utils/runDecisions.ts')
 
 const TIMEOUT = 5000
 
@@ -652,13 +657,30 @@ assert.equal(rst.steps.find(s => s.stepId === 'b').visits, 2, 'visits keep count
 const stepFiles = readdirSync(join(process.env.AGENT_RUNS_DIR, rst.id, 'artifacts', 'steps'))
 assert.ok(stepFiles.some(f => /step-02-.*-restart-1\.json$/.test(f)), 'the failed attempt is snapshotted before the restart')
 
-// A genuinely different workflow (extra step) is refused, not guessed at.
+// A genuinely different workflow (extra step) on disk no longer decides
+// anything for a run that carries its own graph: `workflowSnapshot` is taken at
+// creation precisely so a boot reseed cannot rewrite the definition under a run
+// that is still inside it. The run replays the steps it actually started with.
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
   name: workflow.name, description: '',
   steps: [...workflow.steps, { id: 'e', agentSlug: 'agent-e', label: 'E', next: [] }],
 }))
 runner._dropLive(rst.id)
-await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/, 'a reshaped workflow refuses restart')
+const reshaped = await runner.restartRun(rst.id, 'b')
+assert.equal(reshaped.steps.length, workflow.steps.length,
+  'the run keeps its own step graph; the workflow gaining a step does not add one to a run in flight')
+await runner.waitForSettled(reshaped.id, TIMEOUT)
+
+// A run recorded BEFORE snapshots existed has no graph of its own, so the old
+// rule still holds for it: a reshaped workflow is refused rather than guessed at.
+{
+  const legacy = await store.getRun(rst.id)
+  delete legacy.workflowSnapshot
+  await store.saveRun(legacy)
+  runner._dropLive(rst.id)
+  await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/,
+    'a run with no snapshot still refuses a reshaped workflow')
+}
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'),
   JSON.stringify({ name: workflow.name, description: '', steps: workflow.steps }))
 
@@ -887,8 +909,14 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(ul.status, 'completed')
   assert.equal(seenUnlock['agent-a'], false, 'a step without the flag sees no unlock file')
   assert.equal(seenUnlock['agent-b'], true, 'the flagged step finds .agent/test-unlock.json in its worktree')
-  const unlock = JSON.parse(readFileSync(join(ul.projectDir, '.agent', 'test-unlock.json'), 'utf8'))
-  assert.match(unlock.reason, /writes tests and code together/, 'with the reason recorded for the evidence')
+  // The unlock is two things: permission while the run works, and the record
+  // of WHY a step was allowed to touch tests. When the run ends the permission
+  // is withdrawn from the checkout - it used to be left behind, so every later
+  // agent there inherited it - and the reason is kept with the run's evidence.
+  assert.equal(existsSync(join(ul.projectDir, '.agent', 'test-unlock.json')), false,
+    'the capability does not outlive the run that earned it')
+  const unlock = JSON.parse(readFileSync(join(process.env.AGENT_RUNS_DIR, ul.id, 'artifacts', 'test-unlock.json'), 'utf8'))
+  assert.match(unlock.reason, /writes tests and code together/, 'with the reason kept as evidence where the run keeps the rest')
   rmSync(projectDir, { recursive: true, force: true })
 }
 
@@ -1524,6 +1552,541 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(sawArtifactWhenItRan, true, 'and it was on disk BEFORE the agent ran, not written afterwards')
 
   setReviewReaders({})
+}
+
+// -- the runner classifies the run itself, and an agent cannot talk it down ---
+// oversight.ts decides whether a gate fires purely from run.blastRadius, and
+// nothing wrote it: every run read as unclassified, so every gate stopped and
+// the tiering never tiered. The agent's own claim cannot be the only source
+// either - a step that wants to skip a gate has every reason to call its change
+// ui_parsing - so the runner derives a floor from the paths actually touched and
+// keeps whichever is STRONGER.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'classify-project')
+  mkdirSync(join(project, 'db', 'migration'), { recursive: true })
+  mkdirSync(join(project, 'src'), { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.'])
+  g(['config', 'user.email', 'test@example.com'])
+  g(['config', 'user.name', 'Test'])
+  writeFileSync(join(project, 'src', 'Foo.java'), 'class Foo {}\n')
+  g(['add', '-A']); g(['commit', '-qm', 'base'])
+
+  const { oversightFor } = await import('../shared/utils/oversight.ts')
+  const wf = { slug: 'classify', name: 'Classify', steps: [{ id: 'intake', agentSlug: 'agent-intake', label: 'Intake & Classification', next: [] }] }
+  const metaOf = (id) => JSON.parse(readFileSync(join(process.env.AGENT_RUNS_DIR, id, 'artifacts', 'meta.json'), 'utf8'))
+
+  // 1. The agent proposes a class and touches nothing risky: its word stands.
+  runner.setAgentCaller(async () => 'looked at it\nPIPELINE-CLASS: ui_parsing')
+  const proposed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-1', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(proposed.blastRadius, 'ui_parsing', `the proposal is adopted; run had ${proposed.blastRadius}`)
+  assert.equal(metaOf(proposed.id).blast_radius, 'ui_parsing', 'and it reaches meta.json, which is what a later reader and the bundle use')
+
+  // 2. THE case this exists for: the agent claims a low class while the change
+  //    touched a migration. The floor wins and the record says so.
+  runner.setAgentCaller(async (_slug, _input, dir) => {
+    // The step runs in a LANE WORKTREE, not the project dir, and git tracks
+    // files rather than directories - so db/migration/ does not exist there
+    // until something creates it. Writing the migration the way a real agent
+    // would is what makes the floor fire.
+    const at = dir ?? project
+    mkdirSync(join(at, 'db', 'migration'), { recursive: true })
+    writeFileSync(join(at, 'db', 'migration', 'V2__add_column.sql'), 'ALTER TABLE x ADD y INT;\n')
+    return 'tiny change honestly\nPIPELINE-CLASS: ui_parsing'
+  })
+  const gamed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-2', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(gamed.blastRadius, 'schema',
+    `a migration cannot be classified ui_parsing by the step that wrote it; run had ${gamed.blastRadius}`)
+  assert.equal(gamed.classSource, 'floor', 'and the run records that the floor is why')
+  assert.equal(metaOf(gamed.id).blast_radius, 'schema', 'meta.json carries the adopted class, not the claim')
+
+  // 3. Nothing proposed and nothing risky touched: still unclassified, which
+  //    oversight.ts already treats as stop. A default here would be the one
+  //    answer that must never be assumed.
+  g(['checkout', '-q', '--', '.'])
+  runner.setAgentCaller(async () => 'no classification line at all')
+  const unknown = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'C-3', watch: 'direct-invocation', autoRun: true, projectDir: project })).id, TIMEOUT)
+  assert.equal(unknown.blastRadius, undefined, `an unclassified run stays unclassified; it had ${unknown.blastRadius}`)
+  assert.equal(oversightFor(unknown.blastRadius), 'stop', 'and oversight still stops it')
+}
+
+// -- a step declares a stack; the runner starts it and always takes it down --
+// The runner used to print "Stack: alepo-dev-team-infra/crm" and leave the
+// agent to invent the rest, and nothing owned termination - so a stack left
+// running quietly ate the box. The lifecycle is the runner's job now, and
+// teardown has to happen even when the run FAILS, which is exactly when a
+// half-started stack is most likely to be left behind.
+//
+// No docker here: the commands are captured through the lifecycle module's
+// injected exec seam.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setStackExec } = await import('../server/utils/stackLifecycle.ts')
+  // The stack step now VERIFIES what it started, and that check reads the
+  // daemon through a second module with its own seam. Stubbing only the
+  // lifecycle left verifyStack talking to real docker: the step hung on it and
+  // the run never settled inside waitForSettled's budget, which is what this
+  // suite reported rather than anything about the runner. stackHealth's seam
+  // says it plainly - "No test may reach the real daemon" - and it has to be
+  // taken up here for that to hold.
+  const { setStatusExec } = await import('../server/utils/stackHealth.ts')
+  const infra = join(process.env.CLAUDE_DIR, 'infra')
+  mkdirSync(infra, { recursive: true })
+  writeFileSync(join(infra, '.env'), 'X=1\n')
+  writeFileSync(join(infra, 'docker-compose.zed.yml'),
+    'services:\n  a:\n    image: x\n    profiles: [zed-init]\n  b:\n    image: y\n    profiles: [zed-stack]\n')
+  process.env.ALEPO_INFRA_DIR = infra
+
+  const commands = []
+  setStackExec(async (cmd, args) => { commands.push(`${cmd} ${args.join(' ')}`); return '' })
+  // One running service, so verifyStack settles on the first poll instead of
+  // waiting out its budget. The shape is what `docker compose ps --format json`
+  // emits, because that is what parseStatus reads.
+  setStatusExec(async () => JSON.stringify([{ Service: 'zed', State: 'running', Health: 'healthy', ExitCode: 0, Publishers: [] }]))
+
+  // A registry product whose stack points at that compose file.
+  const registryDir = join(process.env.CLAUDE_DIR, 'registry')
+  mkdirSync(registryDir, { recursive: true })
+  writeFileSync(join(registryDir, 'products.yaml'),
+    'products:\n  zed:\n    repos: [alepolab/zed]\n    branches: {}\n    stack:\n      compose: alepo-dev-team-infra/zed\n      topology_default: 1node\n    tests: {}\n')
+  process.env.AGENT_REGISTRY_PATH = join(registryDir, 'products.yaml')
+
+  const wf = {
+    slug: 'stacked', name: 'Stacked',
+    steps: [{ id: 'reproduce', agentSlug: 'agent-repro', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  runner.setAgentCaller(async () => 'reproduced it')
+  const done = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, productKey: 'zed', initialPrompt: 'S-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+
+  assert.equal(done.steps[0].status, 'completed', `the step ran; it was ${done.steps[0].status} (${done.steps[0].error ?? 'no error'})`)
+  const ups = commands.filter(c => c.includes(' up'))
+  assert.ok(ups.length >= 2, `init and the services were started; commands were ${JSON.stringify(commands)}`)
+  assert.ok(ups[0].includes('--profile zed-init'), 'init first')
+  assert.ok(ups[ups.length - 1].includes('--profile zed-stack'), 'then the services')
+  assert.equal(done.stackStarted, 'zed', 'the run records that it started a stack, so teardown can find it after a restart')
+
+  const downs = commands.filter(c => / down/.test(c))
+  assert.equal(downs.length, 1, `the stack is taken down exactly once when the run settles; commands were ${JSON.stringify(commands)}`)
+  assert.ok(!/ -v|--volumes/.test(downs[0]), `teardown never removes volumes; command was "${downs[0]}"`)
+  assert.ok(done.stackStopped, 'and the run records that it was taken down')
+
+  // A FAILED run still tears down.
+  commands.length = 0
+  runner.setAgentCaller(async () => { throw new Error('the step blew up') })
+  const failed = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, productKey: 'zed', initialPrompt: 'S-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(failed.status, 'failed')
+  assert.ok(commands.some(c => / down/.test(c)),
+    `a failed run still takes its stack down; commands were ${JSON.stringify(commands)}`)
+
+  // A product with no stack registered says so rather than inventing a command.
+  commands.length = 0
+  const bare = {
+    slug: 'stacked-bare', name: 'Bare',
+    steps: [{ id: 'r', agentSlug: 'agent-repro', label: 'Reproduce', next: [], stack: 'up' }],
+  }
+  runner.setAgentCaller(async () => 'ok')
+  const noStack = await runner.waitForSettled(
+    (await runner.startRun({ workflow: bare, initialPrompt: 'S-3 no product', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(commands.length, 0, 'no docker command is invented for a run with no registered stack')
+  // Told to the AGENT, not just logged: the agent is the one that has to work
+  // without a stack, and a message it never sees changes nothing about what it
+  // does next.
+  assert.match(noStack.steps[0].input ?? '', /no product with a registered stack/i,
+    `the agent is told there is no stack; its input began "${(noStack.steps[0].input ?? '').slice(0, 120)}"`)
+  assert.match(noStack.steps[0].input ?? '', /do not try to start a stack yourself/i,
+    'and told not to invent one, which is the behaviour this feature replaces')
+
+  setStackExec(null)
+  setStatusExec(null)
+  delete process.env.ALEPO_INFRA_DIR
+  delete process.env.AGENT_REGISTRY_PATH
+}
+
+// -- a money-class run tells its agent what the bundle will demand ----------
+// The schema requires an adversarial report for money and protocol changes, and
+// nothing ever asked an agent for one - the requirement could not even fire
+// until classification started writing blast_radius. Being told at finalize is
+// too late: the work is a two-node rerun and a pattern search, which has to
+// happen while the step is running.
+//
+// The runner cannot write it. That is the point: it demands the work and
+// reports its absence, and never invents the verdict.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const project = join(process.env.CLAUDE_DIR, 'adv-project')
+  mkdirSync(project, { recursive: true })
+  const g = (args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' })
+  g(['init', '-q', '.']); g(['config', 'user.email', 't@e.com']); g(['config', 'user.name', 'T'])
+  writeFileSync(join(project, 'x.java'), 'class X {}\n'); g(['add', '-A']); g(['commit', '-qm', 'base'])
+
+  const wf = { slug: 'adv', name: 'Adv', steps: [{ id: 'verify', agentSlug: 'agent-verify', label: 'Verify', next: [] }] }
+
+  // The step proposes money, so the run is money-class from its first step on.
+  runner.setAgentCaller(async () => 'checked the tariff maths\nPIPELINE-CLASS: money')
+  const money = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'A-1', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  assert.equal(money.blastRadius, 'money', 'the run is money-class')
+
+  // A second visit is what carries the demand, so run a two-step workflow where
+  // the later step sees the class the earlier one established.
+  const twoStep = {
+    slug: 'adv2', name: 'Adv2',
+    steps: [
+      { id: 'classify', agentSlug: 'agent-classify', label: 'Classify', next: ['verify'] },
+      { id: 'verify', agentSlug: 'agent-verify', label: 'Verify', next: [] },
+    ],
+  }
+  runner.setAgentCaller(async (slug) => slug === 'agent-classify' ? 'PIPELINE-CLASS: money' : 'verified')
+  const done = await runner.waitForSettled(
+    (await runner.startRun({ workflow: twoStep, initialPrompt: 'A-2', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  const verify = done.steps.find(s => s.stepId === 'verify')
+  assert.match(verify.input ?? '', /adversarial/i,
+    `a money-class run tells the next step the bundle needs an adversarial report; its input began "${(verify.input ?? '').slice(0, 140)}"`)
+  assert.match(verify.input ?? '', /two_node_rerun/,
+    'and names the fields, so the agent knows what work is being asked for')
+  assert.match(verify.input ?? '', /mutation_score/)
+
+  // A docs-class run is never asked. A false demand teaches an agent to ignore
+  // the real ones.
+  runner.setAgentCaller(async (slug) => slug === 'agent-classify' ? 'PIPELINE-CLASS: docs' : 'verified')
+  const docs = await runner.waitForSettled(
+    (await runner.startRun({ workflow: twoStep, initialPrompt: 'A-3', watch: 'direct-invocation', autoRun: true, projectDir: project })).id,
+    TIMEOUT,
+  )
+  const docsVerify = docs.steps.find(s => s.stepId === 'verify')
+  assert.ok(!/adversarial/i.test(docsVerify.input ?? ''), 'a docs-class run is told nothing about adversarial reports')
+}
+
+// -- a step can declare a deploy, and prod cannot slip through -------------
+// deploy.sh is the infra repo's one deployment surface. A step declaring
+// `deploy` gets it driven for them; what a step must NOT be able to do is reach
+// a carrier environment because someone wrote a template without a gate.
+{
+  delete process.env.JIRA_POST_ENABLED
+  const { setDeployExec } = await import('../server/utils/deployStep.ts')
+  const infra = join(process.env.CLAUDE_DIR, 'deploy-infra')
+  mkdirSync(join(infra, 'deploy', 'ansible'), { recursive: true })
+  mkdirSync(join(infra, 'agent'), { recursive: true })
+  writeFileSync(join(infra, '.env'), 'X=1\n')
+  writeFileSync(join(infra, 'deploy', 'ansible', 'deploy.sh'), '#!/usr/bin/env bash\nVALID_ENVS="dev staging prod"\nVALID_STEPS="all setup deploy status"\n')
+  writeFileSync(join(infra, 'agent', 'stack-contract.json'), JSON.stringify({
+    contract_version: 1, products: {}, not_startable: {},
+    deploy: { entrypoint: 'deploy/ansible/deploy.sh', environments: ['dev', 'staging', 'prod'], steps: ['all', 'setup', 'deploy', 'status'] },
+  }, null, 2))
+  process.env.ALEPO_INFRA_DIR = infra
+
+  const commands = []
+  setDeployExec(async (cmd, args) => { commands.push(args.join(' ')); return 'ok' })
+
+  // 1. dev status: runs, and the agent is told what it found.
+  runner.setAgentCaller(async () => 'looked at dev')
+  const devWf = {
+    slug: 'dep-dev', name: 'Dep dev',
+    steps: [{ id: 'check', agentSlug: 'agent-check', label: 'Check dev', next: [], deploy: { env: 'dev', step: 'status' } }],
+  }
+  const dev = await runner.waitForSettled(
+    (await runner.startRun({ workflow: devWf, initialPrompt: 'D-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(dev.steps[0].status, 'completed', `the step ran; it was ${dev.steps[0].status} (${dev.steps[0].error ?? 'no error'})`)
+  assert.ok(commands.some(c => /--step status --env dev/.test(c)), `dev status ran; commands were ${JSON.stringify(commands)}`)
+  assert.match(dev.steps[0].input ?? '', /dev/, 'and the agent is told the outcome, not just the run log')
+
+  // 2. prod on a step with NO approval gate: refused, nothing executed.
+  commands.length = 0
+  const prodUngated = {
+    slug: 'dep-prod-ungated', name: 'Dep prod ungated',
+    steps: [{ id: 'ship', agentSlug: 'agent-check', label: 'Ship to prod', next: [], deploy: { env: 'prod', step: 'deploy' } }],
+  }
+  const ungated = await runner.waitForSettled(
+    (await runner.startRun({ workflow: prodUngated, initialPrompt: 'D-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(commands.length, 0,
+    `a prod deploy on an ungated step executes NOTHING; commands were ${JSON.stringify(commands)}`)
+  assert.match(ungated.steps[0].input ?? '', /approv/i,
+    'and the agent is told a gate is missing rather than left wondering why nothing happened')
+
+  setDeployExec(null)
+  delete process.env.ALEPO_INFRA_DIR
+}
+
+// -- a ticket outcome is never silently lost -------------------------------
+// publish() saves the terminal status BEFORE it posts the comment
+// (workflowRunner.ts:358 then :392). A process death in between leaves a run
+// whose record says `completed` and whose ticket was never told - and because
+// a settled run is never re-published, nothing ever retries it. Silence on a
+// carrier ticket is worse than a duplicate: a duplicate is noise a person
+// reconciles, silence is a ticket nobody knows has finished.
+//
+// So the INTENT to notify goes on the record before the status does, and is
+// only cleared once the comment is really on the ticket.
+{
+  process.env.JIRA_POST_ENABLED = '1'
+  process.env.JIRA_BASE_URL = 'https://example.atlassian.net'
+  process.env.JIRA_EMAIL = 'bot@example.com'
+  process.env.JIRA_API_TOKEN = 'bot-token'
+
+  // The post fails, standing in for the process dying before it happened.
+  let attempts = 0
+  runner.setTicketPoster(async () => { attempts += 1; throw new Error('jira unreachable') })
+  runner.setAgentCaller(async () => 'did the work')
+
+  const wf = {
+    slug: 'notify-lost', name: 'Notify lost',
+    steps: [{ id: 'work', agentSlug: 'agent-check', label: 'Work', next: [] }],
+  }
+  const started = await runner.startRun({ workflow: wf, initialPrompt: 'N-1', watch: 'direct-invocation', autoRun: true, ticketKey: 'CSUP-900' })
+  const settled = await runner.waitForSettled(started.id, TIMEOUT)
+  assert.equal(settled.status, 'completed', 'a Jira failure must never change the run outcome')
+  assert.equal(attempts, 1, 'it tried once')
+  assert.equal(settled.ticketNotifyPending, true,
+    'the unfinished notification stays on the record, or a restart has no way to know it is owed')
+
+  // The boot sweep completes what the dead process could not.
+  const posted = []
+  runner.setTicketPoster(async (_watch, key) => { posted.push(key); return { posted: true, comment: 'c', artifactPath: 'p' } })
+  const swept = await runner.completePendingTicketNotifications()
+  // Scoped to this run: the sweep is global by design and earlier runs in this
+  // shared directory legitimately owe comments of their own.
+  assert.ok(posted.includes('CSUP-900'), `the owed comment is sent on the next boot; posted ${JSON.stringify(posted)}`)
+  assert.ok(swept.notified.includes(started.id), 'and the run is reported as notified')
+
+  const after = await store.getRun(started.id)
+  assert.equal(after.ticketNotifyPending, false, 'and the intent is cleared, so a second boot does not send it again')
+
+  // A second sweep must be quiet: nothing is owed.
+  posted.length = 0
+  await runner.completePendingTicketNotifications()
+  assert.ok(!posted.includes('CSUP-900'),
+    `a second boot must not send it again; posted ${JSON.stringify(posted)}`)
+
+  // A run whose post SUCCEEDS owes nothing afterwards: publish clears the
+  // intent itself, so the boot sweep has no work to do for it.
+  const straight = []
+  runner.setTicketPoster(async (_watch, key) => { straight.push(key); return { posted: true, comment: 'c', artifactPath: 'p' } })
+  const clean = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'N-3', watch: 'direct-invocation', autoRun: true, ticketKey: 'CSUP-901' })).id,
+    TIMEOUT,
+  )
+  assert.deepEqual(straight, ['CSUP-901'], 'the comment went out with the run')
+  assert.equal((await store.getRun(clean.id)).ticketNotifyPending, false,
+    'and publish cleared the intent, so no later boot re-sends it')
+
+  // A run that never had a ticket is never swept.
+  runner.setTicketPoster(async () => ({ posted: true, comment: 'c', artifactPath: 'p' }))
+  const noTicket = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'N-2', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.notEqual(noTicket.ticketNotifyPending, true, 'a run with no ticket owes no notification')
+
+  runner.setTicketPoster(null)
+  delete process.env.JIRA_POST_ENABLED
+}
+
+// -- a decision a person made survives the process that took it -----------
+// rehydrate built `approved: new Set()` and nothing repopulated it from
+// run.decisions (workflowRunner.ts:2144). A gate answered before a restart was
+// forgotten, so the resumed run raised the SAME gate at the SAME step and
+// asked the same person the same question again.
+{
+  const calls = []
+  runner.setAgentCaller(async (slug) => { calls.push(slug); return 'work' })
+  const wf = {
+    slug: 'gate-survives', name: 'Gate survives',
+    steps: [
+      { id: 'ask', agentSlug: 'agent-a', label: 'Ask', next: [], approval: true },
+    ],
+  }
+  // Seeded on disk: rehydrate rebuilds the run from the workflow file, which
+  // is exactly what a restarted process has to work from.
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'gate-survives.json'),
+    JSON.stringify({ ...wf, description: '', createdAt: new Date().toISOString() }))
+  const started = await runner.startRun({ workflow: wf, initialPrompt: 'G-1', watch: 'direct-invocation', autoRun: true })
+  for (let i = 0; i < 60 && !(await store.getRun(started.id)).question; i++) await new Promise(r => setTimeout(r, 50))
+  assert.ok((await store.getRun(started.id)).question, 'the gate was raised')
+
+  // The route records the decision on the record before the runner resumes;
+  // that record is all a restart has. Written here the way continue.post.ts
+  // writes it.
+  {
+    const rec = await store.getRun(started.id)
+    const decision = recordDecision(rec, 'approved', 'sandeep')
+    assert.ok(decision, 'a gate that was asked yields a decision')
+    await store.saveRun(rec)
+  }
+
+  // Now the process dies with the gate answered but the step not yet run.
+  {
+    const path = join(process.env.CLAUDE_DIR, 'workflow-runs', `${started.id}.json`)
+    const rec = JSON.parse(readFileSync(path, 'utf8'))
+    rec.status = 'running'; rec.pid = 2 ** 22 + 11
+    rec.currentStepIds = ['ask']
+    rec.steps.find(s => s.stepId === 'ask').status = 'running'
+    writeFileSync(path, JSON.stringify(rec))
+    runner._dropLive(started.id)
+  }
+  assert.equal((await store.getRun(started.id)).status, 'interrupted', 'the dead process reads as interrupted')
+
+  calls.length = 0
+  const resumed = await runner.waitForSettled((await runner.continueRun(started.id)).id, TIMEOUT)
+  assert.equal(resumed.question, undefined,
+    'the resumed run must NOT re-ask a gate this person already answered')
+  assert.ok(calls.includes('agent-a'), `the approved step actually ran; calls were ${JSON.stringify(calls)}`)
+  assert.equal(resumed.status, 'completed', `and the run finished; it was ${resumed.status}`)
+
+  // A decision is not permission unless it APPROVED. A gate sent back for
+  // rework must be asked again after a restart - counting any decision as an
+  // approval would let a rejected deploy gate through, which is the one
+  // mistake this set must never make.
+  const sentBack = await runner.startRun({ workflow: wf, initialPrompt: 'G-2', watch: 'direct-invocation', autoRun: true })
+  for (let i = 0; i < 60 && !(await store.getRun(sentBack.id)).question; i++) await new Promise(r => setTimeout(r, 50))
+  {
+    const rec = await store.getRun(sentBack.id)
+    assert.ok(recordDecision(rec, 'sent-back', 'sandeep', 'not like that'), 'the gate was answered, with a refusal')
+    await store.saveRun(rec)
+    const path = join(process.env.CLAUDE_DIR, 'workflow-runs', `${sentBack.id}.json`)
+    const raw = JSON.parse(readFileSync(path, 'utf8'))
+    raw.status = 'running'; raw.pid = 2 ** 22 + 13
+    raw.currentStepIds = ['ask']
+    raw.steps.find(s => s.stepId === 'ask').status = 'running'
+    raw.question = undefined
+    writeFileSync(path, JSON.stringify(raw))
+    runner._dropLive(sentBack.id)
+  }
+  const afterRefusal = await runner.continueRun(sentBack.id)
+  for (let i = 0; i < 60 && !(await store.getRun(sentBack.id)).question; i++) await new Promise(r => setTimeout(r, 50))
+  assert.ok((await store.getRun(sentBack.id)).question,
+    'a gate that was SENT BACK is asked again after a restart; only an approval carries over')
+  await runner.stopRun(sentBack.id).catch(() => {})
+}
+
+// -- the test-unlock capability does not outlive the run that earned it ---
+// workflowRunner.ts:771 writes .agent/test-unlock.json into the checkout and
+// nothing ever removed it, so every later agent in that checkout inherited
+// permission to edit tests - a capability granted once and held forever.
+{
+  const checkout = join(process.env.CLAUDE_DIR, 'unlock-checkout')
+  mkdirSync(join(checkout, '.agent'), { recursive: true })
+  writeFileSync(join(checkout, '.agent', 'test-unlock.json'), JSON.stringify({ run: 'someone-elses-run' }))
+
+  runner.setAgentCaller(async () => 'work')
+  const wf = {
+    slug: 'unlock-clean', name: 'Unlock clean',
+    steps: [{ id: 'w', agentSlug: 'agent-check', label: 'Writes tests', next: [], testsUnlocked: true }],
+  }
+  const run = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'U-1', watch: 'direct-invocation', autoRun: true, projectDir: checkout })).id,
+    TIMEOUT,
+  )
+  assert.ok(['completed', 'failed'].includes(run.status), `the run settled: ${run.status}`)
+  assert.equal(existsSync(join(checkout, '.agent', 'test-unlock.json')), false,
+    'the unlock is removed when the run that granted it finishes, or the next agent in this checkout inherits it')
+}
+
+// -- a step is told whether it owns the tests, before it writes one -------
+// Run a3cb9d37 died here. Exactly one step of the CSUP workflow owns the tests
+// ("Reproduce & Failing Test", testsUnlocked); "Implement Client Change" does
+// not. Its agent wrote a new spec file anyway, the plugin's test lock fired
+// correctly - the monitor confirmed it was not a false positive - and the
+// lane's 5 files / 566 insertions were left staged and uncommitted while the
+// run burned another twenty minutes before a monitor aborted it.
+//
+// The lock was enforced but never announced. A rule an agent is not told is a
+// rule it discovers by being stopped halfway through committing.
+{
+  const inputs = {}
+  runner.setAgentCaller(async (slug, input) => { inputs[slug] = input; return 'done' })
+
+  const wf = {
+    slug: 'tests-owned', name: 'Tests owned',
+    steps: [
+      { id: 'red', agentSlug: 'agent-a', label: 'Reproduce & Failing Test', next: ['impl'], testsUnlocked: true },
+      { id: 'impl', agentSlug: 'agent-b', label: 'Implement Client Change', next: [] },
+    ],
+  }
+  const run = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'T-1', watch: 'direct-invocation', autoRun: true })).id,
+    TIMEOUT,
+  )
+  assert.equal(run.status, 'completed', `the run finished: ${run.status}`)
+
+  // The step that does not own the tests is told so, and told which step does,
+  // so it can report a missing case instead of writing one and being stopped.
+  assert.match(inputs['agent-b'] ?? '', /TESTS:/,
+    'a step that does not own the tests gets the rule in its input')
+  assert.match(inputs['agent-b'] ?? '', /Reproduce & Failing Test/,
+    'naming the step that does own them')
+  assert.match(inputs['agent-b'] ?? '', /do not (add|write)/i,
+    'and saying plainly not to write one')
+
+  // The step that DOES own them is not told it may not write tests - a false
+  // prohibition teaches agents to ignore the real ones.
+  assert.ok(!/Do not add or edit any test file/i.test(inputs['agent-a'] ?? ''),
+    `the owning step is never forbidden its own job; it got ${JSON.stringify((inputs['agent-a'] ?? '').slice(0, 300))}`)
+  assert.match(inputs['agent-a'] ?? '', /owns the tests for this run: you may add/,
+    'it is told the opposite: that the unlock is written and the tests are its job')
+}
+
+// -- scoping the unlock to a lane does not weaken the lock inside one -----
+// The other half of the a3cb9d37 fix. A lane's unlock is no longer copied
+// anywhere a sibling can see it - but the lock itself must still stop a step
+// that edits source and writes tests together in its OWN lane, because a
+// modified test is never a pass.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'lock-bites-'))
+  const g = (args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim()
+  g(['init', '-q', '-b', 'develop'])
+  g(['config', 'user.email', 't@example.invalid']); g(['config', 'user.name', 'T'])
+  writeFileSync(join(dir, 'app.ts'), 'export const a = 1\n')
+  g(['add', '.']); g(['commit', '-q', '-m', 'init'])
+
+  // Writes where the RUNNER put it, not where the fixture was created: the
+  // step may be given a worktree, and a test that edits the original clone
+  // proves nothing about what the lock sees.
+  runner.setAgentCaller(async (_slug, _input, workdir) => {
+    const at = workdir ?? dir
+    // What the client lane did: source AND a new spec, in a step that does not
+    // own the tests.
+    writeFileSync(join(at, 'app.ts'), 'export const a = 2\n')
+    writeFileSync(join(at, 'app.spec.ts'), 'it("passes", () => {})\n')
+    execFileSync('git', ['add', '.'], { cwd: at })
+    execFileSync('git', ['-c', 'user.email=t@example.invalid', '-c', 'user.name=T', 'commit', '-q', '-m', 'fix and test'], { cwd: at })
+    return 'did the work'
+  })
+
+  const wf = {
+    slug: 'lock-bites', name: 'Lock bites',
+    steps: [{ id: 'impl', agentSlug: 'agent-check', label: 'Implement', next: [] }],
+  }
+  const run = await runner.waitForSettled(
+    (await runner.startRun({ workflow: wf, initialPrompt: 'K-1', watch: 'direct-invocation', autoRun: true, projectDir: dir })).id,
+    TIMEOUT,
+  )
+  const step = run.steps.find(s => s.stepId === 'impl')
+  assert.equal(step.status, 'failed',
+    `a step that writes a test it does not own is stopped; it was ${step.status}`)
+  assert.match(step.error ?? '', /app\.spec\.ts/, 'and the test file it touched is named')
+  assert.match(step.error ?? '', /does not own/, 'with the reason')
+
+  rmSync(dir, { recursive: true, force: true })
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
