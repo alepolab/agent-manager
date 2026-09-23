@@ -79,6 +79,22 @@ services:
       #     -v agent-manager_workflow-records:/new alpine \
       #     sh -c 'cp -a /old/workflow-runs/. /new/ 2>/dev/null || true'
       - workflow-records:/root/.claude/workflow-runs
+      # The SDK's own session transcripts — the third thing on this list to sit
+      # on the writable layer and vanish without an error.
+      #
+      # The SDK has never read CLAUDE_DIR (that is this app's variable): it
+      # resolves CLAUDE_CONFIG_DIR, else $HOME/.claude, and HOME here is
+      # /home/bun. So everything /cli shows, everything sdkSessionStorage.ts
+      # reads, and every transcript a resumed step needs to continue from was
+      # being written to an unmounted path and destroyed by the next
+      # `docker compose build`. A 142-message agent session was lost to exactly
+      # that while verifying a UI change against it.
+      #
+      # Its own volume rather than CLAUDE_CONFIG_DIR=/root/.claude: pointing the
+      # SDK at this app's config directory would also hand it the baked agents,
+      # skills and settings.json to write back into, which is a much larger
+      # change than making transcripts survive a rebuild.
+      - sdk-sessions:/home/bun/.claude
     environment:
       - CLAUDE_DIR=/root/.claude
       - AGENT_RUNS_DIR=/root/.agent-manager/workflow-runs
@@ -130,3 +146,4 @@ volumes:
   claude-config:
   agent-runs:
   workflow-records:
+  sdk-sessions:
