@@ -2,6 +2,7 @@
 const { promoting, promote } = usePromote()
 import type { Command, CommandFrontmatter } from '~/types'
 import InstructionEditor from '~/components/studio/InstructionEditor.vue'
+import { errorToast } from '~/utils/errorToast'
 
 const route = useRoute()
 const router = useRouter()
@@ -10,6 +11,7 @@ const { fetchOne, update, remove } = useCommands()
 const { reveal } = useReveal()
 const { localDesktop } = useClaudeDir()
 const { prefillSkill } = useChat()
+const { can } = useUser()
 
 const slug = route.params.slug as string
 const command = ref<Command | null>(null)
@@ -30,8 +32,10 @@ function toolsToText(tools: CommandFrontmatter['allowed-tools']): string {
 
 const { hasDraft, draftAge, loadDraft, clearDraft, scheduleSave } = useDraftRecovery(`command:${slug}`)
 
+// Arm the draft only for someone who could save it; recovering one stays open
+// so a role change under a person does not eat their work.
 watch([frontmatter, body], () => {
-  if (command.value && isDirty.value) scheduleSave(frontmatter.value, body.value)
+  if (command.value && isDirty.value && can('configure')) scheduleSave(frontmatter.value, body.value)
 }, { deep: true })
 
 function restoreDraft() {
@@ -112,7 +116,7 @@ async function save() {
     }
   } catch (e: any) {
     if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
-    else toast.add({ title: 'Failed to save', description: e.data?.message || e.message, color: 'error' })
+    else toast.add(errorToast('Failed to save command', e))
   } finally {
     saving.value = false
   }
@@ -195,7 +199,9 @@ useUnsavedChanges(isDirty)
           title="Open in Finder"
           @click="reveal(command.filePath)"
         />
+        <ReadOnlyBadge v-if="!can('configure')" reason="changing a command" />
         <UButton
+          v-if="can('configure')"
           label="Promote to team"
           icon="i-lucide-git-pull-request"
           size="sm"
@@ -207,6 +213,7 @@ useUnsavedChanges(isDirty)
           @click="promote('command', slug)"
         />
         <UButton
+          v-if="can('configure')"
           label="Delete"
           icon="i-lucide-trash-2"
           size="sm"
@@ -215,6 +222,7 @@ useUnsavedChanges(isDirty)
           @click="() => { showDeleteConfirm = true }"
         />
         <UButton 
+          v-if="can('configure')"
           label="Save" 
           icon="i-lucide-save" 
           size="sm" 
@@ -231,18 +239,7 @@ useUnsavedChanges(isDirty)
       <div class="flex flex-col space-y-6">
         <!-- Draft recovery banner -->
         <ClientOnly>
-          <div
-            v-if="hasDraft"
-            class="rounded-xl px-4 py-3 flex items-center gap-3"
-            style="background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.12);"
-          >
-            <UIcon name="i-lucide-archive-restore" class="size-4 shrink-0" style="color: var(--info, #3b82f6);" />
-            <span class="t-small flex-1" style="color: var(--text-secondary);">
-              You have an unsaved draft from {{ draftAge }}.
-            </span>
-            <button class="t-small font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
-            <button class="t-small px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
-          </div>
+          <DraftRecoveryBanner v-if="hasDraft" :age="draftAge" @restore="restoreDraft" @dismiss="clearDraft" />
         </ClientOnly>
         <ExternalChangeBanner v-if="externalPending" @reload="reloadExternal" @keep="keepMine" />
 

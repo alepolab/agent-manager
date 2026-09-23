@@ -1055,6 +1055,14 @@ optgroup {
   color: var(--success);
 }
 
+/* A setting an environment variable is forcing: nobody can change it here,
+   operators included, so it reads as a fact about the instance rather than a
+   field that failed. */
+.badge-warning {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--warning);
+}
+
 /* ============================================
    Utility Classes
    ============================================ */

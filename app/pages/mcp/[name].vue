@@ -7,6 +7,7 @@ const router = useRouter()
 const { fetchServer, addServer, removeServer, fetchCapabilities } = useMCP()
 const { clearChat: clearStudioChat, toolCalls, isStreaming: studioStreaming } = useStudioChat()
 const toast = useToast()
+const { can } = useUser()
 
 const name = route.params.name as string
 const scope = route.query.scope as 'global' | 'project'
@@ -187,7 +188,9 @@ useUnsavedChanges(isDirty)
         <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full" style="background: rgba(229, 169, 62, 0.1); color: var(--accent);">Unsaved</span>
       </div>
       <div class="flex items-center gap-2">
+        <ReadOnlyBadge v-if="!can('configure')" reason="changing an MCP server" />
         <UButton
+          v-if="can('configure')"
           :label="saving ? 'Saving...' : 'Save'"
           icon="i-lucide-save"
           size="sm"
@@ -198,6 +201,7 @@ useUnsavedChanges(isDirty)
           @click="save"
         />
         <UButton
+          v-if="can('configure')"
           label="Delete"
           icon="i-lucide-trash-2"
           size="sm"

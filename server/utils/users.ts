@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { jiraBaseUrl as instanceJiraBaseUrl } from './jiraCredentials.ts'
@@ -26,6 +26,11 @@ export interface UserProfile {
   jiraToken?: string
   /** Encrypted; refreshed on every login. */
   githubToken?: string
+  /** Show the unfinished pages - Graph, Explore, Output styles - in this
+   *  person's sidebar. Per-developer rather than instance-wide: it is a
+   *  preference about what you want to look at, and the instance-wide switch
+   *  it replaced was only reachable from a page most roles could not open. */
+  labs?: boolean
   updatedAt: number
 }
 
@@ -60,6 +65,41 @@ export async function getProfile(login: string): Promise<UserProfile | null> {
   const p = profilePath(login)
   if (!existsSync(p)) return null
   try { return JSON.parse(await readFile(p, 'utf8')) as UserProfile } catch { return null }
+}
+
+/** A person this instance has seen, for the roles roster. No credentials: the
+ *  roster answers "who is here", never "what have they stored". */
+export interface ProfileSummary {
+  login: string
+  name?: string
+  avatar?: string
+  /** `updatedAt` of their profile - written on every sign-in. */
+  lastSeenAt: number
+}
+
+/**
+ * Everyone who has ever signed in. `saveProfile` runs on every OAuth callback,
+ * so one file per login is the closest thing this instance has to a roster.
+ *
+ * Same never-throw contract as `listRoles()`: a missing directory reads back as
+ * "nobody has signed in yet", and one unreadable file is skipped rather than
+ * failing the whole list. The roles page must render even when the users
+ * directory is half-written or absent - a broken roster that hides who holds
+ * what is worse than a short one.
+ */
+export async function listProfiles(): Promise<ProfileSummary[]> {
+  const dir = usersDir()
+  if (!existsSync(dir)) return []
+  try {
+    const files = (await readdir(dir)).filter(f => f.endsWith('.json'))
+    const read = await Promise.all(files.map(async (f): Promise<ProfileSummary | null> => {
+      try {
+        const p = JSON.parse(await readFile(join(dir, f), 'utf8')) as UserProfile
+        return p.login ? { login: p.login, name: p.name, avatar: p.avatar, lastSeenAt: p.updatedAt ?? 0 } : null
+      } catch { return null }
+    }))
+    return read.filter((p): p is ProfileSummary => p !== null)
+  } catch { return [] }
 }
 
 export function toPublic(p: UserProfile): PublicProfile {

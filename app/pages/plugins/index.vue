@@ -2,6 +2,7 @@
 const { plugins, loading, error, fetchAll, toggleEnabled } = usePlugins()
 const { fetchAvailable } = useMarketplace()
 const toast = useToast()
+const { can } = useUser()
 
 const searchQuery = ref('')
 const showAddPluginModal = ref(false)
@@ -57,7 +58,9 @@ function onPluginInstalled() {
         <span class="font-mono t-small text-meta">{{ plugins.length }}</span>
       </template>
       <template #right>
+        <ReadOnlyBadge v-if="!can('configure')" reason="adding a plugin" />
         <UButton
+          v-if="can('configure')"
           label="Add Plugin"
           icon="i-lucide-plus"
           size="sm"
@@ -111,7 +114,7 @@ function onPluginInstalled() {
               class="flex items-center gap-3 px-3 py-2.5 rounded-lg group hover-row"
             >
               <!-- Toggle -->
-              <label class="field-toggle shrink-0" @click.stop>
+              <label v-if="can('configure')" class="field-toggle shrink-0" @click.stop>
                 <input
                   type="checkbox"
                   :checked="plugin.enabled"

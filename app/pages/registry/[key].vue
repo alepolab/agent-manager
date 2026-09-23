@@ -18,6 +18,7 @@ import { OWNER_LABELS } from '~~/shared/registry/rules'
 import type { RecipeRead } from '~/composables/useProducts'
 
 const route = useRoute()
+const { can } = useUser()
 const router = useRouter()
 const toast = useToast()
 const { registry, load, create, update, remove, byKey, readRecipe, saveRecipe, removeRecipe } = useProducts()
@@ -264,8 +265,9 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
     <PageHeader :title="isNew ? 'New product' : key">
       <template #right>
         <UButton label="Back" icon="i-lucide-arrow-left" size="sm" variant="ghost" color="neutral" to="/registry" />
-        <UButton v-if="!isNew" label="Remove" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" @click="() => { showDelete = true }" />
-        <UButton label="Save" icon="i-lucide-save" size="sm" :loading="saving" :disabled="!canSave" :title="unstated.length ? `Needs ${unstated.join(', ')}` : undefined" @click="save" />
+        <ReadOnlyBadge v-if="!can('configure')" reason="editing a product" />
+        <UButton v-if="!isNew && can('configure')" label="Remove" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" @click="() => { showDelete = true }" />
+        <UButton v-if="can('configure')" label="Save" icon="i-lucide-save" size="sm" :loading="saving" :disabled="!canSave" :title="unstated.length ? `Needs ${unstated.join(', ')}` : undefined" @click="save" />
       </template>
     </PageHeader>
 
@@ -397,12 +399,13 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
         <div class="flex items-center justify-between gap-3">
           <h3 class="text-section-title mb-0">Recipe</h3>
           <div class="flex items-center gap-2">
+            <ReadOnlyBadge v-if="!can('configure')" reason="editing this recipe" />
             <UButton
-              v-if="recipe && recipe.source === 'local'" label="Revert to the shipped copy" size="xs" variant="ghost" color="neutral"
+              v-if="recipe && recipe.source === 'local' && can('configure')" label="Revert to the shipped copy" size="xs" variant="ghost" color="neutral"
               @click="() => { showRecipeRevert = true }"
             />
             <UButton
-              v-if="recipeOpen" label="Save recipe" icon="i-lucide-save" size="xs"
+              v-if="recipeOpen && can('configure')" label="Save recipe" icon="i-lucide-save" size="xs"
               :loading="recipeSaving" :disabled="!recipeDirty || recipeSaving" @click="persistRecipe"
             />
           </div>
@@ -445,7 +448,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
             here and not for the team. Revert puts the {{ recipe.source }} copy back.
           </div>
 
-          <div v-if="!recipeOpen" class="flex items-center gap-3">
+          <div v-if="!recipeOpen && can('configure')" class="flex items-center gap-3">
             <UButton
               label="Write a recipe" icon="i-lucide-file-plus" size="sm" variant="soft"
               @click="() => { recipeDraft = recipeSkeleton(); recipeStarted = true }"
@@ -454,7 +457,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
           </div>
 
           <textarea
-            v-else v-model="recipeDraft" rows="18" spellcheck="false"
+            v-else v-model="recipeDraft" rows="18" spellcheck="false" :readonly="!can('configure')"
             class="field-input font-mono text-xs" style="line-height: 1.55;"
             :placeholder="`# ${key}`"
           />

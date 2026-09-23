@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { skills, loading, error, fetchAll: fetchSkills } = useSkills()
+const { can } = useUser()
 const router = useRouter()
 const { workingDir } = useWorkingDir()
 
@@ -31,8 +32,9 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
         <span class="font-mono t-small text-meta">{{ skills.length }}</span>
       </template>
       <template #right>
-        <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
-        <UButton label="New Skill" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
+        <ReadOnlyBadge v-if="!can('configure')" reason="adding a skill" />
+        <UButton v-if="can('configure')" label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
+        <UButton v-if="can('configure')" label="New Skill" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 

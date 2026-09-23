@@ -23,6 +23,11 @@ const props = defineProps<{
    *  yet" and would accuse a healthy schedule during the first paint. */
   workflowMissing?: boolean
   firing?: boolean
+  /** Whether this viewer may change the schedule. Required, and decided by the
+   *  parent: the card is presentational and has no business reading a role,
+   *  and a permission prop that defaults to "allowed" is the bug this exists
+   *  to close. */
+  canEdit: boolean
 }>()
 
 const emit = defineEmits<{
@@ -107,7 +112,7 @@ const directory = computed(() =>
       </div>
     </div>
 
-    <div class="flex items-center gap-3 shrink-0">
+    <div v-if="props.canEdit" class="flex items-center gap-3 shrink-0">
       <UButton
         label="Run now"
         icon="i-lucide-play"

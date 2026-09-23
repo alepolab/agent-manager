@@ -46,6 +46,7 @@ async function onPauseAll() {
   finally { pausingAll.value = false }
 }
 const toast = useToast()
+const { can } = useUser()
 
 const expanded = ref<Record<string, boolean>>({})
 const showCreateModal = ref(false)
@@ -285,8 +286,9 @@ function relativeTime(ms: number): string {
         <span class="t-small text-meta">{{ watches.length }}</span>
       </template>
       <template #right>
+        <ReadOnlyBadge v-if="!can('configure')" reason="managing watches" />
         <UButton
-          v-if="enabledCount > 0"
+          v-if="enabledCount > 0 && can('configure')"
           :label="enabledCount === 1 ? 'Pause watch' : `Pause all (${enabledCount})`"
           icon="i-lucide-pause"
           color="warning"
@@ -296,7 +298,7 @@ function relativeTime(ms: number): string {
           title="Disable every enabled watch. Nothing further is dispatched until one is turned back on."
           @click="onPauseAll"
         />
-        <UButton label="New Watch" icon="i-lucide-plus" size="sm" @click="openCreate" />
+        <UButton v-if="can('configure')" label="New Watch" icon="i-lucide-plus" size="sm" @click="openCreate" />
       </template>
     </PageHeader>
 
@@ -363,7 +365,7 @@ function relativeTime(ms: number): string {
               </div>
             </button>
 
-            <div class="flex items-center gap-3 shrink-0">
+            <div v-if="can('configure')" class="flex items-center gap-3 shrink-0">
               <UButton
                 label="Poll now"
                 icon="i-lucide-refresh-cw"
@@ -425,7 +427,7 @@ function relativeTime(ms: number): string {
                   <span v-if="ticket.lastRunId" class="t-small font-mono text-meta">run {{ ticket.lastRunId }}</span>
                   <span class="t-small text-meta ml-auto">{{ relativeTime(ticket.updatedAt) }}</span>
                   <UButton
-                    v-if="ticket.disposition === 'escalated'"
+                    v-if="ticket.disposition === 'escalated' && can('configure')"
                     label="Clear escalation"
                     size="xs"
                     color="error"

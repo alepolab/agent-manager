@@ -14,17 +14,12 @@ import { oversightFor } from '~~/shared/utils/oversight'
  * shared/types/role.ts. One map, in one place, or they disagree — which they
  * already did.
  */
-const { me, can, role, viewingAs, viewAs } = useUser()
+const { me, can, role } = useUser()
 
 // A manager's only question — where is the pipeline stuck, how often does work
 // come back, what does it cost — is answered by /board with real figures. This
 // page was a weaker copy of it for them: no verbs, no gates they can answer.
 watch(role, (r) => { if (r === 'manager') navigateTo('/board') }, { immediate: true })
-const switching = ref(false)
-async function lookAs(next: string | null) {
-  switching.value = true
-  try { await viewAs(next as any) } finally { switching.value = false }
-}
 const { agents, fetchAll: fetchAgents } = useAgents()
 const { commands, fetchAll: fetchCommands } = useCommands()
 const { skills, fetchAll: fetchSkills } = useSkills()
@@ -299,17 +294,6 @@ const minedEmpty = computed(() => (role.value === 'qa'
          matters more. -->
     <div class="page flex flex-col gap-6">
       <WelcomeOnboarding v-if="loaded && !hasContent" @created="(agent) => navigateTo(`/agents/${agent.slug}`)" />
-
-      <!-- Only while impersonating. A console with controls silently missing is
-           indistinguishable from a broken one, so that state earns a banner —
-           but the rest of the time this row spent the most valuable line on the
-           page telling people their own job title, every load, forever. The
-           "view as" switcher is an operator's occasional tool and belongs with
-           the other role settings, not above the queue. -->
-      <div v-if="viewingAs" class="flex flex-wrap items-center gap-2 t-small rounded-lg px-3 py-2" style="background: var(--accent-muted); border: 1px solid var(--accent);">
-        <span style="color: var(--text-primary);">You are seeing this as a <span class="font-mono">{{ role }}</span>. Controls you normally have are hidden.</span>
-        <button class="ml-auto underline focus-ring" :disabled="switching" @click="lookAs(null)">Back to your own view</button>
-      </div>
 
       <form v-if="can('startRun')" class="rounded-xl p-4 flex flex-wrap items-end gap-3" :class="attention.length || escalated.length ? 'order-2' : 'order-1'" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
         <div class="flex-1 min-w-[16rem]">

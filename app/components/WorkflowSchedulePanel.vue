@@ -22,6 +22,8 @@ const props = defineProps<{
   parametersDirty: boolean
 }>()
 
+const { can } = useUser()
+
 const { loading, error, firing, setEnabled, fire, remove, forWorkflow } = useSchedules()
 const toast = useToast()
 
@@ -156,6 +158,7 @@ async function onDelete(schedule: ScheduleRow) {
         :key="schedule.id"
         :schedule="schedule"
         :firing="firing[schedule.id]"
+        :can-edit="can('configure')"
         @fire="onFire(schedule)"
         @edit="openEdit(schedule)"
         @delete="onDelete(schedule)"

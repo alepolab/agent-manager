@@ -10,7 +10,7 @@ export interface Me {
   realRole: Role
   can: Capabilities
   authDisabled: boolean
-  profile: { login: string, jiraEmail?: string, hasJiraToken: boolean, hasGithubToken: boolean, updatedAt: number }
+  profile: { login: string, jiraEmail?: string, hasJiraToken: boolean, hasGithubToken: boolean, labs?: boolean, updatedAt: number }
 }
 
 /** The signed-in developer, fetched once per app load and shared. */

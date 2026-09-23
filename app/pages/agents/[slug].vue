@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const { promoting, promote } = usePromote()
 import type { AgentFrontmatter, AgentSkill } from '~/types'
+import { errorToast } from '~/utils/errorToast'
 
 const route = useRoute()
 const router = useRouter()
@@ -9,6 +10,7 @@ const slug = route.params.slug as string
 const queryWorkingDir = route.query.workingDir as string | undefined
 
 const { fetchOne, remove } = useAgents()
+const { can } = useUser()
 const { clearChat: clearStudioChat, toolCalls, isStreaming: studioStreaming } = useStudioChat()
 const { reveal } = useReveal()
 const { localDesktop } = useClaudeDir()
@@ -34,8 +36,11 @@ const isDirty = computed(() => {
 
 const isDraft = computed(() => body.value !== savedBody.value)
 
+// Only arm the draft when this person could actually save it. Recovering one is
+// left alone on purpose: someone whose role changed under them, or an operator
+// looking at the app as a developer, still needs to get their work back.
 watch([frontmatter, body], () => {
-  if (!loading.value && isDirty.value) scheduleSave(frontmatter.value, body.value)
+  if (!loading.value && isDirty.value && can('configure')) scheduleSave(frontmatter.value, body.value)
 }, { deep: true })
 
 function restoreDraft() {
@@ -137,11 +142,7 @@ async function save() {
   } catch (e: any) {
     console.error('Failed to save:', e)
     if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
-    else toast.add({
-      title: 'Failed to save agent',
-      description: e.data?.message || e.message,
-      color: 'error'
-    })
+    else toast.add(errorToast('Failed to save agent', e))
   } finally {
     saving.value = false
   }
@@ -202,7 +203,9 @@ useUnsavedChanges(isDirty)
           title="Open in Finder"
           @click="reveal(filePath)"
         />
+        <ReadOnlyBadge v-if="!can('configure')" reason="changing an agent" />
         <UButton
+          v-if="can('configure')"
           label="Promote to team"
           icon="i-lucide-git-pull-request"
           size="sm"
@@ -214,6 +217,7 @@ useUnsavedChanges(isDirty)
           @click="promote('agent', slug)"
         />
         <UButton
+          v-if="can('configure')"
           label="Delete"
           icon="i-lucide-trash-2"
           size="sm"
@@ -223,6 +227,7 @@ useUnsavedChanges(isDirty)
           @click="() => { showDeleteConfirm = true }"
         />
         <UButton
+          v-if="can('configure')"
           :label="saving ? 'Saving...' : 'Save'"
           icon="i-lucide-save"
           size="sm"
@@ -250,18 +255,7 @@ useUnsavedChanges(isDirty)
       >
         <!-- Draft recovery banner -->
         <ClientOnly>
-          <div
-            v-if="hasDraft"
-            class="m-6 mb-0 rounded-xl px-4 py-3 flex items-center gap-3"
-            style="background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.12);"
-          >
-            <UIcon name="i-lucide-archive-restore" class="size-4 shrink-0" style="color: var(--info, #3b82f6);" />
-            <span class="t-small flex-1" style="color: var(--text-secondary);">
-              You have an unsaved draft from {{ draftAge }}.
-            </span>
-            <button class="t-small font-medium px-2 py-1 rounded hover-bg" style="color: var(--info, #3b82f6);" @click="restoreDraft">Restore</button>
-            <button class="t-small px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
-          </div>
+          <DraftRecoveryBanner v-if="hasDraft" :age="draftAge" class="m-6 mb-0" @restore="restoreDraft" @dismiss="clearDraft" />
         </ClientOnly>
         <ExternalChangeBanner v-if="externalPending" class="m-6 mb-0" @reload="reloadExternal" @keep="keepMine" />
 

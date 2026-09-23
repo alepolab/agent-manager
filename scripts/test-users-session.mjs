@@ -5,7 +5,7 @@
  *   node scripts/test-users-session.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -50,6 +50,25 @@ for (const who of ['nobody', undefined]) {
 }
 await U.saveProfile('sandeep', { jiraTokenPlain: '' })
 assert.equal((await U.envForUser('sandeep', githubOk)).JIRA_API_TOKEN, undefined, 'an empty token clears it')
+
+// The roster behind /roles. Never throws: the roles page has to render even
+// when the users directory is absent or one file is half-written, because a
+// roster that hides who holds what is worse than a short one.
+const roster = await U.listProfiles()
+assert.ok(roster.some(r => r.login === 'sandeep'), 'a saved profile appears in the roster')
+const sandeep = roster.find(r => r.login === 'sandeep')
+assert.equal(sandeep.name, 'Sandeep')
+assert.ok(sandeep.lastSeenAt > 0, 'the roster carries when they were last seen')
+assert.ok(!('jiraToken' in sandeep) && !('githubToken' in sandeep), 'the roster carries no credentials')
+
+writeFileSync(join(process.env.AGENT_USERS_DIR, 'broken.json'), '{ not json', 'utf8')
+assert.equal((await U.listProfiles()).length, roster.length, 'an unreadable profile is skipped, not thrown')
+rmSync(join(process.env.AGENT_USERS_DIR, 'broken.json'))
+
+const missingDir = process.env.AGENT_USERS_DIR
+process.env.AGENT_USERS_DIR = join(tmpdir(), 'users-that-do-not-exist-0001')
+assert.deepEqual(await U.listProfiles(), [], 'a missing directory reads back as nobody, not an error')
+process.env.AGENT_USERS_DIR = missingDir
 
 assert.equal(S.isPublicApiPath('/api/health'), true)
 assert.equal(S.isPublicApiPath('/api/auth/login'), true)
