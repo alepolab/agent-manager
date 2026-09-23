@@ -147,6 +147,16 @@
               "type": "boolean",
               "default": false,
               "description": "Whether the stack supports tag/rollbackToTag between attempts."
+            },
+            "urls": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "This product's real entry points on a stood-up stack, e.g. http://localhost:8080/lbss. Only the champion knows them: a service on the host network publishes no port through compose, so the runner derives what it can from docker and never guesses the rest. A UI or visual step given no address here reports NOT VERIFIED instead of screenshotting something it assumed.",
+              "items": {
+                "type": "string",
+                "pattern": "^https?://"
+              }
             }
           }
         },

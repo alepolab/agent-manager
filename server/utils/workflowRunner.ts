@@ -24,6 +24,7 @@ import { parseProposal, floorFrom, adopt, classProvenance } from '../../shared/u
 import { collectReviewComments } from './reviewComments.ts'
 import { resolveStackRecipe, StackError } from './stackRecipe.ts'
 import { stackUp, stackDown } from './stackLifecycle.ts'
+import { verifyStack, type StackFacts } from './stackHealth.ts'
 import { planDeploy, runDeploy, DeployError } from './deployStep.ts'
 import { prUrlsOf } from './ciPoller.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
@@ -1069,12 +1070,20 @@ function testOwnershipNote(l: Live, step: { label: string, testsUnlocked?: boole
  * Never throws: a deploy that cannot run is a fact the agent needs, not a
  * reason to kill the run.
  */
+/** deploy.sh steps that change the environment, and therefore owe a check of
+ *  what they left running. `status` and `logs` read and change nothing. */
+const CHANGING_DEPLOY_STEPS = new Set(['all', 'setup', 'deploy'])
+
 async function runDeployForStep(
   l: Live, run: WorkflowRun, rec: RunStep, id: string, step: { deploy?: { env: string, step: string, app?: string, limit?: string, check?: boolean }, approval?: boolean },
 ): Promise<string> {
   const want = step.deploy!
   try {
-    const plan = await planDeploy({ env: want.env, step: want.step, app: want.app, limit: want.limit, check: want.check })
+    // The run's own product when the template names no app. deploy.sh defaults
+    // APP to crm when it is given none, so a PCRF run reaching an unnamed
+    // deploy would deploy CRM - the app is resolved here, and planDeploy
+    // refuses an app the infra repo has no role for rather than falling back.
+    const plan = await planDeploy({ env: want.env, step: want.step, app: want.app ?? run.product?.name, limit: want.limit, check: want.check })
     // The answered gate, from the runner's own record of what a person
     // released. Not from the step's declaration, which is what an author
     // intended rather than what a person decided.
@@ -1082,9 +1091,22 @@ async function runDeployForStep(
     const result = await runDeploy(plan, { approved, approvedBy: approved ? (run.decisions?.at(-1)?.by ?? 'a gate answer') : undefined })
     for (const line of result.ran) logLine(l, run, rec, line)
     logLine(l, run, rec, result.summary)
-    return result.ok
-      ? result.summary
-      : `${result.summary} Do not run deploy.sh yourself - report what you could not verify without it.`
+    if (!result.ok) return `${result.summary} Do not run deploy.sh yourself - report what you could not verify without it.`
+
+    // A deploy that changed something is asked what it left behind, through the
+    // script's own read-only step. "ansible exited zero" and "the environment
+    // is serving" are different claims, and only the second one is worth
+    // anything to the step that has to test against it.
+    if (!plan.check && CHANGING_DEPLOY_STEPS.has(plan.step)) {
+      const verify = await planDeploy({ env: plan.env, step: 'status', app: want.app ?? run.product?.name, limit: want.limit })
+      const status = await runDeploy(verify, { approved, approvedBy: 'post-deploy verification' })
+      for (const line of status.ran) logLine(l, run, rec, line)
+      logLine(l, run, rec, status.summary)
+      return status.ok
+        ? `${result.summary} Post-deploy verification: ${status.summary}`
+        : `${result.summary} Post-deploy verification could not be read: ${status.summary} Treat the deployed environment as unproven and say so.`
+    }
+    return result.summary
   } catch (err) {
     const why = err instanceof DeployError ? err.message : `The deploy could not be planned: ${err instanceof Error ? err.message : String(err)}`
     logLine(l, run, rec, why)
@@ -1124,6 +1146,22 @@ function adversarialDemand(run: WorkflowRun): string {
  * that cannot start is a fact the step's agent has to know about - and for a
  * run with no registered stack, no command is invented at all.
  */
+/**
+ * The measured state of the stack, as a file a later step and a reviewer can
+ * read. Never fatal: evidence that could not be written must not take down the
+ * run whose stack it describes.
+ */
+async function writeStackFacts(run: WorkflowRun, facts: StackFacts): Promise<void> {
+  try {
+    const dir = runArtifactsDir(run.id)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'stack-facts.json'), JSON.stringify(facts, null, 2))
+  }
+  catch (err) {
+    log.warn('stack facts could not be written', { runId: run.id, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 async function bringStackUp(l: Live, run: WorkflowRun, rec: RunStep): Promise<string> {
   const compose = run.product?.stack?.compose
   if (!compose) {
@@ -1143,9 +1181,21 @@ async function bringStackUp(l: Live, run: WorkflowRun, rec: RunStep): Promise<st
       run.stackStarted = recipe.product
       run.stackStopped = undefined
     }
-    return result.ok
-      ? `${result.summary} The runner started it and will take it down when this run settles; you do not need to.`
-      : `${result.summary} Do not try to start it yourself - report what you could not verify without it.`
+    if (!result.ok) return `${result.summary} Do not try to start it yourself - report what you could not verify without it.`
+
+    // `up` exiting zero is not a serving stack, and a step that assumes it is
+    // spends its budget against containers that never came up. Docker is asked
+    // what is actually running, and the answer - including the addresses it
+    // published - becomes an artifact and part of this step's input.
+    const facts = await verifyStack(recipe, { runId: run.id, urls: run.product?.stack?.urls })
+    logLine(l, run, rec, facts.summary)
+    await writeStackFacts(run, facts)
+    const where = facts.registryUrls.length || facts.endpoints.length
+      ? ` Open the application at ${[...facts.registryUrls, ...facts.endpoints].join(' or ')} - these came from the registry and from the ports docker actually published, so use them rather than assuming a port.`
+      : ''
+    return facts.healthy
+      ? `${result.summary} ${facts.summary}${where} The runner started it and will take it down when this run settles; you do not need to. Its verified state is in stack-facts.json in your artifacts directory.`
+      : `${result.summary} ${facts.summary}${where} Treat this stack as unproven: say so in your output rather than reporting a result you could not have obtained from it. Do not try to start it yourself. Its measured state is in stack-facts.json in your artifacts directory.`
   } catch (err) {
     // A StackError already explains itself in the terms a person needs: which
     // file was looked for, or that .env is a human's job.

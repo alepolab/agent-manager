@@ -132,7 +132,13 @@ export interface ProductMatch {
    *  does not produce these, because it git-ignores them. */
   modules?: Record<string, string>
   branches: Record<string, string>
-  stack: { compose: string, topology_default: string, liquibase?: boolean }
+  /**
+   * `urls` are the product's real entry points, named by its champion in the
+   * registry. A stack on the host network publishes no port through compose,
+   * so a run has no other honest way to learn where its UI answers - and a
+   * guessed address is how a visual check reports on nothing.
+   */
+  stack: { compose: string, topology_default: string, liquibase?: boolean, urls?: string[] }
   tests: Record<string, string>
   /**
    * Where each test class writes its MACHINE-READABLE report, and in what
