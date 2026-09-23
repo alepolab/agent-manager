@@ -107,6 +107,42 @@ export function oversightForGate(blastRadius: string | undefined, kind?: GateKin
   return RANK[floor] > RANK[tier] ? floor : tier
 }
 
+/**
+ * What the person at this gate has to READ, and the judgement they owe.
+ *
+ * The question itself names the step — "Approve X to run it" — which says what
+ * is about to happen and nothing about how to decide it. A reviewer told only
+ * the step's name has to re-derive the question every time, and the thing they
+ * most cheaply get wrong is WHICH evidence the decision actually rests on.
+ *
+ * `anyStepRan` is not decoration. The first gate of a run fires before any step
+ * has produced anything, so every criterion on screen passes vacuously and the
+ * gate looks like a judgement on work that does not exist yet. Saying so is the
+ * difference between a reviewer who reads nothing because there is nothing, and
+ * one who learns that approving without reading is normal here.
+ */
+export function gateAsks(kind: GateKind | undefined, anyStepRan: boolean): string {
+  if (!anyStepRan) {
+    return 'Nothing has run yet, so there is no output to judge: you are granting permission to start, not approving work. The checks below pass for every run at this point.'
+  }
+  switch (kind) {
+    case 'story':
+      return 'Read the enriched story: is this the right thing to build, and does "done" mean something you could check?'
+    case 'spec':
+      return 'Read the acceptance rows and the test strategy: if all of them passed, would you believe the work was done?'
+    case 'design':
+      return 'Read the architecture note and its impact list: are the boundaries right, and does the blast radius it claims match what it touches?'
+    case 'security':
+      return 'Read the security findings: does this expose anything — authorization, crypto, personal data, payment, a new dependency?'
+    case 'verify':
+      return 'Read the test report: do the results cover the acceptance rows, including the negative and regression cases?'
+    case 'ship':
+      return 'Read the evidence bundle and the diff: is this what you want opened as a pull request against the base branch?'
+    default:
+      return "Read this step's output before answering. The approval is recorded against your name."
+  }
+}
+
 /** Does approving this run require the reviewer to write why? */
 export function needsJustification(blastRadius: string | undefined, kind?: GateKind): boolean {
   return oversightForGate(blastRadius, kind) === 'justify'

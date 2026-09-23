@@ -15,7 +15,7 @@
  */
 import assert from 'node:assert/strict'
 
-const { oversightFor, needsJustification, oversightReason, BLAST_RADIUS_ORDER } =
+const { oversightFor, needsJustification, oversightReason, gateAsks, BLAST_RADIUS_ORDER } =
   await import('../shared/utils/oversight.ts')
 
 // ── 1. cheap, reversible work flows through ──────────────────────────────────
@@ -64,4 +64,25 @@ assert.match(oversightReason('money'), /money/)
 assert.match(oversightReason('money'), /why/i, 'an owner-gated ask says a reason is required')
 assert.match(oversightReason(undefined), /no blast radius recorded/i, 'and an unclassified run says so plainly')
 
-console.log('oversight: cheap work flows, owner-gated work is justified, unclassified stops')
+// ── 7. the gate says what to READ, not what the step is called ───────────────
+// "Approve X to run it" names the step. A reviewer needs the judgement they
+// owe and the artefact it rests on, which is a different sentence.
+assert.match(gateAsks('story', true), /right thing/i, 'a story gate asks whether this is worth building')
+assert.match(gateAsks('spec', true), /acceptance/i, 'a spec gate points at the acceptance rows')
+assert.match(gateAsks('security', true), /expose/i, 'a security gate asks what is exposed')
+assert.match(gateAsks('verify', true), /test report/i, 'a verify gate points at the report')
+assert.match(gateAsks('ship', true), /pull request/i, 'a ship gate names what it is about to open')
+assert.ok(gateAsks(undefined, true).length > 20, 'and a gate with no kind still says something useful')
+
+// The first gate of a run fires before ANY step has produced output, so every
+// criterion on screen passes vacuously. Saying so is the difference between a
+// reviewer who knowingly grants permission to start and one who learns that
+// approving an empty bundle is normal here.
+for (const kind of ['story', 'spec', 'security', 'verify', 'ship', undefined]) {
+  assert.match(gateAsks(kind, false), /nothing has run yet/i,
+    `${kind ?? 'an unkinded'} gate is honest that there is no output to judge yet`)
+}
+assert.notEqual(gateAsks('story', false), gateAsks('story', true),
+  'and it is not the same sentence once a step has actually run')
+
+console.log('oversight: cheap work flows, owner-gated work is justified, unclassified stops, and every gate says what to read')

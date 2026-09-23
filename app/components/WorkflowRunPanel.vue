@@ -381,6 +381,12 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
            to look like a footnote. -->
       <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
       <p class="t-head whitespace-pre-wrap" style="color: var(--text-primary);">{{ run.question.text }}</p>
+      <!-- The step's name tells a reviewer what happens next, not how to decide
+           it. This is the reading instruction, and at the first gate it says
+           plainly that there is nothing to read yet - which is the difference
+           between a reviewer who approves an empty bundle knowingly and one who
+           learns that approving without reading is what this screen is for. -->
+      <p v-if="run.question.asks" class="t-ui mt-1.5" style="color: var(--text-secondary);">{{ run.question.asks }}</p>
       <p v-if="run.blastRadius" class="t-small mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
       </p>

@@ -42,7 +42,7 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, transcriptPath } from './claudeDir.ts'
-import { oversightFor, oversightForGate, oversightReason, needsJustification, BLAST_RADIUS_ORDER, type BlastRadius, type GateKind } from '../../shared/utils/oversight.ts'
+import { oversightFor, oversightForGate, oversightReason, needsJustification, gateAsks, BLAST_RADIUS_ORDER, type BlastRadius, type GateKind } from '../../shared/utils/oversight.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable, recordClassification,
@@ -2074,6 +2074,10 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
       // wants to explain the policy can compose it once, in a detail view,
       // rather than in every row.
       text: `Approve "${label}" to run it.`,
+      // The step's name says what happens next; this says how to decide it, and
+      // is honest about the first gate, where nothing has run and every
+      // criterion on screen passes for free.
+      asks: gateAsks(gateKind, run.steps.some(s => s.status === 'completed')),
       ...(criteria.length ? { criteria } : {}),
       kind: 'approval',
       askedAt: Date.now(),
