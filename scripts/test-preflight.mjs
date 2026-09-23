@@ -9,7 +9,7 @@
  *   node scripts/test-preflight.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -136,12 +136,21 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   const r = await runPreflight(run({ projectDir: ok }), [{ agentSlug: 'sdlc-ce-work', label: 'Implement Fix', testsUnlocked: true }])
   assert.equal(of(r, 'test unlock').level, 'ok', JSON.stringify(of(r, 'test unlock')))
 
+  // chmod's POSIX bits are what Windows ignores for directories - NTFS never
+  // consults them, so a 0o555 dir there still lets mkdir create children.
+  // icacls denying Write actually blocks it, which is what this check needs.
   const locked = repo(join(root, 'readonly'))
-  chmodSync(locked, 0o555)
+  const lock = () => process.platform === 'win32'
+    ? execFileSync('icacls', [locked, '/deny', `${process.env.USERNAME}:(OI)(CI)W`])
+    : chmodSync(locked, 0o555)
+  const unlock = () => process.platform === 'win32'
+    ? execFileSync('icacls', [locked, '/grant', `${process.env.USERNAME}:(OI)(CI)F`])
+    : chmodSync(locked, 0o755)
+  lock()
   try {
     const bad = await runPreflight(run({ projectDir: locked }), [{ agentSlug: 'sdlc-ce-work', label: 'Implement Fix', testsUnlocked: true }])
     assert.equal(of(bad, 'test unlock').level, 'fail', JSON.stringify(of(bad, 'test unlock')))
-  } finally { chmodSync(locked, 0o755) }
+  } finally { unlock() }
 }
 
 // ── 7. a check that throws is that check failing, never the preflight crashing ──
@@ -152,7 +161,29 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   assert.match(of(r, 'jira: In Progress').detail, /the check itself failed: jira is down/)
 }
 
-// ── 8. a host with no git identity of its own still passes: the run's identity
+// ── 8. the docker probe must not depend on the CLI exiting ─────────────────
+// `docker info` on Docker Desktop for Windows prints the server version and
+// then never exits, holding open the stdout pipe execFile handed it. execFile
+// waits for a close that never comes, the 15s timeout kills it, and guard turns
+// that into a fail — so the run is refused against a daemon that had already
+// answered. Three runs died exactly there, before any agent started. Measured:
+// `info` killed at ~15.2-15.5s (twice with stdout still empty), `version`
+// clean-exited in 2.1-3.4s; neither DOCKER_CLI_HINTS=false nor shell:true
+// changed it.
+//
+// Pinned by reading the source rather than by running a fake docker: execFile
+// cannot launch a .cmd shim on Windows without a shell, so a shim-based test
+// would have to skip on the one platform where this bug appears.
+{
+  const src = readFileSync(new URL('../server/utils/preflight.ts', import.meta.url), 'utf8')
+  const probe = /execFileP\('docker', \[([^\]]*)\]/.exec(src)
+  assert.ok(probe, 'preflight still probes docker for reachability')
+  assert.match(probe[1], /'version'/, 'the daemon probe must use `docker version`, which exits')
+  assert.doesNotMatch(probe[1], /'info'/, '`docker info` answers and then hangs; its exit is not something to wait on')
+  assert.match(src, /\{\{\.Server\.Version\}\}/,
+    'and must ask for .Server.Version — a round trip to the daemon, so it still proves reachability rather than just that a CLI exists')
+}
+// ── 9. a host with no git identity of its own still passes: the run's identity
 //      comes from the env the agents get, not from ~/.gitconfig ──────────────
 // This is the shape of the bug that made CI red for a day: preflight asked
 // `git var GIT_COMMITTER_IDENT` in an environment missing the identity every
@@ -175,7 +206,7 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   }
 }
 
-// ── 9. the checkout the run was handed satisfies the product check ───────────
+// ── 10. the checkout the run was handed satisfies the product check ───────────
 // Preflight used to look only at the canonical workspace path, so a run given
 // an explicit projectDir was failed for "not checked out" and told to sign in
 // to clone the repo it was already sitting in.

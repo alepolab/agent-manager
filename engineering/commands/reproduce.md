@@ -12,6 +12,12 @@ ticket reports — nothing else, and nothing hardcoded here that
 
 ## 1. Resolve the product entry
 
+> Each instance runs its OWN registry store, seeded once from
+> `registry/products.yaml` and edited from the Products page. This file is the
+> seed and may be behind it. When a run header carries a
+> `## Product (from the registry)` block, that is the resolved entry and the
+> one to act on.
+
 Look up `$1` (or match it via the `intent-template` "affected systems"
 field) against `registry/products.yaml`. Read the entry's `stack.compose`
 and `stack.topology_default` — this command never assumes a compose

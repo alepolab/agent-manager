@@ -6,9 +6,10 @@ import { MiniMap } from '@vue-flow/minimap'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
-import type { Workflow, WorkflowStep } from '~/types'
+import type { Workflow, WorkflowStep, WorkflowParameter } from '~/types'
 import { getAgentColor } from '~/utils/colors'
 import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
+import { isValidParameterName, RESERVED_PARAM_PROJECT_DIR } from '~~/shared/utils/workflowParameters'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,7 +18,7 @@ const slug = route.params.slug as string
 const { fetchOne, update, remove } = useWorkflows()
 const { agents } = useAgents()
 // This page had no role awareness at all. It is reachable by URL, and Clone on
-// the runs page used to land every role here — so a manager, whose role is
+// the runs page used to land every role here - so a manager, whose role is
 // "Reads progress across runs. Changes nothing", was shown Save and Delete
 // workflow. The routes behind them already refuse it; the page did not.
 const { can } = useUser()
@@ -28,12 +29,16 @@ const { can } = useUser()
  * three of them need no button at all: clicking an edge deletes it, dragging a
  * node moves it, dropping an agent adds a step. Guarding the markup alone would
  * leave all three reachable. The server refuses the Save that would persist any
- * of it, so the damage was never permanent — but a canvas that silently discards
+ * of it, so the damage was never permanent - but a canvas that silently discards
  * your edits on reload is a worse answer than one that does not accept them.
  */
 const readOnly = computed(() => !can('configure'))
-const { run, runs, logs, attach, start, continueRun, stop, restart, respond, sendNote, reject, rework } = useWorkflowRun(slug)
-const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean } | undefined>()
+const { run, runs, logs, attach, refresh: refreshRun, start, continueRun, stop, restart, respond, sendNote, reject, rework } = useWorkflowRun(slug)
+// The PAGE fetches, not the panel: the tab's own label carries the count, so it
+// is needed before the panel mounts.
+const { fetchAll: fetchSchedules, forWorkflow } = useSchedules()
+const scheduleRows = forWorkflow(slug)
+const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string> } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
  *  Consumed then removed from the URL so a reload does not repeat them. */
@@ -45,16 +50,19 @@ function applyQueryIntent() {
   }
   if (typeof q.clone === 'string') {
     const src = runs.value.find(r => r.id === q.clone)
-    runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun } : undefined
+    runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun, parameters: src.parameters } : undefined
     showRunModal.value = true
   }
   if (q.start === '1') { runInitial.value = undefined; showRunModal.value = true }
-  if (q.run || q.clone || q.start) router.replace({ path: route.path })
+  // `tab` is carried through rather than stripped with the intents: it is a
+  // link target, not a one-shot, so ?run=X&tab=schedule must not lose the tab
+  // when the intent is consumed.
+  if (q.run || q.clone || q.start) router.replace({ path: route.path, query: q.tab ? { tab: q.tab } : {} })
 }
 const showRunDetails = ref(false)
 function cloneRun() {
   if (!run.value) return
-  runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun }
+  runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun, parameters: run.value.parameters }
   showRunModal.value = true
 }
 
@@ -64,6 +72,15 @@ function cloneRun() {
 const execSteps = computed(() => run.value?.steps ?? [])
 const isRunning = computed(() => run.value?.status === 'running')
 const isPaused = computed(() => run.value?.status === 'paused')
+/** Stopped on a person who has entries to decide about. Like paused for every
+ *  purpose on this page: the canvas may not start a second run, and the run
+ *  controls stay up. */
+const isReviewing = computed(() => run.value?.status === 'awaiting_review')
+/** Admitted but waiting for a slot in its concurrency group. Distinct from
+ *  running: the canvas is still editable (launchQueuedRun re-reads the
+ *  definition, so an edit made while it waits is the one that runs), but
+ *  nothing may start a second run of this workflow. */
+const isQueued = computed(() => run.value?.status === 'queued')
 const isComplete = computed(() => !!run.value && ['completed', 'failed', 'stopped', 'interrupted'].includes(run.value.status))
 
 /** Clicking a previous (terminal) run in the panel's history list just shows it - no stream needed. */
@@ -81,14 +98,49 @@ function closeRun() {
 
 const workflow = ref<Workflow | null>(null)
 const workflowSteps = ref<WorkflowStep[]>([])
+/** The workflow's declared inputs. Edited here, collected by the run modal,
+ *  and stated to every step by the runner. */
+const workflowParameters = ref<WorkflowParameter[]>([])
 const name = ref('')
 const description = ref('')
 // Edges are deleted by a click and nodes moved by a drag; leaving discards both silently without this.
 const isDirty = computed(() => !!workflow.value && JSON.stringify({ n: name.value, d: description.value, s: workflowSteps.value }) !== JSON.stringify({ n: workflow.value.name, d: workflow.value.description, s: workflow.value.steps }))
-useUnsavedChanges(isDirty)
+// useUnsavedChanges(anyDirty) is called below, once the refs it reads exist.
+/** The concurrency group this workflow's runs count against. '' is ungrouped,
+ *  which means the default group - and is sent as '' rather than omitted,
+ *  because the PUT route is a shallow merge and an absent key would keep
+ *  whatever was stored. */
+const group = ref('')
+/** Where this workflow's run transitions are announced. '' means the channel
+ *  called `default`, then SLACK_WEBHOOK_URL - sent as '' rather than omitted
+ *  because the PUT is a shallow merge. */
+const notifyChannel = ref('')
+const groups = ref<{ id: string, name: string, maxConcurrent: number, inFlight: number, waiting: number, implicit: boolean }[]>([])
+/** What the picked group means right now, so the cap is not a number with no
+ *  context. Names the default group's cap for an ungrouped workflow, because
+ *  ungrouped is capped too - it is not "unlimited". */
+const groupHint = computed(() => {
+  const g = groups.value.find(x => x.id === (group.value || 'default'))
+  if (!g) return 'Runs of this workflow share slots with the default group'
+  return `${g.name}: ${g.maxConcurrent} run${g.maxConcurrent === 1 ? '' : 's'} at once`
+    + ` (${g.inFlight} running, ${g.waiting} waiting). Automated starts over the cap queue; a run started here does not wait, but does occupy a slot.`
+})
 const saving = ref(false)
 const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
+const showParameters = ref(false)
+/**
+ * Seeded once at setup, before any await, the way explore.vue does it - and
+ * never written back on click. A query param the page both reads and writes
+ * can interleave with applyQueryIntent()'s replace on first paint and either
+ * lose an intent or resurrect a consumed one. A link sets the tab; a click
+ * does not need the URL to know.
+ */
+const activeTab = ref<'canvas' | 'schedule'>(route.query.tab === 'schedule' ? 'schedule' : 'canvas')
+/** The declaration as the server has it. The Inputs editor mutates
+ *  workflowParameters; a schedule is validated against THIS, so the two are
+ *  tracked separately and the difference is what warns the Schedule tab. */
+const savedParameters = ref<WorkflowParameter[]>([])
 const showMobileAgentPicker = ref(false)
 const paletteSearch = ref('')
 const editingName = ref(false)
@@ -96,15 +148,23 @@ const editingDescription = ref(false)
 const settingsStepId = ref<string | null>(null)
 useHead({ title: computed(() => `${name.value || 'Workflow'} | Agent Manager`) })
 
+function applyWorkflow(data: Workflow) {
+  workflow.value = data
+  lastModified.value = (data as any).lastModified ?? null
+  workflowSteps.value = [...data.steps]
+  workflowParameters.value = [...(data.parameters ?? [])]
+  savedParameters.value = [...(data.parameters ?? [])]
+  name.value = data.name
+  description.value = data.description
+  group.value = data.group ?? ''
+  notifyChannel.value = data.notifyChannel ?? ''
+}
+
 // Load workflow
 onMounted(async () => {
   try {
-    const data = await fetchOne(slug)
-    workflow.value = data
-    lastModified.value = (data as any).lastModified ?? null
-    workflowSteps.value = [...data.steps]
-    name.value = data.name
-    description.value = data.description
+    applyWorkflow(await fetchOne(slug))
+    groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => [])
   } catch {
     toast.add({ title: 'Workflow not found', color: 'error' })
     router.push('/workflows')
@@ -114,7 +174,46 @@ onMounted(async () => {
   // one-shot intent in the URL, which may point at a finished run instead.
   await attach()
   applyQueryIntent()
+  // Fire-and-forget: the tab label's count can arrive a moment later, and
+  // nothing above it should wait on a schedule read.
+  void fetchSchedules()
 })
+
+const parametersDirty = computed(() =>
+  JSON.stringify(workflowParameters.value.filter(p => p.name.trim())) !== JSON.stringify(savedParameters.value))
+
+/** Everything unsaved, not just the canvas.
+ *
+ *  isDirty covers name, description and steps. It was also what guarded the
+ *  page against being left, so editing only an input, the concurrency group or
+ *  the notify channel and navigating away discarded it with no prompt - while
+ *  useExternalChange, given the full check, knew perfectly well they were
+ *  dirty. One computed now feeds both, so they cannot disagree again. */
+const anyDirty = computed(() => isDirty.value || parametersDirty.value
+  || group.value !== (workflow.value?.group ?? '')
+  || notifyChannel.value !== (workflow.value?.notifyChannel ?? ''))
+useUnsavedChanges(anyDirty)
+
+const workflowContent = (w: Workflow) => ({
+  name: w.name, description: w.description, steps: w.steps,
+  parameters: w.parameters ?? [], group: w.group ?? '', notifyChannel: w.notifyChannel ?? '',
+})
+// The same full check the leave guard uses: a background reload must not drop
+// edits to inputs, group or channel either.
+const { pending: externalPending, ...external } = useExternalChange({
+  fetch: () => fetchOne(slug),
+  baseline: () => workflow.value && workflowContent(workflow.value),
+  content: workflowContent,
+  isDirty: () => anyDirty.value,
+  apply: applyWorkflow,
+  paused: () => !workflow.value || saving.value,
+})
+function keepMine() {
+  // Adopting their timestamp is what lets the next save overwrite instead of failing with 409.
+  const theirs = external.keepMine()
+  if (theirs) lastModified.value = (theirs as any).lastModified ?? null
+}
+useAutoRefresh(() => Promise.all([refreshRun(), fetchSchedules({ silent: true })]))
 
 const graph = computed(() => buildGraph(workflowSteps.value))
 const stepById = (id: string) => workflowSteps.value.find(s => s.id === id)
@@ -162,6 +261,14 @@ const nodes = computed(() => {
         agentModel: agent?.frontmatter.model,
         monitorLabel: agentBySlug(step.monitorSlug)?.frontmatter.name ?? step.monitorSlug,
         approval: step.approval === true,
+        runWhen: step.runWhen?.artifact,
+        triggerSource: step.triggerWorkflow?.source
+          ?? (step.triggerWorkflow?.fromParameter ? `parameter ${step.triggerWorkflow.fromParameter}` : undefined),
+        triggerJoin: step.triggerWorkflow?.join === true,
+        notifyChannel: step.notify?.channel,
+        produces: step.produces,
+        contextMode: step.contextMode,
+        testsUnlocked: step.testsUnlocked === true,
         maxVisits: step.maxVisits,
         status: exec?.status,
         visits: exec?.visits,
@@ -227,7 +334,41 @@ const edges = computed<Edge[]>(() => {
     })),
   )
 
-  return [...flowEdges, ...monitorEdges]
+  // The fix-it loop is not a graph edge, so nothing above draws it: an agent
+  // emits PIPELINE-REWORK at run time and the runner restarts the target, which
+  // means `next` holds nothing and buildGraph has nothing to classify as a back
+  // edge. Making it a real edge is not the fix - markCompleted arms a back-edge
+  // target on EVERY completion, so the run would loop on success too, until
+  // maxVisits ran out. Drawn here the way monitorEdges are instead: derived,
+  // never stored, and inert to the editing handlers.
+  //
+  // Matched on agentSlug rather than the label "Implement Fix" because labels
+  // are editable on this canvas, and a renamed step would silently lose the
+  // edge that explains the whole mechanism.
+  const reworkSenders = new Set(['sdlc-verifier', 'sdlc-security-review', 'sdlc-pr-follow-up'])
+  const fixStep = workflowSteps.value.find(s => s.agentSlug === 'sdlc-fix-implementer')
+  const reworkEdges = fixStep
+    ? workflowSteps.value
+        .filter(s => reworkSenders.has(s.agentSlug) && s.id !== fixStep.id)
+        .map(s => ({
+          id: `r-${s.id}-${fixStep.id}`,
+          source: s.id,
+          target: fixStep.id,
+          sourceHandle: 'loop',
+          targetHandle: 'in',
+          type: 'smoothstep',
+          selectable: false,
+          // The bound is REWORK_LIMIT in server/utils/workflowRunner.ts, which a
+          // browser bundle cannot import. Duplicated here knowingly; if it moves,
+          // this label moves with it.
+          label: 'send-back ≤2 per trigger',
+          labelStyle: { fill: 'var(--warning, #e5a93e)', fontSize: '10px' },
+          style: { stroke: 'var(--warning, #e5a93e)', strokeWidth: 1.5, strokeDasharray: '4 3' },
+          markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--warning, #e5a93e)' },
+        }))
+    : []
+
+  return [...flowEdges, ...monitorEdges, ...reworkEdges]
 })
 
 /**
@@ -251,7 +392,10 @@ function onConnect({ source, target }: { source: string, target: string }) {
 }
 
 function onEdgeClick({ edge }: { edge: { id: string, source: string, target: string } }) {
-  if (readOnly.value || isRunning.value || edge.id.startsWith('m-')) return
+  // 'r-' is a send-back edge: derived, not stored in `next`, so deleting it
+  // would filter a target that was never there and leave the user thinking they
+  // had removed something.
+  if (readOnly.value || isRunning.value || edge.id.startsWith('m-') || edge.id.startsWith('r-')) return
   materializeEdges()
   workflowSteps.value = workflowSteps.value.map(s =>
     s.id === edge.source ? { ...s, next: (s.next ?? []).filter(id => id !== edge.target) } : s,
@@ -313,6 +457,11 @@ const monitorOptions = computed(() => [
   ...agents.value.map(a => ({ value: a.slug, label: a.frontmatter.name, description: summarise(a.frontmatter.description) })),
 ])
 
+const contextModeOptions = [
+  { value: 'predecessors', label: 'Only the steps just before it', description: 'The default: immediate forward predecessors' },
+  { value: 'ancestors', label: 'Every step upstream', description: 'The full ancestry, budgeted and truncation-marked' },
+]
+
 function patchStep(stepId: string, changes: Partial<WorkflowStep>) {
   workflowSteps.value = workflowSteps.value.map(s => (s.id === stepId ? { ...s, ...changes } : s))
 }
@@ -320,6 +469,161 @@ function patchStep(stepId: string, changes: Partial<WorkflowStep>) {
 const settingsMonitor = computed({
   get: () => settingsStep.value?.monitorSlug,
   set: (value?: string) => settingsStepId.value && patchStep(settingsStepId.value, { monitorSlug: value || undefined }),
+})
+const settingsRunWhen = computed({
+  get: () => settingsStep.value?.runWhen?.artifact ?? '',
+  set: (value: string) => {
+    const artifact = value.trim()
+    if (settingsStepId.value) patchStep(settingsStepId.value, { runWhen: artifact ? { artifact } : undefined })
+  },
+})
+/** The files this step must leave behind, edited one per line - the same shape
+ *  as the routing table below, and for the same reason: a JSON array in a text
+ *  box is a worse thing to type than one entry per line. */
+const settingsProduces = computed({
+  get: () => (settingsStep.value?.produces ?? []).join('\n'),
+  set: (value: string) => {
+    const names = value.split('\n').map(n => n.trim()).filter(Boolean)
+    if (settingsStepId.value) patchStep(settingsStepId.value, { produces: names.length ? names : undefined })
+  },
+})
+/** `predecessors` is never persisted: computeInput only tests for 'ancestors',
+ *  so writing the default would be a key that says nothing. */
+const settingsContextMode = computed({
+  get: () => settingsStep.value?.contextMode ?? 'predecessors',
+  set: (value: string) => {
+    if (settingsStepId.value) patchStep(settingsStepId.value, { contextMode: value === 'ancestors' ? 'ancestors' : undefined })
+  },
+})
+/** The channel a notify step posts to. Emptying it removes the whole notify
+ *  block, for the same reason emptying a dispatch source removes that one: a
+ *  message with no destination is config that can never fire. */
+const settingsNotifyChannel = computed({
+  get: () => settingsStep.value?.notify?.channel ?? '',
+  set: (value: string) => {
+    const channel = value.trim()
+    if (!settingsStepId.value) return
+    const current = settingsStep.value?.notify
+    patchStep(settingsStepId.value, { notify: channel ? { ...current, channel } : undefined })
+  },
+})
+const settingsNotifyMessage = computed({
+  get: () => settingsStep.value?.notify?.message ?? '',
+  set: (value: string) => {
+    const message = value.trim()
+    const current = settingsStep.value?.notify
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { notify: { ...current, message: message || undefined } })
+  },
+})
+
+/** The channels this instance has configured, for the notify step's picker. A
+ *  dropdown rather than a text box on purpose: a mistyped channel name is a
+ *  notification that silently never arrives. */
+const channels = ref<{ name: string, kind: string, host?: string }[]>([])
+onMounted(async () => {
+  try {
+    channels.value = (await $fetch<{ channels: typeof channels.value }>('/api/channels')).channels
+  } catch {
+    channels.value = []
+  }
+})
+
+/** The artifact a dispatch step fans out over. Emptying it removes the whole
+ *  triggerWorkflow block - a step with a routing table and no source to read it
+ *  against is config that can never fire - unless the step fans out over a run
+ *  parameter instead, which is the other half of the same field.
+ *
+ *  Setting one source clears the other rather than leaving both: naming both is
+ *  a step the runner refuses, and a step cannot be saved into a state whose
+ *  only outcome is a failure at run time. */
+const settingsTriggerSource = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.source ?? '',
+  set: (value: string) => {
+    const source = value.trim()
+    if (!settingsStepId.value) return
+    const current = settingsStep.value?.triggerWorkflow
+    const rest = { ...current, fromParameter: undefined }
+    patchStep(settingsStepId.value, {
+      triggerWorkflow: source
+        ? { ...rest, source }
+        : (current?.fromParameter ? { ...current, source: undefined } : undefined),
+    })
+  },
+})
+/** The run parameter a dispatch step fans out over, one item per line. A picker
+ *  rather than a text box, for the reason the notify channel is one: a mistyped
+ *  name is a fan-out that silently dispatches nothing. */
+const settingsTriggerFromParameter = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.fromParameter ?? '',
+  set: (value: string) => {
+    const fromParameter = value.trim()
+    if (!settingsStepId.value) return
+    const current = settingsStep.value?.triggerWorkflow
+    const rest = { ...current, source: undefined }
+    patchStep(settingsStepId.value, {
+      triggerWorkflow: fromParameter
+        ? { ...rest, fromParameter }
+        : (current?.source ? { ...current, fromParameter: undefined } : undefined),
+    })
+  },
+})
+/** The input each child is given its own item as. Required with a parameter
+ *  source, and checked against every target workflow before anything starts. */
+const settingsTriggerItemParameter = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.itemParameter ?? '',
+  set: (value: string) => {
+    const itemParameter = value.trim()
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, itemParameter: itemParameter || undefined } })
+  },
+})
+/** Whether the run waits for its children before going on. */
+const settingsTriggerJoin = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.join === true,
+  set: (value: boolean) => {
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, join: value || undefined } })
+  },
+})
+const settingsTriggerSlug = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.slug ?? '',
+  set: (value: string) => {
+    const slug = value.trim()
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, slug: slug || undefined } })
+  },
+})
+const settingsTriggerRouteBy = computed({
+  get: () => settingsStep.value?.triggerWorkflow?.routeBy ?? '',
+  set: (value: string) => {
+    const routeBy = value.trim()
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, routeBy: routeBy || undefined } })
+  },
+})
+/** The routing table, edited as `value: workflow-slug` lines. A JSON object in
+ *  a text box is a worse thing to type than one pair per line, and this is the
+ *  only place a person writes it. */
+const settingsTriggerRoutes = computed({
+  get: () => Object.entries(settingsStep.value?.triggerWorkflow?.routes ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
+  set: (value: string) => {
+    const current = settingsStep.value?.triggerWorkflow
+    if (!settingsStepId.value || !current) return
+    const routes: Record<string, string> = {}
+    for (const line of value.split('\n')) {
+      const at = line.indexOf(':')
+      if (at < 1) continue
+      const key = line.slice(0, at).trim()
+      const slug = line.slice(at + 1).trim()
+      if (key && slug) routes[key] = slug
+    }
+    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, routes: Object.keys(routes).length ? routes : undefined } })
+  },
 })
 const settingsMaxVisits = computed({
   get: () => settingsStep.value?.maxVisits ?? DEFAULT_MAX_VISITS,
@@ -329,18 +633,78 @@ const settingsMaxVisits = computed({
   },
 })
 
+function addParameter() {
+  workflowParameters.value.push({ name: '' })
+}
+
+function removeParameter(index: number) {
+  workflowParameters.value.splice(index, 1)
+}
+
+/** A name that is not an identifier reads as two tokens in a step header and
+ *  cannot be referred to, so it is flagged here rather than silently dropped
+ *  on save. */
+function parameterNameError(index: number): string | null {
+  const param = workflowParameters.value[index]
+  if (!param) return null
+  const name = param.name.trim()
+  if (!name) return null
+  if (!isValidParameterName(name)) return 'Letters, digits and _ only, starting with a lowercase letter'
+  if (workflowParameters.value.some((other, i) => i !== index && other.name.trim() === name)) return 'Declared twice'
+  return null
+}
+
+/**
+ * A produced filename the runner can never satisfy, caught while a person is
+ * looking at it. `resolveRunArtifact` returns null for anything that resolves
+ * outside the run's artifacts directory, and the output check turns that null
+ * into "<name> was not written" - so a typo'd `../report.md` is an
+ * unsatisfiable requirement whose only symptom is a step sent back, after it
+ * has already run and spent its budget.
+ */
+function producesError(names: string[] | undefined): string | null {
+  for (const name of names ?? []) {
+    if (/^[/\\]/.test(name) || /^[A-Za-z]:/.test(name) || name.includes('\\')) return `"${name}" must be a path inside the run's artifacts directory`
+    if (name.split('/').includes('..')) return `"${name}" climbs out of the run's artifacts directory`
+  }
+  return null
+}
+const settingsProducesError = computed(() => producesError(settingsStep.value?.produces))
+/** The same check across every step, because save() is the last place a name
+ *  nobody can satisfy can still be stopped. */
+const badProducesStep = computed(() => {
+  for (const step of workflowSteps.value) {
+    const error = producesError(step.produces)
+    if (error) return { label: step.label, error }
+  }
+  return null
+})
+
 async function save() {
   if (!workflow.value) return
+  // Refused rather than saved-and-warned: the runner reads this list as files it
+  // must find, so a name that can never resolve is a step that always fails, and
+  // the first sign of it is a run sent back after it has already spent budget.
+  if (badProducesStep.value) {
+    toast.add({ title: `"${badProducesStep.value.label}" has a file nothing can write`, description: badProducesStep.value.error, color: 'error' })
+    return
+  }
   saving.value = true
   try {
     const saved = await update(slug, {
       name: name.value,
       description: description.value,
       steps: workflowSteps.value,
+      parameters: workflowParameters.value.filter(p => p.name.trim()),
+      group: group.value,
+      notifyChannel: notifyChannel.value,
       lastModified: lastModified.value ?? undefined,
     } as any)
     lastModified.value = (saved as any).lastModified ?? null
     workflow.value = saved as any
+    // The baseline a schedule is checked against moves with the save, which is
+    // what clears the Schedule tab's unsaved-inputs warning.
+    savedParameters.value = workflowParameters.value.filter(p => p.name.trim())
     toast.add({ title: 'Workflow saved', color: 'success' })
   } catch (e: any) {
     if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
@@ -351,7 +715,15 @@ async function save() {
 }
 
 async function deleteWorkflow() {
-  if (!confirm('Delete this workflow?')) return
+  // Deleting a workflow cascades to nothing, so its schedules survive it and
+  // keep showing a next fire time while every fire errors - a failure nobody
+  // sees until a night has passed. Named here because the count is already on
+  // this page. Degrades to the plain question if the fetch has not landed.
+  const n = scheduleRows.value.length
+  const question = n
+    ? `Delete this workflow? ${n} schedule${n === 1 ? '' : 's'} point at it and will start failing.`
+    : 'Delete this workflow?'
+  if (!confirm(question)) return
   try {
     await remove(slug)
     router.push('/workflows')
@@ -360,10 +732,10 @@ async function deleteWorkflow() {
   }
 }
 
-async function startRun(prompt: string, projectDir?: string, autoRun = false) {
+async function startRun(prompt: string, projectDir?: string, autoRun = false, parameters?: Record<string, string>) {
   showRunModal.value = false
   if (!workflow.value) return
-  await start(prompt, projectDir, autoRun)
+  await start(prompt, projectDir, autoRun, parameters)
   try {
     await update(slug, { lastRunAt: new Date().toISOString() } as any)
   } catch {
@@ -371,7 +743,7 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false) {
   }
 }
 
-const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value)
+const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value && !isReviewing.value && !isQueued.value)
 const filteredAgents = computed(() => {
   if (!paletteSearch.value) return agents.value
   const q = paletteSearch.value.toLowerCase()
@@ -434,7 +806,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
            `configure`. They rendered for everyone regardless, so the only way to
            learn you could not use one was to press it and read the 403. -->
       <UButton
-        v-if="(isRunning || isPaused) && can('runEngine')"
+        v-if="(isRunning || isPaused || isReviewing || isQueued) && can('runEngine')"
         label="Stop"
         icon="i-lucide-square"
         size="sm"
@@ -450,13 +822,49 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         :disabled="!canRun"
         @click="() => { showRunModal = true }"
       />
+      <UButton
+        v-if="can('configure')"
+        :label="workflowParameters.length ? `Inputs (${workflowParameters.length})` : 'Inputs'"
+        icon="i-lucide-sliders-horizontal"
+        size="sm"
+        variant="ghost"
+        color="neutral"
+        @click="() => { showParameters = true }"
+      />
+      <!-- Which runs this workflow's runs share slots with. Beside Inputs
+           because both are things you state about the workflow rather than
+           about one run, and both are saved by the same Save. -->
+      <select
+        v-if="can('configure')"
+        v-model="group"
+        class="field-input t-small max-w-[11rem]"
+        aria-label="Concurrency group"
+        :title="groupHint"
+      >
+        <option value="">Ungrouped (default)</option>
+        <option v-for="g in groups.filter(x => !x.implicit)" :key="g.id" :value="g.id">
+          {{ g.name }} - {{ g.maxConcurrent }} at once
+        </option>
+      </select>
+      <!-- Where this workflow's runs announce themselves. Beside the group for
+           the same reason: both are stated about the workflow, not about a run. -->
+      <select
+        v-if="can('configure')"
+        v-model="notifyChannel"
+        class="field-input t-small max-w-[11rem]"
+        aria-label="Notification channel"
+        title="Where this workflow's runs announce that they paused, finished or failed"
+      >
+        <option value="">Default channel</option>
+        <option v-for="c in channels" :key="c.name" :value="c.name">Announce to {{ c.name }}</option>
+      </select>
       <UButton v-if="can('configure')" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
       <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
       <!-- Said out loud rather than left as an absence: a page with its controls
            quietly removed is indistinguishable from a broken one, and the
            pipeline definition is worth reading before answering a gate on it. -->
       <span v-if="!can('configure')" class="t-small text-label whitespace-nowrap">
-        Read-only — changing a workflow is an operator's job.
+        Read-only - changing a workflow is an operator's job.
       </span>
     </div>
 
@@ -488,8 +896,37 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       </span>
     </div>
 
-    <!-- Body: palette + canvas -->
-    <div class="flex-1 flex min-h-0">
+    <!-- Canvas / Schedule. A hand-rolled strip, matching studio/EditorPanel:
+         nothing in this app uses UTabs, and its chrome would not match these
+         CSS-var styles. -->
+    <div class="shrink-0 flex" style="border-bottom: 1px solid var(--border-subtle);">
+      <button
+        v-for="tab in (['canvas', 'schedule'] as const)"
+        :key="tab"
+        class="px-4 py-2.5 t-small font-medium capitalize transition-all relative"
+        :style="{ color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-tertiary)' }"
+        :data-testid="`workflow-tab-${tab}`"
+        @click="activeTab = tab"
+      >
+        {{ tab }}<!-- Omitted rather than shown as (0) while the fetch is in
+             flight: a wrong zero on a workflow that IS scheduled is worse than
+             no number. -->
+        <span v-if="tab === 'schedule' && scheduleRows.length" class="ml-1 text-meta">({{ scheduleRows.length }})</span>
+        <div
+          v-if="activeTab === tab"
+          class="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+          style="background: var(--accent);"
+        />
+      </button>
+    </div>
+
+    <ExternalChangeBanner v-if="externalPending" class="mx-4 my-2" @reload="external.reload" @keep="keepMine" />
+
+    <!-- Body: palette + canvas.
+         v-show, not v-if: VueFlow fits the view on init, so a remount would
+         throw away the pan and zoom the person set. The panel below is v-if
+         because it should not mount until it is looked at. -->
+    <div v-show="activeTab === 'canvas'" class="flex-1 flex min-h-0">
       <!-- Left palette (hidden on mobile) -->
       <div
         v-if="can('configure')"
@@ -621,6 +1058,17 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       </div>
     </div>
 
+    <!-- When this workflow runs on its own. Mounted lazily, unlike the canvas. -->
+    <WorkflowSchedulePanel
+      v-if="activeTab === 'schedule'"
+      class="flex-1 min-h-0 overflow-y-auto"
+      :workflow-slug="slug"
+      :workflow-name="name"
+      :parameters="savedParameters"
+      :schedulable="workflowSteps.length > 0"
+      :parameters-dirty="parametersDirty"
+    />
+
     <!-- Run detail: live per-agent rows while a run is active, run history otherwise -->
     <USlideover v-model:open="showRunDetails" title="Run details">
       <template #body>
@@ -646,14 +1094,84 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
     <WorkflowRunModal
       :open="showRunModal"
       :initial="runInitial"
+      :parameters="workflowParameters"
       @update:open="showRunModal = $event"
       @start="startRun"
     />
 
+    <!-- Workflow inputs: what an operator (or a schedule) must state before a
+         run starts, instead of hoping it was buried in the prompt. -->
+    <UModal :open="showParameters" @update:open="showParameters = $event">
+      <template #content>
+        <div class="p-6 space-y-4 bg-overlay">
+          <h3 class="text-page-title">Workflow inputs</h3>
+          <p class="t-small text-label">
+            Named values collected when a run starts and stated to every step. Declare what this
+            workflow needs - which repository, which Jira project - so no agent has to work it out
+            from the prompt.
+          </p>
+
+          <div v-if="!workflowParameters.length" class="t-small" style="color: var(--text-disabled);">
+            No inputs declared. Runs are started with just the prompt.
+          </div>
+
+          <div v-for="(param, index) in workflowParameters" :key="index" class="field-group">
+            <div class="flex items-start gap-2">
+              <div class="flex-1 space-y-2">
+                <input
+                  v-model="param.name"
+                  placeholder="name, e.g. jira_project"
+                  class="field-input w-full"
+                >
+                <span v-if="parameterNameError(index)" class="field-hint" style="color: var(--text-error, #dc2626);">
+                  {{ parameterNameError(index) }}
+                </span>
+                <input
+                  v-model="param.description"
+                  placeholder="what it is for (shown to whoever starts the run)"
+                  class="field-input w-full"
+                >
+                <div class="flex items-center gap-3">
+                  <input
+                    v-model="param.default"
+                    placeholder="default (optional)"
+                    class="field-input flex-1"
+                  >
+                  <label class="flex items-center gap-2 cursor-pointer shrink-0">
+                    <input v-model="param.required" type="checkbox" class="shrink-0">
+                    <span class="field-label mb-0">Required</span>
+                  </label>
+                </div>
+                <span v-if="param.name.trim() === RESERVED_PARAM_PROJECT_DIR" class="field-hint">
+                  Reserved name: this one becomes the run's project folder, and replaces that field
+                  in the run dialog. Everything else is stated to the agents as text.
+                </span>
+              </div>
+              <UButton
+                icon="i-lucide-trash-2"
+                size="sm"
+                variant="ghost"
+                color="error"
+                @click="removeParameter(index)"
+              />
+            </div>
+          </div>
+
+          <div class="flex justify-between gap-2 pt-3">
+            <UButton label="Add input" icon="i-lucide-plus" size="sm" variant="soft" @click="addParameter" />
+            <div class="flex gap-2">
+              <UButton label="Close" variant="ghost" color="neutral" size="sm" @click="() => { showParameters = false }" />
+              <UButton label="Save" icon="i-lucide-save" size="sm" :loading="saving" @click="save" />
+            </div>
+          </div>
+        </div>
+      </template>
+    </UModal>
+
     <!-- Step settings -->
     <UModal :open="!!settingsStepId" @update:open="settingsStepId = $event ? settingsStepId : null">
       <template #content>
-        <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay">
+        <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
           <h3 class="text-page-title">{{ settingsStep.label }}</h3>
 
           <div class="field-group">
@@ -682,6 +1200,35 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             <span class="field-hint">The run pauses on the run page until you approve, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>
           </div>
 
+          <div class="field-group">
+            <label class="field-label">Run only when this artifact has content</label>
+            <input
+              v-model="settingsRunWhen" type="text" class="field-input" placeholder="approved-drafts.json"
+            >
+            <span class="field-hint">
+              A filename in the run's artifacts directory, for a step that consumes what an
+              earlier step wrote. Leave empty and the step always runs. When the file is not
+              written, or holds an empty array or object, the step is skipped and everything
+              downstream still runs. When it exists but is not valid JSON the step fails, so a
+              step that crashed mid-write is never mistaken for one with nothing to do.
+            </span>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Files this step must leave behind, one per line</label>
+            <textarea
+              v-model="settingsProduces" rows="3" class="field-input font-mono text-xs"
+              placeholder="plan.md&#10;qa-plan.json"
+            />
+            <span v-if="settingsProducesError" class="field-hint" style="color: var(--error);">{{ settingsProducesError }}</span>
+            <span class="field-hint">
+              Filenames in the run's artifacts directory. Checked before the monitor runs, so a step
+              that left one out is sent back for that exact file instead of paying for a model to
+              notice — which costs it a visit. A step with no visits left fails instead, and a step
+              that skipped itself is exempt. Leave empty to check nothing.
+            </span>
+          </div>
+
           <div v-if="settingsStep.agentSlug === 'sdlc-jira-tracker'" class="field-group">
             <label class="field-label">Move the ticket to</label>
             <input
@@ -697,6 +1244,96 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               <span class="field-label mb-0">Attach the run's evidence files</span>
             </label>
             <span class="field-hint">Runner-executed, no model call. The status is matched to the ticket's own workflow (with synonyms), so "Dev Done" lands even where the project calls it "Ready for Review"; when nothing matches, the output lists what the ticket offers. Writes reach Jira only when JIRA_POST_ENABLED=1 on the instance.</span>
+          </div>
+
+          <div v-if="settingsStep.agentSlug === 'sdlc-auto-dispatcher'" class="field-group">
+            <template v-if="!settingsTriggerFromParameter">
+              <label class="field-label">Dispatch one run per entry in</label>
+              <input v-model="settingsTriggerSource" type="text" class="field-input" placeholder="created-tickets.json">
+            </template>
+            <template v-if="!settingsTriggerSource">
+              <label class="field-label" :class="{ 'mt-2': !settingsTriggerFromParameter }">
+                {{ settingsTriggerFromParameter ? 'Dispatch one run per line of' : 'or one run per line of a run input' }}
+              </label>
+              <select v-model="settingsTriggerFromParameter" class="field-input">
+                <option value="">Choose a run input…</option>
+                <option v-for="p in workflowParameters.filter(p => p.name.trim())" :key="p.name" :value="p.name">{{ p.name }}</option>
+              </select>
+              <span v-if="!workflowParameters.some(p => p.name.trim())" class="field-hint">
+                This workflow declares no inputs yet. Add one under <strong>Inputs</strong> above, then choose it here.
+              </span>
+            </template>
+            <template v-if="settingsTriggerSource || settingsTriggerFromParameter">
+              <label class="field-label mt-2">Give each child this input</label>
+              <input v-model="settingsTriggerItemParameter" type="text" class="field-input" placeholder="repo">
+              <label class="field-label mt-2 flex items-center gap-2">
+                <input v-model="settingsTriggerJoin" type="checkbox" class="rounded">
+                <span>Wait for every child before the next step</span>
+              </label>
+              <template v-if="settingsTriggerSource">
+                <label class="field-label mt-2">Route on this field</label>
+                <input v-model="settingsTriggerRouteBy" type="text" class="field-input" placeholder="work_type">
+                <label class="field-label mt-2">Routes, one <code>value: workflow-slug</code> per line</label>
+                <textarea v-model="settingsTriggerRoutes" rows="5" class="field-input font-mono text-xs" placeholder="bug: runbook-a-ticket-to-evidence-backed-pr&#10;feature: runbook-b-feature-request-to-evidence-backed-pr" />
+              </template>
+              <label class="field-label mt-2">
+                {{ settingsTriggerFromParameter ? 'Workflow every item goes to' : 'Workflow for anything the routes miss' }}
+              </label>
+              <input v-model="settingsTriggerSlug" type="text" class="field-input" placeholder="runbook-a-ticket-to-evidence-backed-pr">
+            </template>
+            <span class="field-hint">Runner-executed, no model call. Starts one run per item, each in its own checkout, from either an artifact this run's earlier steps wrote or a run input holding one item per line. The input is the way to fan out over a list somebody types when they start the run — scanning five repositories needs no step to produce a file first — and it has no field to route on, so it goes to one workflow. <strong>Every target workflow must declare the input you name above</strong>, or the step fails before starting anything: a child that was not told which item it is for would work on whatever its checkout contained. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. <strong>Waiting</strong> holds this run at <code>JOINING</code> until every child has settled, then writes <code>children.json</code> — one entry per child with its status — so one step downstream can report on the whole fan-out. A joining run spends no slot in its group, so a group that dispatches and receives can be capped at 1; without waiting, this step completes as soon as the children exist and each reports to its own run, and this run holds a slot while it dispatches, so such a group needs a cap of at least 2.</span>
+          </div>
+
+          <div v-if="settingsStep.agentSlug === 'sdlc-notifier'" class="field-group">
+            <label class="field-label">Post to channel</label>
+            <select v-model="settingsNotifyChannel" class="field-input">
+              <option value="">Choose a channel…</option>
+              <option v-for="c in channels" :key="c.name" :value="c.name">{{ c.name }} ({{ c.kind }}{{ c.host ? ` · ${c.host}` : '' }})</option>
+            </select>
+            <span v-if="!channels.length" class="field-hint">
+              No channels are configured on this instance yet. Add one under
+              <NuxtLink to="/settings" class="underline">Settings</NuxtLink>, then choose it here.
+            </span>
+            <template v-if="settingsNotifyChannel">
+              <label class="field-label mt-2">Message</label>
+              <textarea v-model="settingsNotifyMessage" rows="3" class="field-input" placeholder="{count} drafts need a decision." />
+            </template>
+            <span class="field-hint">
+              Runner-executed, no model call. Posts one message and completes. <code>{{ '{count}' }}</code> is
+              the number of entries in this step's "Run only when this artifact has content" file above, and the
+              entries are named the same way the review panel names them; a link to the run is appended. The
+              channel's webhook is never stored in this workflow — only its name. A delivery failure is recorded
+              in the step's output and never fails the run, so verify a new channel with "Send test" in Settings
+              rather than on the branch that matters.
+              Beside a step that waits for approval is fine: only the gated step waits, so this one sends
+              before the run stops on the person.
+            </span>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">What this step is shown from upstream</label>
+            <USelectDropdown v-model="settingsContextMode" :options="contextModeOptions" />
+            <span class="field-hint">
+              By default a step receives only the steps immediately before it. "Every step upstream"
+              is for a step that must see evidence produced several hops back — it is not free: the
+              input is capped at 60,000 characters shared evenly between the contributors, and what
+              does not fit is cut with the truncation marked.
+            </span>
+          </div>
+
+          <div class="field-group">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" :checked="settingsStep.testsUnlocked === true" @change="settingsStepId && patchStep(settingsStepId, { testsUnlocked: ($event.target as HTMLInputElement).checked || undefined })">
+              <span class="field-label mb-0">This step writes tests and code together</span>
+              <HelpTip
+                title="Lifting the test lock"
+                body="The plugin's test lock denies test edits once source has been edited, so a step cannot quietly rewrite the test that was meant to catch it. A step that owns both by design needs that lock lifted: the runner writes .agent/test-unlock.json into the checkout with the reason before the step starts, and preflight checks the lock against this step before the run spends a token. Tick it only for a step whose whole job is test-and-code in one pass."
+              />
+            </label>
+            <span class="field-hint">
+              The runner lifts the plugin's test lock for this step and records why. Leave it off for
+              any step that edits source without owning the tests that cover it.
+            </span>
           </div>
 
           <div class="field-group">

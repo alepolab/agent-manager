@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { resolveClaudePath } from './claudeDir'
+import { resolveClaudeFile } from './claudeDir'
 import type { Workflow } from '~/types'
 
 /**
@@ -15,7 +15,7 @@ import type { Workflow } from '~/types'
  * anything; the auth gate just made the cost visible.
  */
 export async function readWorkflow(slug: string): Promise<Workflow | null> {
-  const filePath = resolveClaudePath('workflows', `${slug}.json`)
+  const filePath = resolveClaudeFile('workflows', slug)
   if (!existsSync(filePath)) return null
   const raw = await readFile(filePath, 'utf-8')
   const data = JSON.parse(raw)

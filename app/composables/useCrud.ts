@@ -11,19 +11,26 @@ export function useCrud<T extends { slug: string }, P = unknown>(basePath: strin
 
   const label = opts.label || opts.stateKey
 
-  async function fetchAll(params: any = {}) {
-    loading.value = true
-    error.value = null
+  /** `silent` is for background refreshes: no loading flag, and a failure keeps the last good list. */
+  async function fetchAll(params: any = {}, { silent = false } = {}) {
+    if (!silent) {
+      loading.value = true
+      error.value = null
+    }
     try {
-      items.value = await $fetch<T[]>(basePath, { 
-        query: { workingDir: workingDir.value, ...params } 
+      const next = await $fetch<T[]>(basePath, {
+        query: { workingDir: workingDir.value, ...params }
       }) as T[]
+      // An unchanged background refresh must not hand consumers new objects: /graph rebuilds its layout from them.
+      if (silent && JSON.stringify(next) === JSON.stringify(items.value)) return
+      items.value = next
     } catch (e: unknown) {
+      if (silent) return
       const msg = e instanceof Error ? e.message : `Failed to load ${label}`
       error.value = msg
       console.error(`[useCrud:${label}] fetchAll:`, msg)
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 

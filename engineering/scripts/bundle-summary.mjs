@@ -100,6 +100,7 @@ function renderBlastRadius(bundle) {
 
 function renderDeployment(bundle) {
   const { stack } = bundle
+  if (stack === null) return '## Deployment truths considered\n- No stack stood up: intake judged the change provable without one.'
   const liquibase = stack?.liquibase_tag ?? 'n/a'
   return `## Deployment truths considered\n- Profile \`${stack?.profile}\`, topology \`${stack?.topology}\`, Liquibase tag: ${liquibase}.`
 }

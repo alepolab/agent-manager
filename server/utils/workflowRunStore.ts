@@ -2,12 +2,18 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { resolveClaudePath } from './claudeDir.ts'
+import { resolveClaudeFile, resolveClaudePath } from './claudeDir.ts'
 import { agentManagerSettings } from './appSettings.ts'
 import { runWorkspace } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
+// Relative, not the ~~ alias: this is a VALUE import, so it survives to
+// runtime, and the plain-node test scripts that import this module directly
+// resolve no aliases. The type-only imports below may keep the alias because
+// they are erased.
+import { isLiveStatus, isWorkingStatus } from '../../shared/types/run.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
+import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
 
 /** Per-run caps: an env var on the instance wins, then the Settings page's values, then the defaults. */
 export function defaultBudget(): RunBudget {
@@ -68,11 +74,15 @@ function applyInterrupted(run: WorkflowRun): WorkflowRun {
   // and answering it starts the work in whichever process is alive then.
   // resumeInterruptedRuns already refuses to touch these for exactly this
   // reason ("not an interruption, a question nobody answered"); relabelling
-  // them here contradicted it, and the contradiction was visible — a restart
+  // them here contradicted it, and the contradiction was visible - a restart
   // turned a developer's pending approval into an `interrupted` run, which
   // only an operator may resume. The decision must survive a deploy.
   if (run.status === 'paused' && run.question) return run
-  const live = run.status === 'running' || run.status === 'paused'
+  // Deliberately NOT isLiveStatus: a `queued` run has no owner to lose. Its
+  // pid and bootId name the process that queued it, which is routinely gone by
+  // the time a slot frees, and calling that "interrupted" would delete the
+  // queue on every restart.
+  const live = isWorkingStatus(run.status)
   // Either signal means the owner is gone: a boot id from another process, or
   // a pid nothing answers on. Inside a container every server is pid 1, which
   // is why the boot id exists at all.
@@ -110,18 +120,26 @@ function applyDefaults(run: WorkflowRun): WorkflowRun {
 export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
   await ensureDir()
   const now = Date.now()
+  const status = input.status ?? 'running'
   const run: WorkflowRun = {
     id: randomUUID(),
     workflowSlug: input.workflowSlug,
     workflowName: input.workflowName,
-    status: 'running',
+    status,
+    group: input.group,
+    notifyChannel: input.notifyChannel,
+    // Only a queued run has one, so its presence is also the honest record of
+    // "this run waited". A run that started immediately never did.
+    ...(status === 'queued' ? { queuedAt: Date.now() } : {}),
     autoRun: input.autoRun,
     initialPrompt: input.initialPrompt,
     watch: input.watch,
     ticketKey: input.ticketKey,
     projectDir: input.projectDir,
+    parameters: input.parameters,
     product: input.product,
     startedBy: input.startedBy,
+    parentRunId: input.parentRunId,
     baseCommit: input.baseCommit,
     steps: input.steps.map(s => ({
       stepId: s.stepId, label: s.label, agentSlug: s.agentSlug,
@@ -134,7 +152,11 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     // fields are set explicitly rather than left absent, because absent is how
     // the clock recognises a record written before it existed.
     activeMs: 0,
-    runningSince: now,
+    // Only a run that is actually running has an open stretch. A queued run
+    // has not started, and startRunClock is idempotent - a runningSince set
+    // here would survive the queued -> running transition and bill the whole
+    // queue wait as execution time.
+    ...(status === 'queued' ? {} : { runningSince: now }),
     pid: process.pid,
     bootId: BOOT_ID,
     budget: defaultBudget(),
@@ -151,7 +173,25 @@ export async function saveRun(run: WorkflowRun): Promise<void> {
   const path = runPath(run.id)
   const tmp = `${path}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`  // unique per call: two concurrent saves of one run shared a name, and the second rename found nothing
   await writeFile(tmp, JSON.stringify(run, null, 2), 'utf-8')
-  await rename(tmp, path)
+
+  // Retried, because on Windows renaming ONTO a file somebody else has open
+  // fails with EPERM. Every listRuns() opens every record - the /runs page
+  // polls it, the run queue's drain sweeps it - so a save landing while any of
+  // those is mid-read loses the write. Observed as runs reaching 'failed' with
+  // `EPERM: operation not permitted, rename ...` as their error: the record was
+  // fine, the reader was just holding it. The read side cannot fix this (a
+  // reader has no lock to release), and the write side must not give up on a
+  // condition that clears in microseconds.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(tmp, path)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (attempt >= 10 || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) throw err
+      await new Promise(r => setTimeout(r, 5 * (attempt + 1)))
+    }
+  }
 }
 
 export async function getRun(id: string): Promise<WorkflowRun | null> {
@@ -174,7 +214,7 @@ export async function getRun(id: string): Promise<WorkflowRun | null> {
 export async function deleteRun(id: string): Promise<'ok' | 'not-found' | 'live'> {
   const run = await getRun(id)
   if (!run) return 'not-found'
-  if (run.status === 'running' || run.status === 'paused') return 'live'
+  if (isLiveStatus(run.status)) return 'live'
   await rm(runPath(id), { force: true })
   await rm(join(runArtifactsDir(id), '..'), { recursive: true, force: true })
   return 'ok'
@@ -192,35 +232,75 @@ export async function listRuns(workflowSlug?: string): Promise<WorkflowRun[]> {
   return runs.sort((a, b) => b.startedAt - a.startedAt)
 }
 
+/** This workflow's run that can still change, if any. Counts a `queued` run:
+ *  a watch that could not see one would dispatch a second ticket into the same
+ *  queue on its next cycle, which is the dedupe this function exists for. */
 export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun | null> {
   const runs = await listRuns(workflowSlug)
-  return runs.find(r => r.status === 'running' || r.status === 'paused') ?? null
+  return runs.find(r => isLiveStatus(r.status)) ?? null
 }
 
 /**
- * A live run that would write the same directory as `workspace`, across EVERY
+ * A run that would write the same directory as `workspace`, across EVERY
  * workflow — because the hazard is a shared checkout, not a shared workflow
  * definition. See server/utils/workspace.ts for why the per-workflow lock this
  * replaces was both too strict and too loose.
+ *
+ * `includeQueued` picks which of two different questions is being asked, and
+ * getting it wrong is silent both ways:
+ *
+ *  - **false (the default) — "is anything WORKING here right now?"** This is
+ *    the lock. A queued run holds no checkout, so counting it would refuse a
+ *    start for a directory nothing is touching. This is what a launch and a
+ *    restart ask.
+ *  - **true — "is anything already AIMED here?"** This is admission. A cron
+ *    schedule whose group is full queues; if the next fire cannot see that
+ *    queued run it queues a second, and a third, and by morning eight runs
+ *    are pointed at one `projectDir` for the queue to launch into each other.
+ *    Two parents dispatching the same ticket key produce the same collision,
+ *    since a child's directory is derived from that key.
  */
-export async function findRunInWorkspace(workspace: string, excludeRunId?: string): Promise<WorkflowRun | null> {
+export async function findRunInWorkspace(
+  workspace: string,
+  excludeRunId?: string,
+  opts: { includeQueued?: boolean } = {},
+): Promise<WorkflowRun | null> {
   const runs = await listRuns()
   return runs.find(r =>
-    (r.status === 'running' || r.status === 'paused')
+    (opts.includeQueued ? isLiveStatus(r.status) : isWorkingStatus(r.status))
     && r.id !== excludeRunId
     && runWorkspace(r) === workspace,
   ) ?? null
 }
 
 /** The workflow definition a run was started from, read from disk. The runner
- *  needs it to rebuild scheduling state for a run it has never seen in memory. */
-export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, steps: any[] } | null> {
-  const path = resolveClaudePath('workflows', `${slug}.json`)
+ *  needs it to rebuild scheduling state for a run it has never seen in memory,
+ *  the dispatch step needs a target's `parameters` to work out which of the
+ *  parent's values that child actually declares, and every automated starter
+ *  needs its `group` to know which cap the run counts against. This is the only
+ *  workflow reader on those paths, so returning `group` here is what keeps
+ *  slot accounting from re-reading a workflow file per live run. */
+export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, name: string, group?: string, notifyChannel?: string, steps: any[], parameters?: WorkflowParameter[] } | null> {
+  const path = resolveClaudeFile('workflows', slug)
   if (!existsSync(path)) return null
   try {
     const data = JSON.parse(await readFile(path, 'utf-8'))
-    return { slug, name: data.name ?? slug, steps: data.steps ?? [] }
+    return { slug, name: data.name ?? slug, group: data.group || undefined, notifyChannel: data.notifyChannel || undefined, steps: data.steps ?? [], parameters: data.parameters ?? [] }
   } catch {
     return null
   }
+}
+
+/** The `workflow:` argument every starter hands startRun or startOrQueue.
+ *
+ *  It exists because writing that object literal by hand is how `group` and
+ *  `notifyChannel` went missing from four of the five start paths. Both fields
+ *  decide something the run cannot recover later: `group` is the cap the run
+ *  counts against, and `notifyChannel` is who hears about it - absent, it falls
+ *  through to a channel literally named `default`. newRunInput threads both
+ *  correctly, so the only way to lose them is at the call site. */
+export function toWorkflowLike<T extends { slug: string, name: string, group?: string, notifyChannel?: string, steps: any[] }>(
+  wf: T,
+): { slug: string, name: string, group?: string, notifyChannel?: string, steps: any[] } {
+  return { slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, steps: wf.steps }
 }

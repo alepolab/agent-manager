@@ -45,8 +45,10 @@ function main() {
   const target = call.tool_input?.file_path ?? call.tool_input?.path ?? ''
 
   // The plan itself, and everything else under .agent/, must be writable —
-  // otherwise the gate forbids satisfying the gate.
-  if (target.includes('.agent/')) process.exit(0)
+  // otherwise the gate forbids satisfying the gate. Both separators: on
+  // Windows target is backslash-separated (it's built with path.join()),
+  // so a literal '.agent/' check never matches there.
+  if (/(^|[\\/])\.agent[\\/]/.test(target)) process.exit(0)
 
   // A workflow run's evidence artifacts, likewise. They live outside any
   // project — under CLAUDE_DIR/workflow-runs/<id>/artifacts — so no plan in

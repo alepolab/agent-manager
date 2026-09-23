@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { parseFrontmatter } from '../../utils/frontmatter'
 import { resolveClaudePath } from '../../utils/claudeDir'
+import { getModelContextWindow } from '../../utils/models.ts'
 
 /**
  * Built-in command handlers
@@ -58,7 +59,8 @@ Custom commands are loaded from:
   '/cost': async (_args, context) => {
     const tokenUsage = context?.tokenUsage || {}
     const used = Number(tokenUsage.used ?? tokenUsage.totalUsed ?? 0) || 0
-    const total = Number(tokenUsage.total ?? tokenUsage.contextWindow ?? 200000) || 200000
+    const fallbackWindow = getModelContextWindow(context?.model)
+    const total = Number(tokenUsage.total ?? tokenUsage.contextWindow ?? fallbackWindow) || fallbackWindow
     const percentage = total > 0 ? Number(((used / total) * 100).toFixed(1)) : 0
 
     return {

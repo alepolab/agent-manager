@@ -63,8 +63,9 @@ const base = readFileSync(join(root, 'registry/environments.yaml'), 'utf8')
 
 // ── 3. Two environments with an identical detect fingerprint are ambiguous ─
 {
+  // \r?\n: on a CRLF checkout the literal string above never matches.
   const r = runWith(base.replace(
-    "      os_release_id: ol\n      wsl: true",
+    /      os_release_id: ol\r?\n      wsl: true/,
     "      os_release_id: ubuntu\n      wsl: true"
   ))
   assert.equal(r.code, 1, 'a duplicate detect fingerprint must fail')
@@ -73,14 +74,16 @@ const base = readFileSync(join(root, 'registry/environments.yaml'), 'utf8')
 
 // ── 4. `detect` missing `wsl` must fail (schema: both keys required together) ─
 {
-  const r = runWith(base.replace('      os_release_id: ubuntu\n      wsl: true', '      os_release_id: ubuntu'))
+  // \r?\n: same CRLF tolerance as the duplicate-fingerprint fixture above.
+  const r = runWith(base.replace(/      os_release_id: ubuntu\r?\n      wsl: true/, '      os_release_id: ubuntu'))
   assert.equal(r.code, 1, 'detect without wsl must fail schema validation')
   assert.match(r.out, /missing required key "wsl"/, r.out)
 }
 
 // ── 5. An empty facts map is a schema violation (minProperties: 1) ────────
 {
-  const r = runWith(base.replace(/facts:\n(\s+package_manager: apt\n[\s\S]*?is_production_shaped: false\n)/, 'facts:\n'))
+  // \r?\n: same CRLF tolerance as the fixtures above.
+  const r = runWith(base.replace(/facts:\r?\n(\s+package_manager: apt\r?\n[\s\S]*?is_production_shaped: false\r?\n)/, 'facts:\n'))
   assert.equal(r.code, 1, 'an empty facts map must fail')
   assert.match(r.out, /needs at least 1 entr/, r.out)
 }

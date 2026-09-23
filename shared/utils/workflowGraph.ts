@@ -258,6 +258,28 @@ export function markCompleted(graph: WorkflowGraph, state: RunState, id: string)
   }
 }
 
+/**
+ * Settle a node whose `runWhen` condition was not met: it never ran, and whatever
+ * it feeds still schedules.
+ *
+ * The graph status is 'completed' even though the run record says 'skipped',
+ * because the AND-join in markCompleted tests `status === 'completed'` on every
+ * forward predecessor - a branch that legitimately had nothing to do must not
+ * wedge the join behind it. That divergence between graph status and record
+ * status is deliberate and already load-bearing for Jira steps, which settle the
+ * same way (see the `step.jira` branch in server/utils/workflowRunner.ts).
+ *
+ * Clearing `armed` is the whole reason this is not just a markCompleted call.
+ * markCompleted does not clear it; markRunning normally does, and a condition
+ * skip deliberately never calls markRunning (nothing was attempted, so nothing
+ * may be billed as a visit). Leave `armed` set and readyNodes hands the node
+ * straight back on the next pass - the caller's resolution loop never terminates.
+ */
+export function markSkippedByCondition(graph: WorkflowGraph, state: RunState, id: string): void {
+  state.armed[id] = false
+  markCompleted(graph, state, id)
+}
+
 export function markFailed(state: RunState, id: string): void {
   state.status[id] = 'failed'
   state.armed[id] = false
@@ -356,6 +378,349 @@ export function parseSkip(text: string | undefined | null): string | null {
   const matches = [...(text ?? '').matchAll(/^PIPELINE-SKIP:[^\S\n]*(\S.*)$/gm)]
   const last = matches[matches.length - 1]
   return last ? last[1]!.trim() : null
+}
+
+/** Blast radii a unit test cannot clear: a migration, a wire protocol, a charge. */
+export const STACK_REQUIRED_BLAST_RADII = ['schema', 'protocol', 'money']
+
+/**
+ * Whether the provisioning step may declare PIPELINE-SKIP, judged from the
+ * meta.json intake wrote.
+ *
+ * Left to the provisioner alone, the same kind of ticket stood a stack up on
+ * one run and skipped it on the next, and a skip on a wide-impact change ships
+ * a PR whose only proof is a unit test. So intake records `stack_required`
+ * with its reason, and the runner holds the provisioner to it. Fails closed: a
+ * missing or non-boolean value is not permission, and the forced blast radii
+ * overrule intake entirely. I/O-free like gateSatisfied: the caller reads the
+ * file and passes the parsed object, or null.
+ */
+export function stackSkipAllowed(meta: unknown): { allowed: boolean, reason: string } {
+  const m = meta && typeof meta === 'object' ? meta as Record<string, unknown> : {}
+  const because = typeof m.stack_reason === 'string' && m.stack_reason.trim() ? ` (${m.stack_reason.trim()})` : ''
+  if (typeof m.blast_radius === 'string' && STACK_REQUIRED_BLAST_RADII.includes(m.blast_radius)) {
+    return { allowed: false, reason: `blast_radius is ${m.blast_radius}, which is always verified on a running stack` }
+  }
+  if (m.stack_required === false) return { allowed: true, reason: `intake recorded stack_required: false${because}` }
+  if (m.stack_required === true) return { allowed: false, reason: `intake recorded stack_required: true${because}` }
+  return { allowed: false, reason: 'meta.json has no stack_required: false from intake' }
+}
+
+export type GateResult = {
+  verdict: 'run' | 'skip' | 'error'
+  /** Reads as the predicate of a sentence about the file: "<name> <detail>." */
+  detail: string
+  /** Entries found, when the shape has a countable one. */
+  count?: number
+}
+
+/**
+ * The array of entries a JSON artifact holds, however the agent shaped it.
+ *
+ * The contract every drafting agent is given says "a JSON array". On
+ * 2026-09-11 the drafter wrote one; on 2026-09-15, from an unchanged prompt, it
+ * wrapped the same array in `{note, run_id, repo, checkout, drafts: [...]}`.
+ * Both are one model's reading of the same instruction, and a pipeline that
+ * dies on the second has made a coin toss load-bearing.
+ *
+ * So a wrapper carrying exactly one array is unwrapped, and anything else is
+ * still refused - two arrays in one object is genuinely ambiguous about which
+ * one the step is meant to act on, and guessing there would be the kind of
+ * silent wrong answer this whole file exists to avoid.
+ *
+ * Returns null when there is no single array to be found.
+ */
+export function entriesOf(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) return parsed
+  if (!parsed || typeof parsed !== 'object') return null
+  const arrays = Object.values(parsed as Record<string, unknown>).filter(Array.isArray)
+  return arrays.length === 1 ? arrays[0] as unknown[] : null
+}
+
+/**
+ * What is missing from a step's declared `produces`, one sentence per file;
+ * empty when every file is there.
+ *
+ * The monitor is a model reading the step's own account of itself, and a
+ * monitor that crashes or answers unreadably votes CONTINUE, so "the step never
+ * wrote oracle-before.xml" could pass on to a verifier that has nothing to
+ * compare against. Whether a file exists is not a judgement. I/O-free like
+ * gateSatisfied: the caller passes each file's text, or null when unreadable.
+ */
+export function missingArtifacts(produces: string[], contents: Record<string, string | null>): string[] {
+  return produces.flatMap((name) => {
+    const raw = contents[name]
+    if (raw === null || raw === undefined) return [`${name} was not written`]
+    return raw.trim() ? [] : [`${name} is empty`]
+  })
+}
+
+/**
+ * Whether a step's `runWhen` artifact holds something worth running for.
+ *
+ * Takes the file's text rather than its path so the whole decision - every
+ * emptiness rule and every sentence a reviewer reads - stays I/O-free and
+ * testable under plain node. The caller does the reading and passes `null` when
+ * the file could not be read at all.
+ *
+ * Missing and malformed are deliberately different verdicts. A file that was
+ * never written is a legitimate "nothing to do here": the gate ran and found
+ * no work. A file that exists but is not JSON means the step that produced it
+ * crashed mid-write or wrote something nobody can consume, and reading that as
+ * "nothing to do" would let a broken gate silently complete a run having
+ * created nothing - the exact silent-nothing the rest of this pipeline is built
+ * to prevent. So it is an error, and it fails the step.
+ */
+export function gateSatisfied(raw: string | null): GateResult {
+  if (raw === null) return { verdict: 'skip', detail: 'was not written' }
+  if (!raw.trim()) return { verdict: 'skip', detail: 'is empty' }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { verdict: 'error', detail: 'exists but is not valid JSON' }
+  }
+
+  if (parsed === null) return { verdict: 'skip', detail: 'holds null' }
+  if (Array.isArray(parsed)) {
+    return parsed.length
+      ? { verdict: 'run', detail: `holds ${parsed.length} ${parsed.length === 1 ? 'entry' : 'entries'}`, count: parsed.length }
+      : { verdict: 'skip', detail: 'holds an empty array (0 entries)', count: 0 }
+  }
+  if (typeof parsed === 'string') {
+    return parsed ? { verdict: 'run', detail: 'holds a string' } : { verdict: 'skip', detail: 'holds an empty string' }
+  }
+  if (typeof parsed === 'object') {
+    // A wrapper around a single array is that array: the drafting agents shape
+    // the same instruction both ways between runs, and the dispatch step that
+    // consumes this file resolves it the same way. The two used to disagree -
+    // this said "an object with 5 keys, there is work here" and ran the step,
+    // while planDispatch refused the identical file - so an empty drafts array
+    // inside a wrapper ran a create step that had nothing to create.
+    const wrapped = entriesOf(parsed)
+    if (wrapped) {
+      return wrapped.length
+        ? { verdict: 'run', detail: `holds ${wrapped.length} ${wrapped.length === 1 ? 'entry' : 'entries'}`, count: wrapped.length }
+        : { verdict: 'skip', detail: 'holds an empty array (0 entries)', count: 0 }
+    }
+    const keys = Object.keys(parsed as Record<string, unknown>).length
+    return keys
+      ? { verdict: 'run', detail: `holds an object with ${keys} ${keys === 1 ? 'key' : 'keys'}`, count: keys }
+      : { verdict: 'skip', detail: 'holds an empty object', count: 0 }
+  }
+  // A bare number or boolean: falsy is nothing to do, truthy is something.
+  return parsed
+    ? { verdict: 'run', detail: `holds ${JSON.stringify(parsed)}` }
+    : { verdict: 'skip', detail: `holds ${JSON.stringify(parsed)}` }
+}
+
+/** A step the runner executes itself, without a model: it starts one child run
+ *  per entry in `source`, routing each entry to a workflow. */
+export interface TriggerWorkflowConfig {
+  /** Array artifact in the run's artifacts directory; one child run per entry. */
+  source?: string
+  /**
+   * A run parameter holding one item per line; one child run per line.
+   *
+   * Exactly one of this and `source` is set. It exists because the artifact
+   * source needs a step to produce the file, and "scan these five repos" is a
+   * list a person types when they start the run, not something an agent has to
+   * be spent deriving.
+   *
+   * A list of bare items carries no field to route on, so this requires `slug`
+   * and refuses `routeBy`.
+   */
+  fromParameter?: string
+  /**
+   * The child parameter each item is bound to, so the child can act on it.
+   *
+   * Required with `fromParameter`. The item already names the child's
+   * workspace, but a directory name is not an input a workflow can declare, and
+   * a child that cannot tell which repo it is for would scan whatever the
+   * checkout happened to contain.
+   */
+  itemParameter?: string
+  /**
+   * Wait for every child to settle before this run continues.
+   *
+   * Off by default - what this step has always done, and still the right
+   * default, because the children are complete runs that report for themselves.
+   * On, the parent reaches `joining`: live, but holding no slot in its group.
+   * That status exists for this field. A parent counted against the cap its own
+   * children queue behind deadlocks outright at a cap of 1 and halves
+   * throughput at 2 (see inFlightForGroup in runQueue.ts).
+   */
+  join?: boolean
+  /** Entry field whose value picks the workflow (e.g. 'work_type'). */
+  routeBy?: string
+  /** A `routeBy` value mapped to the workflow slug it dispatches to. */
+  routes?: Record<string, string>
+  /** Where an entry goes when `routeBy`/`routes` do not resolve it, and the
+   *  only target when neither is configured. */
+  slug?: string
+}
+
+export interface DispatchTarget {
+  /** Identifies the entry in reports, and names the child's own workspace. */
+  key: string
+  /** The workflow the child run starts. */
+  slug: string
+  /** The entry itself, so the caller can build the child's opening prompt. */
+  entry: Record<string, unknown>
+}
+
+export interface DispatchPlan {
+  targets: DispatchTarget[]
+  /** Reads as the predicate of a sentence about the file: "<name> <detail>." */
+  detail: string
+  /** Set when no plan could be made; the step fails and dispatches nothing. */
+  error?: string
+}
+
+/** Fields an entry may carry its identity in, nearest-first. A scan pipeline's
+ *  drafts are keyed by ticket before the ticket exists and by key after. */
+const ENTRY_KEY_FIELDS = ['jira_key', 'key', 'id', 'ticket', 'title']
+
+/**
+ * What to call one entry of an artifact: its own identity where it has one,
+ * else its position.
+ *
+ * Exported because the review panel names the same entries a dispatch will,
+ * and two different names for one draft - "DRAFT-002" on screen, "entry 2" in
+ * the run log - is a reviewer unable to tell whether the thing they approved
+ * is the thing that ran.
+ */
+export function entryKey(entry: Record<string, unknown>, index: number): string {
+  const named = ENTRY_KEY_FIELDS.map(f => entry[f]).find(v => typeof v === 'string' && v.trim())
+  return typeof named === 'string' ? named.trim() : `entry ${index + 1}`
+}
+
+/**
+ * Which child runs a `triggerWorkflow` step should start, from the artifact it
+ * dispatches over.
+ *
+ * Takes the file's text rather than its path, for the same reason
+ * `gateSatisfied` above does: every routing rule and every sentence a reviewer
+ * reads stays I/O-free and testable under plain node. The caller reads the file
+ * and passes `null` when it could not be read at all.
+ *
+ * Absent and malformed are deliberately different, exactly as they are for a
+ * `runWhen` gate. A file that was never written, or holds an empty array, is a
+ * legitimate "nothing to dispatch" - the step ran and found no work. A file
+ * that is not JSON, or is JSON but not an array, means the step that produced
+ * it crashed mid-write or wrote something nobody can consume; reading that as
+ * "nothing to dispatch" would let a scan complete having silently started
+ * nothing, which is the failure this pipeline is built to prevent.
+ *
+ * Routing is all-or-nothing. One entry nobody can route fails the whole step
+ * and starts no children, because a partially dispatched batch leaves some
+ * tickets in flight and others silently dropped, with nothing on the run
+ * saying which were which. Failing names the entry and the value that had no
+ * route, so the fix is a one-line edit to `routes`.
+ */
+export function planDispatch(raw: string | null, cfg: TriggerWorkflowConfig): DispatchPlan {
+  const none = (detail: string): DispatchPlan => ({ targets: [], detail })
+  if (raw === null) return none('was not written')
+  if (!raw.trim()) return none('is empty')
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { targets: [], detail: 'exists but is not valid JSON', error: 'exists but is not valid JSON' }
+  }
+  const entries = entriesOf(parsed)
+  if (!entries) {
+    const shape = parsed === null ? 'null' : typeof parsed
+    const why = `holds ${shape}, not the array of entries this step dispatches over`
+    return { targets: [], detail: why, error: why }
+  }
+  if (!entries.length) return none('holds an empty array (0 entries)')
+
+  // A non-object entry has no field to route by and no field to be named by.
+  return planDispatchEntries(entries.map(raw_ => (raw_ && typeof raw_ === 'object' && !Array.isArray(raw_))
+    ? raw_ as Record<string, unknown>
+    : {}), cfg)
+}
+
+/** The field a list item carries its value in, and the one `entryKey` reads it
+ *  back out of. `id` rather than a name of its own so an item is named the same
+ *  way an artifact entry is, in the step output and in the child's workspace. */
+export const LIST_ITEM_FIELD = 'id'
+
+/**
+ * Which child runs a `triggerWorkflow` step should start, from a run parameter
+ * holding one item per line.
+ *
+ * The same shape as planDispatch above and for the same reasons - `detail`
+ * reads as the predicate of a sentence about the source, absent and empty are
+ * legitimate "nothing to dispatch", and anything the step cannot honour is an
+ * error that starts no children rather than some of them.
+ *
+ * Two identical items is one of those errors, not a list to quietly dedupe. An
+ * item names its child's workspace, so dispatching both would put two runs in
+ * one checkout - the hazard every other line of this fan-out is arranged to
+ * avoid - and silently dropping the second would report a fan-out of two over a
+ * list of three.
+ */
+export function planListDispatch(value: string | undefined, cfg: TriggerWorkflowConfig): DispatchPlan {
+  const none = (detail: string): DispatchPlan => ({ targets: [], detail })
+  const fail = (why: string): DispatchPlan => ({ targets: [], detail: why, error: why })
+
+  // Checked before the value, so a misconfigured step says so even on a run
+  // that supplied nothing: an empty list would otherwise report "nothing to
+  // dispatch" and hide the reason it could never have dispatched anything.
+  if (cfg.routeBy) {
+    return fail('is a list of items, which carry no field to route on: name one target workflow instead of a routing field')
+  }
+  if (!cfg.itemParameter?.trim()) {
+    return fail('names no parameter to give each child, so a child could not tell which item it was started for')
+  }
+
+  if (value === undefined) return none('was not given')
+  const items = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  if (!items.length) return none('is empty')
+
+  const seen = new Set<string>()
+  for (const item of items) {
+    if (seen.has(item)) {
+      return fail(`lists "${item}" twice; each item names its own workspace, so both children would work in one checkout`)
+    }
+    seen.add(item)
+  }
+
+  return planDispatchEntries(items.map(item => ({ [LIST_ITEM_FIELD]: item })), cfg)
+}
+
+/**
+ * The routing half of a dispatch plan: entries in, one target per entry out.
+ *
+ * Split out of planDispatch because a list parameter arrives at the same
+ * entries by a different road, and routing them in two places is how two
+ * sources of the same thing drift apart.
+ */
+export function planDispatchEntries(entries: Record<string, unknown>[], cfg: TriggerWorkflowConfig): DispatchPlan {
+  const targets: DispatchTarget[] = []
+  for (const [i, entry] of entries.entries()) {
+    const key = entryKey(entry, i)
+
+    const routed = cfg.routeBy ? entry[cfg.routeBy] : undefined
+    const slug = (typeof routed === 'string' && cfg.routes?.[routed]) || cfg.slug
+    if (!slug) {
+      const why = !cfg.routeBy
+        ? 'this step names no workflow to dispatch to: set a target workflow, or a routing field and table'
+        : typeof routed !== 'string' || !routed
+          ? `${key} has no "${cfg.routeBy}" to route on, and this step has no fallback workflow`
+          : `${key} routes on "${cfg.routeBy}": "${routed}", which is in no route and this step has no fallback workflow`
+      return { targets: [], detail: why, error: why }
+    }
+    targets.push({ key, slug, entry })
+  }
+  return {
+    targets,
+    detail: `holds ${targets.length} ${targets.length === 1 ? 'entry' : 'entries'} to dispatch`,
+  }
 }
 
 const CLIP = 4000

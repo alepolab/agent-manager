@@ -1,13 +1,16 @@
 import { noteRun } from '../../../utils/workflowRunner'
-import { requireCapability } from '../../../utils/session'
+import { appendRunAudit } from '../../../utils/runArtifacts'
+import { currentUser, requireCapability } from '../../../utils/session'
 
 /** Send a note to whichever step starts next in a running run. */
 export default defineEventHandler(async (event) => {
   // Steering an agent mid-flight is engine work, whatever it looks like.
   await requireCapability(event, 'runEngine')
+  const id = getRouterParam(event, 'id')!
   const body = await readBody<{ text?: string }>(event)
   if (!body?.text?.trim()) throw createError({ statusCode: 400, message: 'text is required' })
-  const r = await noteRun(getRouterParam(event, 'id')!, body.text)
+  const r = await noteRun(id, body.text)
   if (!r) throw createError({ statusCode: 409, message: 'This run is not in flight on this instance; restart a step with a note instead' })
+  await appendRunAudit(id, { type: 'note', actor: (await currentUser(event))?.login, text: body.text.trim() })
   return r
 })

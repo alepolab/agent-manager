@@ -12,6 +12,13 @@ const props = defineProps<{
     monitorLabel?: string
     maxVisits?: number
     approval?: boolean
+    runWhen?: string
+    triggerSource?: string
+    triggerJoin?: boolean
+    notifyChannel?: string
+    produces?: string[]
+    contextMode?: 'predecessors' | 'ancestors'
+    testsUnlocked?: boolean
     status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
     visits?: number
     monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
@@ -63,6 +70,48 @@ const verdictColor: Record<string, string> = {
             :title="`Ran ${data.visits} times`"
           >×{{ data.visits }}</span>
           <span v-if="data.approval" class="inline-flex items-center" title="Waits for your approval before running"><UIcon name="i-lucide-hand" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.runWhen"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Runs only when ${data.runWhen} has content`"
+          ><UIcon name="i-lucide-git-branch" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.triggerSource"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Starts one run per entry in ${data.triggerSource}`"
+          ><UIcon name="i-lucide-git-fork" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.triggerJoin"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            title="Waits for every child run before the next step"
+          ><UIcon name="i-lucide-hourglass" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.notifyChannel"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Posts a message to ${data.notifyChannel}`"
+          ><UIcon name="i-lucide-bell-ring" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.produces?.length"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            :title="`Must write: ${data.produces.join(', ')}`"
+          ><UIcon name="i-lucide-file-check" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.contextMode === 'ancestors'"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            title="Receives every upstream step's output, not just the ones before it"
+          ><UIcon name="i-lucide-git-merge" class="size-2.5 -mt-px" /></span>
+          <span
+            v-if="data.testsUnlocked"
+            class="inline-flex items-center"
+            style="color: var(--text-disabled);"
+            title="Writes tests and code together; the plugin's test lock is lifted for this step"
+          ><UIcon name="i-lucide-unlock" class="size-2.5 -mt-px" /></span>
           <span
             v-if="data.monitorLabel"
             class="t-small truncate"

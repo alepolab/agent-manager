@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import type { McpServer } from '~/composables/useMCP'
 
 const route = useRoute()
 const router = useRouter()
@@ -60,24 +61,38 @@ const isDirty = computed(() => {
   return JSON.stringify(form.value) !== initialForm.value
 })
 
+function formFrom(data: McpServer): typeof form.value {
+  return {
+    name: data.name,
+    transport: data.transport,
+    command: data.command || '',
+    argsString: data.args?.join(' ') || '',
+    url: data.url || '',
+    scope: data.scope,
+    disabled: !!data.disabled,
+    envPairs: Object.entries(data.env ?? {}).map(([key, value]) => ({ key, value })),
+    headerPairs: Object.entries(data.headers ?? {}).map(([key, value]) => ({ key, value })),
+  }
+}
+
+function applyServer(data: McpServer) {
+  form.value = formFrom(data)
+  initialForm.value = JSON.stringify(form.value)
+}
+
+// Config only: capabilities start the MCP server, so they are never refreshed in the background.
+const { pending: externalPending, ...external } = useExternalChange({
+  fetch: () => fetchServer(name, scope, { silent: true }),
+  baseline: () => initialForm.value && JSON.parse(initialForm.value),
+  content: formFrom,
+  isDirty: () => isDirty.value,
+  apply: applyServer,
+  paused: () => loading.value || saving.value,
+})
+
 onMounted(async () => {
   try {
-    const data = await fetchServer(name, scope)
-    form.value.name = data.name
-    form.value.transport = data.transport
-    form.value.command = data.command || ''
-    form.value.argsString = data.args?.join(' ') || ''
-    form.value.url = data.url || ''
-    form.value.scope = data.scope
-    form.value.disabled = !!data.disabled
-    
-    if (data.env) {
-      form.value.envPairs = Object.entries(data.env).map(([key, value]) => ({ key, value }))
-    }
-    if (data.headers) {
-      form.value.headerPairs = Object.entries(data.headers).map(([key, value]) => ({ key, value }))
-    }
-    initialForm.value = JSON.stringify(form.value)
+    applyServer(await fetchServer(name, scope))
   } catch (err) {
     router.push('/mcp')
   } finally {
@@ -193,6 +208,9 @@ useUnsavedChanges(isDirty)
         />
       </div>
     </div>
+
+    <!-- No stored timestamp to adopt: an MCP save always overwrites, so Keep mine only dismisses. -->
+    <ExternalChangeBanner v-if="externalPending" class="mx-6 mt-3" @reload="external.reload" @keep="external.keepMine" />
 
     <!-- Loading -->
     <div v-if="loading" class="flex-1 flex items-center justify-center">

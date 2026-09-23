@@ -13,7 +13,17 @@ interface TeamStatus {
   workflow: { slug: string, state: State, steps: number, diff?: string }
   workflows: { slug: string, name: string, state: State, steps: number, diff?: string }[]
   watches: Item[]
-  registry: { ok: boolean, products: number, path: string | null, items: { key: string, suite?: string, repos: string[], recipe: boolean }[] }
+  registry: {
+    ok: boolean
+    /** The store exists but does not parse, so routing is running on the seed. */
+    degraded: boolean
+    products: number
+    path: string | null
+    items: { key: string, suite?: string, repos: string[], recipe: boolean, recipeSource: 'local' | 'plugin' | 'shipped' | null }[]
+    seed: { seededFrom: string, seededKind: string, seededAt: number } | null
+    /** Reported only. Applying never touches the registry — see teamSync.ts. */
+    drift: { newInSource: string[], changedInSource: string[], removedInSource: string[] }
+  }
   unresolvedSkills: string[]
   enforcement: { ok: boolean, checks: { name: string, armed: boolean, source?: string }[], error?: string }
   lastApplied: { by: string, at: number, items: number } | null
@@ -85,6 +95,15 @@ async function apply(only?: string[]) {
   } finally { syncing.value = null }
 }
 onMounted(() => { refresh(); loadCheckouts() })
+// Not refresh(): its loading flag spins the "Check again" button on every tick. Waits while an apply or park is
+// in flight, since both write status or checkouts from their own response.
+useAutoRefresh(async () => {
+  if (syncing.value || stashing.value) return
+  await Promise.all([
+    $fetch<TeamStatus>('/api/team/status').then((s) => { status.value = s; error.value = null }),
+    loadCheckouts(),
+  ])
+})
 const color = (s: State) => s === 'ok' ? 'var(--success)' : s === 'missing' ? 'var(--error)' : 'var(--warning)'
 const byState = (items: Item[]) => [...items].sort((a, b) => Number(a.state === 'ok') - Number(b.state === 'ok'))
 const sourceLabel = (s: Source) => s === 'plugin' ? 'from the installed plugin' : s === 'shipped' ? 'from the copy shipped in the app' : s === 'other' ? 'from an override path' : 'no source found'
@@ -222,13 +241,29 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <p class="t-small text-label mt-2">Seeded disabled. Enable one on the Watches page once its query has been checked against real tickets.</p>
           </div>
           <div :class="card" :style="cardStyle">
-            <h2 class="t-small font-medium mb-2" style="color: var(--text-primary);">Products</h2>
+            <h2 class="t-small font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+              Products
+              <NuxtLink to="/registry" class="t-small font-normal underline focus-ring text-label">edit</NuxtLink>
+            </h2>
+            <!-- Reported here, never applied here. The registry is the one seeded
+                 thing a developer edits to change how runs route, so an apply that
+                 rewrote it would hand that change back at the next boot. -->
+            <p v-if="status.registry.degraded" class="t-small mb-2" style="color: var(--error);">
+              The store at {{ status.registry.path }} does not parse, so routing is running on the seed.
+            </p>
+            <p v-else-if="status.registry.drift.newInSource.length" class="t-small mb-2" style="color: var(--warning);">
+              The team ships {{ status.registry.drift.newInSource.length }} product(s) this instance does not have
+              ({{ status.registry.drift.newInSource.join(', ') }}). A ticket for one resolves to nothing here until it is
+              imported on the <NuxtLink to="/registry" class="underline focus-ring">Products page</NuxtLink>.
+            </p>
             <p v-if="!status.registry.items.length" class="t-small text-label">Registry not readable{{ status.registry.path ? ` at ${status.registry.path}` : '' }}.</p>
             <div v-for="p in status.registry.items" :key="p.key" class="flex items-center gap-2 t-small py-0.5">
               <span class="font-mono">{{ p.key }}</span>
               <span v-if="p.suite" class="text-label">{{ p.suite }}</span>
               <span class="text-label truncate ml-auto" :title="p.repos.join(', ')">{{ p.repos.length }} repo{{ p.repos.length === 1 ? '' : 's' }}</span>
-              <span class="t-small px-1.5 py-0.5 rounded" :style="{ color: p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }" :title="p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? 'recipe' : 'no recipe' }}</span>
+              <!-- 'local' is drift and this page is about drift: the recipe in force
+                   was edited here and no longer matches whatever the plugin ships. -->
+              <span class="t-small px-1.5 py-0.5 rounded" :style="{ color: p.recipeSource === 'local' ? 'var(--warning)' : p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }" :title="p.recipeSource === 'local' ? `recipes/${p.key}.md was edited in the config directory; the plugin's copy, if any, is hidden behind it on this machine` : p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? (p.recipeSource === 'local' ? 'recipe · local' : 'recipe') : 'no recipe' }}</span>
             </div>
           </div>
         </div>

@@ -58,7 +58,20 @@ function writeMeta(runId, meta) {
   assert.doesNotMatch(comment, /pull request is ready/)
   assert.match(comment, /stopped before opening a pull request/)
   assert.match(comment, /stack would not come up/)
-  assert.match(comment, /^\(no assignee or reporter/, 'no owner known is stated plainly, not invented')
+  // Nobody looked, so the comment says nothing about ownership. It used to open
+  // by declaring the ticket had no assignee or reporter - on real tickets that
+  // had both - because the runner's own settle path passes no owner at all.
+  assert.doesNotMatch(comment, /no assignee or reporter/, 'an unchecked ticket gets no ownership line')
+}
+{
+  // Asked and answered: the ticket genuinely has neither, and says so.
+  const comment = renderTicketComment({
+    ticketKey: 'CSUP-2b',
+    watchName: 'Jira Watch',
+    ownerChecked: true,
+    outcome: { runId: 'run-2b', runStatus: 'failed', prUrls: [], haltReason: 'stack would not come up' },
+  })
+  assert.match(comment, /^\(no assignee or reporter/, 'a checked ticket with neither still states it plainly')
 }
 
 // ── 3. forVisName, when given, appears as the house-style closing line ─────
@@ -70,6 +83,54 @@ function writeMeta(runId, meta) {
     forVisName: 'Ashwani',
   })
   assert.match(comment, /For vis: Ashwani$/m)
+}
+
+
+// ── 3b. The comment names what actually started the run ───────────────────
+//
+// It said 'Dispatched by watch "<workflow name>"' unconditionally, so a run a
+// scan dispatched, and a run a person started by hand, both reported to a real
+// ticket that a watch had sent them. No such watch existed in either case.
+{
+  const ROWS = [
+    {
+      name: 'a watch dispatch',
+      watchId: 'csup-bugs',
+      match: /Dispatched by watch "Jira Watch" — run run-3b\./,
+    },
+    {
+      name: 'a run started by hand',
+      watchId: 'direct-invocation',
+      match: /Started directly — run run-3b\./,
+    },
+    {
+      name: 'a child of another run',
+      watchId: 'workflow-trigger:1bba2e7b-43ad-4637-81cc-1ab82f1f21d7',
+      match: /Dispatched from run 1bba2e7b-43ad-4637-81cc-1ab82f1f21d7 — run run-3b\./,
+    },
+    {
+      name: 'an unknown source',
+      watchId: undefined,
+      match: /Dispatched by watch "Jira Watch" — run run-3b\./,
+    },
+  ]
+  for (const row of ROWS) {
+    const comment = renderTicketComment({
+      ticketKey: 'CSUP-3b',
+      watchName: 'Jira Watch',
+      watchId: row.watchId,
+      outcome: { runId: 'run-3b', runStatus: 'failed', prUrls: [], haltReason: 'halted' },
+    })
+    assert.match(comment, row.match, `the trigger line is honest for ${row.name}`)
+  }
+  // And a child never calls its parent a watch.
+  const child = renderTicketComment({
+    ticketKey: 'CSUP-3b',
+    watchName: 'Jira Watch',
+    watchId: 'workflow-trigger:parent-1',
+    outcome: { runId: 'run-3b', runStatus: 'failed', prUrls: [], haltReason: 'halted' },
+  })
+  assert.doesNotMatch(child, /Dispatched by watch/)
 }
 
 // ══ notifyTicketOutcome — the wiring, gating, and artifact write ══════════

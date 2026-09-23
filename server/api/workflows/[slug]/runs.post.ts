@@ -1,8 +1,9 @@
 import { requireCapability } from '../../../utils/session'
-import { startRun } from '../../../utils/workflowRunner'
+import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner'
 import { readWorkflow } from '../../../utils/workflows'
-import { findRunInWorkspace } from '../../../utils/workflowRunStore'
-import { runWorkspace } from '../../../utils/workspace'
+import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
+import { findRunInWorkspace, toWorkflowLike } from '../../../utils/workflowRunStore'
+import { canonicalProjectDir, runWorkspace } from '../../../utils/workspace'
 import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
 import { currentUser } from '../../../utils/session'
 import { envForUser } from '../../../utils/users'
@@ -12,9 +13,61 @@ export default defineEventHandler(async (event) => {
   // answers the verification gate on work someone else began.
   await requireCapability(event, 'startRun')
   const slug = getRouterParam(event, 'slug')!
-  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string }>(event)
+  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string, parameters?: Record<string, string> }>(event)
   if (!body?.initialPrompt?.trim()) {
     throw createError({ statusCode: 400, message: 'initialPrompt is required' })
+  }
+
+  const user = await currentUser(event)
+
+  // Read from disk, never over our own HTTP API: a server-to-self $fetch sends
+  // no cookies, so the auth middleware answered this with 401 "Sign in
+  // required" and every run start in team mode died on an unhandled
+  // FetchError. Standalone mode hid it because AUTH_DISABLED makes the
+  // middleware a no-op.
+  //
+  // This has to happen before the workspace lock below, not after it as it
+  // once did: a declared `projectDir` parameter decides WHICH directory gets
+  // locked, and a lock taken on the wrong directory protects nothing.
+  const workflow = await readWorkflow(slug)
+  if (!workflow) {
+    throw createError({ statusCode: 404, message: 'Workflow not found' })
+  }
+  if (!workflow.steps?.length) {
+    throw createError({ statusCode: 400, message: 'This workflow has no steps' })
+  }
+
+  // Refused here rather than started and left for an agent to discover: a run
+  // missing a stated input produces a step that guesses, and a guess is what
+  // declaring the parameter was meant to remove.
+  const { values: parameters, missing } = resolveParameters(workflow.parameters, body.parameters)
+  if (missing.length) {
+    throw createError({
+      statusCode: 400,
+      message: `This workflow needs ${missing.length === 1 ? 'a value' : 'values'} for ${missing.join(', ')}`,
+      data: { missing },
+    })
+  }
+  // The one parameter the runner acts on instead of merely stating. An
+  // explicit value wins over the request's own projectDir, because the
+  // workflow declared this input and the modal collects it in that field's
+  // place. See RESERVED_PARAM_PROJECT_DIR.
+  const stated = parameters[RESERVED_PARAM_PROJECT_DIR]?.trim() || body.projectDir
+
+  // Refused here, while the dialog is still open, because the consuming end
+  // does not fail: callAgent falls back to the Claude config directory for a
+  // path that does not exist and reports success. Canonicalised for the lock
+  // below, which compares directory strings. An unset directory is not
+  // validated - it resolves to the developer's own workspace root, which
+  // startRun creates.
+  let projectDir = stated
+  if (stated) {
+    const checked = canonicalProjectDir(stated)
+    if ('error' in checked) {
+      throw createError({ statusCode: 400, message: `That project folder cannot be used: ${checked.error}` })
+    }
+    projectDir = checked.path
+    if (parameters[RESERVED_PARAM_PROJECT_DIR]) parameters[RESERVED_PARAM_PROJECT_DIR] = checked.path
   }
 
   // Locked on the DIRECTORY a run will write, not on the workflow. Two runs
@@ -24,8 +77,7 @@ export default defineEventHandler(async (event) => {
   //
   // The check has to come after the user is known, because an unset projectDir
   // resolves to that developer's own workspace root.
-  const user = await currentUser(event)
-  const workspace = runWorkspace({ projectDir: body.projectDir, startedBy: user?.login })
+  const workspace = runWorkspace({ projectDir, startedBy: user?.login })
   const active = await findRunInWorkspace(workspace)
   if (active) {
     throw createError({
@@ -34,19 +86,6 @@ export default defineEventHandler(async (event) => {
         + ` (${active.workflowName ?? active.workflowSlug}). Wait for it, stop it, or start this one against a different project directory.`,
       data: { runId: active.id },
     })
-  }
-
-  // Read from disk, never over our own HTTP API: a server-to-self $fetch sends
-  // no cookies, so the auth middleware answered this with 401 "Sign in
-  // required" and every run start in team mode died on an unhandled
-  // FetchError. Standalone mode hid it because AUTH_DISABLED makes the
-  // middleware a no-op.
-  const workflow = await readWorkflow(slug)
-  if (!workflow) {
-    throw createError({ statusCode: 404, message: 'Workflow not found' })
-  }
-  if (!workflow.steps?.length) {
-    throw createError({ statusCode: 400, message: 'This workflow has no steps' })
   }
 
   // Deliberately not awaited to completion: the HTTP response returns as soon
@@ -63,20 +102,39 @@ export default defineEventHandler(async (event) => {
       ? `${typed}\n\nThe ticket text could not be fetched from Jira for this run (${ticket.reason}). Work from the key and whatever the repository holds, say so in the context packet, and do not try to reach Jira yourself: agents have no shell and no Jira access. The developer can add a Jira token on the Profile page, or paste the ticket text, and start again.`
       : body.initialPrompt
 
-  const run = await startRun({
-    workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
-    initialPrompt,
-    ...(body.productKey ? { productKey: body.productKey } : {}),
-    // This route is the manual/API start path, never a watch dispatch — the
-    // reserved literal is the honest answer to "what triggered this?".
-    watch: 'direct-invocation',
-    // Read from the prompt, so a run started by hand reports back to its ticket
-    // the way a watch-dispatched one does. Without it notifyTicketOutcome never
-    // fires for a manual run - the key was in the prompt and nothing looked.
-    ticketKey: ticketKeyFrom(body.initialPrompt),
-    autoRun: body.autoRun === true,
-    projectDir: body.projectDir,
-    startedBy: user?.login,
-  })
-  return run
+  try {
+    return await startRun({
+      // toWorkflowLike, not a literal: a manual start ignores the cap on
+      // purpose, but it still OCCUPIES a slot - see startOrQueue. Dropping
+      // `group` here filed the run under `default`, so inFlightForGroup read 0
+      // for the group it was really working in and the drain launched two more
+      // beside it. `notifyChannel` went the same way, to a channel named
+      // `default`.
+      workflow: toWorkflowLike(workflow),
+      initialPrompt,
+      ...(body.productKey ? { productKey: body.productKey } : {}),
+      // This route is the manual/API start path, never a watch dispatch — the
+      // reserved literal is the honest answer to "what triggered this?".
+      watch: 'direct-invocation',
+      // Read from the prompt, so a run started by hand reports back to its ticket
+      // the way a watch-dispatched one does. Without it notifyTicketOutcome never
+      // fires for a manual run - the key was in the prompt and nothing looked.
+      ticketKey: ticketKeyFrom(body.initialPrompt),
+      autoRun: body.autoRun === true,
+      projectDir,
+      parameters,
+      startedBy: user?.login,
+    })
+  } catch (err) {
+    // A start that got past the check above but lost the race to a
+    // near-simultaneous one. Answered exactly like a persisted run in the same
+    // directory, because to the person clicking Start it is the same fact.
+    if (err instanceof WorkspaceBusyError) {
+      throw createError({
+        statusCode: 409,
+        message: `A run is already starting in ${err.workspace}. Wait for it, or start this one against a different project directory.`,
+      })
+    }
+    throw err
+  }
 })

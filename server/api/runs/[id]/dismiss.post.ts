@@ -1,5 +1,7 @@
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
-import { requireCapability } from '../../../utils/session'
+import { isLiveStatus } from '../../../../shared/types/run.ts'
+import { appendRunAudit } from '../../../utils/runArtifacts'
+import { currentUser, requireCapability } from '../../../utils/session'
 
 /**
  * Clear a settled run from the attention queue. It stays in history; nothing is deleted.
@@ -14,8 +16,9 @@ export default defineEventHandler(async (event) => {
   await requireCapability(event, 'answerGate')
   const run = await getRun(id)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
-  if (run.status === 'running' || run.status === 'paused') throw createError({ statusCode: 409, message: 'A live run cannot be dismissed; stop it first' })
+  if (isLiveStatus(run.status)) throw createError({ statusCode: 409, message: 'A live run cannot be dismissed; stop it first' })
   run.dismissed = true
   await saveRun(run)
+  await appendRunAudit(id, { type: 'dismiss', actor: (await currentUser(event))?.login })
   return run
 })

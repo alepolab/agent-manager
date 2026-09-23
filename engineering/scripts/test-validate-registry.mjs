@@ -68,8 +68,10 @@ const baseProducts = readFileSync(join(root, 'registry/products.yaml'), 'utf8')
 // this stopped testing anything and passed by having nothing to break. The
 // subject here is the validator, not the registry's current contents.
 {
+  // \r?\n rather than \n: on a CRLF checkout each line ends in \r, and JS
+  // regex `.` and `$` do not match \r, so a plain \n here would never match.
   const withVersionBranch = baseProducts.replace(
-    /^(  ffm:\n(?:.*\n)*?    branches:\n      bug: )\S+$/m,
+    /^(  ffm:\r?\n(?:.*\r?\n)*?    branches:\r?\n      bug: )\S+\r?$/m,
     "$1'release/{version}'",
   )
   assert.notEqual(withVersionBranch, baseProducts, 'the fixture must actually inject a {version} branch')
@@ -82,8 +84,9 @@ const baseProducts = readFileSync(join(root, 'registry/products.yaml'), 'utf8')
 {
   // Injected, not stripped: no product declares an atdd command today, so
   // mutating one that happens to exist tests nothing the day it stops existing.
+  // \r?\n: same CRLF tolerance as the {version} fixture above.
   const withAtdd = baseProducts.replace(
-    /^(  aaa:\n(?:.*\n)*?    tests:\n      unit: .*\n)/m,
+    /^(  aaa:\r?\n(?:.*\r?\n)*?    tests:\r?\n      unit: .*\r?\n)/m,
     "$1      atdd: 'robot tests/aaa'\n",
   )
   assert.notEqual(withAtdd, baseProducts, 'the fixture must actually inject an atdd command')
@@ -98,8 +101,9 @@ const baseProducts = readFileSync(join(root, 'registry/products.yaml'), 'utf8')
   // product with several repos must be marked, and a marked product must have
   // several. Inject rather than strip so this keeps testing the validator when
   // the registry's own use of multi_repo changes.
+  // \r?\n: same CRLF tolerance as the {version} fixture above.
   const marked = baseProducts.replace(
-    /^(  ffm:\n(?:.*\n)*?    repos: .*\n)/m,
+    /^(  ffm:\r?\n(?:.*\r?\n)*?    repos: .*\r?\n)/m,
     "$1    multi_repo: true\n",
   )
   assert.notEqual(marked, baseProducts, 'the fixture must mark a single-repo product')
@@ -109,8 +113,9 @@ const baseProducts = readFileSync(join(root, 'registry/products.yaml'), 'utf8')
 
   // And the other direction, which the registry can no longer supply either:
   // several repos with no multi_repo produces no merge order.
+  // \r?\n: same CRLF tolerance as the {version} fixture above.
   const unmarked = baseProducts.replace(
-    /^(  ffm:\n(?:.*\n)*?    repos: \[)([^\]]+)(\]\n)/m,
+    /^(  ffm:\r?\n(?:.*\r?\n)*?    repos: \[)([^\]]+)(\]\r?\n)/m,
     "$1$2, alepolab/ffm-second$3",
   )
   assert.notEqual(unmarked, baseProducts, 'the fixture must give a product a second repo')

@@ -9,6 +9,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { getClaudeDir } from './claudeDir'
+import { resolveModelMeta, DEFAULT_CONTEXT_WINDOW } from './models.ts'
 
 export interface ClaudeCodeProject {
   name: string
@@ -618,6 +619,9 @@ export async function getClaudeCodeSessionMessages(
     output: number
     cacheCreation: number
     cacheRead: number
+    /** The window these counts are a fraction of. The client has no full-id
+     *  table of its own, so the size has to travel with the counts. */
+    contextWindow: number
   }
 }> {
   const projectDir = join(getClaudeProjectsDir(), projectName)
@@ -663,7 +667,8 @@ export async function getClaudeCodeSessionMessages(
     // Extract latest token usage and model from messages (scan from end)
     let tokenUsage: any = undefined
     let model: string | undefined = undefined
-    
+    let contextWindow: number | undefined = undefined
+
     for (let i = sortedMessages.length - 1; i >= 0; i--) {
       const msg = sortedMessages[i]
       if (!msg) continue
@@ -671,6 +676,18 @@ export async function getClaudeCodeSessionMessages(
       // Extract model if present anywhere in session
       if ((msg as any).model && !model) {
         model = (msg as any).model
+      }
+
+      // Resolve the window from `message.model`, which is where Claude Code
+      // actually records it - the top-level read above finds nothing in any of
+      // the 368 transcripts under ~/.claude/projects (checked 2026-09-10).
+      // Kept as a resolved number rather than returned as an id: transcripts
+      // carry ids the SDK will not accept ('<synthetic>'), and an id here
+      // would reach the chat page's model picker and go back out as
+      // options.model. An unresolvable id leaves this undefined so the scan
+      // keeps looking further back for a model we know.
+      if (contextWindow === undefined) {
+        contextWindow = resolveModelMeta((msg.message as any)?.model)?.contextWindow
       }
 
       // Use msg.message.role or entry.role/type depending on JSONL format
@@ -688,6 +705,12 @@ export async function getClaudeCodeSessionMessages(
       
       // If we have both, we can stop
       if (model && tokenUsage) break
+    }
+
+    // After the loop, not inside it: the reverse scan can find the usage before
+    // it finds the model.
+    if (tokenUsage) {
+      tokenUsage.contextWindow = contextWindow ?? DEFAULT_CONTEXT_WINDOW
     }
 
     const total = sortedMessages.length

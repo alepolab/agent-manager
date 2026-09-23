@@ -8,19 +8,23 @@ export function useOutputStyles() {
   const { workingDir } = useWorkingDir()
   const toast = useToast()
 
-  async function fetchStyles() {
-    loading.value = true
-    error.value = null
+  async function fetchStyles({ silent = false } = {}) {
+    if (!silent) {
+      loading.value = true
+      error.value = null
+    }
     try {
       const data = await $fetch<OutputStyle[]>('/api/output-styles', {
         query: { workingDir: workingDir.value }
       })
       styles.value = data
     } catch (err: any) {
+      // A background refresh must not raise a toast every tick while the server is down.
+      if (silent) return
       error.value = err.message || 'Failed to fetch output styles'
       toast.add({ title: 'Failed to load output styles', description: error.value ?? undefined, color: 'error' })
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 

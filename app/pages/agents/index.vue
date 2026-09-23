@@ -13,13 +13,15 @@ const searchQuery = ref('')
 const skillCounts = ref<Record<string, number>>({})
 const creatingTemplate = ref<string | null>(null)
 
-onMounted(async () => {
+async function loadSkillCounts() {
   try {
     skillCounts.value = await $fetch<Record<string, number>>('/api/agents/skill-counts')
   } catch {
     // Non-critical
   }
-})
+}
+onMounted(loadSkillCounts)
+useAutoRefresh(loadSkillCounts)
 
 const filteredAgents = computed(() => {
   if (!searchQuery.value) return agents.value

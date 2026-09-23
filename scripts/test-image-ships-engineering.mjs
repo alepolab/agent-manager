@@ -61,7 +61,7 @@ assert.ok(schemas.some(f => f.startsWith('evidence-bundle.') && f.endsWith('.sch
 // had never seen it. ceSkillsDir falls back to /app/vendor/compound-engineering,
 // so the Dockerfile must put them there, at a pinned commit, not a branch.
 {
-  const fetch = dockerfile.match(/ARG CE_PLUGIN_REV=([0-9a-f]{40})\n/)
+  const fetch = dockerfile.match(/ARG CE_PLUGIN_REV=([0-9a-f]{40})\r?\n/)
   assert.ok(fetch, 'the Dockerfile pins the compound-engineering plugin to a full commit sha (ARG CE_PLUGIN_REV)')
   assert.ok(dockerfile.includes('compound-engineering-plugin.git'), 'and fetches it from the EveryInc repository')
   assert.ok(dockerfile.includes('/app/vendor/compound-engineering/skills/ce-plan/SKILL.md'),

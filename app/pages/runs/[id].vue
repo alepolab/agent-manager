@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR, runStatusLabel } from '~/utils/runStatus'
+import { isLiveStatus } from '~~/shared/types/run'
 
 /**
  * A run, full screen: steps and their live output on the left, the evidence
@@ -8,7 +9,8 @@ import { RUN_STATUS_COLOR } from '~/utils/runStatus'
  */
 const route = useRoute()
 const id = route.params.id as string
-const { run, logs, error, load, continueRun, stop, restart, respond, sendNote, reject, rework } = useRun(id)
+const { run, logs, error, load, refresh, continueRun, stop, restart, respond, sendNote, reject, rework } = useRun(id)
+useAutoRefresh(refresh)
 // The builder and Clone are pipeline controls; a reviewer opening the run they
 // hold a gate on has no use for either, and the API refuses them anyway.
 const { can } = useUser()
@@ -36,7 +38,7 @@ async function onNote(text: string) {
 const toast = useToast()
 onMounted(load)
 useHead({ title: computed(() => `${run.value ? (run.value.initialPrompt.split('\n')[0] ?? '').slice(0, 40) : 'Run'} | Agent Manager`) })
-const live = computed(() => !!run.value && (run.value.status === 'running' || run.value.status === 'paused'))
+const live = computed(() => !!run.value && isLiveStatus(run.value.status))
 async function onRestart(stepId: string, note?: string) {
   try { await restart(stepId, note) } catch (e: any) { toast.add({ title: 'Could not restart', description: e.data?.message || e.message, color: 'error' }) }
 }
@@ -50,7 +52,7 @@ async function onRestart(stepId: string, note?: string) {
       </template>
       <template #subtitle>
         <p v-if="run" class="t-small font-mono text-meta truncate">
-          <span :style="{ color: RUN_STATUS_COLOR[run.status] }">{{ run.status }}</span>
+          <span :style="{ color: RUN_STATUS_COLOR[run.status] }">{{ runStatusLabel(run.status) }}</span>
           · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}
         </p>
       </template>

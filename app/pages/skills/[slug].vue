@@ -41,27 +41,37 @@ function restoreDraft() {
   }
 }
 
+const skillQuery = () => {
+  const effectiveWorkingDir = queryWorkingDir || workingDir.value
+  return effectiveWorkingDir ? { workingDir: effectiveWorkingDir } : {}
+}
+
+function applySkill(item: Skill) {
+  skill.value = item
+  frontmatter.value = { ...item.frontmatter }
+  body.value = item.body ?? ''
+  // Only the GET carries it; without it the first save skips the server's changed-on-disk check.
+  lastModified.value = (item as any).lastModified ?? null
+}
+
 onMounted(async () => {
   try {
     // Try to find skill in local state to get filePath
     const localSkill = skills.value.find(s => s.slug === slug)
-    const effectiveWorkingDir = queryWorkingDir || workingDir.value
-    const query = effectiveWorkingDir ? { workingDir: effectiveWorkingDir } : {}
+    const query = skillQuery()
     const resolvedFilePath = queryFilePath || localSkill?.filePath
 
     if (resolvedFilePath) {
-      skill.value = await $fetch<Skill>(`/api/skills/${encodeURIComponent(slug)}`, {
+      applySkill(await $fetch<Skill>(`/api/skills/${encodeURIComponent(slug)}`, {
         method: 'POST',
         body: { filePath: resolvedFilePath },
         query
-      })
+      }))
     } else {
-      skill.value = await $fetch<Skill>(`/api/skills/${encodeURIComponent(slug)}`, {
+      applySkill(await $fetch<Skill>(`/api/skills/${encodeURIComponent(slug)}`, {
         query
-      })
+      }))
     }
-    frontmatter.value = { ...skill.value.frontmatter }
-    body.value = skill.value.body ?? ''
     clearStudioChat()
   } catch (err: any) {
     console.error('Skill load error:', err)
@@ -69,6 +79,29 @@ onMounted(async () => {
     router.push('/skills')
   }
 })
+
+// Polls the GET, not the POST the page loads with: the POST invalidates the server's skills cache on every call.
+// A GET that resolves the slug to a different file than the one open here is not this skill, so it is ignored.
+const { pending: externalPending, ...external } = useExternalChange({
+  fetch: () => $fetch<Skill>(`/api/skills/${encodeURIComponent(slug)}`, { query: skillQuery() }),
+  baseline: () => skill.value && { frontmatter: skill.value.frontmatter, body: skill.value.body ?? '' },
+  // Separators normalized: the list's path and the GET's join() can disagree on Windows.
+  content: (item: Skill) => item.filePath?.replace(/\\/g, '/') === skill.value?.filePath?.replace(/\\/g, '/')
+    ? { frontmatter: item.frontmatter, body: item.body ?? '' }
+    : skill.value && { frontmatter: skill.value.frontmatter, body: skill.value.body ?? '' },
+  isDirty: () => isDirty.value,
+  apply: applySkill,
+  paused: () => !skill.value || saving.value,
+})
+function reloadExternal() {
+  external.reload()
+  clearDraft()
+}
+function keepMine() {
+  // Adopting their timestamp is what lets the next save overwrite instead of failing with 409.
+  const theirs = external.keepMine()
+  if (theirs) lastModified.value = (theirs as any).lastModified ?? null
+}
 
 async function save() {
   if (!frontmatter.value.name.trim()) {
@@ -246,7 +279,7 @@ useUnsavedChanges(isDirty)
             <button class="t-small px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
           </div>
         </ClientOnly>
-
+        <ExternalChangeBanner v-if="externalPending" @reload="reloadExternal" @keep="keepMine" />
         <!-- Read-only banner for imported skills -->
         <div
           v-if="isImported"

@@ -29,6 +29,45 @@
 
 products:
 
+  ase-crm:
+    # The React + Gradle CRM, not the Liferay-era `crm` below: a different
+    # repository, a different Jira project, its own stack. Registered
+    # 2026-09-11 so scan dispatch routes ASECRM work to the repository that was
+    # scanned instead of falling through to ase_lbss.
+    #
+    # `match` is the project key alone, deliberately: word() is
+    # boundary-anchored, so the `crm` entry's "CRM" component cannot match
+    # inside ASECRM, and adding a component word here would be inventing one.
+    suite: crm
+    match:
+      projects: [ASECRM]
+    repos: [alepolab/ase-crm]
+    branches:
+      # main is four months stale (last commit 24 Apr 2026); develop is where
+      # work lands (7 Sep 2026). Read from the repo, not drafted.
+      bug: develop
+      feature: develop
+      infra: develop
+    stack:
+      # alepo-dev-team-infra holds no docker-compose.ase-crm.yml — only the
+      # Liferay docker-compose.crm.yml, which stands a different application
+      # up. Named for the file that SHOULD exist, so preflight and the stack
+      # step say exactly that rather than deploying the wrong product. The
+      # repo's own docker/docker-compose.yml is not permitted as a deployment
+      # source. CONFIRM with the infra owner.
+      compose: alepo-dev-team-infra/ase-crm
+      topology_default: 1node
+    tests:
+      # From the repo's own Makefile.
+      unit: 'make test'
+      # No atdd command declared: `make atdd` exists but its Playwright
+      # reporters emit list/html/json, not xunit, and the registry check requires
+      # xunit because the loop reads a verdict rather than grepping logs. Wiring a
+      # junit reporter belongs in ase-crm's own Makefile, not here.
+      ui_trace: playwright
+    owners:
+      protocol: CONFIRM
+
   crm:
     # ase_lbss is a multi-repo workspace: each modules/* is its own git repo.
     # The CI build workflow is the list of what actually ships.

@@ -112,7 +112,11 @@ export async function ceSkillsDir(shipped = join(process.cwd(), 'vendor', 'compo
   try {
     const installed = JSON.parse(await readFile(resolveClaudePath('plugins', 'installed_plugins.json'), 'utf-8'))
     const entry = Object.entries<any>(installed?.plugins ?? {}).find(([k]) => k.startsWith('compound-engineering@'))?.[1]?.[0]
-    if (entry?.installPath) return join(entry.installPath, 'skills')
+    // Forward slashes, not join(): this is handed to agents as CE_SKILLS_DIR and
+    // interpolated into their shell commands (`cat "$CE_SKILLS_DIR/ce-plan/SKILL.md"`),
+    // never used as an fs path here. join() emits backslashes on Windows, which
+    // break every one of those commands. Same class as 76439d7.
+    if (entry?.installPath) return `${entry.installPath.replace(/\\/g, '/')}/skills`
   } catch { /* no registry, or not JSON: not installed */ }
   return existsSync(join(shipped, 'ce-plan', 'SKILL.md')) ? shipped : ''
 }
@@ -366,6 +370,11 @@ export async function callAgent(
   let modelRan: string | null = null
   let usage: AgentUsage | null = null
   let sessionId: string | null = null
+  /** Results discarded as a resume replay, and whether any result was ever
+   *  taken. Together they separate "the agent legitimately said nothing" from
+   *  "we threw away the only result there was" - see the check after the loop. */
+  let replayed = 0
+  let accepted = false
 
   // ── steering: the prompt is a stream so the operator can talk to the agent mid-step ──
   // The first message is the step input. Later ones are operator notes, pushed
@@ -373,10 +382,13 @@ export async function callAgent(
   // or model request in flight completes, without ending the turn. ('now' would
   // abort whatever is in flight, and an aborted model request comes back as an
   // error result that ends the step - seen live.) The stream ends at the first result
-  // with nothing pending; a note that arrives after that is refused (deliver
+  // that answers the input with nothing pending (a resume's replay turn does not
+  // count - see isResumeReplay); a note that arrives after that is refused (deliver
   // returns false) and the runner falls back to queueing it for the next step.
   const pending: string[] = []
   let finished = false
+  let results = 0
+  let modelSpoke = false
   let wake: (() => void) | undefined
   const kick = () => { const w = wake; wake = undefined; w?.() }
   onSteer?.((text) => { if (finished) return false; pending.push(text); kick(); return true })
@@ -481,6 +493,7 @@ export async function callAgent(
     }
     if (message.type === 'assistant') {
       turn += 1
+      if ((message as { message?: { model?: unknown } }).message?.model !== SYNTHETIC_MODEL) modelSpoke = true
       // Duck-typed on purpose: the SDK's BetaMessage content-block union is
       // deep and version-sensitive (see the doc comment on AgentProgress),
       // and all this needs is "was one of this turn's blocks a tool_use, and
@@ -514,11 +527,18 @@ export async function callAgent(
     }
     if (message.type === 'result') {
       const interpreted = interpretResultMessage(message, maxTurns, lastApiError)
-      result = interpreted.output
-      usage = interpreted.usage
-      // The turn is over. Close the input stream unless a note is still queued,
-      // in which case the agent gets one more turn to act on it.
-      if (!pending.length) finished = true
+      const replay = isResumeReplay({ resuming: Boolean(resume), resultsSoFar: results, modelSpoke })
+      results += 1
+      modelSpoke = false
+      if (replay) replayed += 1
+      if (!replay) {
+        accepted = true
+        result = interpreted.output
+        usage = interpreted.usage
+        // The turn is over. Close the input stream unless a note is still queued,
+        // in which case the agent gets one more turn to act on it.
+        if (!pending.length) finished = true
+      }
       kick()
     }
   }
@@ -548,6 +568,28 @@ export async function callAgent(
   // shouldEmitProgress's caller: "absent when nothing informative" holds
   // because emitProgress/onProgress are never called at all when turn stays 0).
   if (turn > 0) emitProgress(true)
+
+  // A resumed call whose ONLY result was discarded as a replay.
+  //
+  // isResumeReplay drops the first result of a resumed session because the CLI
+  // closes the dead turn itself, with a synthetic message and no model behind
+  // it, before it reads the queued input. The assumption is that a real result
+  // follows. When the session was already terminal none does, the stream just
+  // ends, and `result` is still the empty string it started as - so the step
+  // recorded a green completion with no output and no model. parseAsk and
+  // parseSkip both return falsy on '', so nothing downstream noticed, and
+  // `produces` only catches it for a step that declares artifacts.
+  //
+  // Deliberately narrow: an empty output from a call that accepted a result is
+  // still legal, because a successful result may genuinely carry no text.
+  if (isReplayOnly({ accepted, replayed })) {
+    throw new AgentResultError(
+      `the resumed session for ${agentSlug} ended without running the step`
+      + ' (its only result was the replay of the turn that was already finished when it was resumed);'
+      + ' restart the step to run it in a fresh session',
+      usage, 'error_resume_replay_only',
+    )
+  }
 
   log.info('agent call completed', () => ({
     agentSlug,
@@ -600,6 +642,55 @@ export async function declaredModelOf(agentSlug: string): Promise<string | undef
     return parseFrontmatter<AgentFrontmatter>(await readFile(agentPath, 'utf-8')).frontmatter?.model
   }
   catch { return undefined }
+}
+
+/** The model id Claude Code stamps on messages it writes itself, without a model call. */
+export const SYNTHETIC_MODEL = '<synthetic>'
+
+/**
+ * Whether a `result` is the CLI replaying an interrupted turn rather than
+ * answering this call's input.
+ *
+ * Resuming a session whose process died holding a live tool call or a
+ * background task makes the CLI first close that turn itself - "Continue from
+ * where you left off." answered by a `<synthetic>` "No response requested.",
+ * no model call behind it - and emit a `result` for it before it reads the
+ * input. Taking that result as the end of the call closed the input stream
+ * while the real instruction was still queued, and the CLI then refused every
+ * `run_in_background` call with "The user doesn't want to take this action
+ * right now": a test-author retried after its time budget could no longer
+ * start the build it had to wait for, and halted with its oracle unrun.
+ * Reproduced through the runner with a stale background task; the same resume
+ * without one has no replay turn and the background call succeeds.
+ *
+ * Only the first result of a resumed call can be a replay, so a misread costs
+ * at most one turn, still bounded by the call's deadline.
+ */
+export function isResumeReplay(opts: { resuming: boolean, resultsSoFar: number, modelSpoke: boolean }): boolean {
+  return opts.resuming && opts.resultsSoFar === 0 && !opts.modelSpoke
+}
+
+/**
+ * The call threw away the only result it ever saw.
+ *
+ * isResumeReplay discards the first result of a resumed session on the
+ * assumption that a real one follows. When the session was already terminal
+ * none does — the stream just ends — and the call would otherwise return the
+ * empty string it started with: a green step with no output and no model
+ * recorded. parseAsk and parseSkip both read '' as falsy, so nothing
+ * downstream notices, and `produces` only catches it for a step that declares
+ * artifacts.
+ *
+ * Exported beside isResumeReplay, and for the same reason: the decision is
+ * worth stating once and testing directly, rather than inferring it from a
+ * live SDK stream.
+ *
+ * Narrow on purpose. A call that accepted a result and still has no text is
+ * fine — a successful result may genuinely carry none — and a call that never
+ * replayed anything has a different problem, reported elsewhere.
+ */
+export function isReplayOnly(opts: { accepted: boolean, replayed: number }): boolean {
+  return !opts.accepted && opts.replayed > 0
 }
 
 export class AgentResultError extends Error {

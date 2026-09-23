@@ -117,6 +117,25 @@ check('blast_radius: money with adversarial: null is rejected', () => {
   assert.ok(problems.some(p => /adversarial/.test(p)), `expected a message naming "adversarial", got:\n${problems.join('\n')}`)
 })
 
+// ── 2b. No stack stood up ───────────────────────────────────────────────────
+// A change intake judged provable without a running product records stack:
+// null. The blast radii that are always verified on a stack may not.
+check('stack: null validates for a ui_parsing change', () => {
+  const problems = validateBundle(broken(b => { b.stack = null }))
+  assert.deepEqual(problems, [], `expected no problems, got:\n${problems.join('\n')}`)
+})
+
+for (const radius of ['schema', 'protocol', 'money']) {
+  check(`stack: null with blast_radius: ${radius} is rejected`, () => {
+    const problems = validateBundle(broken(b => {
+      b.blast_radius = radius
+      b.stack = null
+      b.adversarial = { report: 'reports/adversarial.md', two_node_rerun: true, pattern_search: 'grep', mutation_score: 0.9 }
+    }))
+    assert.ok(problems.some(p => /stack/.test(p)), `expected a message naming "stack", got:\n${problems.join('\n')}`)
+  })
+}
+
 // ── 3. Pre-fix oracle that PASSED ────────────────────────────────────────────
 // If the oracle passed before the fix, the bug was never reproduced — the
 // schema cannot express this (verdict is a plain enum), so it is semantic.

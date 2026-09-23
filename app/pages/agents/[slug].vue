@@ -48,30 +48,48 @@ function restoreDraft() {
   }
 }
 
+const fetchAgent = () => fetchOne(slug, queryWorkingDir ? { workingDir: queryWorkingDir } : {}) as Promise<any>
+
+// Ensure memory and tools are initialized
+const normalizeFm = (fm: AgentFrontmatter) => ({ memory: 'none', tools: [], ...fm }) as AgentFrontmatter
+
+function applyAgent(agent: any) {
+  const normalizedFm = normalizeFm(agent.frontmatter)
+  frontmatter.value = { ...normalizedFm }
+  savedFrontmatter.value = { ...normalizedFm }
+  body.value = agent.body as string
+  savedBody.value = agent.body as string
+  lastModified.value = (agent.lastModified as number) || null
+  filePath.value = agent.filePath || ''
+}
+
 async function loadAgent() {
   loading.value = true
   try {
-    const agent = await fetchOne(slug, queryWorkingDir ? { workingDir: queryWorkingDir } : {}) as any
-    const fm = agent.frontmatter as AgentFrontmatter
-    
-    // Ensure memory and tools are initialized
-    const normalizedFm = { 
-      memory: 'none',
-      tools: [],
-      ...fm 
-    } as AgentFrontmatter
-    
-    frontmatter.value = { ...normalizedFm }
-    savedFrontmatter.value = { ...normalizedFm }
-    body.value = agent.body as string
-    savedBody.value = agent.body as string
-    lastModified.value = (agent.lastModified as number) || null
-    filePath.value = agent.filePath || ''
+    applyAgent(await fetchAgent())
   } catch {
     router.push('/agents')
   } finally {
     loading.value = false
   }
+}
+
+const { pending: externalPending, ...external } = useExternalChange({
+  fetch: fetchAgent,
+  baseline: () => ({ frontmatter: savedFrontmatter.value, body: savedBody.value }),
+  content: (agent: any) => ({ frontmatter: normalizeFm(agent.frontmatter), body: agent.body }),
+  isDirty: () => isDirty.value,
+  apply: applyAgent,
+  paused: () => loading.value || saving.value,
+})
+function reloadExternal() {
+  external.reload()
+  clearDraft()
+}
+function keepMine() {
+  // Adopting their timestamp is what lets the next save overwrite instead of failing with 409.
+  const theirs = external.keepMine()
+  if (theirs) lastModified.value = theirs.lastModified || null
 }
 
 async function loadSkills() {
@@ -245,6 +263,7 @@ useUnsavedChanges(isDirty)
             <button class="t-small px-2 py-1 rounded hover-bg text-meta" @click="clearDraft">Dismiss</button>
           </div>
         </ClientOnly>
+        <ExternalChangeBanner v-if="externalPending" class="m-6 mb-0" @reload="reloadExternal" @keep="keepMine" />
 
         <EditorPanel
           :frontmatter="frontmatter"

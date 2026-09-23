@@ -43,6 +43,15 @@ writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({ name: 'alepo-engi
 const runner = await import('../server/utils/workflowRunner.ts')
 const { assembleBundle } = await import('../engineering/scripts/assemble-bundle.mjs')
 
+// This acceptance test is about the bundle the run produces, not about
+// whether THIS machine has ocs_cpp14 checked out, a GitHub token, and a
+// running docker daemon — that gate is scripts/test-preflight.mjs's job, and
+// runPreflight is exactly why workflowRunner.ts exposes this seam (see
+// scripts/test-workflow-runner.mjs). Without it every scenario below fails
+// preflight before a single agent runs, wherever those three things are not
+// already sitting on the box.
+runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
+
 // fix.repos/files_changed/lines_changed are now COMPUTED from git at finalize
 // time (server/utils/gitFacts.ts), not trusted from the agent's self-report —
 // see runArtifacts.ts's reconcileFix. Every scenario below needs a run with a

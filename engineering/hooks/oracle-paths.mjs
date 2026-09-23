@@ -10,16 +10,18 @@
  * that runs on import, so both can import this freely.
  */
 
-/** Paths whose contents decide what the oracle asserts. */
-export const TEST_PATH = /(^|\/)(tests?|spec|specs|__tests__|e2e|itest|robot)(\/|$)/i
+/** Paths whose contents decide what the oracle asserts. Both separators: on
+ * Windows a path built with path.join() is backslash-separated, so a
+ * forward-slash-only boundary never matches there. */
+export const TEST_PATH = /(^|[\\/])(tests?|spec|specs|__tests__|e2e|itest|robot)([\\/]|$)/i
 export const TEST_FILE = /(\.test\.|\.spec\.|_test\.|test_[^/]*\.py$|\.robot$|\.feature$)/i
 export const ORACLE_CONFIG = new RegExp(
-  '(^|/)(' +
+  '(^|[\\\\/])(' +
   'conftest\\.py|pytest\\.ini|tox\\.ini|' +
   'jest\\.config\\.[jt]s|jest\\.setup\\.[jt]s|vitest\\.config\\.[jt]s|setup-tests?\\.[jt]s|' +
   'playwright\\.config\\.[jt]s|karma\\.conf\\.js|' +
   '__mocks__|fixtures?|testdata' +
-  ')(/|$)', 'i')
+  ')([\\\\/]|$)', 'i')
 
 export const looksLikeOracle = (p) => !!p && (TEST_PATH.test(p) || TEST_FILE.test(p) || ORACLE_CONFIG.test(p))
 
@@ -33,7 +35,9 @@ export const looksLikeOracle = (p) => !!p && (TEST_PATH.test(p) || TEST_FILE.tes
  */
 export const isExemptPath = (p) => {
   if (!p) return false
-  if (p.includes('.agent/')) return true
+  // Both separators: on Windows a path built with path.join() is
+  // backslash-separated, so a literal '.agent/' check never matches there.
+  if (/(^|[\\/])\.agent[\\/]/.test(p)) return true
   if (/[\\/]workflow-runs[\\/][^\\/]+[\\/]artifacts[\\/]/.test(p)) return true
   return false
 }

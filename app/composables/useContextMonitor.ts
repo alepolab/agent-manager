@@ -1,4 +1,5 @@
 import type { ContextMetrics, ToolCall, TokenUsage } from '~/types'
+import { DEFAULT_MODEL, getModelContextWindow } from '~/utils/models'
 
 export function useContextMonitor() {
   // Initialize empty metrics
@@ -16,7 +17,7 @@ export function useContextMonitor() {
     },
     contextWindow: {
       used: 0,
-      total: 200_000,
+      total: getModelContextWindow(DEFAULT_MODEL),
       percentage: 0,
     },
     files: {
@@ -46,7 +47,7 @@ export function useContextMonitor() {
   /**
    * Reset metrics to initial state
    */
-  function resetMetrics() {
+  function resetMetrics(contextWindowTotal?: number) {
     metrics.value = {
       tokens: {
         input: 0,
@@ -61,7 +62,7 @@ export function useContextMonitor() {
       },
       contextWindow: {
         used: 0,
-        total: 200_000,
+        total: contextWindowTotal || getModelContextWindow(DEFAULT_MODEL),
         percentage: 0,
       },
       files: {
@@ -176,16 +177,19 @@ export function useContextMonitor() {
   /**
    * Update metrics with specific token usage (overwrites current)
    */
-  function updateTokenUsage(tokens: { input: number; output: number; cacheCreation?: number; cacheRead?: number }) {
-    metrics.value.tokens = { 
-      input: tokens.input, 
-      output: tokens.output, 
+  function updateTokenUsage(
+    tokens: { input: number; output: number; cacheCreation?: number; cacheRead?: number },
+    contextWindowTotal?: number
+  ) {
+    metrics.value.tokens = {
+      input: tokens.input,
+      output: tokens.output,
       cached: tokens.cacheRead || 0,
       cacheCreation: tokens.cacheCreation || 0
     }
-    
+
     // Calculate context usage (reference logic: input + cacheCreation + cacheRead)
-    const total = metrics.value.contextWindow.total || 200000
+    const total = contextWindowTotal || metrics.value.contextWindow.total || getModelContextWindow(DEFAULT_MODEL)
     const used = tokens.input + (tokens.cacheCreation || 0) + (tokens.cacheRead || 0)
     const percentage = Math.min(100, (used / total) * 100)
     
@@ -193,6 +197,20 @@ export function useContextMonitor() {
       used,
       total,
       percentage: Math.round(percentage * 100) / 100
+    }
+  }
+
+  /**
+   * Point the usage bar at a different window, keeping whatever tokens are
+   * already counted. Used when the model changes: the panel should say 1M as
+   * soon as the picker moves, not at the end of the next turn.
+   */
+  function setContextWindow(total: number) {
+    const used = metrics.value.contextWindow.used
+    metrics.value.contextWindow = {
+      used,
+      total,
+      percentage: Math.round(Math.min(100, (used / total) * 100) * 100) / 100
     }
   }
 
@@ -212,5 +230,6 @@ export function useContextMonitor() {
     stopMonitoring,
     resetMetrics,
     updateTokenUsage,
+    setContextWindow,
   }
 }

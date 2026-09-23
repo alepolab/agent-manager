@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { WorkflowRun, RunCostSummary } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
+import { isLiveStatus, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
+import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 import { needsJustification, oversightReason } from '~~/shared/utils/oversight'
 
 const props = defineProps<{ run: WorkflowRun | null, runs: WorkflowRun[], logs?: Record<string, string[]>, fullPage?: boolean }>()
@@ -36,6 +36,12 @@ const mayAnswer = computed(() => can('answerGate') && mineToAnswer.value)
  *  from a 400 after they have already clicked. */
 const mustJustify = computed(() => needsJustification(props.run?.blastRadius))
 const canApprove = computed(() => !mustJustify.value || !!note.value.trim())
+
+/** The run is gated on the entries of an artifact, so RunDecisionPanel owns
+ *  both the question and the resume: the generic note box and Approve button
+ *  below would offer a second, cruder way to answer the same gate — one that
+ *  acts on every entry. */
+const reviewing = computed(() => props.run?.status === 'awaiting_review')
 
 /** An agent is mid-call: a note reaches it directly instead of waiting for the next step. */
 const anyRunning = computed(() => props.run?.steps.some(s => s.status === 'running') ?? false)
@@ -123,7 +129,7 @@ async function loadFacts() {
 watch(() => [props.run?.id, props.run?.status, props.run?.steps.filter(s => s.status === 'completed').length], loadFacts, { immediate: true })
 
 /** Restart and clone only make sense once nothing is executing. */
-const settledRun = computed(() => !!props.run && !['running', 'paused'].includes(props.run.status))
+const settledRun = computed(() => !!props.run && !isLiveStatus(props.run.status))
 const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
 
 /** A live run's timer has to advance between the run updates that arrive over
@@ -165,6 +171,9 @@ const elapsed = (s: { startedAt?: number, completedAt?: number }) => {
  * filling left to right would imply progress the run never made.
  */
 const settled = SETTLED_STATUSES
+/** The run's declared inputs, as pairs, so the template stays declarative. */
+const statedParameters = computed(() => Object.entries(props.run?.parameters ?? {}))
+
 const progress = computed(() => {
   const steps = props.run?.steps ?? []
   return { done: steps.filter(s => settled.has(s.status)).length, total: steps.length }
@@ -217,7 +226,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       </button>
       <NuxtLink v-if="!fullPage" :to="`/runs/${run.id}`" class="t-small text-label hover:underline shrink-0 focus-ring" title="Steps, live output and every evidence file, full screen">Full page &nearr;</NuxtLink>
       <span class="t-small font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">
-        {{ run.status }}
+        {{ runStatusLabel(run.status) }}
       </span>
       <span class="t-small text-label">{{ run.workflowName }}</span>
       <span class="t-small text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">
@@ -228,6 +237,15 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
 
     <!-- One segment per step, coloured by that step's status. See `progress`. -->
     <RunProgressBar :steps="run.steps" :aria-label="`${progress.done} of ${progress.total} steps settled`" />
+
+    <!-- What this run was actually given. Shown because a reader deciding
+         whether to clone or restart needs to know the inputs, and the prompt
+         alone no longer carries them. -->
+    <div v-if="statedParameters.length" class="flex flex-wrap gap-x-3 gap-y-1 t-small font-mono" data-testid="run-parameters">
+      <span v-for="[name, value] in statedParameters" :key="name" class="text-label">
+        <span style="color: var(--text-tertiary);">{{ name }}:</span> {{ value }}
+      </span>
+    </div>
 
     <p v-if="run.status === 'interrupted'" class="t-small" :style="{ color: STATUS_COLOR.failed }">
       The process that was running this is gone. Its steps are frozen where they stopped.
@@ -298,14 +316,22 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
         <template v-else>This gate is <span class="font-mono">{{ gateOwner }}</span>'s decision, not yours. You are {{ role }}.</template>
       </p>
     </div>
-
+    <!-- A run gated on the entries of an artifact gets the panel that can take
+         those decisions, not the one-line banner and the single Approve button
+         below: approving the step acts on every entry, which is the thing the
+         reviewer is here to prevent. -->
+    <RunDecisionPanel v-if="reviewing" :run="run" />
     <!-- What the reviewer is actually approving. The gate used to show a step
          label and one line of agent prose, with the measured change, the test
          results and the security verdict all sitting unread in the bundle. -->
     <RunVerdictCard
-      v-if="run.question?.kind === 'approval' && run.question.reason !== 'budget'"
+      v-else-if="run.question?.kind === 'approval' && run.question.reason !== 'budget'"
       :run="run"
     />
+    <div v-else-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
+      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
+    </div>
 
     <!-- What was decided at this run's earlier gates. A four-gate runbook used
          to arrive at its last gate with no record of who approved the first
@@ -325,7 +351,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     <!-- A live run or an open gate: the note has somewhere to go the moment it is
          typed, so it is offered directly. -->
     <textarea
-      v-if="(mayDrive && run.status === 'running') || (mayAnswer && run.status === 'paused')"
+      v-if="!reviewing && ((mayDrive && run.status === 'running') || (mayAnswer && run.status === 'paused'))"
       v-model="note"
       rows="2"
       class="field-input w-full resize-none t-small"
@@ -407,9 +433,6 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             <span class="font-medium whitespace-nowrap shrink-0">{{ step.label }}</span>
             <span class="text-label font-mono t-small truncate min-w-0">{{ step.agentSlug }}</span>
             <span v-if="step.visits > 1" class="t-small text-label" :title="`This step ran ${step.visits} times`">×{{ step.visits }}</span>
-            <!-- The monitor's reasoning was recorded and never rendered: the row
-                 showed an eight-character verdict and kept the sentence that
-                 explains it to itself. -->
             <!-- Only when the monitor had something to say. CONTINUE is the
                  boring case and it was printed on all eleven rows in the same
                  weight as the step's own name, so the two verdicts that matter
@@ -425,6 +448,9 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
                  same grey word. The runner treats that distinction as
                  load-bearing; the row never showed it. -->
             <span v-if="step.status === 'skipped' && step.skipReason" class="t-small text-label truncate" :title="step.skipReason">skipped: {{ step.skipReason }}</span>
+            <span v-if="step.childRunIds?.length" class="t-small text-label shrink-0" data-testid="child-run-count">
+              {{ step.childRunIds.length }} {{ step.childRunIds.length === 1 ? 'child run' : 'child runs' }}
+            </span>
             <span class="ml-auto t-small text-label">{{ elapsed(step) }}</span>
           </button>
           <!-- Visible on the row itself: an action nobody has to discover by
@@ -454,6 +480,20 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
             :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`"
           />
           <p v-if="step.error" class="t-small" :style="{ color: STATUS_COLOR.failed }">{{ step.error }}</p>
+          <!-- The runs this step started. Without these a fan-out is a set of
+               unrelated rows on /runs, and childRunIds - persisted since the
+               dispatch step existed - was the link nothing followed. -->
+          <div v-if="step.childRunIds?.length" class="space-y-0.5" data-testid="child-runs">
+            <div class="t-small text-label">
+              {{ step.childRunIds.length === 1 ? 'The run this step started' : 'The runs this step started' }}<template v-if="step.status === 'waiting'">, which it is waiting for</template>
+            </div>
+            <div class="flex flex-wrap gap-x-2 gap-y-0.5">
+              <NuxtLink
+                v-for="childId in step.childRunIds" :key="childId" :to="`/runs/${childId}`"
+                class="font-mono t-small underline" :title="childId"
+              >{{ childId.slice(0, 8) }}</NuxtLink>
+            </div>
+          </div>
           <div v-if="liveFor(step.stepId).length" class="space-y-0.5">
             <div class="t-small text-label">Live output{{ step.status === 'running' ? '' : ' (this attempt)' }}</div>
             <div :ref="(el) => { logPre[step.stepId] = el as HTMLElement | null }" class="max-h-72 overflow-auto rounded p-2" style="background: var(--surface-base); border: 1px solid var(--border-subtle);"><LogLines :lines="liveFor(step.stepId)" /></div>
@@ -483,7 +523,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     </div>
 
     <div class="flex gap-2">
-      <UButton v-if="mayAnswer && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
+      <UButton v-if="mayAnswer && !reviewing && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
       <UButton
         v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'"
         size="xs" icon="i-lucide-check"
@@ -493,13 +533,10 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
         @click="send('continue')"
       />
       <UButton v-else-if="mayAnswer && run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
-      <!-- The counterpart of Approve, on the same capability: a reviewer who
-           cannot refuse is not gating anything. Disabled until a reason is
-           typed, because the reason is the point. -->
       <!-- The reviewer's third answer, and the one that was missing: hand the
            work back to a named earlier step with the instruction it works from.
            The runner has always been able to do this; only an agent could ask
-           for it. "Reject run" beside it ends the run — they were previously the
+           for it. "Reject run" beside it ends the run - they were previously the
            same button, labelled as this one and behaving as that one. -->
       <template v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget' && reworkCandidates.length && reworksLeft > 0">
         <select v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to">
@@ -522,7 +559,9 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       />
       <UButton v-if="mayDrive && noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
       <UButton v-if="mayDrive && run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
-      <UButton v-if="mayDrive && (run.status === 'running' || run.status === 'paused')" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
+      <!-- isLiveStatus, not a status list: a queued run is stoppable, and that is
+           how it is cancelled. -->
+      <UButton v-if="mayDrive && isLiveStatus(run.status)" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
       <UButton v-if="mayDrive && settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
       <p v-if="!mayAnswer && run.status === 'paused'" class="t-small text-label self-center">This run is waiting on a decision from a developer.</p>
     </div>
@@ -537,7 +576,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <span class="w-2 h-2 rounded-full" :style="{ background: STATUS_COLOR[r.status] }" />
       <span>{{ new Date(r.startedAt).toLocaleString() }}</span>
       <span class="t-small text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(r, now) }}</span>
-      <span class="ml-auto t-small font-mono text-label">{{ r.status }}</span>
+      <span class="ml-auto t-small font-mono text-label">{{ runStatusLabel(r.status) }}</span>
     </button>
     <p v-if="runs.length > 10" class="t-small text-label pt-1">
       Showing 10 of {{ runs.length }}. <NuxtLink to="/runs" class="hover:underline">See all</NuxtLink>.

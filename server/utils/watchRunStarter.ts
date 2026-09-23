@@ -12,35 +12,13 @@
  * now just imports `realRunStarter` from here and wires it via
  * `setRunStarter`.
  */
-import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { resolveClaudePath } from './claudeDir.ts'
-import { findActiveRun } from './workflowRunStore.ts'
-import { startRun } from './workflowRunner.ts'
+import { findActiveRun, loadWorkflowSteps, toWorkflowLike } from './workflowRunStore.ts'
+import { startOrQueue } from './workflowRunner.ts'
+import { fenceTicketBody } from './jiraTicketSource.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
 
-interface WorkflowFile {
-  slug: string
-  name: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number }[]
-}
-
-/** Reads a workflow definition straight off disk — the same file
- *  `GET /api/workflows/[slug]` reads — rather than looping the dispatch
- *  path back through HTTP for something the server process can just read. */
-async function loadWorkflow(slug: string): Promise<WorkflowFile | null> {
-  const path = resolveClaudePath('workflows', `${slug}.json`)
-  if (!existsSync(path)) return null
-  try {
-    const data = JSON.parse(await readFile(path, 'utf-8'))
-    return { slug, ...data } as WorkflowFile
-  } catch {
-    return null
-  }
-}
-
 function promptFor(ticket: TicketRef): string {
-  return `${ticket.key}: ${ticket.summary}\n\n${ticket.description}`
+  return `${ticket.key}: ${ticket.summary}\n\n${ticket.description?.trim() ? fenceTicketBody(ticket.description) : ''}`
 }
 
 /**
@@ -98,7 +76,7 @@ export async function realRunStarter(watch: Watch, ticket: TicketRef): Promise<{
   const active = await findActiveRun(watch.workflowSlug)
   if (active) return { runId: active.id }
 
-  const workflow = await loadWorkflow(watch.workflowSlug)
+  const workflow = await loadWorkflowSteps(watch.workflowSlug)
   if (!workflow) {
     throw new Error(`workflow '${watch.workflowSlug}' not found`)
   }
@@ -106,8 +84,13 @@ export async function realRunStarter(watch: Watch, ticket: TicketRef): Promise<{
     throw new Error(`workflow '${watch.workflowSlug}' has no steps`)
   }
 
-  const run = await startRun({
-    workflow: { slug: workflow.slug, name: workflow.name, steps: workflow.steps },
+  // Started now if the workflow's concurrency group has room, else recorded as
+  // queued. Either way a run id comes back, which is what recordDispatch
+  // stores and what reconcile follows - so a ticket dispatched into a full
+  // group is tracked exactly like one that started immediately, rather than
+  // looking to the watcher like a failed attempt.
+  const { run } = await startOrQueue({
+    workflow: toWorkflowLike(workflow),
     initialPrompt: promptFor(ticket),
     // The runner's own fact for "what triggered this" — the watch that
     // dispatched it, never left to the agent to self-report.

@@ -12,6 +12,12 @@ hand-write a substitute.
 
 ## 1. Resolve the product entry
 
+> Each instance runs its OWN registry store, seeded once from
+> `registry/products.yaml` and edited from the Products page. This file is the
+> seed and may be behind it. When a run header carries a
+> `## Product (from the registry)` block, that is the resolved entry and the
+> one to act on.
+
 Look up `$1` against `registry/products.yaml`. Read its `tests` block —
 `unit`, `atdd`, `regression`, `ui_trace`, `compose_test` — and its `build`
 command if one is declared. Never hardcode a test command here; a product

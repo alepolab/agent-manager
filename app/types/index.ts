@@ -1,4 +1,7 @@
 import type { Role } from '~~/shared/types/role'
+import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
+
+export type { WorkflowParameter }
 
 export type AgentModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
 export type AgentMemory = 'user' | 'project' | 'local' | 'none'
@@ -288,6 +291,100 @@ export interface WorkflowStep {
    */
   testsUnlocked?: boolean
   /**
+   * Run artifacts this step must leave behind, as filenames relative to the
+   * run's artifacts directory. Checked by the runner before the monitor runs:
+   * a missing or empty file sends the step back naming the file, or fails it
+   * when no visits remain. A step that skips itself is exempt.
+   */
+  produces?: string[]
+  /**
+   * Conditional routing: the step runs only when the named run artifact holds
+   * something. Absent means it always runs.
+   *
+   * `artifact` is a filename relative to the run's artifacts directory. Not
+   * written, blank, or holding an empty array / object / string / null / 0 /
+   * false, and the step is skipped - its successors still schedule, so a join
+   * downstream is not wedged behind the branch that had nothing to do. Present
+   * but not valid JSON FAILS the step, because a producer that crashed
+   * mid-write must not read as "nothing to do".
+   *
+   * Only "non-empty" is expressible, deliberately. If a negated form is ever
+   * needed ("run only when nothing was escalated"), add a mode to this object
+   * rather than a parallel `skipWhen` - two fields that gate the same step from
+   * opposite directions is a rule nobody can read off the canvas.
+   */
+  runWhen?: { artifact: string }
+  /**
+   * Present on a step the runner executes itself, without a model: it starts
+   * one child run per item of a list, routing each item to a workflow.
+   *
+   * The list comes from exactly one of two places, and naming both or neither
+   * fails the step. `source` is a filename relative to the run's artifacts
+   * directory holding a JSON array - written by an earlier step. Not written or
+   * empty and the step dispatches nothing and completes; present but not valid
+   * JSON, or not an array, FAILS the step - the same rule `runWhen` uses, and
+   * for the same reason. `fromParameter` names one of the workflow's own
+   * parameters instead, whose value is one item per line: that is what makes
+   * "scan these five repos" a list a person types when they start the run,
+   * rather than a step spent producing a file.
+   *
+   * `itemParameter` is the input each child is given the item as, and is
+   * required with `fromParameter`. Every target workflow must declare it or the
+   * step fails before starting anything: a child that was never told which repo
+   * it is for would scan whatever its checkout happened to contain, and nothing
+   * would say so.
+   *
+   * `routeBy` names a field on each entry and `routes` maps that field's value
+   * to a workflow slug, so one step fans a mixed batch out to several
+   * workflows. `slug` is the target for an entry no route matches, and the
+   * only target when neither is set. An entry nobody can route fails the whole
+   * step and starts nothing: a half-dispatched batch leaves some work in
+   * flight and some silently dropped, with nothing recording which. A list of
+   * bare items has no field to route on, so `fromParameter` requires `slug`.
+   *
+   * `join` decides whether the step waits. Without it - the original behaviour,
+   * and still the default - the children are started and not waited for, the
+   * step's successors run immediately, and each child's outcome reaches its own
+   * run. With it the run reaches `joining` until every child has settled, then
+   * writes `children.json` (one entry per child, with its item name, status and
+   * failure) and carries on, so one step downstream can report on the whole
+   * fan-out. A child stopped on a person keeps the parent waiting: the work
+   * being joined is not finished.
+   */
+  triggerWorkflow?: {
+    source?: string
+    fromParameter?: string
+    itemParameter?: string
+    join?: boolean
+    routeBy?: string
+    routes?: Record<string, string>
+    slug?: string
+  }
+  /**
+   * Present on a step the runner executes itself, without a model: it posts one
+   * message to a channel configured under Settings, and completes.
+   *
+   * `channel` is a NAME, never a URL. Workflow definitions are staged into the
+   * distributable image and written onto the shared team volume, so a webhook
+   * written here would ship inside an image; the URL lives encrypted outside the
+   * config tree (server/utils/channels.ts).
+   *
+   * `message` is the step author's own sentence, with `{count}` replaced by the
+   * number of entries in this step's `runWhen` artifact. The entry names and a
+   * link to the run are appended. There is no other substitution: projecting
+   * arbitrary entry fields would make this config know the artifact's schema,
+   * and a producer renaming a field would silently empty the message.
+   *
+   * Placement is free: a gated step waits alone (workflowRunner.ts, runWave
+   * splits the wave), so a notify step beside one still sends before the run
+   * stops on the person. It sends earlier upstream of the gate, and that is
+   * still the clearer place to read it off the canvas.
+   */
+  notify?: {
+    channel: string
+    message?: string
+  }
+  /**
    * This step continues its predecessor's Claude Code session instead of
    * starting a fresh one.
    *
@@ -318,6 +415,38 @@ export interface Workflow {
   name: string
   description: string
   steps: WorkflowStep[]
+  /**
+   * Inputs this workflow needs stated before it runs, instead of hoping the
+   * operator buried them in the prompt and every agent parses them out the
+   * same way. Resolved once at start (shared/utils/workflowParameters.ts) and
+   * stated to every step by artifactHeader.
+   *
+   * Only declared names reach a run: a value nothing declared is dropped, not
+   * passed along. `projectDir` is the one name the runner acts on rather than
+   * merely states - it supplies the run's working directory, so a workflow
+   * cannot end up naming that directory twice in two places that disagree.
+   */
+  parameters?: WorkflowParameter[]
+  /**
+   * The concurrency group this workflow's runs count against
+   * (shared/types/workflowGroup.ts). Absent or empty means the default group,
+   * never "uncapped" — see DEFAULT_GROUP_ID.
+   *
+   * Held here rather than as a list of members on the group, so a workflow
+   * carries its own membership: renaming or deleting a workflow cannot leave a
+   * dangling entry in the registry, and one file is the answer to "which group
+   * is this in?".
+   */
+  group?: string
+  /**
+   * The named channel this workflow's run transitions are announced to
+   * (server/utils/channels.ts). Absent falls back to a channel called `default`,
+   * then to SLACK_WEBHOOK_URL.
+   *
+   * A name, not a URL, for the same reason WorkflowStep.notify holds one: this
+   * file ships inside the distributable image.
+   */
+  notifyChannel?: string
   createdAt: string
   lastRunAt?: string
   filePath: string
@@ -327,6 +456,13 @@ export interface WorkflowPayload {
   name: string
   description: string
   steps: WorkflowStep[]
+  /** See Workflow.parameters. */
+  parameters?: WorkflowParameter[]
+  /** See Workflow.group. Sent as '' rather than omitted to clear it: the PUT
+   *  route is a shallow merge, so an absent key keeps the stored value. */
+  group?: string
+  /** See Workflow.notifyChannel. Sent as '' to clear it, like `group`. */
+  notifyChannel?: string
 }
 
 export interface StepExecution {

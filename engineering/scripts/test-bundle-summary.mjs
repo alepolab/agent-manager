@@ -128,6 +128,12 @@ check('summary states the deployment truths considered: profile and topology', (
   assert.match(md, /single-node/)
 })
 
+check('a null stack says no stack was stood up, not "Profile undefined"', () => {
+  const md = renderSummary(broken(b => { b.stack = null }))
+  assert.match(md, /No stack stood up/)
+  assert.doesNotMatch(md, /undefined/)
+})
+
 // ── Cost ──────────────────────────────────────────────────────────────────────
 check('summary states the cost: tokens, attempts, wall clock', () => {
   const md = renderSummary(validBundle())

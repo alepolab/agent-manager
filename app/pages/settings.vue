@@ -33,6 +33,44 @@ async function setAgentModel(value: string) {
   toast.add({ title: value ? `Pipeline agents will run on ${MODEL_OPTIONS.find(o => o.value === value)?.label ?? value}` : 'Each agent uses its own model again', color: 'success' })
 }
 /** Per-run caps for new runs. Blank returns to the default; a run that reaches its cap pauses and asks. */
+/**
+ * What this instance is configured to do, read-only. `pinned` is the part that
+ * changes how the form behaves: a field an env var is overriding is disabled
+ * and says so, because until now it accepted a number, toasted "Settings
+ * saved", and then every run used the variable's value instead.
+ */
+interface InstanceInfo {
+  pinned: Record<string, string>
+  automations: { name: string, envVar: string, enabled: boolean, detail?: string }[]
+  paths: { claudeDir: string, agentRunsDir: string, workspaceRoot: string, usersDir: string }
+  secrets: { name: string, set: boolean }[]
+  identity: { authDisabled: boolean, githubOrg: string | null, managerUrl: string | null, clientIdSet: boolean }
+}
+const instance = ref<InstanceInfo | null>(null)
+onMounted(async () => {
+  try { instance.value = await $fetch<InstanceInfo>('/api/instance') }
+  catch { instance.value = null }
+})
+/** The value an env var is forcing on this field, or undefined when the saved setting wins. */
+const pinnedBy = (envVar: string) => instance.value?.pinned?.[envVar]
+const pinnedNote = (envVar: string) => {
+  const value = pinnedBy(envVar)
+  return value ? `Pinned by ${envVar}=${value} on this instance; the value here is ignored until that is unset.` : ''
+}
+
+const jiraSettings = computed(() => (settings.value as any)?.agentManager?.jira ?? {})
+async function setJira(key: 'postEnabled' | 'baseUrl' | 'defaultProject' | 'forVisName', value: string | boolean) {
+  const agentManager = (settings.value as any)?.agentManager ?? {}
+  const next = typeof value === 'string' ? (value.trim() || undefined) : value || undefined
+  // A base URL that is not a URL reaches every Jira call as a broken host, so
+  // it is refused here the same silent way a bad tasks-picker window is.
+  if (key === 'baseUrl' && typeof next === 'string') {
+    try { if (new URL(next).protocol !== 'https:') return } catch { return }
+  }
+  await save({ ...(settings.value ?? {}), agentManager: { ...agentManager, jira: { ...agentManager.jira, [key]: next } } } as any)
+  toast.add({ title: 'Jira settings saved', color: 'success' })
+}
+
 async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
   const current = (settings.value as any)?.agentManager?.runBudget ?? {}
   const value = Number(raw)
@@ -40,6 +78,115 @@ async function setRunBudget(key: 'maxTokens' | 'maxMinutes', raw: string) {
   await save({ ...(settings.value ?? {}), agentManager: { ...((settings.value as any)?.agentManager ?? {}), runBudget } } as any)
   toast.add({ title: 'Run budget saved for new runs', color: 'success' })
 }
+/**
+ * Notification channels. Their own API, not part of settings.json: the webhook
+ * is a secret and the config tree holds none (server/utils/channels.ts).
+ */
+type ChannelKind = 'teams' | 'slack' | 'email'
+interface PublicChannel { name: string, kind: ChannelKind, hasUrl: boolean, host?: string, to?: string[], updatedAt: number, updatedBy?: string }
+interface PublicSmtp { host: string, port: number, secure?: boolean, user?: string, from: string, hasPassword: boolean }
+const channels = ref<PublicChannel[]>([])
+const channelsError = ref('')
+const newChannelName = ref('')
+const newChannelKind = ref<ChannelKind>('teams')
+const newChannelUrl = ref('')
+const newChannelTo = ref('')
+const savingChannel = ref(false)
+const testing = ref('')
+
+/** The one relay every email channel sends through. Shown only when an email
+ *  channel exists or is being added - an instance that notifies over webhooks
+ *  has no use for it. */
+const smtp = ref<PublicSmtp>({ host: '', port: 587, secure: false, user: '', from: '', hasPassword: false })
+const smtpPassword = ref('')
+const savingSmtp = ref(false)
+const needsSmtp = computed(() => newChannelKind.value === 'email' || channels.value.some(c => c.kind === 'email'))
+
+/** What a row sends to: a webhook host, or the people on an email channel. */
+function channelTarget(c: PublicChannel): string {
+  if (c.kind === 'email') return (c.to ?? []).join(', ') || 'no recipients'
+  return c.host ?? 'stored'
+}
+
+/** The relay as last loaded or saved, so a background refresh can tell whether the form holds edits. */
+let loadedSmtp = JSON.stringify(smtp.value)
+const smtpEdited = () => !!smtpPassword.value || JSON.stringify(smtp.value) !== loadedSmtp
+
+async function loadChannels({ keepSmtpEdits = false } = {}) {
+  try {
+    channels.value = (await $fetch<{ channels: PublicChannel[] }>('/api/channels')).channels
+    channelsError.value = ''
+    const s = (await $fetch<{ smtp: PublicSmtp | null }>('/api/smtp')).smtp
+    if (s && !(keepSmtpEdits && smtpEdited())) {
+      smtp.value = s
+      loadedSmtp = JSON.stringify(s)
+    }
+  } catch (e: unknown) {
+    channelsError.value = e instanceof Error ? e.message : 'Could not load channels'
+  }
+}
+
+async function saveSmtpSettings() {
+  savingSmtp.value = true
+  try {
+    smtp.value = await $fetch<PublicSmtp>('/api/smtp', {
+      method: 'PUT',
+      body: { ...smtp.value, password: smtpPassword.value },
+    })
+    loadedSmtp = JSON.stringify(smtp.value)
+    smtpPassword.value = ''
+    toast.add({ title: 'SMTP relay saved', color: 'success' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not save the relay', color: 'error' })
+  } finally {
+    savingSmtp.value = false
+  }
+}
+
+async function saveChannel() {
+  savingChannel.value = true
+  try {
+    await $fetch(`/api/channels/${encodeURIComponent(newChannelName.value.trim())}`, {
+      method: 'PUT',
+      body: { kind: newChannelKind.value, url: newChannelUrl.value, to: newChannelTo.value },
+    })
+    newChannelUrl.value = ''
+    newChannelTo.value = ''
+    newChannelName.value = ''
+    await loadChannels()
+    toast.add({ title: 'Channel saved', color: 'success' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not save the channel', color: 'error' })
+  } finally {
+    savingChannel.value = false
+  }
+}
+
+async function removeChannel(name: string) {
+  try {
+    await $fetch(`/api/channels/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    await loadChannels()
+    toast.add({ title: `Removed "${name}"`, color: 'success' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not remove the channel', color: 'error' })
+  }
+}
+
+/** Proves a webhook works now, rather than on the escalation branch at 2am. */
+async function testChannel(name: string) {
+  testing.value = name
+  try {
+    const res = await $fetch<{ ok: boolean, message: string }>(`/api/channels/${encodeURIComponent(name)}/test`, { method: 'POST' })
+    toast.add({ title: res.message, color: res.ok ? 'success' : 'error' })
+  } catch (e: unknown) {
+    toast.add({ title: (e as { data?: { message?: string } })?.data?.message ?? 'Could not reach the channel', color: 'error' })
+  } finally {
+    testing.value = ''
+  }
+}
+
+onMounted(() => loadChannels())
+
 const viewMode = ref<'structured' | 'raw'>('structured')
 const showRemoveConfirm = ref(false)
 const repoToRemove = ref<{ owner: string; repo: string; type: 'skills' | 'agents'; count: number } | null>(null)
@@ -55,6 +202,20 @@ onMounted(async () => {
     fetchGithubImports('agents')
   ])
 })
+
+// Assigning `settings` rewrites the raw JSON editor and the status-line inputs (see the watchers below),
+// so a background load waits while either holds input that has not been saved.
+const rawJsonEdited = () => !!settings.value && rawJson.value !== JSON.stringify(settings.value, null, 2)
+const statusLineEdited = () => statusLineType.value !== (settings.value?.statusLine?.type || '')
+  || statusLineCommand.value !== (settings.value?.statusLine?.command || '')
+useAutoRefresh(() => Promise.all([
+  saving.value || rawJsonEdited() || statusLineEdited() ? null : load({ silent: true }),
+  loadChannels({ keepSmtpEdits: true }),
+]))
+useAutoRefresh(() => Promise.all([
+  fetchGithubImports('skills', { silent: true }),
+  fetchGithubImports('agents', { silent: true }),
+]), { interval: 0 })
 
 async function onUpdateImport(owner: string, repo: string, type: 'skills' | 'agents') {
   try {
@@ -365,17 +526,21 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <div class="t-small mt-0.5 text-label leading-relaxed">
                 Caps for each new run; when one is reached the run pauses and asks whether to continue with a fresh allowance. Defaults are 8,000,000 tokens and 180 minutes, overridden by AGENT_RUN_MAX_TOKENS or AGENT_RUN_MAX_MINUTES on the instance.
               </div>
+              <div v-if="pinnedBy('AGENT_RUN_MAX_TOKENS')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_TOKENS') }}</div>
+              <div v-if="pinnedBy('AGENT_RUN_MAX_MINUTES')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('AGENT_RUN_MAX_MINUTES') }}</div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <input
                 type="number" min="1" step="100000" class="field-input t-small" style="width: 9rem; flex: none;" placeholder="8000000" aria-label="Max tokens per run"
                 :value="settings?.agentManager?.runBudget?.maxTokens ?? ''"
+                :disabled="!!pinnedBy('AGENT_RUN_MAX_TOKENS')" :title="pinnedNote('AGENT_RUN_MAX_TOKENS')"
                 @change="setRunBudget('maxTokens', ($event.target as HTMLInputElement).value)"
               />
               <span class="t-small text-label">tokens</span>
               <input
                 type="number" min="1" step="10" class="field-input t-small" style="width: 6rem; flex: none;" placeholder="180" aria-label="Max minutes per run"
                 :value="settings?.agentManager?.runBudget?.maxMinutes ?? ''"
+                :disabled="!!pinnedBy('AGENT_RUN_MAX_MINUTES')" :title="pinnedNote('AGENT_RUN_MAX_MINUTES')"
                 @change="setRunBudget('maxMinutes', ($event.target as HTMLInputElement).value)"
               />
               <span class="t-small text-label">min</span>
@@ -422,6 +587,250 @@ const lineCount = computed(() => rawJson.value.split('\n').length)
               <span class="t-small text-label">seconds</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Jira -->
+      <div class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Jira</h3>
+        <p class="t-small text-meta">
+          The host and the posting gate for this instance. The API token is not here and never will be: it is
+          per-developer and stored encrypted outside the config tree — set yours on
+          <NuxtLink to="/profile" class="underline focus-ring">your profile</NuxtLink>. An environment variable
+          set on the instance overrides anything saved here.
+        </p>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="t-ui font-medium">Post outcomes to Jira</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
+              Off by default. Every run writes the comment it would post to its own <code>jira-comment.json</code>
+              artifact either way, so this decides where that comment goes, never whether one is produced.
+              <code>JIRA_POST_ENABLED=0</code> on the instance pins it off for everyone.
+            </div>
+            <div v-if="pinnedBy('JIRA_POST_ENABLED')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_POST_ENABLED') }}</div>
+          </div>
+          <label class="field-toggle" :title="pinnedNote('JIRA_POST_ENABLED')">
+            <input
+              type="checkbox" :checked="jiraSettings.postEnabled === true" :disabled="!!pinnedBy('JIRA_POST_ENABLED')"
+              @change="setJira('postEnabled', ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="field-toggle__track"><span class="field-toggle__thumb" /></span>
+          </label>
+        </div>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="t-ui font-medium">Jira host</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
+              The site every Jira call goes to, as an https URL. If this was the missing credential, ticket
+              polling starts at the next restart — the watcher chooses its ticket source once, at boot.
+            </div>
+            <div v-if="pinnedBy('JIRA_BASE_URL')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_BASE_URL') }}</div>
+          </div>
+          <input
+            type="url" class="field-input t-small" style="width: 20rem; flex: none;" placeholder="https://your-team.atlassian.net"
+            aria-label="Jira host" :value="jiraSettings.baseUrl ?? ''"
+            :disabled="!!pinnedBy('JIRA_BASE_URL')" :title="pinnedNote('JIRA_BASE_URL')"
+            @change="setJira('baseUrl', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="t-ui font-medium">Default project key</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
+              Written into the generated jira-cli config for new runs. Leave empty and the agents name a project explicitly.
+            </div>
+            <div v-if="pinnedBy('JIRA_DEFAULT_PROJECT')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_DEFAULT_PROJECT') }}</div>
+          </div>
+          <input
+            type="text" class="field-input t-small" style="width: 10rem; flex: none;" placeholder="ASECRM"
+            aria-label="Default Jira project key" :value="jiraSettings.defaultProject ?? ''"
+            :disabled="!!pinnedBy('JIRA_DEFAULT_PROJECT')" :title="pinnedNote('JIRA_DEFAULT_PROJECT')"
+            @change="setJira('defaultProject', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+
+        <div class="flex items-start justify-between gap-4 py-3">
+          <div class="min-w-0 flex-1 max-w-2xl">
+            <div class="t-ui font-medium">"For vis:" name</div>
+            <div class="t-small mt-0.5 text-label leading-relaxed">
+              Appended as a last line on a posted or rendered comment. Left out entirely when empty — never filled with a placeholder.
+            </div>
+            <div v-if="pinnedBy('JIRA_COMMENT_FOR_VIS_NAME')" class="t-small mt-1" style="color: var(--warning);">{{ pinnedNote('JIRA_COMMENT_FOR_VIS_NAME') }}</div>
+          </div>
+          <input
+            type="text" class="field-input t-small" style="width: 14rem; flex: none;" placeholder="Nobody by default"
+            aria-label="For vis name" :value="jiraSettings.forVisName ?? ''"
+            :disabled="!!pinnedBy('JIRA_COMMENT_FOR_VIS_NAME')" :title="pinnedNote('JIRA_COMMENT_FOR_VIS_NAME')"
+            @change="setJira('forVisName', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+      </div>
+
+      <!-- Instance: read-only, because none of it can change without a restart -->
+      <div v-if="instance" class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Instance</h3>
+        <p class="t-small text-meta">
+          What this server is actually running, as it booted. None of it is editable here: every switch below is
+          read once at startup, before the timer it controls exists, so a toggle would save cleanly and change
+          nothing until a restart. Each row names the variable to set instead.
+        </p>
+
+        <div>
+          <div class="t-ui font-medium mb-2">Automations</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            <div v-for="a in instance.automations" :key="a.envVar" class="flex items-center gap-2 t-small">
+              <span class="size-1.5 rounded-full shrink-0" :style="{ background: a.enabled ? 'var(--success)' : 'var(--text-disabled)' }" />
+              <span>{{ a.name }}</span>
+              <span class="text-label">{{ a.enabled ? (a.detail ?? 'on') : 'off' }}</span>
+              <code class="t-small text-label ml-auto">{{ a.envVar }}</code>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="t-ui font-medium mb-2">Paths</div>
+          <div class="grid grid-cols-1 gap-y-1 t-small">
+            <div><span class="text-label">Config</span> <code class="ml-2">{{ instance.paths.claudeDir }}</code></div>
+            <div><span class="text-label">Run evidence</span> <code class="ml-2">{{ instance.paths.agentRunsDir }}</code></div>
+            <div><span class="text-label">Checkouts</span> <code class="ml-2">{{ instance.paths.workspaceRoot }}</code></div>
+            <div><span class="text-label">Developer profiles</span> <code class="ml-2">{{ instance.paths.usersDir }}</code></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="t-ui font-medium mb-2">Credentials</div>
+          <div class="t-small text-meta mb-2">Presence only — no value is ever sent to this page.</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            <div v-for="s in instance.secrets" :key="s.name" class="flex items-center gap-2 t-small">
+              <span class="size-1.5 rounded-full shrink-0" :style="{ background: s.set ? 'var(--success)' : 'var(--text-disabled)' }" />
+              <code class="t-small">{{ s.name }}</code>
+              <span class="text-label ml-auto">{{ s.set ? 'set' : 'not set' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="t-small">
+          <span class="text-label">Sign-in</span>
+          <span class="ml-2">{{ instance.identity.authDisabled ? 'disabled (every request is the local developer)' : `GitHub${instance.identity.githubOrg ? `, ${instance.identity.githubOrg}` : ''}` }}</span>
+          <code class="t-small text-label ml-2">AUTH_DISABLED, GITHUB_ORG</code>
+        </div>
+      </div>
+
+      <!-- Notification channels -->
+      <div class="rounded-xl p-5 space-y-4 bg-card">
+        <h3 class="text-section-title">Notification channels</h3>
+        <p class="t-small text-meta">
+          Named Teams, Slack and email destinations a workflow refers to by name — from a notify step, or as a
+          workflow's channel for run transitions. Stored encrypted on the server under
+          <code>~/.agent-manager</code>, outside the Claude config directory: they are not part of
+          settings.json and are never included in a config export or a built image. A channel called
+          <code>default</code> receives run transitions from every workflow that names no channel of its own.
+        </p>
+
+        <div v-if="channelsError" class="t-small" style="color: var(--error);">{{ channelsError }}</div>
+
+        <table v-if="channels.length" class="w-full t-small">
+          <thead>
+            <tr class="text-meta text-left">
+              <th class="pb-2 font-medium">Name</th>
+              <th class="pb-2 font-medium">Kind</th>
+              <th class="pb-2 font-medium">Sends to</th>
+              <th class="pb-2 font-medium">Last saved</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in channels" :key="c.name" class="border-t" style="border-color: var(--border);">
+              <td class="py-2 font-medium text-primary">{{ c.name }}</td>
+              <td class="py-2">{{ c.kind }}</td>
+              <td class="py-2 font-mono text-meta">{{ channelTarget(c) }}</td>
+              <td class="py-2 text-meta">
+                {{ new Date(c.updatedAt).toLocaleDateString() }}{{ c.updatedBy ? ` · ${c.updatedBy}` : '' }}
+              </td>
+              <td class="py-2 text-right whitespace-nowrap">
+                <UButton label="Send test" size="xs" variant="soft" :loading="testing === c.name" @click="testChannel(c.name)" />
+                <UButton label="Remove" size="xs" variant="ghost" color="error" class="ml-1" @click="removeChannel(c.name)" />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else-if="!channelsError" class="t-small text-meta">No channels configured yet.</p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="field-group">
+            <label class="field-label">Name</label>
+            <input v-model="newChannelName" class="field-input" placeholder="reviewers" >
+          </div>
+          <div class="field-group">
+            <label class="field-label">Kind</label>
+            <select v-model="newChannelKind" class="field-input">
+              <option value="teams">Teams</option>
+              <option value="slack">Slack</option>
+              <option value="email">Email</option>
+            </select>
+          </div>
+          <div v-if="newChannelKind === 'email'" class="field-group">
+            <label class="field-label">Recipients</label>
+            <input v-model="newChannelTo" class="field-input" placeholder="dev-leads@alepo.com, qa@alepo.com" >
+            <span class="field-hint">
+              Comma- or newline-separated. Not a secret, so unlike a webhook these are shown back to you and
+              saving replaces the whole list.
+            </span>
+          </div>
+          <div v-else class="field-group">
+            <label class="field-label">Webhook URL</label>
+            <input v-model="newChannelUrl" type="password" class="field-input" placeholder="https://…" >
+            <span class="field-hint">
+              Write-only once saved. Editing an existing channel and leaving this blank keeps the stored URL.
+            </span>
+          </div>
+        </div>
+
+        <!-- The relay, shown only when something would actually use it. -->
+        <div v-if="needsSmtp" class="rounded-lg p-4 space-y-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <h4 class="t-ui font-semibold text-primary">SMTP relay</h4>
+          <p class="t-small text-meta">
+            One relay for every email channel: it is a property of this deployment, not of an audience.
+            The password is sealed like a webhook URL, and leaving it blank keeps the stored one.
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="field-group">
+              <label class="field-label">Host</label>
+              <input v-model="smtp.host" class="field-input" placeholder="smtp.office365.com" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">Port</label>
+              <input v-model.number="smtp.port" type="number" class="field-input" placeholder="587" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">From</label>
+              <input v-model="smtp.from" class="field-input" placeholder="agent-manager@alepo.com" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">Username</label>
+              <input v-model="smtp.user" class="field-input" placeholder="optional" >
+            </div>
+            <div class="field-group">
+              <label class="field-label">Password</label>
+              <input v-model="smtpPassword" type="password" class="field-input" :placeholder="smtp.hasPassword ? 'stored; paste a new one to replace it' : ''" >
+            </div>
+            <div class="field-group">
+              <label class="flex items-center gap-2 cursor-pointer mt-5">
+                <input v-model="smtp.secure" type="checkbox" >
+                <span class="field-label mb-0">Implicit TLS (465)</span>
+              </label>
+            </div>
+          </div>
+          <div class="flex justify-end">
+            <UButton label="Save relay" size="sm" variant="soft" :loading="savingSmtp" @click="saveSmtpSettings" />
+          </div>
+        </div>
+
+        <div class="flex justify-end">
+          <UButton label="Save channel" size="sm" variant="soft" :loading="savingChannel" @click="saveChannel" />
         </div>
       </div>
 

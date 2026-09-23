@@ -1,4 +1,4 @@
-import type { WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 
 /**
  * Subscribes to a server-owned run. It does not drive anything — the server
@@ -38,16 +38,27 @@ export function useWorkflowRun(slug: string) {
   /** Attach to whatever is already running, if anything. Called on page load. */
   async function attach() {
     await refreshRuns()
-    const active = runs.value.find(r => r.status === 'running' || r.status === 'paused')
+    // Includes a queued run: it is this workflow's current run, and the SSE
+    // stream follows it into `running` on its own.
+    const active = runs.value.find(r => isLiveStatus(r.status))
     if (active) { run.value = active; listen(active.id) }
   }
 
-  async function start(initialPrompt: string, projectDir?: string, autoRun = false) {
+  /** Background refresh: the run list, and the open run's stream if another tab made it live again.
+   *  Never opens a run that isn't already shown. */
+  async function refresh() {
+    await refreshRuns()
+    if (source || !run.value) return
+    const latest = runs.value.find(r => r.id === run.value!.id)
+    if (latest && isLiveStatus(latest.status)) { run.value = latest; listen(latest.id) }
+  }
+
+  async function start(initialPrompt: string, projectDir?: string, autoRun = false, parameters?: Record<string, string>) {
     loading.value = true
     error.value = null
     try {
       const started = await $fetch<WorkflowRun>(`/api/workflows/${slug}/runs`, {
-        method: 'POST', body: { initialPrompt, projectDir, autoRun },
+        method: 'POST', body: { initialPrompt, projectDir, autoRun, parameters },
       })
       run.value = started
       listen(started.id)
@@ -76,7 +87,7 @@ export function useWorkflowRun(slug: string) {
   onScopeDispose(() => source?.close())
 
   return {
-    run, runs, loading, error, logs, attach, start, refreshRuns,
+    run, runs, loading, error, logs, attach, start, refreshRuns, refresh,
     continueRun: (note?: string) => act('continue')(note?.trim() ? { note: note.trim() } : undefined),
     sendNote: async (text: string) => run.value ? $fetch<{ delivered?: string[], queued?: string }>(`/api/runs/${run.value.id}/note`, { method: 'POST', body: { text } }) : undefined,
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),

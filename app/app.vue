@@ -75,6 +75,15 @@ onMounted(async () => {
   void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers()])
 })
 
+// The shared lists live here, so pages that only read them don't refetch them too.
+// Skills are several MB: refreshed on focus here, and polled only while /skills is open.
+const canRefresh = () => initialized.value && claudeDirExists.value && !isLogin.value
+useAutoRefresh(() => canRefresh() && Promise.all([
+  fetchAgents({}, { silent: true }), fetchCommands({}, { silent: true }), fetchPlugins({ silent: true }),
+  fetchWorkflows({}, { silent: true }), fetchServers({ silent: true }),
+]))
+useAutoRefresh(() => canRefresh() && fetchSkills({}, { silent: true }), { interval: 0 })
+
 const { settings, load: loadSettings } = useSettings()
 const { me, signOut, can, role, viewingAs, viewAs } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
@@ -86,6 +95,8 @@ const navTopAll = [
   { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
   { label: 'Board', icon: 'i-lucide-gauge', to: '/board' },
   { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
+  { label: 'Products', icon: 'i-lucide-boxes', to: '/registry' },
+  { label: 'Schedules', icon: 'i-lucide-calendar-clock', to: '/schedules' },
   { label: 'Team', icon: 'i-lucide-users', to: '/team' },
   { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
   { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },

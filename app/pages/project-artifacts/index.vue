@@ -51,6 +51,7 @@ async function addProject() {
 onMounted(async () => {
   await fetchProjects()
 })
+useAutoRefresh(() => fetchProjects({ silent: true }))
 
 useHead({
   title: 'Project Artifacts | Agent Manager',

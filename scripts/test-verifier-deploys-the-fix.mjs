@@ -60,7 +60,7 @@ check('it uses TAG, not IMAGE_TAG',
 
 check('health is proved from inside the network',
   /docker exec <container> curl -sf/.test(verifier)
-  && /host-published ports are\n\s*unreachable/.test(verifier),
+  && /host-published ports are\r?\n\s*unreachable/.test(verifier),
   'the agent runs inside a container; a timeout against a host port says nothing about the build')
 
 check('teardown is scoped and non-destructive',

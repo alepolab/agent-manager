@@ -18,24 +18,37 @@ const store = await import('../server/utils/workflowRunStore.ts')
 const A = await import('../server/utils/runArtifacts.ts')
 
 // ── notify: one message per transition, none without a webhook ───────────
+// notifyRunTransition returns its delivery promise so this can await the send.
+// Resolving a NAMED channel reads from disk, so a transition message is no
+// longer delivered synchronously the way a bare env-var webhook was.
 const posted = []
 N.setPoster(async (url, body) => { posted.push({ url, body }) })
 const run = await store.createRun({ workflowSlug: 'w', workflowName: 'Runbook', autoRun: true, initialPrompt: 'SCN-1 upload fails', watch: 'direct-invocation',
   steps: [{ stepId: 'a', label: 'Intake', agentSlug: 'x' }, { stepId: 'b', label: 'Fix', agentSlug: 'y' }] })
 delete process.env.SLACK_WEBHOOK_URL
-N.notifyRunTransition({ ...run, status: 'failed', error: 'boom' })
+await N.notifyRunTransition({ ...run, status: 'failed', error: 'boom' })
 assert.equal(posted.length, 0, 'no webhook configured, nothing sent')
 process.env.SLACK_WEBHOOK_URL = 'https://hooks.example/abc'
-N.notifyRunTransition({ ...run, status: 'running' })
+await N.notifyRunTransition({ ...run, status: 'running' })
 assert.equal(posted.length, 0, 'running is not worth a message')
-N.notifyRunTransition({ ...run, status: 'paused', nextStepIds: ['b'] })
-N.notifyRunTransition({ ...run, status: 'paused', nextStepIds: ['b'] })
+await N.notifyRunTransition({ ...run, status: 'paused', nextStepIds: ['b'] })
+await N.notifyRunTransition({ ...run, status: 'paused', nextStepIds: ['b'] })
 assert.equal(posted.length, 1, 'the same status is announced once')
 assert.match(posted[0].body.text, /Runbook: PAUSED at Fix — SCN-1 upload fails/, 'message names workflow, status, step and ticket')
 assert.match(posted[0].body.text, /\/workflows\/w\?run=/, 'message links to the run')
-N.notifyRunTransition({ ...run, status: 'failed', error: 'Budget exceeded: 9 tokens over the 1 token cap', steps: [{ ...run.steps[0], status: 'failed' }, run.steps[1]] })
+// The status a message was never sent for must not be deduped against: the
+// 'failed' above found nothing configured, so this one still announces.
+await N.notifyRunTransition({ ...run, status: 'failed', error: 'Budget exceeded: 9 tokens over the 1 token cap', steps: [{ ...run.steps[0], status: 'failed' }, run.steps[1]] })
 assert.equal(posted.length, 2)
 assert.match(posted[1].body.text, /FAILED at Intake .* Budget exceeded/, 'a failure carries its reason')
+
+// What is being decided rides along, so an awaiting_review message says more
+// than which step it stopped at.
+N._resetNotified()
+await N.notifyRunTransition({ ...run, status: 'awaiting_review', nextStepIds: ['b'],
+  question: { stepId: 'b', kind: 'approval', askedAt: 1, text: 'Decide which entries of escalated-drafts.json to act on before "Fix" runs', artifact: 'escalated-drafts.json' } })
+assert.equal(posted.length, 3)
+assert.match(posted[2].body.text, /Decide which entries of escalated-drafts\.json/, 'the message carries the question')
 delete process.env.SLACK_WEBHOOK_URL
 
 // ── ci poller: classification, persistence, and stopping when final ──────

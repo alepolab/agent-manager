@@ -12,7 +12,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -293,7 +293,9 @@ function initRepo() {
 
   // An untracked file inside an untracked directory: -uall must list the
   // file, not collapse the whole tree to "sub/".
-  execFileSync('mkdir', ['-p', join(dir, 'sub')])
+  // node's own mkdir, not the binary: there is no mkdir.exe on a Windows PATH
+  // (it is a shell builtin), so spawning it fails with ENOENT outside a POSIX shell.
+  mkdirSync(join(dir, 'sub'), { recursive: true })
   writeFileSync(join(dir, 'sub', 'new.txt'), 'x\n')
   assert.deepEqual(await workingTreeDirty(dir), ['sub/new.txt'],
     '-uall lists files inside untracked directories rather than the directory')

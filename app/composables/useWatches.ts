@@ -42,15 +42,17 @@ export function useWatches() {
   const states = useState<Record<string, Record<string, TicketState>>>('watchStates', () => ({}))
   const polling = useState<Record<string, boolean>>('watchesPolling', () => ({}))
 
-  async function fetchAll() {
-    loading.value = true
-    error.value = null
+  async function fetchAll({ silent = false } = {}) {
+    if (!silent) {
+      loading.value = true
+      error.value = null
+    }
     try {
       watches.value = await $fetch<Watch[]>('/api/watches')
     } catch (e: any) {
-      error.value = e?.data?.message || e?.message || 'Failed to load watches'
+      if (!silent) error.value = e?.data?.message || e?.message || 'Failed to load watches'
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 

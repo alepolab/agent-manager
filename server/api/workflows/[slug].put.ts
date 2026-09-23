@@ -1,13 +1,13 @@
 import { requireCapability } from '../../utils/session'
 import { readFile, writeFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { resolveClaudePath } from '../../utils/claudeDir'
+import { resolveClaudeFile } from '../../utils/claudeDir'
 import type { Workflow } from '~/types'
 
 export default defineEventHandler(async (event) => {
   await requireCapability(event, 'configure')
-  const slug = getRouterParam(event, 'slug')
-  const filePath = resolveClaudePath('workflows', `${slug}.json`)
+  const slug = getRouterParam(event, 'slug')!
+  const filePath = resolveClaudeFile('workflows', slug)
 
   if (!existsSync(filePath)) {
     throw createError({ statusCode: 404, message: 'Workflow not found' })

@@ -8,6 +8,7 @@ const editingStyle = ref<OutputStyle | null>(null)
 const saving = ref(false)
 
 onMounted(() => fetchStyles())
+useAutoRefresh(() => fetchStyles({ silent: true }))
 
 function onNewStyle() {
   editingStyle.value = null

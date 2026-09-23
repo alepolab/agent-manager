@@ -29,7 +29,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { parse } from 'yaml'
 
 const args = process.argv.slice(2)
 const quick = args.includes('--quick')
@@ -51,7 +50,12 @@ async function api(path, method = 'GET', body) {
   return json
 }
 
-const registry = parse(readFileSync('engineering/registry/products.yaml', 'utf8'))
+// Read from the instance rather than from the checkout. A sweep exists to
+// exercise the products this instance actually routes, and since the registry
+// became a store the instance edits, the file in engineering/ is only the seed
+// it was first copied from — sweeping that would test products the instance
+// may no longer have, and miss the ones it has added.
+const registry = { products: Object.fromEntries((await api('/api/registry/products')).products.map(p => [p.key, p.product])) }
 let products = Object.entries(registry.products).filter(([k]) => !wanted.length || wanted.includes(k))
 if (resume) {
   // Products the latest sweep file already settled are not run again.

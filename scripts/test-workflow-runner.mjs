@@ -25,7 +25,21 @@ const runner = await import('../server/utils/workflowRunner.ts')
 runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 const store = await import('../server/utils/workflowRunStore.ts')
 
-const TIMEOUT = 5000
+/**
+ * How long one run is given to settle.
+ *
+ * A liveness guard, not a performance assertion. Every agent in this file is a
+ * stub that returns immediately, so a run that needs seconds is not doing more
+ * work — it is waiting for a CPU. Sized to an idle machine, this script failed
+ * whenever the machine was not idle: under six concurrent copies it failed six
+ * times out of six, always as `waitForSettled: run <id> did not settle within
+ * 5000ms`, which reads like a runner bug and is not one.
+ *
+ * 30s matches waitForSettled's own default. Raising it costs nothing on a run
+ * that passes — the wait ends when the run settles — and only lengthens the
+ * report of a genuine hang.
+ */
+const TIMEOUT = 30_000
 
 const workflow = {
   slug: 'demo', name: 'Demo',
@@ -790,7 +804,15 @@ inflight = await runner.waitForSettled(inflight.id, TIMEOUT)
 assert.ok(Date.now() - t0 < 2000, 'stop returns without waiting for the agent to finish on its own')
 assert.equal(inflight.status, 'stopped', 'an aborted wave leaves the run stopped, not failed')
 // The stop publishes first; the aborted step's own failure lands a moment later.
-for (let i = 0; i < 20 && (await store.getRun(inflight.id)).steps.find(s => s.stepId === 'a').status === 'running'; i++) await new Promise(r => setTimeout(r, 50))
+// Bounded by a deadline rather than an iteration count: 20 × 50ms is a second,
+// which is plenty on an idle machine and not always enough on a busy one — the
+// step was still 'running' here under parallel load, failing the assertion below
+// as though the abort had not been recorded.
+const abortRecordedBy = Date.now() + TIMEOUT
+while ((await store.getRun(inflight.id)).steps.find(s => s.stepId === 'a').status === 'running'
+  && Date.now() < abortRecordedBy) {
+  await new Promise(r => setTimeout(r, 25))
+}
 inflight = await store.getRun(inflight.id)
 assert.equal(inflight.status, 'stopped', 'the step failure does not turn a stopped run into a failed one')
 assert.equal(inflight.steps.find(s => s.stepId === 'a').status, 'failed', 'the aborted step records a failure, not a completion')
@@ -922,6 +944,38 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   warned = await runner.waitForSettled(warned.id, TIMEOUT)
   assert.equal(warned.status, 'completed', 'a warning is a note on the run page, not a gate')
   assert.ok(called > 0, 'the agents ran')
+  runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
+}
+
+// ── 18d. a launch that throws AFTER the record is persisted fails the run ──
+// The record exists on disk as `running`, owned by this process's pid and
+// bootId, from the moment the slot is taken - which is well before the
+// checkout and preflight are done. A throw in that window used to leave it
+// there: no live entry, no wave loop, and applyInterrupted will not rescue a
+// run whose process is still alive. It held its group's slot and its
+// workspace until the server was restarted.
+{
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  const queue = await import('../server/utils/runQueue.ts')
+  const before = new Set((await store.listRuns('demo')).map(r => r.id))
+
+  runner.setPreflight(async () => { throw new Error('docker socket vanished') })
+  await assert.rejects(
+    runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true }),
+    /docker socket vanished/,
+    'the caller still sees the error: the repair must not swallow it')
+
+  const rec = (await store.listRuns('demo')).find(r => !before.has(r.id))
+  assert.ok(rec, 'the run record was persisted before the throw, which is the whole reason it needs repairing')
+  assert.equal(rec.status, 'failed',
+    'THE REGRESSION: a launch that threw after the persist point used to leave the record `running` for ever, holding its slot and its workspace')
+  assert.match(rec.error, /docker socket vanished/, 'and it says what went wrong, rather than "Unknown error"')
+  assert.ok(rec.endedAt, 'settled, so the run clock stops')
+  assert.equal(await queue.inFlightForGroup(queue.groupOf(rec)), 0,
+    'and the group has its slot back at once, not at the next sweep')
+  assert.ok(rec.steps.every(s => s.status === 'pending'),
+    'the steps stay pending: flipping them off pending is what un-gates the Jira comment, and this run did nothing to report')
+
   runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
 }
 
@@ -1068,6 +1122,12 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   g = await runner.waitForSettled(g.id, TIMEOUT)
   assert.equal(g.status, 'paused', 'run-to-completion still stops at an approval gate')
   assert.equal(g.question?.kind, 'approval'); assert.equal(g.question.stepId, 'd')
+  // A gate over no artifact is still a plain approval: one yes, one button. The
+  // awaiting_review status is reserved for a gate whose step consumes a file,
+  // and promoting every approval to it would put a decision panel in front of
+  // steps that have nothing to decide.
+  assert.equal(g.status !== 'awaiting_review', true, 'a gate with no runWhen artifact is a plain approval')
+  assert.equal(g.question.artifact, undefined, 'and names no artifact to decide about')
   assert.equal(g.steps.find(s => s.stepId === 'd').status, 'pending', 'the gated step has not started')
   assert.equal(inputs['agent-d'], undefined)
   g = await runner.continueRun(g.id, 'Target the SaskTel branch policy')
@@ -1304,13 +1364,90 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.match(fixInputs[1], /Sent back by "Security Review".*GenericResource\.java:198/, 'the fix step is told what to change')
   assert.equal(rw.reworks, 1)
 
-  // Two steps disagreeing forever is a failure to report, not a loop to run.
+  // Two steps disagreeing is bounded per trigger, and the bound stops to ASK
+  // rather than failing: the branch, its commits and an open PR are all still
+  // good at that point, and one more attempt is usually the right answer.
   runner.setAgentCaller(async (agentSlug) => agentSlug === 'agent-fix' ? 'fixed' : 'PIPELINE-REWORK: Implement Fix — still leaking')
   let loop = await runner.startRun({ workflow: chain, initialPrompt: 'go again', watch: 'direct-invocation', autoRun: true })
   loop = await runner.waitForSettled(loop.id, TIMEOUT)
-  assert.equal(loop.status, 'failed')
-  assert.match(loop.error, /Sent back 3 times/)
-  assert.equal(loop.reworks, 3)
+  assert.equal(loop.status, 'paused', 'the spent budget asks instead of failing')
+  assert.equal(loop.question.kind, 'approval', 'answerable by continue — a question would route to respondToRun and no-op, since no step is live')
+  assert.equal(loop.question.reason, 'rework')
+  assert.equal(loop.question.rework.target, 'f', 'and it carries the send-back it is asking about')
+  assert.match(loop.question.text, /still leaking/, 'the operator is shown why')
+  assert.equal(loop.error, undefined, 'a run waiting on a person has no error')
+  assert.equal(loop.endedAt, undefined, 'and has not ended')
+  assert.ok(!loop.steps.some(s => s.status === 'skipped'), 'later steps wait; nothing is skipped')
+  assert.equal(loop.reworksBy.verification, 3, 'the review spends the verification allowance')
+  assert.equal(loop.reworksBy.ci, undefined, 'and only that one')
+
+  // The pending send-back is on the record, not in memory: after a server
+  // restart, continuing must still re-run the step that was sent back rather
+  // than the successors the raising step already armed.
+  runner._dropLive(loop.id)
+  fixInputs.length = 0
+  runner.setAgentCaller(async (agentSlug, input) => {
+    if (agentSlug === 'agent-fix') { fixInputs.push(input); return 'fixed' }
+    return 'VERDICT: PASS'
+  })
+  loop = await runner.continueRun(loop.id, 'go ahead, the leak is handled elsewhere')
+  loop = await runner.waitForSettled(loop.id, TIMEOUT)
+  assert.equal(loop.status, 'completed', `the granted send-back re-runs the fix step: ${loop.error}`)
+  assert.match(fixInputs[0], /go ahead, the leak is handled elsewhere/, "the operator's note reaches the re-run step")
+  assert.match(fixInputs[0], /still leaking/, 'along with what sent it back')
+
+  // Budgets are per trigger, so a red check and a proven regression cannot
+  // exhaust each other: four automatic send-backs across two triggers all run.
+  {
+    const buckets = { slug: 'rework-buckets', name: 'Rework buckets', steps: [
+      { id: 'f', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['r'] },
+      { id: 'r', agentSlug: 'agent-review', label: 'Security Review', next: ['p'] },
+      { id: 'p', agentSlug: 'sdlc-pr-follow-up', label: 'PR Checks', next: [] },
+    ] }
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'rework-buckets.json'), JSON.stringify({ ...buckets, description: '', createdAt: new Date().toISOString() }))
+    let sawReview = 0
+    let sawChecks = 0
+    runner.setAgentCaller(async (agentSlug) => {
+      if (agentSlug === 'agent-fix') return 'fixed'
+      if (agentSlug === 'agent-review') { sawReview += 1; return sawReview <= 2 ? 'PIPELINE-REWORK: Implement Fix — still leaking' : 'VERDICT: PASS' }
+      sawChecks += 1
+      return sawChecks <= 2 ? 'PIPELINE-REWORK: Implement Fix — the build is red' : 'CHECKS: pass'
+    })
+    let split = await runner.startRun({ workflow: buckets, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    split = await runner.waitForSettled(split.id, TIMEOUT)
+    assert.equal(split.status, 'completed', `neither trigger spends the other's allowance: ${split.error}`)
+    assert.equal(split.reworksBy.verification, 2)
+    assert.equal(split.reworksBy.ci, 2, 'the PR-checks step draws on the ci budget')
+    assert.equal(split.reworks, 4, 'and the run total counts them all')
+  }
+
+  // Two steps in ONE wave can both send back. l.rework used to be assigned
+  // unconditionally, so whichever finished second silently erased the first and
+  // its finding was never raised again — latent until the verifier could send
+  // back at all, which is exactly the fan-out this runbook has.
+  {
+    const wave = { slug: 'rework-wave', name: 'Rework wave', steps: [
+      { id: 'f', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['r', 's'] },
+      { id: 'r', agentSlug: 'agent-review', label: 'Security Review', next: [] },
+      { id: 's', agentSlug: 'agent-verify', label: 'Verify', next: [] },
+    ] }
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'rework-wave.json'), JSON.stringify({ ...wave, description: '', createdAt: new Date().toISOString() }))
+    const seen = []
+    let sawReview = 0
+    let sawVerify = 0
+    runner.setAgentCaller(async (agentSlug, input) => {
+      if (agentSlug === 'agent-fix') { seen.push(input); return 'fixed' }
+      if (agentSlug === 'agent-review') { sawReview += 1; return sawReview === 1 ? 'PIPELINE-REWORK: Implement Fix — GenericResource.java:198 leaks the exception message' : 'VERDICT: PASS' }
+      sawVerify += 1
+      return sawVerify === 1 ? 'PIPELINE-REWORK: Implement Fix — UploadTest.java:64 fails on the 8MB row' : 'VERDICT: PASS'
+    })
+    let both = await runner.startRun({ workflow: wave, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    both = await runner.waitForSettled(both.id, TIMEOUT)
+    assert.equal(both.status, 'completed', `both send-backs are carried: ${both.error}`)
+    assert.match(seen[1], /GenericResource\.java:198/, "the second sender's finding survives")
+    assert.match(seen[1], /UploadTest\.java:64/, "and so does the first's — neither is overwritten")
+    assert.equal(both.reworksBy.verification, 1, 'one wave sending back once spends one allowance, not two')
+  }
 
   // A target that is not a step of the run fails the step, naming the steps.
   runner.setAgentCaller(async (agentSlug) => agentSlug === 'agent-fix' ? 'fixed' : 'PIPELINE-REWORK: Nowhere — nothing')
@@ -1318,6 +1455,786 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   lost = await runner.waitForSettled(lost.id, TIMEOUT)
   assert.equal(lost.status, 'failed')
   assert.match(lost.steps.find(s => s.stepId === 'r').error, /not a step of this run/)
+}
+
+
+// ── 27. Conditional routing: a step runs only when its artifact holds work ─
+// The shape that prompted this: a Decision Gate writes two files, and each of
+// its two successors consumes one of them. Either may legitimately be empty,
+// and the empty branch must not run — nor, when it carries `approval`, ask a
+// person to approve doing nothing.
+{
+  const gateFlow = {
+    slug: 'gate-demo', name: 'Gate Demo',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['ap', 'esc'] },
+      { id: 'ap', agentSlug: 'agent-ap', label: 'Create Jira (Auto-Approved)', next: ['j'], runWhen: { artifact: 'approved-drafts.json' } },
+      { id: 'esc', agentSlug: 'agent-esc', label: 'Create Jira (Escalated)', next: ['j'], approval: true, runWhen: { artifact: 'escalated-drafts.json' } },
+      { id: 'j', agentSlug: 'agent-j', label: 'Dispatch', next: [] },
+    ],
+  }
+
+  // The gate learns where to write from the artifact header, exactly as a real
+  // agent does — the same channel poisonMetaFromInput uses.
+  function gateWriting(approved, escalated) {
+    return async (agentSlug, input) => {
+      calls.push(agentSlug)
+      if (agentSlug === 'agent-g') {
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        if (approved !== null) writeFileSync(join(dir, 'approved-drafts.json'), approved)
+        if (escalated !== null) writeFileSync(join(dir, 'escalated-drafts.json'), escalated)
+      }
+      return `output of ${agentSlug}`
+    }
+  }
+
+  // ── 27a. The reported bug: nothing escalated, so nobody is asked ─────────
+  runner.setAgentCaller(gateWriting('[{"key":"A-1"}]', '[]'))
+  calls.length = 0
+  let g1 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g1 = await runner.waitForSettled(g1.id, TIMEOUT)
+
+  // The assertion that proves the feature: NOT 'paused'. Before conditional
+  // routing this run stopped on an approval prompt for an empty file.
+  assert.equal(g1.status, 'completed', 'an empty escalated branch must not pause the run for approval')
+  assert.equal(g1.question, undefined, 'and must leave no question behind')
+  const esc1 = g1.steps.find(s => s.stepId === 'esc')
+  assert.equal(esc1.status, 'skipped', 'the branch whose artifact was empty is skipped')
+  assert.match(esc1.skipReason, /escalated-drafts\.json/, 'the reason names the file')
+  assert.match(esc1.skipReason, /empty array/, 'and what was found in it')
+  assert.equal(esc1.visits, 0, 'a condition skip spends no visit')
+  assert.equal(g1.steps.find(s => s.stepId === 'ap').status, 'completed', 'the branch with work runs')
+  assert.equal(g1.steps.find(s => s.stepId === 'j').status, 'completed', 'the join still runs')
+  assert.ok(!calls.includes('agent-esc'), 'the skipped step never reached its agent')
+  assert.deepEqual(calls.sort(), ['agent-ap', 'agent-g', 'agent-j'])
+
+  // ── 27b. Both branches empty: the join runs and is TOLD they were empty ──
+  runner.setAgentCaller(gateWriting('[]', '[]'))
+  calls.length = 0
+  let g2 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g2 = await runner.waitForSettled(g2.id, TIMEOUT)
+  assert.equal(g2.status, 'completed')
+  assert.equal(g2.steps.find(s => s.stepId === 'ap').status, 'skipped')
+  assert.equal(g2.steps.find(s => s.stepId === 'esc').status, 'skipped')
+  const join2 = g2.steps.find(s => s.stepId === 'j')
+  assert.equal(join2.status, 'completed', 'a join whose every branch was empty still runs')
+  // The point of publishing the skip as a sentence: an unset output would hand
+  // the join two empty strings, indistinguishable from steps that ran and
+  // produced nothing. The join has to be able to report that there was no work.
+  assert.match(join2.input, /approved-drafts\.json/, 'the join is told the approved branch was empty')
+  assert.match(join2.input, /escalated-drafts\.json/, 'and the escalated one too')
+  assert.deepEqual(calls.sort(), ['agent-g', 'agent-j'])
+
+  // ── 27c. A non-empty escalated branch still gates on approval ────────────
+  runner.setAgentCaller(gateWriting('[{"key":"A-1"}]', '[{"key":"E-1"}]'))
+  calls.length = 0
+  let g3 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g3 = await runner.waitForSettled(g3.id, TIMEOUT)
+  // Not 'paused': the step consumes an artifact, so what it does depends on
+  // which of its entries survive review, and "approve this step" is the wrong
+  // question. The status is what the run page keys the decision panel off.
+  assert.equal(g3.status, 'awaiting_review', 'a gate over an artifact waits on decisions, not on one yes')
+  assert.equal(g3.question.kind, 'approval')
+  assert.equal(g3.question.stepId, 'esc')
+  assert.equal(g3.question.artifact, 'escalated-drafts.json', 'and names the file whose entries are being decided')
+  assert.match(g3.question.text, /escalated-drafts\.json/, 'the question says so in words too')
+  // The sibling that needs nobody does NOT wait on the human: the wave splits,
+  // the auto-approved branch runs, and the gate is raised once it is the only
+  // thing left. This is the whole point of the split - the two branches meet in
+  // one wave and only one of them is a decision.
+  assert.equal(g3.steps.find(s => s.stepId === 'ap').status, 'completed',
+    'the ungated sibling of a gated step runs instead of waiting for the person')
+  assert.ok(calls.includes('agent-ap'), 'and it really ran')
+  assert.ok(!calls.includes('agent-esc'), 'while the gated step itself has not')
+  assert.deepEqual(g3.nextStepIds, ['esc'], 'what comes next is the gated step alone')
+  g3 = await runner.continueRun(g3.id)
+  g3 = await runner.waitForSettled(g3.id, TIMEOUT)
+  assert.equal(g3.status, 'completed')
+  assert.ok(calls.includes('agent-esc'), 'the approved branch runs once a person says yes')
+
+  // ── 27e. More gates in one wave than MAX_CONCURRENCY still runs the rest ─
+  // 27c splits a wave of two. The split used to be applied to
+  // readyNodes().slice(0, MAX_CONCURRENCY), so once MAX_CONCURRENCY gated
+  // steps were ready together they filled the slice, `runnable` came out
+  // empty, and the run raised its gate with an ungated step sitting just past
+  // the cut - waiting on a person for no reason, which is exactly what the
+  // split exists to prevent.
+  {
+    const manyGates = {
+      slug: 'many-gates', name: 'Many Gates',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Fan', next: ['q1', 'q2', 'q3', 'q4', 'free'] },
+        { id: 'q1', agentSlug: 'agent-q1', label: 'Gate 1', next: [], approval: true },
+        { id: 'q2', agentSlug: 'agent-q2', label: 'Gate 2', next: [], approval: true },
+        { id: 'q3', agentSlug: 'agent-q3', label: 'Gate 3', next: [], approval: true },
+        { id: 'q4', agentSlug: 'agent-q4', label: 'Gate 4', next: [], approval: true },
+        { id: 'free', agentSlug: 'agent-free', label: 'Needs nobody', next: [] },
+      ],
+    }
+    runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `output of ${agentSlug}` })
+    calls.length = 0
+    let m = await runner.startRun({ workflow: manyGates, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    m = await runner.waitForSettled(m.id, TIMEOUT)
+
+    assert.equal(m.status, 'paused', 'four gates and one free step: the run ends up asking, once there is nothing else to run')
+    assert.ok(calls.includes('agent-free'),
+      'THE REGRESSION: the ungated step ran. Slicing before the gate split left it behind the four gates and the run asked a person while real work was still schedulable')
+    assert.equal(m.steps.find(s => s.stepId === 'free').status, 'completed')
+    // Every gate is still offered, not just the first MAX_CONCURRENCY of them.
+    assert.deepEqual([...m.nextStepIds].sort(), ['q1', 'q2', 'q3', 'q4'],
+      'nextStepIds names every gated step; truncating it to the concurrency cap would lose steps from the run page')
+    for (const id of ['q1', 'q2', 'q3', 'q4']) {
+      assert.equal(m.steps.find(s => s.stepId === id).status, 'pending', `${id} is deferred, not skipped`)
+    }
+    assert.equal((await runner.stopRun(m.id)).status, 'stopped')
+  }
+
+  // ── 27d. A missing artifact skips; the run does not silently look normal ─
+  runner.setAgentCaller(gateWriting(null, null))
+  calls.length = 0
+  let g4 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g4 = await runner.waitForSettled(g4.id, TIMEOUT)
+  assert.equal(g4.status, 'completed')
+  assert.match(g4.steps.find(s => s.stepId === 'ap').skipReason, /was not written/,
+    'a file nobody wrote reads differently from one that is empty')
+
+  // ── 27e. Malformed JSON FAILS the step; it never reads as "nothing to do" ─
+  runner.setAgentCaller(gateWriting('{', '[]'))
+  calls.length = 0
+  let g5 = await runner.startRun({ workflow: gateFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  g5 = await runner.waitForSettled(g5.id, TIMEOUT)
+  assert.equal(g5.status, 'failed', 'a producer that crashed mid-write must not complete the run quietly')
+  const ap5 = g5.steps.find(s => s.stepId === 'ap')
+  assert.equal(ap5.status, 'failed')
+  assert.match(ap5.error, /approved-drafts\.json/, 'the error names the file')
+  assert.match(ap5.error, /not valid JSON/, 'and why it could not be evaluated')
+  assert.ok(!calls.includes('agent-j'), 'nothing downstream runs')
+
+  // ── 27f. An artifact name that escapes the run directory is refused ──────
+  {
+    const escapeFlow = {
+      slug: 'gate-escape', name: 'Gate Escape',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['x'] },
+        { id: 'x', agentSlug: 'agent-x', label: 'X', next: [], runWhen: { artifact: '../../../etc/passwd' } },
+      ],
+    }
+    runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
+    let g6 = await runner.startRun({ workflow: escapeFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g6 = await runner.waitForSettled(g6.id, TIMEOUT)
+    assert.equal(g6.status, 'failed')
+    assert.match(g6.steps.find(s => s.stepId === 'x').error, /outside the run's artifacts directory/)
+  }
+
+  // ── 27g. A terminal conditional step COMPLETES the run, never "stuck" ────
+  // Guards the stuck detector: it counts steps whose record still reads
+  // 'pending', so the condition must resolve before it, not after.
+  {
+    const tailFlow = {
+      slug: 'gate-tail', name: 'Gate Tail',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['t'] },
+        { id: 't', agentSlug: 'agent-t', label: 'Tail', next: [], runWhen: { artifact: 'never-written.json' } },
+      ],
+    }
+    runner.setAgentCaller(async (agentSlug) => `output of ${agentSlug}`)
+    let g7 = await runner.startRun({ workflow: tailFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g7 = await runner.waitForSettled(g7.id, TIMEOUT)
+    assert.equal(g7.status, 'completed', 'a workflow ending in a skipped conditional step is finished, not stuck')
+    assert.equal(g7.error, undefined, 'and reports no "No step can run" error')
+    assert.equal(g7.steps.find(s => s.stepId === 't').status, 'skipped')
+  }
+
+  // ── 27h. A monitor RETRY is not swallowed by the condition ───────────────
+  // runWhen gates a forward arming only. A retry arrives by another route and
+  // re-testing the artifact there would discard the monitor's feedback.
+  {
+    const retryFlow = {
+      slug: 'gate-retry', name: 'Gate Retry',
+      steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['r'] },
+        { id: 'r', agentSlug: 'agent-r', label: 'R', next: [], runWhen: { artifact: 'work.json' }, monitorSlug: 'mon' },
+      ],
+    }
+    let rCalls = 0
+    let verdict = 'VERDICT: RETRY'
+    runner.setAgentCaller(async (agentSlug, input) => {
+      if (agentSlug === 'agent-g') {
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        writeFileSync(join(dir, 'work.json'), '[1]')
+        return 'gate done'
+      }
+      if (agentSlug === 'mon') { const v = verdict; verdict = 'VERDICT: CONTINUE'; return v }
+      if (agentSlug === 'agent-r') {
+        rCalls++
+        // Empty the artifact after the first attempt: a re-test would now skip.
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        writeFileSync(join(dir, 'work.json'), '[]')
+        return 'r done'
+      }
+      return `output of ${agentSlug}`
+    })
+    let g8 = await runner.startRun({ workflow: retryFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g8 = await runner.waitForSettled(g8.id, TIMEOUT)
+    assert.equal(rCalls, 2, 'the monitor retry re-runs the step even though the artifact is now empty')
+    assert.equal(g8.steps.find(s => s.stepId === 'r').status, 'completed')
+  }
+
+  // ── 27i. An operator restart outranks the condition ──────────────────────
+  // Same concession as the extra visit a restart grants: a predicate guards
+  // automatic scheduling, not a person naming the step they want run. It also
+  // proves the skip rehydrates as settled — skipReason is what makes it so.
+  {
+    mkdirSync(join(process.env.CLAUDE_DIR, 'workflows'), { recursive: true })
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'gate-restart.json'),
+      JSON.stringify({ name: 'Gate Restart', description: '', steps: [
+        { id: 'g', agentSlug: 'agent-g', label: 'Gate', next: ['ap', 'esc'] },
+        { id: 'ap', agentSlug: 'agent-ap', label: 'AP', next: ['j'], runWhen: { artifact: 'approved-drafts.json' } },
+        { id: 'esc', agentSlug: 'agent-esc', label: 'ESC', next: ['j'], runWhen: { artifact: 'escalated-drafts.json' } },
+        { id: 'j', agentSlug: 'agent-j', label: 'J', next: [] },
+      ] }))
+    const restartFlow = { slug: 'gate-restart', name: 'Gate Restart', steps: JSON.parse(readFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'gate-restart.json'), 'utf8')).steps }
+
+    runner.setAgentCaller(gateWriting('[{"key":"A-1"}]', '[]'))
+    calls.length = 0
+    let g9 = await runner.startRun({ workflow: restartFlow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+    g9 = await runner.waitForSettled(g9.id, TIMEOUT)
+    assert.equal(g9.status, 'completed')
+    assert.equal(g9.steps.find(s => s.stepId === 'esc').status, 'skipped')
+
+    // Forget the live record, as a server restart would, then restart the very
+    // step the condition skipped. The artifact is still empty.
+    runner._dropLive(g9.id)
+    calls.length = 0
+    g9 = await runner.restartRun(g9.id, 'esc')
+    g9 = await runner.waitForSettled(g9.id, TIMEOUT)
+    assert.ok(calls.includes('agent-esc'),
+      'restarting a condition-skipped step by name runs it despite the still-empty artifact')
+    assert.equal(g9.status, 'completed')
+  }
+}
+// ── 28. triggerWorkflow: one child run per entry, dispatched not awaited ───
+// Replaces the sdlc-auto-dispatcher agent, whose "dispatch" was a JSON file
+// nothing read. The step starts real runs, so these assert real run records.
+{
+  const queue = await import('../server/utils/runQueue.ts')
+  process.env.AGENT_WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), 'runner-workspaces-'))
+  // Deterministic: every entry dispatches at once, so nothing is queued except
+  // where 28h deliberately lowers the cap to test queueing.
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+
+  // The child workflows must exist on disk — the runner reads them from
+  // CLAUDE_DIR/workflows, never from the parent's definition.
+  const wfDir = join(process.env.CLAUDE_DIR, 'workflows')
+  mkdirSync(wfDir, { recursive: true })
+  const childWorkflow = name => JSON.stringify({
+    name, steps: [{ id: 'only', agentSlug: 'agent-child', label: name, next: [] }],
+  })
+  writeFileSync(join(wfDir, 'runbook-a.json'), childWorkflow('Runbook A'))
+  writeFileSync(join(wfDir, 'runbook-b.json'), childWorkflow('Runbook B'))
+
+  const dispatchFlow = (trigger, slug = 'scan-demo') => ({
+    slug, name: 'Scan Demo',
+    steps: [
+      { id: 's', agentSlug: 'agent-s', label: 'Scan', next: ['d'] },
+      { id: 'd', agentSlug: 'sdlc-auto-dispatcher', label: 'Dispatch', next: [], triggerWorkflow: trigger },
+    ],
+  })
+  const ROUTING = { source: 'created-tickets.json', routeBy: 'work_type', routes: { bug: 'runbook-a', feature: 'runbook-b' } }
+
+  // The scan step writes the artifact the dispatch step reads, through the
+  // artifact header — the same channel a real agent learns the path from.
+  function scanWriting(tickets) {
+    return async (agentSlug, input) => {
+      calls.push(agentSlug)
+      if (agentSlug === 'agent-s' && tickets !== null) {
+        const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+        writeFileSync(join(dir, 'created-tickets.json'), tickets)
+      }
+      return `output of ${agentSlug}`
+    }
+  }
+  const settleAll = async ids => Promise.all(ids.map(id => runner.waitForSettled(id, TIMEOUT)))
+
+  // ── 28a. The feature: a mixed batch fans out, one child run per entry ────
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-1', work_type: 'bug', summary: 'crash on save' },
+    { jira_key: 'CSUP-2', work_type: 'feature', summary: 'dark mode' },
+  ])))
+  calls.length = 0
+  let d1 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true, startedBy: 'dev' })
+  d1 = await runner.waitForSettled(d1.id, TIMEOUT)
+
+  assert.equal(d1.status, 'completed', 'the parent completes; it never waits for a child')
+  const step1 = d1.steps.find(s => s.stepId === 'd')
+  assert.equal(step1.status, 'completed')
+  assert.equal(step1.childRunIds.length, 2, 'one child run per entry')
+  assert.equal(step1.model, null, 'a dispatch step is runner-executed: no model')
+  assert.equal(step1.usage, null, 'and no usage to report')
+  assert.ok(!calls.includes('sdlc-auto-dispatcher'), 'the dispatch step never reaches an agent')
+  assert.match(step1.output, /Dispatched CSUP-1 to runbook-a/, 'the output names each child and its workflow')
+  assert.match(step1.output, /Dispatched CSUP-2 to runbook-b/)
+
+  const kids = await settleAll(step1.childRunIds)
+  assert.deepEqual(kids.map(k => k.workflowSlug).sort(), ['runbook-a', 'runbook-b'],
+    'each entry routed on its own work_type')
+  for (const kid of kids) {
+    assert.equal(kid.parentRunId, d1.id, 'every child records the run that dispatched it')
+    assert.equal(kid.watch, `workflow-trigger:${d1.id}`, 'and answers "what triggered this?" honestly')
+    assert.match(kid.ticketKey, /^CSUP-[12]$/, 'a ticket-shaped key becomes the child ticketKey')
+  }
+  // The whole reason children get their own directory: two runs editing one
+  // checkout corrupt each other, and the run lock is scoped to the directory.
+  assert.equal(new Set(kids.map(k => k.projectDir)).size, 2, 'each child works in its own checkout')
+  assert.ok(kids.every(k => k.projectDir.includes('CSUP-')), 'named after the entry it was dispatched for')
+
+  // ── 28b. Nothing to dispatch is an outcome, not a failure ───────────────
+  runner.setAgentCaller(scanWriting('[]'))
+  let d2 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d2 = await runner.waitForSettled(d2.id, TIMEOUT)
+  assert.equal(d2.status, 'completed', 'an empty batch completes the run')
+  const step2 = d2.steps.find(s => s.stepId === 'd')
+  assert.equal(step2.status, 'completed')
+  assert.match(step2.output, /Dispatched nothing/, 'and says plainly that it dispatched nothing')
+  assert.match(step2.output, /empty array/, 'naming what it found')
+  assert.equal(step2.childRunIds, undefined)
+
+  // A file that was never written is the same outcome, said differently.
+  runner.setAgentCaller(scanWriting(null))
+  let d3 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d3 = await runner.waitForSettled(d3.id, TIMEOUT)
+  assert.equal(d3.status, 'completed')
+  assert.match(d3.steps.find(s => s.stepId === 'd').output, /was not written/)
+
+  // ── 28c. Routing is all-or-nothing ──────────────────────────────────────
+  // A half-dispatched batch leaves some tickets in flight and some silently
+  // dropped, with nothing on the run recording which were which.
+  const runsBefore = (await store.listRuns()).length
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-3', work_type: 'bug' },
+    { jira_key: 'CSUP-4', work_type: 'docs' },
+  ])))
+  let d4 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d4 = await runner.waitForSettled(d4.id, TIMEOUT)
+  assert.equal(d4.status, 'failed', 'an unroutable entry fails the step')
+  const step4 = d4.steps.find(s => s.stepId === 'd')
+  assert.equal(step4.status, 'failed')
+  assert.match(step4.error, /CSUP-4 routes on "work_type": "docs"/, 'the error names the entry and the value')
+  assert.equal((await store.listRuns()).length, runsBefore + 1,
+    'and the routable entry alongside it was NOT dispatched — only the parent exists')
+
+  // ── 28d. Malformed is a failure, never "nothing to dispatch" ────────────
+  // A producer that crashed mid-write must not read as a scan with no findings.
+  runner.setAgentCaller(scanWriting('not json'))
+  let d5 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d5 = await runner.waitForSettled(d5.id, TIMEOUT)
+  assert.equal(d5.status, 'failed')
+  assert.match(d5.steps.find(s => s.stepId === 'd').error, /not valid JSON/)
+
+  // An object where an array belongs is malformed too, not an empty batch.
+  runner.setAgentCaller(scanWriting('{"jira_key":"CSUP-5"}'))
+  let d6 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  d6 = await runner.waitForSettled(d6.id, TIMEOUT)
+  assert.equal(d6.status, 'failed')
+  assert.match(d6.steps.find(s => s.stepId === 'd').error, /not the array of entries/)
+
+  // ── 28e. An unknown target workflow fails before anything starts ────────
+  const before5 = (await store.listRuns()).length
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-6', work_type: 'bug' },
+    { jira_key: 'CSUP-7', work_type: 'feature' },
+  ])))
+  let d7 = await runner.startRun({
+    workflow: dispatchFlow({ ...ROUTING, routes: { bug: 'runbook-a', feature: 'no-such-runbook' } }),
+    initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true,
+  })
+  d7 = await runner.waitForSettled(d7.id, TIMEOUT)
+  assert.equal(d7.status, 'failed')
+  assert.match(d7.steps.find(s => s.stepId === 'd').error, /no workflow "no-such-runbook"/)
+  assert.equal((await store.listRuns()).length, before5 + 1,
+    'the valid target was not dispatched either — every target is checked first')
+
+  // ── 28f. A path outside the run's artifacts directory is refused ────────
+  runner.setAgentCaller(scanWriting('[]'))
+  let d8 = await runner.startRun({
+    workflow: dispatchFlow({ ...ROUTING, source: '../../../etc/passwd' }),
+    initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true,
+  })
+  d8 = await runner.waitForSettled(d8.id, TIMEOUT)
+  assert.equal(d8.status, 'failed')
+  assert.match(d8.steps.find(s => s.stepId === 'd').error, /outside the run's artifacts directory/)
+
+  // ── 28g. Recursion: a workflow may not dispatch one it descends from ────
+  // Nothing else in the runner can see this. maxVisits and MAX_TOTAL_RUNS are
+  // per-run, and each generation here would be a NEW run with a fresh budget.
+  writeFileSync(join(wfDir, 'loop-demo.json'), JSON.stringify({
+    name: 'Loop Demo',
+    steps: [
+      { id: 's', agentSlug: 'agent-s', label: 'Scan', next: ['d'] },
+      { id: 'd', agentSlug: 'sdlc-auto-dispatcher', label: 'Dispatch', next: [], triggerWorkflow: { source: 'created-tickets.json', slug: 'loop-demo' } },
+    ],
+  }))
+  runner.setAgentCaller(scanWriting(JSON.stringify([{ jira_key: 'CSUP-8' }])))
+  let d9 = await runner.startRun({
+    workflow: dispatchFlow({ source: 'created-tickets.json', slug: 'loop-demo' }, 'loop-demo'),
+    initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true,
+  })
+  d9 = await runner.waitForSettled(d9.id, TIMEOUT)
+  assert.equal(d9.status, 'failed', 'a self-dispatching workflow is refused')
+  assert.match(d9.steps.find(s => s.stepId === 'd').error, /already descends from|dispatch itself forever/)
+
+  // ── 28h. The cap queues the overflow, and a settling run drains it ──────
+  // Without a cap a twenty-finding scan opens twenty clones and twenty agent
+  // budgets at once. The overflow is a REAL RUN in `queued` status, not an
+  // entry in a side file: it has an id, it is listed against its parent, and
+  // it is visible and stoppable on /runs.
+  //
+  // A cap of 1, and the dispatching scan itself holds that slot while it
+  // dispatches - see runQueue.ts's inFlightForGroup, which counts every live
+  // run in the group and not only the dispatched ones. So both children wait,
+  // and the drain starts them as the scan and then each child settles.
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '1'
+  runner.setAgentCaller(scanWriting(JSON.stringify([
+    { jira_key: 'CSUP-9', work_type: 'bug' },
+    { jira_key: 'CSUP-10', work_type: 'feature' },
+  ])))
+  let d10 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  const queuedChildren = () => store.listRuns().then(rs => rs.filter(r => r.parentRunId === d10.id && r.status === 'queued'))
+  d10 = await runner.waitForSettled(d10.id, TIMEOUT)
+  assert.equal(d10.status, 'completed', 'the scan does not wait for what it dispatched')
+  // Asserted from the step's own recorded output rather than from live run
+  // status: the parent settling frees its slot and the drain starts a child
+  // immediately, so "is it still queued" is a race by design. What the step
+  // DID is durable.
+  const step10 = d10.steps.find(s => s.stepId === 'd')
+  assert.equal(step10.childRunIds.length, 2,
+    'BOTH children are recorded against the parent - a queued child used to be untraceable until it started')
+  assert.match(step10.output, /Queued CSUP-9 for runbook-a \(run [0-9a-f-]+, waiting for a slot in default\)/,
+    'the overflow is queued, not dropped, and the line names the run so it can be found')
+  assert.match(step10.output, /Queued CSUP-10 for runbook-b \(run [0-9a-f-]+, waiting for a slot in default\)/)
+
+  // The queue drains as each run settles, so both children start on their own.
+  for (let i = 0; i < 200 && (await queuedChildren()).length; i++) await new Promise(r => setTimeout(r, 50))
+  assert.equal((await queuedChildren()).length, 0, 'the queue drains once slots free up')
+  const dispatched = (await store.listRuns()).filter(r => r.parentRunId === d10.id)
+  assert.equal(dispatched.length, 2, 'both entries eventually got a run - queued work is not lost')
+  assert.deepEqual(dispatched.map(r => r.workflowSlug).sort(), ['runbook-a', 'runbook-b'])
+  assert.deepEqual(dispatched.map(r => r.id).sort(), [...step10.childRunIds].sort(),
+    'and they are the same two runs the step named when it queued them')
+
+  // THE ONE THAT MATTERS: a launched child's clock starts when it launches.
+  // The budget, the wall clock and the cost report are all measured from
+  // startedAt, so a child that kept its admission time would pause on a spent
+  // budget having done no work.
+  for (const d of dispatched) {
+    assert.ok(d.startedAt >= d.queuedAt,
+      'startedAt is restated at launch; queuedAt keeps the record of the wait')
+    assert.notEqual(d.status, 'paused', 'and it did not pause on a budget it had not spent')
+  }
+
+  // ── 28i. A run cancelled while queued reports nothing about work it never did
+  // Left ungated, publish() finalised an evidence bundle for a run with zero
+  // executed steps and commented "run stopped" on its ticket.
+  {
+    const q = await runner.enqueueRun({
+      workflow: { slug: 'runbook-a', name: 'Runbook A', steps: [{ id: 'a', agentSlug: 'agent-a', label: 'A' }] },
+      initialPrompt: 'CSUP-77 something',
+      watch: 'direct-invocation',
+      ticketKey: 'CSUP-77',
+      autoRun: true,
+      projectDir: join(process.env.AGENT_WORKSPACE_ROOT, 'cancel-me'),
+    })
+    assert.equal(q.status, 'queued')
+    assert.ok(q.queuedAt > 0, 'a queued run records when it joined the queue')
+    assert.equal(q.baseCommit, undefined,
+      'and carries no baseline: one captured now would name a HEAD that has moved by the time it starts')
+    assert.equal(q.branch, undefined, 'and no branch: it has taken no checkout')
+    const stopped = await runner.stopRun(q.id)
+    assert.equal(stopped.status, 'stopped', 'a queued run can be cancelled')
+    assert.ok(stopped.steps.every(s => s.status === 'skipped'), 'and every step it never ran is skipped')
+    assert.equal(existsSync(join(process.env.AGENT_RUNS_DIR, q.id, 'artifacts', 'bundle.md')), false,
+      'no evidence bundle is assembled for a run that did nothing')
+    assert.equal(await store.deleteRun(q.id), 'ok', 'and once stopped it can be deleted')
+  }
+
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+  void queue
+
+  rmSync(process.env.AGENT_WORKSPACE_ROOT, { recursive: true, force: true })
+}
+
+// ── 33. The notify step: runner-executed, never fatal, and wave-sensitive ──
+// A notify step posts one message and completes. It must never reach the agent
+// caller, must never fail a run when delivery fails, and - the trap worth a
+// test rather than a comment - must be placed UPSTREAM of an approval gate,
+// because runWave returns at the gate before any member of that wave runs.
+{
+  process.env.AGENT_MANAGER_SECRET = 'runner-test-secret'
+  process.env.AGENT_CHANNELS_FILE = join(process.env.CLAUDE_DIR, 'channels.json')
+  const C = await import('../server/utils/channels.ts')
+  const N = await import('../server/utils/notify.ts')
+  await C.saveChannel('reviewers', { kind: 'slack', url: 'https://hooks.slack.com/services/runner' })
+
+  const sent = []
+  N.setPoster(async (url, body) => { sent.push({ url, body }) })
+
+  const writeEscalated = json => async (agentSlug, input) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-g') {
+      const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+      writeFileSync(join(dir, 'escalated-drafts.json'), json)
+    }
+    return `output of ${agentSlug}`
+  }
+
+  // 33a. Upstream of the gate: the message goes out, THEN the run stops to ask.
+  const upstream = {
+    slug: 'notify-upstream', name: 'Notify Upstream',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['n'] },
+      { id: 'n', agentSlug: 'sdlc-notifier', label: 'Tell reviewers', next: ['esc'],
+        runWhen: { artifact: 'escalated-drafts.json' },
+        notify: { channel: 'reviewers', message: '{count} drafts need a decision' } },
+      { id: 'esc', agentSlug: 'agent-esc', label: 'Create Jira (Escalated)', next: [], approval: true, runWhen: { artifact: 'escalated-drafts.json' } },
+    ],
+  }
+  runner.setAgentCaller(writeEscalated('[{"key":"A-1"},{"key":"A-2"}]'))
+  calls.length = 0
+  sent.length = 0
+  let n1 = await runner.startRun({ workflow: upstream, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n1 = await runner.waitForSettled(n1.id, TIMEOUT)
+
+  assert.equal(n1.status, 'awaiting_review', 'the run still stops for the decision')
+  assert.equal(sent.length, 1, 'and the message went out before it did')
+  assert.match(sent[0].body.text, /2 drafts need a decision/, 'the count comes from the runWhen artifact')
+  assert.match(sent[0].body.text, /A-1, A-2/, 'and the entries are named the way the review panel names them')
+  assert.ok(!calls.includes('sdlc-notifier'), 'a notify step never reaches the agent caller')
+
+  const nStep = n1.steps.find(s => s.stepId === 'n')
+  assert.equal(nStep.status, 'completed')
+  assert.equal(nStep.model, null, 'no model ran')
+  assert.equal(nStep.usage, null, 'so it costs nothing')
+  assert.match(nStep.output, /^Posted to "reviewers"/, 'the output says what happened')
+  assert.equal(nStep.error, undefined, 'and a message that went out leaves no error on the step')
+
+  // 33b. Beside the gate now works too: the wave splits, the notify step is not
+  // the decision, and it sends before the run stops on the person. Kept as its
+  // own case because it was a documented trap for as long as a gate held its
+  // whole wave, and a regression there would go unnoticed - the run reaches
+  // awaiting_review either way, and only the message is missing.
+  const beside = {
+    slug: 'notify-beside', name: 'Notify Beside',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['n', 'esc'] },
+      { id: 'n', agentSlug: 'sdlc-notifier', label: 'Tell reviewers', next: [],
+        runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'reviewers' } },
+      { id: 'esc', agentSlug: 'agent-esc', label: 'Create Jira (Escalated)', next: [], approval: true, runWhen: { artifact: 'escalated-drafts.json' } },
+    ],
+  }
+  runner.setAgentCaller(writeEscalated('[{"key":"B-1"}]'))
+  sent.length = 0
+  let n2 = await runner.startRun({ workflow: beside, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n2 = await runner.waitForSettled(n2.id, TIMEOUT)
+  assert.equal(n2.status, 'awaiting_review')
+  assert.equal(sent.length, 1,
+    'a notify step beside the gate sends: only the gated step waits for the person')
+  assert.match(sent[0].body.text, /B-1/, 'over the same entries the decision is about')
+  assert.equal(n2.steps.find(s => s.stepId === 'n').status, 'completed', 'it ran')
+
+  // 33c. Delivery failure completes the step and does not fail the run.
+  N.setPoster(async () => { throw new Error('the webhook answered 503') })
+  const plain = {
+    slug: 'notify-plain', name: 'Notify Plain',
+    steps: [
+      { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['n'] },
+      { id: 'n', agentSlug: 'sdlc-notifier', label: 'Tell reviewers', next: [],
+        runWhen: { artifact: 'escalated-drafts.json' }, notify: { channel: 'reviewers' } },
+    ],
+  }
+  runner.setAgentCaller(writeEscalated('[{"key":"C-1"}]'))
+  let n3 = await runner.startRun({ workflow: plain, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n3 = await runner.waitForSettled(n3.id, TIMEOUT)
+  assert.equal(n3.status, 'completed', 'a webhook outage must not fail a run that did its work')
+  const failedStep = n3.steps.find(s => s.stepId === 'n')
+  assert.equal(failedStep.status, 'completed', 'the step completes')
+  assert.match(failedStep.output, /Could not post to "reviewers": the webhook answered 503/, 'and says so in its output')
+  assert.match(failedStep.output, /run still needs attention at/, 'with the link whoever reads it now has to act on')
+  // The point of the error: a completed step that told nobody must not read as a
+  // green one. The run page renders step.error in the failure colour whatever
+  // the status is, so this is what makes a dead channel visible.
+  assert.equal(failedStep.error, failedStep.output, 'and the step carries it as an error, not just as output')
+
+  // 33d. Nothing to report: runWhen skips the step, and nothing is sent.
+  N.setPoster(async (url, body) => { sent.push({ url, body }) })
+  runner.setAgentCaller(writeEscalated('[]'))
+  sent.length = 0
+  let n4 = await runner.startRun({ workflow: plain, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  n4 = await runner.waitForSettled(n4.id, TIMEOUT)
+  assert.equal(n4.status, 'completed')
+  assert.equal(n4.steps.find(s => s.stepId === 'n').status, 'skipped', 'an empty artifact skips the step')
+  assert.equal(sent.length, 0, 'so nobody is told about nothing')
+}
+
+// ── 34. A fan-out over a list parameter, joined ────────────────────────────
+// Multi-repo scanning: one child run per line of a run parameter, each with its
+// own checkout, and a parent that waits for all of them so a rollup step can
+// run once. The deadlock in 34b is the whole reason the `joining` status exists.
+{
+  const LF = String.fromCharCode(10)
+  const wfDir = join(process.env.CLAUDE_DIR, 'workflows')
+  mkdirSync(wfDir, { recursive: true })
+  // The child DECLARES the input the fan-out binds each item to; without the
+  // declaration resolveParameters would drop it (see 34c).
+  writeFileSync(join(wfDir, 'scan-child.json'), JSON.stringify({
+    name: 'Scan Child',
+    parameters: [{ name: 'repo', required: true }],
+    steps: [{ id: 'only', agentSlug: 'agent-child', label: 'Scan one repo', next: [] }],
+  }))
+  // Its own concurrency group, so the cap 34b sets is that group's alone and
+  // not shared with whatever earlier cases left paused in `default`. It is also
+  // the arrangement a real fan-out uses - see inFlightForGroup.
+  writeFileSync(join(wfDir, 'scan-child-capped.json'), JSON.stringify({
+    name: 'Scan Child Capped',
+    group: 'fanout',
+    parameters: [{ name: 'repo', required: true }],
+    steps: [{ id: 'only', agentSlug: 'agent-child', label: 'Scan one repo', next: [] }],
+  }))
+  writeFileSync(join(wfDir, 'scan-child-no-input.json'), JSON.stringify({
+    name: 'Scan Child Without Input',
+    steps: [{ id: 'only', agentSlug: 'agent-child', label: 'Scan', next: [] }],
+  }))
+
+  const fanFlow = (trigger, slug = 'fan-demo', group = undefined) => ({
+    slug, name: 'Fan Demo', group,
+    steps: [
+      { id: 'f', agentSlug: 'sdlc-auto-dispatcher', label: 'Fan out', next: ['r'], triggerWorkflow: trigger },
+      { id: 'r', agentSlug: 'agent-rollup', label: 'Roll up', next: [] },
+    ],
+  })
+  const LIST = { fromParameter: 'repos', itemParameter: 'repo', slug: 'scan-child', join: true }
+
+  // Polls the record rather than using waitForSettled: `joining` IS settled -
+  // the wave loop has ended, and a caller must not block for whole child
+  // pipelines - so a run's real outcome is a different question.
+  const waitForStatus = async (runId, status, ms = TIMEOUT) => {
+    const until = Date.now() + ms
+    for (;;) {
+      const r = await store.getRun(runId)
+      if (r?.status === status) return r
+      if (Date.now() > until) assert.fail(`run ${runId} was ${r?.status}, never ${status}`)
+      await new Promise(res => setTimeout(res, 25))
+    }
+  }
+  const readChildren = async runId => JSON.parse(readFileSync(
+    join(process.env.AGENT_RUNS_DIR, runId, 'artifacts', 'children.json'), 'utf8'))
+
+  // ── 34a. The feature: one child per line, each told which item it is for ──
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+  runner.setAgentCaller(async (agentSlug) => { calls.push(agentSlug); return `output of ${agentSlug}` })
+  calls.length = 0
+  let f1 = await runner.startRun({
+    workflow: fanFlow(LIST), initialPrompt: 'scan them', watch: 'direct-invocation',
+    autoRun: true, startedBy: 'dev', parameters: { repos: ['alepo-aaa', 'alepo-bbb', 'alepo-ccc'].join(LF) },
+  })
+  f1 = await runner.waitForSettled(f1.id, TIMEOUT)
+
+  assert.equal(f1.status, 'joining', 'the parent waits for its children rather than completing')
+  const fanStep = f1.steps.find(s => s.stepId === 'f')
+  assert.equal(fanStep.status, 'waiting', 'the fan-out step is not done until its children are')
+  assert.equal(fanStep.completedAt, undefined, 'so it has no completion time yet')
+  assert.equal(fanStep.childRunIds.length, 3, 'one child run per line')
+  assert.equal(f1.steps.find(s => s.stepId === 'r').status, 'pending', 'the rollup step has not run')
+  assert.deepEqual(f1.currentStepIds, ['f'], 'and the run page points at the step that is waiting')
+  assert.ok(!calls.includes('agent-rollup'), 'nothing downstream of the join has run')
+
+  const kids = await Promise.all(fanStep.childRunIds.map(id => runner.waitForSettled(id, TIMEOUT)))
+  assert.deepEqual(kids.map(k => k.parameters.repo), ['alepo-aaa', 'alepo-bbb', 'alepo-ccc'],
+    'each child is told which item it was started for')
+  assert.equal(new Set(kids.map(k => k.projectDir)).size, 3, 'and each works in its own checkout')
+  assert.deepEqual(kids.map(k => k.workflowSlug), ['scan-child', 'scan-child', 'scan-child'])
+  assert.deepEqual(kids.map(k => k.parentRunId), [f1.id, f1.id, f1.id], 'the link back to the parent')
+
+  // The last child to settle is what resumes the parent.
+  const done1 = await waitForStatus(f1.id, 'completed')
+  const settledFan = done1.steps.find(s => s.stepId === 'f')
+  assert.equal(settledFan.status, 'completed', 'the join completes once every child has')
+  assert.match(settledFan.output, /3 children finished\./, 'and says how many')
+  assert.match(settledFan.output, /alepo-bbb: completed/, 'naming each child by its item, not its run id')
+  assert.equal(done1.steps.find(s => s.stepId === 'r').status, 'completed', 'so the rollup step runs')
+  assert.equal(calls.filter(c => c === 'agent-rollup').length, 1, 'exactly once, not once per item')
+  const summary1 = await readChildren(f1.id)
+  assert.deepEqual(summary1.map(c => [c.id, c.status]),
+    [['alepo-aaa', 'completed'], ['alepo-bbb', 'completed'], ['alepo-ccc', 'completed']],
+    'children.json is what a rollup notify or runWhen reads')
+
+  // ── 34b. A cap of one: the deadlock `joining` exists to prevent ───────────
+  // The parent dispatches while it is still `running`, so at a cap of 1 every
+  // child is queued behind it. If a joining parent held its group's slot, the
+  // children would wait for the parent and the parent for the children.
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '1'
+  calls.length = 0
+  let f2 = await runner.startRun({
+    // Parent AND children in one group: a parent in a group of its own could
+    // not deadlock its children, so it would not be this test.
+    workflow: fanFlow({ ...LIST, slug: 'scan-child-capped' }, 'fan-capped', 'fanout'),
+    initialPrompt: 'scan them', watch: 'direct-invocation',
+    autoRun: true, startedBy: 'dev', parameters: { repos: ['cap-one', 'cap-two'].join(LF) },
+  })
+  f2 = await runner.waitForSettled(f2.id, TIMEOUT)
+  assert.equal(f2.status, 'joining')
+  const capped = f2.steps.find(s => s.stepId === 'f')
+  assert.equal(capped.childRunIds.length, 2, 'both children are real runs even when both had to queue')
+
+  const done2 = await waitForStatus(f2.id, 'completed', TIMEOUT * 3)
+  assert.equal(done2.steps.find(s => s.stepId === 'r').status, 'completed',
+    'a capped fan-out still finishes: the parent gives its slot back when it starts joining')
+  const kids2 = await Promise.all(capped.childRunIds.map(id => store.getRun(id)))
+  assert.deepEqual(kids2.map(k => k.status), ['completed', 'completed'], 'and every child got its turn')
+  process.env.AGENT_MAX_CONCURRENT_PIPELINES = '10'
+
+  // ── 34c. A target that cannot be told which item it is for ───────────────
+  // Silent otherwise: resolveParameters drops what the child never declared, so
+  // the run would start N children each scanning whatever its checkout held.
+  calls.length = 0
+  let f3 = await runner.startRun({
+    workflow: fanFlow({ ...LIST, slug: 'scan-child-no-input' }, 'fan-undeclared'),
+    initialPrompt: 'scan them', watch: 'direct-invocation', autoRun: true,
+    parameters: { repos: ['x', 'y'].join(LF) },
+  })
+  f3 = await runner.waitForSettled(f3.id, TIMEOUT)
+  assert.equal(f3.status, 'failed', 'a fan-out that cannot brief its children is a failure, not a dispatch')
+  const undeclared = f3.steps.find(s => s.stepId === 'f')
+  assert.equal(undeclared.status, 'failed')
+  assert.match(undeclared.error, /declares no "repo" input/, 'and the message names the missing declaration')
+  assert.equal(undeclared.childRunIds ?? undefined, undefined, 'nothing was started')
+
+  // ── 34d. A child that fails still settles the join ───────────────────────
+  // The parent waits for its children, not for them to succeed: a rollup that
+  // never ran because one repo failed is the report nobody gets.
+  calls.length = 0
+  runner.setAgentCaller(async (agentSlug, input) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-child' && input.includes('doomed')) throw new Error('the scan blew up')
+    return `output of ${agentSlug}`
+  })
+  let f4 = await runner.startRun({
+    workflow: fanFlow(LIST, 'fan-partial'), initialPrompt: 'scan them', watch: 'direct-invocation',
+    autoRun: true, startedBy: 'dev', parameters: { repos: ['doomed', 'healthy'].join(LF) },
+  })
+  f4 = await runner.waitForSettled(f4.id, TIMEOUT)
+  assert.equal(f4.status, 'joining')
+  const partial = f4.steps.find(s => s.stepId === 'f')
+  await Promise.all(partial.childRunIds.map(id => runner.waitForSettled(id, TIMEOUT)))
+
+  const done4 = await waitForStatus(f4.id, 'completed')
+  assert.equal(done4.steps.find(s => s.stepId === 'r').status, 'completed', 'the rollup still runs')
+  const joined4 = done4.steps.find(s => s.stepId === 'f')
+  assert.match(joined4.output, /1 not completed/, 'the join says how many did not make it')
+  assert.match(joined4.output, /doomed: failed/, 'naming the one that did not')
+  const summary4 = await readChildren(f4.id)
+  assert.deepEqual(summary4.map(c => [c.id, c.status]), [['doomed', 'failed'], ['healthy', 'completed']],
+    'and children.json records each outcome, so a rollup can act on the failures')
+  assert.ok(summary4.find(c => c.id === 'doomed').error, 'with the failure itself, not just its status')
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })

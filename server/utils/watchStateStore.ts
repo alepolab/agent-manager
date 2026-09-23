@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { resolveClaudePath } from './claudeDir.ts'
+import { resolveClaudeFile, resolveClaudePath } from './claudeDir.ts'
 import type { TicketState } from '~~/shared/types/watch'
 
 export const WATCH_STATE_DIR_NAME = 'watch-state'
@@ -10,7 +9,7 @@ export const WATCH_STATE_DIR_NAME = 'watch-state'
 export const MAX_ATTEMPTS = 3
 
 const watchStateDir = () => resolveClaudePath(WATCH_STATE_DIR_NAME)
-const watchStatePath = (watchId: string) => join(watchStateDir(), `${watchId}.json`)
+const watchStatePath = (watchId: string) => resolveClaudeFile(WATCH_STATE_DIR_NAME, watchId)
 
 async function ensureDir() {
   const dir = watchStateDir()

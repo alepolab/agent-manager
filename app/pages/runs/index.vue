@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR, runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
+import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
+import { RUN_STATUS_COLOR, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,9 +31,18 @@ const status = computed({
   set: v => router.replace({ query: { ...route.query, status: v || undefined } }),
 })
 
+/** Group occupancy, so a queued row can say what it is waiting behind rather
+ *  than only that it is waiting. Fetched alongside the runs, and only used by
+ *  the in-flight section. */
+const groups = ref<{ id: string, name: string, inFlight: number, maxConcurrent: number }[]>([])
+const loadFor = (r: WorkflowRun) => groups.value.find(g => g.id === (r.group?.trim() || 'default'))
+
 async function refresh() {
   try {
     runs.value = await $fetch<WorkflowRun[]>('/api/runs')
+    // Best-effort: a queued row without its group's numbers still says it is
+    // waiting, which is the load-bearing half.
+    groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => groups.value)
     loadError.value = null
   } catch (e: any) {
     loadError.value = e.data?.message || e.message || 'Failed to load runs'
@@ -59,19 +68,23 @@ onUnmounted(() => {
   if (timer) clearInterval(timer)
   if (clock) clearInterval(clock)
 })
+// The 5s poll stops once nothing is live; this picks up runs a watch, schedule or another tab starts.
+useAutoRefresh(refresh)
 
 // Runs that can still change, newest first: the "what is happening now" list.
 // Deliberately NOT filtered by the table's filters — those exist to search
 // history, and hiding a live run behind a stale filter is how one gets
 // forgotten.
-const live = computed(() => runs.value.filter(r => r.status === 'running' || r.status === 'paused'))
+// Includes `queued`: a run waiting for a slot can still change, so the 5s
+// poll has to keep going or the moment it starts is never painted.
+const live = computed(() => runs.value.filter(r => isLiveStatus(r.status)))
 
 // The list refreshes every 5s; a run's idle time has to count up in between or
 // a card that says "12s ago" for five seconds reads as frozen.
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | null = null
 
-const STATUSES = ['running', 'paused', 'completed', 'failed', 'stopped', 'interrupted']
+const STATUSES = ['queued', 'running', 'paused', 'awaiting_review', 'completed', 'failed', 'stopped', 'interrupted']
 const shown = computed(() => runs.value.filter(r =>
   (!filter.value || [r.workflowName, r.initialPrompt.split('\n')[0] ?? '', r.startedBy ?? '', r.product?.name ?? ''].some(v => v.toLowerCase().includes(filter.value.toLowerCase())))
   && (!status.value || r.status === status.value)
@@ -94,7 +107,9 @@ const restartPoint = (r: WorkflowRun) =>
 // Folding the capability in here rather than at each button keeps the two
 // buttons and the bulk control from drifting apart later.
 const canRestart = (r: WorkflowRun) => can('runEngine') && ['failed', 'stopped', 'interrupted'].includes(r.status) && !!restartPoint(r)
-const canStop = (r: WorkflowRun) => can('runEngine') && (r.status === 'running' || r.status === 'paused')
+// A queued run is stoppable - that is how it is cancelled - and stopping it
+// is the step before deleting it.
+const canStop = (r: WorkflowRun) => can('runEngine') && isLiveStatus(r.status)
 
 // Stop is irreversible for the step in flight: ask once, inline, then forget.
 const confirmingStop = ref<string | null>(null)
@@ -123,9 +138,9 @@ async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<strin
   }
 }
 
-// Deleting a run takes its evidence directory with it — the one irreversible act
+// Deleting a run takes its evidence directory with it - the one irreversible act
 // in this console, and the one that was open to everyone.
-const canDelete = (r: WorkflowRun) => can('runEngine') && !['running', 'paused'].includes(r.status)
+const canDelete = (r: WorkflowRun) => can('runEngine') && !isLiveStatus(r.status)
 
 // Delete removes the run and its evidence for good: ask once inline, like Stop.
 const confirmingDelete = ref<string | null>(null)
@@ -200,7 +215,7 @@ async function deleteFailed() {
           <h2 class="t-small font-mono uppercase tracking-wider text-label">In flight</h2>
           <span class="t-small text-meta">{{ live.length }}</span>
         </header>
-        <RunLiveCard v-for="r in live" :key="`live-${r.id}`" :run="r" :now="now" />
+        <RunLiveCard v-for="r in live" :key="`live-${r.id}`" :run="r" :now="now" :load="loadFor(r)" />
       </section>
 
       <div class="flex flex-wrap gap-2 items-center">
@@ -208,7 +223,7 @@ async function deleteFailed() {
         <label class="t-small text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox" /> Mine</label>
         <select v-model="status" class="field-input w-40" aria-label="Filter by status">
           <option value="">All statuses</option>
-          <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
+          <option v-for="s in STATUSES" :key="s" :value="s">{{ runStatusLabel(s) }}</option>
         </select>
         <UButton
           v-if="failedShown.length"
@@ -262,7 +277,7 @@ async function deleteFailed() {
                    hover is not a fix, but it beats opening the run to find out
                    why it is red. -->
               <td class="px-3 py-2 font-mono t-label" :style="{ color: RUN_STATUS_COLOR[r.status] }" :title="r.error || r.status">
-                {{ r.status }}
+                {{ runStatusLabel(r.status) }}
                 <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans t-small underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
               </td>
               <td class="px-3 py-2 text-label hidden 2xl:table-cell"><div class="truncate">{{ new Date(r.startedAt).toLocaleString() }}</div></td>

@@ -1,112 +1,275 @@
 /**
- * What survives a decision.
- *
- * Before this existed, nothing did. An approval note went into the runner's
- * in-memory `l.notes` and died with the process; a rejection was concatenated
- * into `run.error`. So a reviewer standing at the fourth gate of a runbook could
- * not see who had approved the first three or why, and no screen could report
- * how long any gate had waited — `run.question` is cleared the instant it is
- * answered, taking `askedAt` with it.
- *
- * The rule these tests protect is that the record is measured, never invented:
- * a decision with no question behind it is not recorded at all, rather than
- * recorded with a comfortable zero.
+ * Self-check for the "awaiting review" gate: a run stops on the ENTRIES of an
+ * artifact, a person decides about each one, and the decision binds on every
+ * step that reads that file.
  *
  *   node scripts/test-run-decisions.mjs
+ *
+ * The dimension that varies is the DECISION MIX, not one reported example. A
+ * fix that special-cased "approve everything" — which is what the old approval
+ * button did, and what /review-drafts could not express — passes a single
+ * happy-path test and still dispatches three pipelines when the operator asked
+ * for two. So every row below states an approve/skip pattern and asserts what
+ * survives in the artifact, in the audit record, and in what actually ran.
  */
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-const { recordDecision, humanWaitMs } = await import('../shared/utils/runDecisions.ts')
+process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'decisions-'))
+process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'decisions-artifacts-'))
+// Posting stays off for every row but the one that turns it on: creation must
+// be provable without a Jira, and the default must never post.
+delete process.env.JIRA_POST_ENABLED
 
-const MINUTE = 60_000
+const runner = await import('../server/utils/workflowRunner.ts')
+const review = await import('../server/utils/runReview.ts')
+const artifacts = await import('../server/utils/runArtifacts.ts')
 
-function runAtGate(askedAt, extra = {}) {
-  return {
-    id: 'r1',
-    steps: [
-      { stepId: 'fix', label: 'Implement Fix' },
-      { stepId: 'ship', label: 'Push + PR' },
-    ],
-    question: { stepId: 'ship', text: 'Approve "Push + PR" to run it.', kind: 'approval', askedAt },
-    blastRadius: 'money',
-    ...extra,
+const TIMEOUT = 5000
+
+/** The scan pipeline's real shape: a gate fanning out to an approval-gated
+ *  creator and a dispatcher, both reading the same escalated file. */
+const flow = {
+  slug: 'review-demo',
+  name: 'Review Demo',
+  steps: [
+    { id: 'g', agentSlug: 'agent-g', label: 'Decision Gate', next: ['esc'] },
+    { id: 'esc', agentSlug: 'agent-esc', label: 'Create Jira (Escalated)', next: ['disp'], approval: true, runWhen: { artifact: 'escalated-drafts.json' } },
+    { id: 'disp', agentSlug: 'agent-disp', label: 'Dispatch Escalated', next: [], runWhen: { artifact: 'escalated-drafts.json' } },
+  ],
+}
+
+const draft = (n, extra = {}) => ({
+  draft_id: `DRAFT-00${n}`,
+  summary: `Finding ${n}`,
+  description: `The body of finding ${n}`,
+  severity: n === 1 ? 'high' : 'medium',
+  fields: { project: 'SEC', issue_type: 'Bug', priority: 'High', component: `mod/${n}.py` },
+  acceptance_criteria: [`criterion ${n}`],
+  gate: { verdict: 'escalated', reason: 'blast radius is money', decision_prompt: `Create a ticket for finding ${n}?`, escalation_criteria: ['blast_money'] },
+  ...extra,
+})
+
+const calls = []
+function gateWriting(entries) {
+  return async (agentSlug, input) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-g') {
+      const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+      const { writeFileSync } = await import('node:fs')
+      writeFileSync(join(dir, 'escalated-drafts.json'), JSON.stringify(entries, null, 2))
+    }
+    return `output of ${agentSlug}`
   }
 }
 
-// ── 1. a decision is measured from the question it answers ───────────────────
-{
-  const run = runAtGate(Date.now() - 5 * MINUTE)
-  const d = recordDecision(run, 'approved', 'sandeep', 'Checked the tax arithmetic against the invoice fixture.')
-
-  assert.ok(d, 'a gate that was waiting produces a decision')
-  assert.equal(d.stepId, 'ship')
-  assert.equal(d.label, 'Push + PR', 'the label is captured, so the record reads without the workflow beside it')
-  assert.equal(d.by, 'sandeep')
-  assert.equal(d.verdict, 'approved')
-  assert.match(d.note, /tax arithmetic/)
-  assert.equal(d.blastRadius, 'money', 'the tier at the time is part of what was decided')
-  // ~5 minutes, allowing for the clock moving between construction and call.
-  assert.ok(d.waitedMs >= 4.9 * MINUTE && d.waitedMs <= 5.2 * MINUTE,
-    `the wait is measured from askedAt, got ${d.waitedMs}ms`)
-  assert.deepEqual(run.decisions, [d], 'and it lands on the run')
+const readArtifact = (runId, name) => {
+  const path = artifacts.resolveRunArtifact(runId, name)
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null
 }
 
-// ── 2. no question means no decision — never a fabricated zero ───────────────
-// The failure mode worth preventing: a run with no gate open recording a
-// decision with `waitedMs: 0` would put a number in the record that nothing
-// measured, and a board summing those would under-report human latency.
-{
-  const run = { id: 'r2', steps: [], question: undefined }
-  assert.equal(recordDecision(run, 'approved', 'sandeep'), null)
-  assert.equal(run.decisions, undefined, 'nothing is appended when nothing was asked')
+/** Starts a run and drives it to the gate. */
+async function gatedRun(entries) {
+  calls.length = 0
+  runner.setAgentCaller(gateWriting(entries))
+  let run = await runner.startRun({ workflow: flow, initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })
+  run = await runner.waitForSettled(run.id, TIMEOUT)
+  assert.equal(run.status, 'awaiting_review', 'a gate over an artifact raises awaiting_review')
+  assert.equal(run.question.artifact, 'escalated-drafts.json')
+  return run
 }
 
-// ── 3. a clock artefact cannot produce a negative wait ───────────────────────
-{
-  const run = runAtGate(Date.now() + 10 * MINUTE)
-  const d = recordDecision(run, 'approved', 'sandeep')
-  assert.equal(d.waitedMs, 0, 'a question asked in the future clamps to zero rather than going negative')
+// ── 1. The decision mix decides what survives ────────────────────────────
+// Each row: what was escalated, what the operator said, and what must remain.
+const MIXES = [
+  {
+    name: 'approves every draft',
+    entries: [draft(1), draft(2), draft(3)],
+    decide: ['approved', 'approved', 'approved'],
+    survives: ['DRAFT-001', 'DRAFT-002', 'DRAFT-003'],
+    escRan: true,
+  },
+  {
+    name: 'approves some',
+    entries: [draft(1), draft(2), draft(3)],
+    decide: ['approved', 'skipped', 'approved'],
+    survives: ['DRAFT-001', 'DRAFT-003'],
+    escRan: true,
+  },
+  {
+    name: 'approves exactly one',
+    entries: [draft(1), draft(2), draft(3)],
+    decide: ['skipped', 'approved', 'skipped'],
+    survives: ['DRAFT-002'],
+    escRan: true,
+  },
+  {
+    name: 'skips every draft',
+    entries: [draft(1), draft(2), draft(3)],
+    decide: ['skipped', 'skipped', 'skipped'],
+    survives: [],
+    escRan: false,
+  },
+  {
+    name: 'skips the only draft',
+    entries: [draft(1)],
+    decide: ['skipped'],
+    survives: [],
+    escRan: false,
+  },
+  {
+    name: 'approves the only draft',
+    entries: [draft(1)],
+    decide: ['approved'],
+    survives: ['DRAFT-001'],
+    escRan: true,
+  },
+]
+
+for (const row of MIXES) {
+  const run = await gatedRun(row.entries)
+  const queue = await review.loadReviewQueue(run)
+  assert.equal(queue.items.length, row.entries.length, `${row.name}: every entry is offered`)
+  assert.equal(queue.items[0].decisionPrompt, row.entries[0].gate.decision_prompt, `${row.name}: the gate's own prompt is what is shown`)
+  assert.equal(queue.stepLabel, 'Create Jira (Escalated)', `${row.name}: the panel names the step being gated`)
+
+  const submitted = row.decide.map((decision, index) => ({ index, decision }))
+  const result = await review.applyReviewDecisions(run, submitted, 'a-reviewer')
+  const approvedCount = row.decide.filter(d => d === 'approved').length
+  assert.equal(result.approved, approvedCount, `${row.name}: approved count`)
+  assert.equal(result.skipped, row.entries.length - approvedCount, `${row.name}: skipped count`)
+
+  // The artifact now holds exactly the approved entries. This is the lever:
+  // both remaining steps read this file.
+  const after = readArtifact(run.id, 'escalated-drafts.json')
+  assert.deepEqual(after.map(e => e.draft_id), row.survives, `${row.name}: the artifact holds exactly the approved entries`)
+
+  // The audit keeps EVERY entry, including the ones dropped from the artifact.
+  // Without it the skipped drafts would have no surviving record at all.
+  const record = readArtifact(run.id, 'review-decisions.json')
+  assert.equal(record.artifact, 'escalated-drafts.json')
+  assert.equal(record.reviewedBy, 'a-reviewer', `${row.name}: the record says who decided`)
+  assert.equal(record.items.length, row.entries.length, `${row.name}: the audit keeps every entry`)
+  assert.deepEqual(record.items.map(i => i.decision), row.decide, `${row.name}: with the decision made about each`)
+  // Named positionally, and deliberately so: `draft_id` is NOT one of
+  // workflowGraph's ENTRY_KEY_FIELDS, so this is exactly what a dispatch step
+  // will call the same entries in the run log. Adding draft_id to that list
+  // would read better here and cost more than it is worth — "DRAFT-001"
+  // satisfies the Jira-key shape, so a dispatched child would claim a ticketKey
+  // for an issue that does not exist. Once the create step has stamped
+  // `jira_key`, that wins and both places name the real ticket.
+  assert.deepEqual(record.items.map((i, n) => i.key), row.entries.map((_, n) => `entry ${n + 1}`),
+    `${row.name}: named as dispatch would name them`)
+
+  // Resume exactly as the route does, and let the run settle.
+  let settled = await runner.continueRun(run.id, undefined, { grantApproval: result.approved > 0 })
+  settled = await runner.waitForSettled(settled.id, TIMEOUT)
+  assert.equal(settled.status, 'completed', `${row.name}: the run completes either way`)
+
+  const esc = settled.steps.find(s => s.stepId === 'esc')
+  const disp = settled.steps.find(s => s.stepId === 'disp')
+  if (row.escRan) {
+    assert.equal(esc.status, 'completed', `${row.name}: the approved branch runs`)
+    assert.equal(disp.status, 'completed', `${row.name}: and so does what it feeds`)
+  } else {
+    // The heart of it. Approving the step would have waived its runWhen and run
+    // it over the file the operator just emptied — the approval overriding the
+    // decision it was carrying out.
+    assert.equal(esc.status, 'skipped', `${row.name}: approving nothing must not run the step`)
+    assert.match(esc.skipReason, /escalated-drafts\.json/, `${row.name}: the reason names the file`)
+    assert.match(esc.skipReason, /empty array/, `${row.name}: and what was found in it`)
+    assert.equal(disp.status, 'skipped', `${row.name}: nothing downstream of it dispatches either`)
+    assert.ok(!calls.includes('agent-esc'), `${row.name}: the skipped step never reached its agent`)
+  }
 }
 
-// ── 4. send-back records where it went; reject records why ───────────────────
+// ── 2. Refusals: a review that does not decide everything is not a review ──
 {
-  const run = runAtGate(Date.now() - MINUTE)
-  const sent = recordDecision(run, 'sent-back', 'qa-person', 'The oracle only covers one credit.', 'fix')
-  assert.equal(sent.verdict, 'sent-back')
-  assert.equal(sent.target, 'fix', 'the step it was returned to is on the record')
-
-  const rejected = recordDecision(runAtGate(Date.now() - MINUTE), 'rejected', 'dev', 'Wrong base branch.')
-  assert.equal(rejected.verdict, 'rejected')
-  assert.equal(rejected.target, undefined, 'a rejection has no target; it ends the run')
+  const run = await gatedRun([draft(1), draft(2)])
+  const refusals = [
+    { name: 'an entry left undecided', submitted: [{ index: 0, decision: 'approved' }], code: 400, match: /every entry must be decided; 2 was not/ },
+    { name: 'an index past the end', submitted: [{ index: 0, decision: 'approved' }, { index: 9, decision: 'skipped' }], code: 400, match: /names no entry of escalated-drafts\.json, which holds 2/ },
+    { name: 'a negative index', submitted: [{ index: -1, decision: 'approved' }, { index: 1, decision: 'skipped' }], code: 400, match: /names no entry/ },
+    { name: 'the same entry twice', submitted: [{ index: 0, decision: 'approved' }, { index: 0, decision: 'skipped' }], code: 400, match: /entry 1 was decided twice/ },
+    { name: 'a decision that is neither', submitted: [{ index: 0, decision: 'maybe' }, { index: 1, decision: 'skipped' }], code: 400, match: /must be "approved" or "skipped"/ },
+    { name: 'no decisions at all', submitted: [], code: 400, match: /decisions is required/ },
+  ]
+  for (const r of refusals) {
+    await assert.rejects(
+      () => review.applyReviewDecisions(run, r.submitted, 'a-reviewer'),
+      (err) => err.statusCode === r.code && r.match.test(err.message),
+      `${r.name} must be refused`,
+    )
+  }
+  // Nothing was written by any of them: a refused review leaves the run exactly
+  // where it was, still gated, still holding both drafts.
+  assert.deepEqual(readArtifact(run.id, 'escalated-drafts.json').map(e => e.draft_id), ['DRAFT-001', 'DRAFT-002'])
+  assert.equal(readArtifact(run.id, 'review-decisions.json'), null, 'a refused review writes no audit record')
+  assert.equal((await runner.stopRun(run.id)).status, 'stopped')
 }
 
-// ── 5. append-only, oldest first ─────────────────────────────────────────────
-// A four-gate runbook must read as a history, not as its last decision.
+// ── 3. A second submission cannot decide the same run twice ───────────────
 {
-  const run = runAtGate(Date.now() - MINUTE)
-  recordDecision(run, 'sent-back', 'qa-person', 'first', 'fix')
-  run.question = { stepId: 'ship', text: 'again', kind: 'approval', askedAt: Date.now() - MINUTE }
-  recordDecision(run, 'approved', 'dev', 'second')
+  const run = await gatedRun([draft(1), draft(2)])
+  await review.applyReviewDecisions(run, [{ index: 0, decision: 'approved' }, { index: 1, decision: 'skipped' }], 'a-reviewer')
+  let settled = await runner.continueRun(run.id, undefined, { grantApproval: true })
+  settled = await runner.waitForSettled(settled.id, TIMEOUT)
 
-  assert.equal(run.decisions.length, 2, 'the earlier decision is kept, not replaced')
-  assert.deepEqual(run.decisions.map(d => d.note), ['first', 'second'], 'oldest first')
+  await assert.rejects(
+    () => review.applyReviewDecisions(settled, [{ index: 0, decision: 'approved' }], 'a-reviewer'),
+    (err) => err.statusCode === 409 && /is not waiting on a decision/.test(err.message),
+    'a run that has already been decided refuses a second review',
+  )
+  // And the first decision still stands: one entry, not two, not re-filtered.
+  assert.deepEqual(readArtifact(run.id, 'escalated-drafts.json').map(e => e.draft_id), ['DRAFT-001'])
 }
 
-// ── 6. human latency counts the gate still open ──────────────────────────────
-// The number the manager board exists to show: hours the pipeline spent waiting
-// for people. A gate open right now has not been decided, so it is in no
-// decision yet — and omitting it would report a stuck run as costing nothing.
+// ── 4. Modify: the ticket that gets filed is the text that was approved ───
 {
-  const run = runAtGate(Date.now() - 3 * MINUTE)
-  recordDecision(run, 'approved', 'dev')            // ~3 min, clears nothing here
-  run.question = { stepId: 'ship', text: 'open', kind: 'approval', askedAt: Date.now() - 2 * MINUTE }
+  const run = await gatedRun([draft(1), draft(2)])
+  await review.applyReviewDecisions(run, [
+    { index: 0, decision: 'approved', edits: { summary: 'Validate the payment amount', priority: 'Highest', description: 'Rewritten body' } },
+    { index: 1, decision: 'skipped' },
+  ], 'a-reviewer')
 
-  const total = humanWaitMs(run)
-  assert.ok(total >= 4.9 * MINUTE, `decided wait plus the gate still open, got ${Math.round(total / 1000)}s`)
+  const [kept] = readArtifact(run.id, 'escalated-drafts.json')
+  assert.equal(kept.summary, 'Validate the payment amount', 'the edited summary is what survives')
+  assert.equal(kept.description, 'Rewritten body', 'and the edited description')
+  assert.equal(kept.fields.priority, 'Highest', 'and the edited priority')
+  assert.equal(kept.fields.project, 'SEC', 'while the fields nobody edited are untouched')
 
-  const settled = { ...run, question: undefined }
-  assert.ok(humanWaitMs(settled) < 3.2 * MINUTE, 'with nothing open, only the decided waits count')
-  assert.equal(humanWaitMs({ id: 'x', steps: [] }), 0, 'a run that never stopped for anyone waited zero')
+  // The edits are in the audit too, so what changed at the gate is visible
+  // later without diffing the draft against a ticket.
+  const record = readArtifact(run.id, 'review-decisions.json')
+  assert.equal(record.items[0].edits.summary, 'Validate the payment amount')
+  assert.equal(record.items[1].edits, undefined, 'a skipped entry carries no edits')
+  assert.equal((await runner.stopRun(run.id)).status, 'stopped')
 }
 
-console.log('run decisions: waits are measured not invented, history is append-only, open gates still count')
+// ── 5. With posting off, nothing is filed and the run says so ─────────────
+{
+  const run = await gatedRun([draft(1)])
+  const result = await review.applyReviewDecisions(run, [{ index: 0, decision: 'approved' }], 'a-reviewer')
+  assert.deepEqual(result.created, [], 'no issue key is invented when posting is disabled')
+  assert.match(result.lines[0], /JIRA_POST_ENABLED is not 1/, 'and the reason is stated, not swallowed')
+  assert.equal(readArtifact(run.id, 'escalated-drafts.json')[0].jira_key, undefined, 'so no entry claims a ticket that does not exist')
+  assert.equal(readArtifact(run.id, 'tickets-created.json'), null, 'and nothing is recorded as created')
+  assert.equal((await runner.stopRun(run.id)).status, 'stopped')
+}
+
+// ── 6. A gate over an artifact that vanished is an error, not "nothing" ───
+{
+  const run = await gatedRun([draft(1)])
+  const { rmSync } = await import('node:fs')
+  rmSync(artifacts.resolveRunArtifact(run.id, 'escalated-drafts.json'))
+  await assert.rejects(
+    () => review.loadReviewQueue(run),
+    (err) => err.statusCode === 409 && /was not written/.test(err.message),
+    'a gate whose file has gone must not read as "nothing to decide"',
+  )
+  assert.equal((await runner.stopRun(run.id)).status, 'stopped')
+}
+
+console.log('run decisions: the decision mix binds on every step that reads the file')

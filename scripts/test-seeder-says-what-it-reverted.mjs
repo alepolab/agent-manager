@@ -50,7 +50,7 @@ check('reverted is returned, not just computed',
 for (const [kind, re] of [
   ['skill', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'skill', name \}\)[\s\S]{0,1200}?await cp\(/],
   ['command', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'command'[\s\S]{0,200}?await writeFile\(to, next\)/],
-  ['agent', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'agent', name: id \}\)\n\s*if \(apply && state !== 'ok'\) \{ await writeFile/],
+  ['agent', /if \(apply && state === 'drifted'\) reverted\.push\(\{ kind: 'agent', name: id \}\)\r?\n\s*if \(apply && state !== 'ok'\) \{ await writeFile/],
 ]) {
   check(`${kind} records the revert BEFORE overwriting`, re.test(sync),
     `applying sets state to 'ok'; a push written after the write would always see 'ok' and record nothing`)

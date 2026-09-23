@@ -94,6 +94,48 @@ assert.equal(active.id, other.id)
 // ── 8. A missing run is null, not a throw ─────────────────────────────────
 assert.equal(await store.getRun('does-not-exist'), null)
 
+// ── 9. A queued run: live for every question but the workspace lock ───────
+//
+// A run admitted while its concurrency group was full waits as a REAL run.
+// Which of the store's questions it answers yes to is the whole contract:
+// it can still change (so it is not deletable and it dedupes a watch), but it
+// holds no checkout (so it must not block a start in that directory).
+{
+  const queued = await store.createRun({
+    workflowSlug: 'queued-demo', workflowName: 'Queued Demo', autoRun: true,
+    watch: 'direct-invocation', initialPrompt: 'wait', steps: sampleSteps,
+    status: 'queued', group: 'sdlc', projectDir: '/repos/shared',
+  })
+  assert.equal(queued.status, 'queued')
+  assert.equal(queued.group, 'sdlc', 'the group is snapshotted on the run, not looked up later')
+  assert.ok(queued.queuedAt > 0, 'a queued run records when it joined the queue')
+
+  const stored = await store.getRun(queued.id)
+  assert.equal(stored.status, 'queued', 'and reads back queued')
+
+  assert.equal((await store.findActiveRun('queued-demo')).id, queued.id,
+    'a queued run IS this workflow\'s active run - otherwise a watch queues a second ticket behind it')
+  assert.equal(await store.deleteRun(queued.id), 'live',
+    'and cannot be deleted from under the queue; it is stopped first')
+
+  // THE TWO QUESTIONS. Same directory, opposite answers, both correct.
+  assert.equal(await store.findRunInWorkspace('/repos/shared'), null,
+    'the LOCK ignores it: nothing is working in that directory yet')
+  assert.equal((await store.findRunInWorkspace('/repos/shared', undefined, { includeQueued: true })).id, queued.id,
+    'ADMISSION sees it: something is already aimed there, so a second fire must not queue too')
+
+  // THE REGRESSION applyInterrupted would cause: a queued run outlives the
+  // boot that queued it by definition - that is what waiting for a slot means.
+  const path = join(process.env.CLAUDE_DIR, 'workflow-runs', `${queued.id}.json`)
+  const raw = JSON.parse(readFileSync(path, 'utf8'))
+  raw.bootId = 'a-boot-that-is-gone'
+  raw.pid = 999999
+  writeFileSync(path, JSON.stringify(raw))
+  const survived = await store.getRun(queued.id)
+  assert.equal(survived.status, 'queued',
+    'a queued run with a foreign bootId and a dead pid is still queued, never interrupted')
+}
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 // ── A finished run whose final status never landed ────────────────────────
 //
@@ -184,6 +226,18 @@ rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
   const lr = JSON.parse(readFileSync(lp, 'utf8')); lr.status = 'paused'; lr.pid = process.pid; lr.bootId = store.BOOT_ID; writeFileSync(lp, JSON.stringify(lr))
   assert.equal(await store.deleteRun(live.id), 'live', 'a live run is refused; stop it first')
   assert.ok(existsSync(lp), 'and its record is untouched')
+
+  // A run stopped on a person's decisions is live for the same reason a paused
+  // one is: it holds its checkout and it is going to do something as soon as it
+  // is answered. Deleting it would take that decision away from under it.
+  const reviewing = JSON.parse(readFileSync(lp, 'utf8'))
+  reviewing.status = 'awaiting_review'
+  reviewing.question = { stepId: 'a', kind: 'approval', askedAt: Date.now(), text: 'decide', artifact: 'escalated-drafts.json' }
+  writeFileSync(lp, JSON.stringify(reviewing))
+  assert.equal((await store.getRun(live.id)).status, 'awaiting_review',
+    'and it is not reported interrupted while its owner is alive')
+  assert.equal(await store.deleteRun(live.id), 'live', 'a run awaiting a decision is refused too')
+  assert.ok(existsSync(lp), 'and keeps its record')
   rmSync(runsBase, { recursive: true, force: true })
 }
 

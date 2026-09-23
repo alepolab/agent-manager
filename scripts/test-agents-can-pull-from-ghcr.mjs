@@ -19,8 +19,9 @@
  * written GITHUB_CLIENT_SECRET into a stack report by running `env`.
  */
 import assert from 'node:assert'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 
 process.env.AGENT_USERS_DIR = mkdtempSync(join(tmpdir(), 'ghcr-'))
@@ -57,8 +58,30 @@ await check('it authenticates to ghcr.io with this developer\'s token', () => {
 })
 
 await check('the credential file is not world-readable', () => {
-  const mode = statSync(join(env.DOCKER_CONFIG, 'config.json')).mode & 0o777
-  assert.equal(mode, 0o600, `docker's format is base64, not encryption, so the file permission is the only protection (got ${mode.toString(8)})`)
+  const file = join(env.DOCKER_CONFIG, 'config.json')
+  // NTFS does not honour POSIX mode bits: dockerConfigFor's `mode: 0o600`
+  // becomes the cosmetic "readonly" attribute on Windows, and stat always
+  // reports 666 back regardless of what was asked for. That is not the same
+  // as unprotected — the real gate on Windows is the file's ACL, inherited
+  // here from usersDir() (the developer's own home directory, or this test's
+  // AGENT_USERS_DIR under %TEMP%), both of which Windows already restricts to
+  // the owner, Administrators and SYSTEM. So assert that ACL directly, the
+  // same way test-preflight.mjs checks a locked-down directory with icacls,
+  // instead of a mode bit Windows never applies.
+  if (process.platform === 'win32') {
+    const out = execFileSync('icacls', [file], { encoding: 'utf8' }).replace(file, '')
+    const owner = (process.env.USERNAME || userInfo().username || '').toLowerCase()
+    const allowed = new Set(['nt authority\\system', 'builtin\\administrators'])
+    const strangers = out.split(/\r?\n/).map(l => l.trim())
+      .filter(l => l && !/^Successfully processed|^Failed processing/.test(l))
+      .map(l => l.split(':')[0].trim().toLowerCase())
+      .filter(p => p && !allowed.has(p) && p !== owner && !p.endsWith(`\\${owner}`))
+    assert.equal(strangers.length, 0,
+      `docker's format is base64, not encryption, so the ACL is the only protection (unexpected grant(s): ${strangers.join(', ')})`)
+  } else {
+    const mode = statSync(file).mode & 0o777
+    assert.equal(mode, 0o600, `docker's format is base64, not encryption, so the file permission is the only protection (got ${mode.toString(8)})`)
+  }
 })
 
 await check('it lives with the profile, never in run artifacts', () => {

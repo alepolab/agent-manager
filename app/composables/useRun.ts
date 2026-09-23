@@ -1,4 +1,4 @@
-import type { WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 
 /** One run by id: the record, its live output, and the actions on it. Streams while it is alive. */
 export function useRun(id: string) {
@@ -25,13 +25,21 @@ export function useRun(id: string) {
     try { run.value = await $fetch<WorkflowRun>(`/api/runs/${id}`); error.value = null; listen() }
     catch (e: any) { error.value = e.data?.message || e.message }
   }
+  /** Background refresh. An open stream already keeps the run current; a closed one would miss a
+   *  restart or continue made from another tab, so reopen it once the run is live again. */
+  async function refresh() {
+    if (source) return
+    run.value = await $fetch<WorkflowRun>(`/api/runs/${id}`)
+    error.value = null
+    if (isLiveStatus(run.value.status)) listen()
+  }
   const act = (path: string) => async (body?: Record<string, unknown>) => {
     run.value = await $fetch<WorkflowRun>(`/api/runs/${id}/${path}`, { method: 'POST', body })
     listen()
   }
   onScopeDispose(() => source?.close())
   return {
-    run, logs, error, load,
+    run, logs, error, load, refresh,
     continueRun: (note?: string) => act('continue')(note?.trim() ? { note: note.trim() } : undefined),
     respond: (reply: string) => act('respond')({ reply }),
     sendNote: (text: string) => $fetch<{ delivered?: string[], queued?: string }>(`/api/runs/${id}/note`, { method: 'POST', body: { text } }),

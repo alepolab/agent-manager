@@ -1,5 +1,6 @@
 import { getRun } from '../../../utils/workflowRunStore'
 import { subscribe, subscribeLog, getLiveLog } from '../../../utils/workflowRunner'
+import { isLiveStatus } from '../../../../shared/types/run.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 export default defineEventHandler(async (event) => {
@@ -22,8 +23,10 @@ export default defineEventHandler(async (event) => {
   send({ type: 'run', run: initial })
   send({ type: 'log-snapshot', logs: await getLiveLog(id) })
 
-  const finished = (r: WorkflowRun) =>
-    r.status !== 'running' && r.status !== 'paused'
+  // isLiveStatus, so a `queued` run is not "finished": the stream stays open
+  // and follows it into `running` when the queue launches it. Ending it here
+  // would tell every watcher the run was over before it had begun.
+  const finished = (r: WorkflowRun) => !isLiveStatus(r.status)
 
   if (finished(initial)) {
     send({ type: 'done' })

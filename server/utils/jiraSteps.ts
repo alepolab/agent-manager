@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { isJiraPostingEnabled, jiraAuthHeader } from './jiraCredentials.ts'
 import { credentialsFor, notifyTicketOutcome } from './ticketNotifier.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
+import { createFromArtifact } from './jiraCreate.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -14,15 +15,31 @@ export interface JiraStepConfig {
   comment?: boolean
   /** Attach the run's evidence files to the ticket. */
   attach?: boolean
+  /**
+   * Create one issue per entry of `source`, stamping the key back onto the
+   * entry (server/utils/jiraCreate.ts).
+   *
+   * Spelled as an action rather than a boolean because the workflows already
+   * declare it that way and have since they were written — they were simply
+   * never read, since this interface modelled only the three fields above.
+   * Matching the declaration is what makes those files start working with no
+   * migration and no edit to a workflow definition.
+   */
+  action?: 'create'
+  /** The artifact `action: 'create'` reads its drafts from. */
+  source?: string
 }
 
 /**
- * Synonyms the estate's projects use for the two states this pipeline moves a
+ * Synonyms the estate's projects use for the states this pipeline moves a
  * ticket through. A step configured for "Dev Done" still lands the transition
  * on a project that calls it "Ready for Review", "In Review" or "Resolved",
  * because the intent is the same and only the label differs per Jira workflow.
  * Ordered: the closest name is tried first. A configured name not in a group
  * is matched on its own, exactly as before.
+ *
+ * Matching is case-insensitive on both sides, which is why ASECRM's ALL-CAPS
+ * "DEV DONE", "READY FOR QA" and "QA DONE" need no entry of their own.
  */
 /**
  * Status names for comparison: lowercased, punctuation flattened to spaces.
@@ -40,6 +57,9 @@ const norm = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').t
 const STATUS_SYNONYMS: Record<string, string[]> = {
   'dev done': ['dev done', 'development done', 'ready for review', 'in review', 'code review', 'review', 'resolved', 'fixed'],
   'in progress': ['in progress', 'in development', 'in dev', 'start progress', 'doing'],
+  'ready for qa': ['ready for qa', 'ready for test', 'ready for testing', 'awaiting qa', 'ready for verification'],
+  'qa in progress': ['qa in progress', 'in qa', 'qa', 'testing', 'in testing', 'under test', 'start qa'],
+  'qa done': ['qa done', 'qa complete', 'qa completed', 'qa passed', 'tested', 'verified'],
 }
 
 /**
@@ -51,9 +71,23 @@ const STATUS_SYNONYMS: Record<string, string[]> = {
  * it would have done.
  */
 export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchImpl: FetchLike = fetch): Promise<string> {
-  const key = run.ticketKey
-  if (!key) return 'PIPELINE-SKIP: this run has no ticket key, so there is nothing in Jira to move or to comment on.'
   const lines: string[] = []
+  // Creation runs first, and outside the ticket-key guard below: a step that
+  // CREATES tickets is the one kind that legitimately starts without one. That
+  // guard is about a run whose own ticket is missing, which says nothing about
+  // drafts this step is about to file — and returning early on it is why the
+  // create action, once declared, would still have produced nothing.
+  if (cfg.action === 'create') {
+    if (!cfg.source) return 'Nothing created: this step is set to create tickets but names no artifact to create them from.'
+    lines.push(await createFromArtifact(run, cfg.source, fetchImpl))
+  }
+
+  const key = run.ticketKey
+  if (!key) {
+    return lines.length
+      ? lines.join('\n')
+      : 'PIPELINE-SKIP: this run has no ticket key, so there is nothing in Jira to move or to comment on.'
+  }
   if (cfg.transition) lines.push(await moveTicket(run, key, cfg.transition, fetchImpl))
   if (cfg.attach) lines.push(await attachArtifacts(run, key, fetchImpl))
   if (cfg.comment) {
@@ -64,7 +98,7 @@ export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchIm
     lines.push(result.posted ? `Comment posted on ${key}.` : `Comment recorded, not posted: ${result.reason}.`)
     run.ticketCommented = true
   }
-  return lines.join('\n') || 'Nothing configured for this Jira step: set a status to move to, or the outcome comment, in the workflow builder.'
+  return lines.join('\n') || 'Nothing configured for this Jira step: set a status to move to, the outcome comment, or ticket creation, in the workflow builder.'
 }
 
 /**
@@ -248,14 +282,6 @@ async function moveTicket(run: WorkflowRun, key: string, target: string, fetchIm
   const transitions = (((await listed.json()) as { transitions?: Transition[] })?.transitions) ?? []
   // The same resolver preflight used, so the two cannot drift apart.
   //
-  // The current status is fetched LAZILY: it only answers "is it already
-  // there?", which cannot be true when a transition of that name is on offer.
-  // Fetching it unconditionally added a second Jira request to every move on
-  // the common path, for an answer that path never reads.
-  //
-  // Only asked when a category is registered for this intent, too: without one
-  // the current status cannot change the answer, and fetching it would spend a
-  // request to learn nothing.
   // The current status is read only when a category is registered for this
   // intent, and then BEFORE resolving rather than as a retry: a ticket a
   // developer already moved by hand has no transition back to where it is, and
@@ -266,7 +292,7 @@ async function moveTicket(run: WorkflowRun, key: string, target: string, fetchIm
   if (r.needsCurrent) r = resolveTransition(target, transitions, await currentStatus(issueUrl, headers, fetchImpl))
   if (r.already) return `${key} is ${r.why}; left as is.`
   if (!r.hit) {
-    return `${key} could not be moved to "${target}": ${r.why}. Left as is — the ticket's own workflow offers no safe next step, which is not a problem with this run. Name the status this project uses on the step, or move it by hand.`
+    return `${key} could not be moved to "${target}": ${r.why}. Left as is - the ticket's own workflow offers no safe next step, which is not a problem with this run. Name the status this project uses on the step, or move it by hand.`
   }
   const hit = r.hit
   const to = hit.to?.name ?? hit.name

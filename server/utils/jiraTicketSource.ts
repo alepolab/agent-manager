@@ -26,7 +26,7 @@
  * nothing", the same tolerance it already gives the file-backed stub.
  */
 import { adfToPlainText } from './adf.ts'
-import { resolveJiraCredentials, jiraAuthHeader } from './jiraCredentials.ts'
+import { resolveJiraCredentials, jiraAuthHeader, jiraBaseUrl } from './jiraCredentials.ts'
 import type { TicketSource } from './ticketSource.ts'
 import type { Watch, TicketRef } from '../../shared/types/watch.ts'
 
@@ -160,7 +160,7 @@ export function createJiraTicketSource(fetchImpl: FetchLike = fetch): TicketSour
  */
 function credentialsFrom(env: Record<string, string>) {
   if (env.JIRA_EMAIL && env.JIRA_API_TOKEN) {
-    const baseUrl = (env.JIRA_BASE_URL || process.env.JIRA_BASE_URL || '').replace(/\/+$/, '')
+    const baseUrl = (env.JIRA_BASE_URL?.replace(/\/+$/, '') || jiraBaseUrl() || '')
     if (baseUrl) return { baseUrl, email: env.JIRA_EMAIL, apiToken: env.JIRA_API_TOKEN }
   }
   return resolveJiraCredentials()
@@ -186,15 +186,29 @@ export async function viewIssue(key: string, env: Record<string, string> = {}, f
   }
 }
 
+/** Named in artifactHeader's standing instruction, so the two cannot drift. */
+export const UNTRUSTED_TICKET_TAG = 'untrusted-ticket-content'
+
+/**
+ * Ticket text marked as data. Whoever can edit a ticket - a customer on a CSUP
+ * ticket - writes straight into the input of agents that run with no
+ * permission prompts and can push. The fence does not make that safe; it
+ * gives the header's instruction something exact to point at. A marker inside
+ * the ticket itself is removed, so the ticket cannot close the fence early.
+ */
+export function fenceTicketBody(body: string): string {
+  const safe = body.replace(new RegExp(`<\\s*/?\\s*${UNTRUSTED_TICKET_TAG}[^>]*>`, 'gi'), '[marker removed]')
+  return `<${UNTRUSTED_TICKET_TAG}>\n${safe}\n</${UNTRUSTED_TICKET_TAG}>`
+}
+
 /** The text a run should start from for one ticket: key, summary, labels and description. */
 export function ticketText(issue: JiraIssueView): string {
-  return [
-    `${issue.key}: ${issue.summary}`,
-    `URL: ${issue.url}`,
-    issue.labels.length ? `Labels: ${issue.labels.join(', ')}` : '',
-    '',
+  // The first line stays bare: every run list and page uses it as the headline.
+  const body = [
+    ...(issue.labels.length ? [`Labels: ${issue.labels.join(', ')}`, ''] : []),
     issue.description,
-  ].filter((l, i) => l !== '' || i === 3).join('\n')
+  ].join('\n')
+  return [`${issue.key}: ${issue.summary}`, `URL: ${issue.url}`, fenceTicketBody(body)].join('\n')
 }
 
 /** For a manual run started with only a key: the ticket text, or null when Jira cannot serve it. */

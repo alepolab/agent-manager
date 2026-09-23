@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { jiraBaseUrl as instanceJiraBaseUrl } from './jiraCredentials.ts'
+import { agentManagerSettings, envString, settingString } from './appSettings.ts'
 
 /**
  * Per-developer profiles for a shared instance: the GitHub token from login
@@ -29,7 +31,7 @@ export interface UserProfile {
 
 export type PublicProfile = Omit<UserProfile, 'jiraToken' | 'githubToken'> & { hasJiraToken: boolean, hasGithubToken: boolean }
 
-const usersDir = () => process.env.AGENT_USERS_DIR || join(homedir(), '.agent-manager', 'users')
+export const usersDir = () => process.env.AGENT_USERS_DIR || join(homedir(), '.agent-manager', 'users')
 const profilePath = (login: string) => join(usersDir(), `${safe(login)}.json`)
 const safe = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, '_')
 
@@ -215,14 +217,16 @@ export async function envForUser(login: string | undefined, fetchImpl: typeof fe
   if (p.jiraToken && p.jiraEmail) {
     env.JIRA_API_TOKEN = decrypt(p.jiraToken)
     env.JIRA_EMAIL = p.jiraEmail
-    env.JIRA_BASE_URL = jiraBaseUrl()
+    env.JIRA_BASE_URL = jiraHost()
     env.JIRA_CONFIG_FILE = await jiraConfigFor(p)
   }
   return env
 }
 
-/** A jira-cli config naming this user's login; the token travels in JIRA_API_TOKEN. */
-const jiraBaseUrl = () => (process.env.JIRA_BASE_URL || process.env.JIRA_SERVER || 'https://alepo.atlassian.net').replace(/\/+$/, '')
+/** The instance's Jira host, resolved once in jiraCredentials.ts so the env
+ *  var, the Settings page and JIRA_SERVER are read the same way everywhere.
+ *  The alepo host stays the last resort for a deployment that names none. */
+const jiraHost = () => instanceJiraBaseUrl() ?? 'https://alepo.atlassian.net'
 
 /** The registry a run pulls product images from. */
 const GHCR = 'ghcr.io'
@@ -262,14 +266,15 @@ async function dockerConfigFor(login: string, token: string): Promise<string> {
 }
 
 async function jiraConfigFor(p: UserProfile): Promise<string> {
-  const server = jiraBaseUrl()
+  const server = jiraHost()
+  const defaultProject = envString('JIRA_DEFAULT_PROJECT') ?? settingString(agentManagerSettings().jira?.defaultProject)
   const path = join(usersDir(), `${safe(p.login)}.jira.yml`)
   const body = [
     `installation: cloud`,
     `server: ${server}`,
     `login: ${p.jiraEmail}`,
     `auth_type: basic`,
-    ...(process.env.JIRA_DEFAULT_PROJECT ? [`project:`, `    key: ${process.env.JIRA_DEFAULT_PROJECT}`] : []),
+    ...(defaultProject ? [`project:`, `    key: ${defaultProject}`] : []),
     '',
   ].join('\n')
   await mkdir(usersDir(), { recursive: true })

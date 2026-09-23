@@ -290,21 +290,14 @@ export function useChatV2Handler() {
           // Update context monitor with aggregated usage from result
           if (message.metadata?.aggregatedUsage) {
             const usage = message.metadata.aggregatedUsage
+            // The window the SDK reports for the model that actually ran beats
+            // whatever the registry guessed from the picker.
             contextMonitor.updateTokenUsage({
               input: usage.input || 0,
               output: usage.output || 0,
               cacheRead: usage.cacheRead || 0,
               cacheCreation: usage.cacheCreation || 0,
-            })
-
-            // Update context window total if provided
-            if (usage.contextWindow) {
-              contextMonitor.metrics.value.contextWindow.total = usage.contextWindow
-              // Recalculate percentage
-              const used = contextMonitor.metrics.value.contextWindow.used
-              contextMonitor.metrics.value.contextWindow.percentage =
-                Math.round((used / usage.contextWindow) * 10000) / 100
-            }
+            }, usage.contextWindow)
 
             // Update cost if provided
             if (usage.totalCost !== undefined) {

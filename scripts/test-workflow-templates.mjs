@@ -287,12 +287,15 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 //    place is guaranteed to still match every body it was copied into. ──────
 {
   const source = readFileSync(new URL('../app/utils/templates.ts', import.meta.url), 'utf8')
-  const constMatch = source.match(/const SDLC_STANDING_RULES = `([\s\S]*?)`\n/)
+  const constMatch = source.match(/const SDLC_STANDING_RULES = `([\s\S]*?)`\r?\n/)
   assert.ok(constMatch, 'SDLC_STANDING_RULES constant must exist in app/utils/templates.ts')
   // The constant's own source uses \` to escape literal backticks inside the
   // template literal; un-escape those the same way the JS engine would so the
   // comparison is against the actual runtime string, not its escaped source.
-  const standingRules = constMatch[1].replace(/\\`/g, '`').replace(/\\\$/g, '$')
+  // CRLF is normalised to LF as well: a template literal's own value never
+  // carries \r (the engine folds <CR><LF> to <LF>), so on a CRLF checkout the
+  // raw source would otherwise match no body at all.
+  const standingRules = constMatch[1].replace(/\\`/g, '`').replace(/\\\$/g, '$').replace(/\r\n/g, '\n')
 
   const sdlcIds = ['sdlc-ticket-intake', 'sdlc-stack-provisioner', 'sdlc-test-author',
                     'sdlc-fix-implementer', 'sdlc-verifier', 'sdlc-trace-capture',
@@ -318,7 +321,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   const source = readFileSync(new URL('../app/utils/templates.ts', import.meta.url), 'utf8')
   // Each agent template entry starts with `id: '<id>',` at the object's top level
   // (two-space indent) - split the file into per-entry chunks on that boundary.
-  const entryStarts = [...source.matchAll(/^  \{\n    id: '([^']+)',/gm)]
+  const entryStarts = [...source.matchAll(/^  \{\r?\n    id: '([^']+)',/gm)]
   assert.ok(entryStarts.length > 0, 'expected to find at least one agent template entry')
 
   for (let i = 0; i < entryStarts.length; i++) {
@@ -327,7 +330,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     const end = i + 1 < entryStarts.length ? entryStarts[i + 1].index : source.length
     const entry = source.slice(start, end)
 
-    const frontmatterMatch = entry.match(/frontmatter: \{([\s\S]*?)\n    \},\n    body:/)
+    const frontmatterMatch = entry.match(/frontmatter: \{([\s\S]*?)\r?\n    \},\r?\n    body:/)
     assert.ok(frontmatterMatch, `${id}: expected a frontmatter block bounded by 'frontmatter: {' ... '},\\n    body:'`)
 
     // Frontmatter values in this file are strings, numbers, or flat arrays -
@@ -475,6 +478,18 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.ok(!/git clone git@github\.com/.test(prov.body),
     'an SSH clone URL cannot work in the container and must not be suggested')
 
+  // Whether a stack is needed is intake's call, and the runner refuses a
+  // provisioner skip meta.json does not permit (stackSkipAllowed). An agent
+  // that is not told both keys exist cannot write or honour them.
+  const intake = AGENT_TEMPLATES.find(t => t.id === 'sdlc-ticket-intake')
+  for (const key of ['stack_required', 'stack_reason']) {
+    assert.ok(intake.body.includes(`\`${key}\``), `intake must be told to write ${key} into meta.json`)
+    assert.ok(prov.body.includes(`\`${key}\``), `the provisioner must be told to read ${key}`)
+  }
+  assert.ok(/`schema`, `protocol` or `money`/.test(intake.body) && /`schema`, `protocol` or\s+`money`/.test(prov.body),
+    'both must know which blast radii the runner always verifies on a stack')
+  assert.ok(prov.body.includes('`stack: null`'), 'a skipped provisioner must record stack: null for the bundle')
+
   // A compose-only ticket with no UI reached the browser step, which correctly
   // had nothing to capture. Its output was the ls -la of the artifacts
   // directory and nothing else, so the monitor read a step named "Browser
@@ -561,6 +576,17 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     const made = materializeTemplateSteps(runbook, slugs)
     assert.equal(made.find(s => s.agentSlug === 'sdlc-evidence-and-pr').approval, true, 'and the gate survives materialisation into a real workflow')
     for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) assert.ok(a.body.includes('PIPELINE-ASK:'), `${a.id} must know it may ask the operator`)
+
+    // Runbook A's senders. A send-back names a step by label, so a label that is
+    // not in this runbook sends the work nowhere and fails the raising step.
+    const aLabels = new Set(runbook.steps.map(s => s.label))
+    for (const agent of ['sdlc-verifier', 'sdlc-pr-follow-up', 'sdlc-security-review']) {
+      const targets = [...AGENT_TEMPLATES.find(t => t.id === agent).body.matchAll(/PIPELINE-REWORK: ([^—\n]+?) —/g)]
+        .map(m => m[1].trim())
+        .filter(t => !t.startsWith('<')) // the standing rules' own placeholder
+      assert.ok(targets.length, `${agent} runs in Runbook A and must be able to send work back`)
+      for (const t of targets) assert.ok(aLabels.has(t), `${agent} sends work back to "${t}", which is not a step label of Runbook A`)
+    }
   }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
   assert.ok(evidence.body.includes('Which branch the pull request targets'),
@@ -596,11 +622,22 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   for (const s of steps) assert.equal(s.monitorSlug, 'sdlc-step-monitor', `${s.label} is monitored`)
   const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
   const id = label => byLabel[label].id
-  assert.deepEqual(byLabel['Implement Fix'].next, [id('Code Review')], 'review before anything is deployed')
+  assert.deepEqual(byLabel['Implement Fix'].next, [id('Jira: Dev Done')], 'the board reads DEV DONE as soon as the code is written')
+  assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
+  assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Code Review')], 'review before anything is deployed')
   assert.deepEqual(byLabel['Code Review'].next, [id('Update Stack')], 'the stack is rebuilt from the reviewed fix')
-  assert.deepEqual([...byLabel['Update Stack'].next].sort(), [id('Automated QA'), id('Manual QA'), id('Security Review')].sort(),
+  assert.deepEqual(byLabel['Update Stack'].next, [id('Jira: QA In Progress')],
+    'QA In Progress is posted immediately before the wave - a step cannot fire while its siblings start')
+  assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Automated QA'), id('Manual QA'), id('Security Review')].sort(),
     'both halves of QA and the security review run against the rebuilt stack, in one wave')
   for (const l of ['Automated QA', 'Manual QA', 'Security Review']) assert.deepEqual(byLabel[l].next, [id('Push + PR')], `${l} gates the PR`)
+  assert.deepEqual(byLabel['PR Checks + Review'].next, [id('Jira: QA Done')])
+  assert.deepEqual(byLabel['Jira: QA Done'].next, [], 'the last tracker step terminates the run')
+  {
+    const trackers = steps.filter(s => s.agentSlug === 'sdlc-jira-tracker')
+    assert.equal(trackers.length, 5, 'In Progress, Dev Done, Ready for QA, QA In Progress, QA Done')
+    assert.equal(new Set(trackers.map(s => s.id)).size, 5, 'five steps sharing one agent template are still five distinct steps')
+  }
   assert.equal(byLabel['Push + PR'].contextMode, 'ancestors', 'the PR body quotes evidence from several hops upstream')
   assert.equal(byLabel['Implement Fix'].testsUnlocked, true, 'ce-work writes tests and code in one step, so the test lock is lifted for it')
   assert.equal(byLabel['Code Review'].testsUnlocked, undefined, 'and for that step only')
@@ -678,11 +715,16 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 {
   const gated = id => WORKFLOW_TEMPLATES.find(t => t.id === id).steps.filter(s => s.approval).map(s => s.label)
 
-  assert.deepEqual(gated('runbook-a-jira-to-diff'), ['Evidence Bundle + PR', 'Jira: Dev Done'],
-    'the bug path stops for a person twice: at the diff, and before the ticket is told the work is done')
+  // Dev Done and QA Done are two steps here, not one: the terminal tracker was
+  // split so the board shows each transition as it happens. Both write to the
+  // ticket - one comments, one attaches the evidence - so the rule above gates
+  // both, and the intent is unchanged: no claim reaches the reporters and
+  // watchers without a person having qualified it.
+  assert.deepEqual(gated('runbook-a-jira-to-diff'), ['Jira: Dev Done', 'Evidence Bundle + PR', 'Jira: QA Done'],
+    'the bug path stops at the diff, and again before each claim the ticket makes about the work')
 
-  assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Update Stack', 'Push + PR', 'Jira: Dev Done'],
-    'the feature path stops four times: the plan, the diff, verification before ship, and before the ticket is told the work is done')
+  assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Jira: Dev Done', 'Update Stack', 'Push + PR', 'Jira: QA Done'],
+    'the feature path stops at the plan, the diff, verification before ship, and before each claim the ticket makes about the work')
 
   // A gate only means something before the step acts. Both outward-effect steps
   // push; approving them IS the decision to push.
@@ -691,6 +733,58 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     const pusher = steps.find(s => /PR$/.test(s.label))
     assert.equal(pusher.approval, true, `${id}: the step that opens the PR waits for a person`)
   }
+}
+
+// ── 15. Runbook A's Jira status chain, addressed by step `id`. ────────────
+//    Before `id` existed, every `next: ['sdlc-jira-tracker']` resolved to
+//    whichever tracker step was declared LAST, so four of the five would be
+//    unreachable and the run would jump straight to the terminal one.
+{
+  const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
+  const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
+  const steps = materializeTemplateSteps(runbook, slugs)
+  const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
+  const id = label => byLabel[label].id
+
+  const trackers = steps.filter(s => s.agentSlug === 'sdlc-jira-tracker')
+  assert.equal(trackers.length, 5, 'In Progress, Dev Done, Ready for QA, QA In Progress, QA Done')
+  assert.equal(new Set(trackers.map(s => s.id)).size, 5, 'five steps sharing one agent template are still five distinct steps')
+
+  assert.deepEqual(byLabel['Implement Fix'].next, [id('Jira: Dev Done')], 'the fix hands to Jira, not straight to verification')
+  assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
+  assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Jira: QA In Progress')])
+  assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
+    'QA In Progress is posted immediately before the wave - a step cannot fire while its siblings start')
+  assert.deepEqual(byLabel['PR Checks + Review'].next, [id('Jira: QA Done')])
+  assert.deepEqual(byLabel['Jira: QA Done'].next, [], 'the last tracker step terminates the run')
+
+  // Split on purpose: the outcome comment describes finished code work, so it
+  // rides Dev Done; the evidence bundle does not exist until Evidence Bundle + PR
+  // has run, so the attachments ride the last step. Neither is an oversight.
+  const jiraOf = label => runbook.steps.find(s => s.label === label).jira
+  assert.equal(jiraOf('Jira: Dev Done').comment, true)
+  assert.equal(jiraOf('Jira: Dev Done').attach, undefined, 'there is no bundle to attach yet')
+  assert.equal(jiraOf('Jira: QA Done').attach, true)
+  assert.equal(jiraOf('Jira: QA Done').comment, undefined, 'the comment was already posted at Dev Done')
+
+  // Each configured status is one server/utils/jiraSteps.ts can resolve: either a
+  // synonym-group key or a name matched on its own.
+  assert.deepEqual(runbook.steps.filter(s => s.jira?.transition).map(s => s.jira.transition),
+    ['In Progress', 'Dev Done', 'Ready for QA', 'QA In Progress', 'QA Done'])
+
+  // Adding a step must not regenerate the ids of the steps that did not change:
+  // teamSync carries the operator's canvas positions over keyed by step id, so a
+  // regenerated id loses that step's layout. It does not rescue an older run's
+  // restartability - alignStepIds refuses a step-count change outright.
+  const unchanged = s => s.label !== 'Jira: Ready for QA'
+  const saved = steps.filter(unchanged).map(s => ({ id: s.id, label: s.label }))
+  const resynced = materializeTemplateSteps(runbook, slugs, saved)
+  assert.deepEqual(resynced.filter(unchanged).map(s => s.id), steps.filter(unchanged).map(s => s.id),
+    'every step the saved workflow already had keeps its id')
+  assert.notEqual(resynced.find(s => !unchanged(s)).id, byLabel['Jira: Ready for QA'].id,
+    'and only the step it never had gets a new one')
+  const rByLabel = Object.fromEntries(resynced.map(s => [s.label, s]))
+  assert.deepEqual(rByLabel['Implement Fix'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
 }
 
 console.log('workflowTemplates: all assertions passed')

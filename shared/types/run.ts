@@ -1,7 +1,150 @@
 import type { Role } from './role'
 
 export type WorkflowRunStatus =
+  /**
+   * Admitted but not started: its concurrency group was full
+   * (server/utils/runQueue.ts), so it waits for a slot.
+   *
+   * A real run from this moment on, not a placeholder — it has the id that
+   * `RunStep.childRunIds`, a watch's dispatch record and a schedule's
+   * `lastRunId` all persist, and the id in the /runs URL an operator may
+   * already have open. It holds no working directory and no process; it takes
+   * both when the queue drains it into `running`.
+   *
+   * `queued` counts as LIVE everywhere the question is "can this still
+   * change": it is not settled, not restartable, not deletable, and not an
+   * item in the attention queue (it needs nobody). The one place it counts as
+   * idle is the workspace lock at launch time — see findRunInWorkspace.
+   */
+  | 'queued'
+  /**
+   * Stopped on a person who must decide about the ENTRIES of an artifact, not
+   * merely say yes to a step.
+   *
+   * Raised when the gated step carries both `approval` and a `runWhen`
+   * artifact: what that step will do depends on which entries survive the
+   * review, so "approve this step" is the wrong question and answering it
+   * yes acts on all of them. The decision is recorded by rewriting the
+   * artifact (server/api/runs/[id]/decisions.post.ts), which is what makes it
+   * bind on every step that reads the same file.
+   *
+   * Distinct from `paused` on purpose, and not merely for the colour: a paused
+   * run resumes with one button, and this one cannot resume at all until the
+   * entries have been decided. Live either way - it holds its working
+   * directory and its group's slot while it waits.
+   */
+  | 'awaiting_review'
+  /**
+   * Waiting for the child runs a `triggerWorkflow` step with `join` started,
+   * so it can carry on with what comes after them.
+   *
+   * The one live status that holds no slot in its concurrency group, and the
+   * reason it exists rather than reusing `paused`. Children are admitted
+   * through the same per-group count their parent would be in - so a parent
+   * waiting in `running` or `paused` holds a slot against the queue its own
+   * children sit in. At a cap of 1 that never resolves: the parent waits for
+   * children that wait for the parent. See holdsGroupSlot below.
+   *
+   * It does still OWN things - its working directory and the process watching
+   * for its children - so `isWorkingStatus` covers it, and a launch aimed at
+   * that directory is refused while it waits. Only the slot count is different.
+   *
+   * Not `isWaitingOnAPerson`: nobody can advance it, and putting it in the
+   * attention queue would ask an operator to act on a run that is getting on
+   * with its work elsewhere. It runs no model and spends no budget meanwhile.
+   */
+  | 'joining'
   | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
+
+/**
+ * A run that can still change: it is waiting for a slot, working, or stopped
+ * on a person. Everything else has reached an outcome.
+ *
+ * One function rather than the `status === 'running' || status === 'paused'`
+ * that used to be spelled out at a dozen call sites, for the reason
+ * app/utils/runStatus.ts states about colours: `queued` was added to the union
+ * long after those sites were written, and every one of them read it as
+ * "finished" — offering Restart on a run that had not started, ending its SSE
+ * stream immediately, and letting Delete remove it from under the queue.
+ *
+ * Deliberately NOT the same set as workflowRunner.ts's `isSettled`, which
+ * counts `paused` as settled because a paused run has handed control back.
+ * That is a question about the wave loop; this is a question about the run.
+ */
+export function isLiveStatus(status: WorkflowRunStatus): boolean {
+  return status === 'queued' || status === 'running' || status === 'paused'
+    || status === 'awaiting_review' || status === 'joining'
+}
+
+/**
+ * A run that has stopped ON A PERSON: nothing will advance it until somebody
+ * acts, and no amount of waiting changes that.
+ *
+ * The distinction the attention queue is built on, and the one that decides
+ * whether a run can be dismissed from it. Dismissing a failure is a person
+ * saying "I have seen this"; there is no equivalent for a run that is still
+ * going to do something as soon as it is answered, so these two are the ones
+ * that cannot be cleared away.
+ */
+export function isWaitingOnAPerson(status: WorkflowRunStatus): boolean {
+  return status === 'paused' || status === 'awaiting_review'
+}
+
+/**
+ * A run that OWNS something right now: a working directory and an owning
+ * process. Everything `isLiveStatus` covers except `queued`, which is admitted
+ * but holds nothing yet.
+ *
+ * A group's slot is the one thing this no longer answers for - `joining` owns
+ * the rest without spending that - so the slot count reads `holdsGroupSlot`
+ * below instead.
+ *
+ * The second predicate exists because three call sites keep needing exactly
+ * this one and each had spelled it out as `running || paused`: the workspace
+ * lock (findRunInWorkspace), the orphan check (applyInterrupted) and the
+ * per-group slot count (inFlightForGroup). All three were written before
+ * `awaiting_review` joined the union, and all three would have read it as
+ * owning nothing - launching a second run into an occupied checkout, calling a
+ * run that is merely waiting on a person `interrupted` at the next restart, and
+ * handing its group's slot to something else while it still held the clone.
+ */
+export function isWorkingStatus(status: WorkflowRunStatus): boolean {
+  return status === 'running' || status === 'paused' || status === 'awaiting_review'
+    || status === 'joining'
+}
+
+/**
+ * A run holding one of its concurrency group's slots.
+ *
+ * Everything `isWorkingStatus` covers except `joining`, and the exception is
+ * the whole point: a joining parent is waiting for child runs that are admitted
+ * against this very count, so counting it would have it queue behind itself.
+ * At a cap of 1 that is a deadlock rather than a slowdown - the children never
+ * start, so the parent never stops waiting.
+ *
+ * Separate from `isWorkingStatus` rather than carved out of it because the two
+ * questions only look alike. A joining parent still owns its checkout and its
+ * process, which is what every other caller of that predicate is asking about;
+ * it is only the machine's budget for concurrent WORK that it is not spending.
+ */
+export function holdsGroupSlot(status: WorkflowRunStatus): boolean {
+  return isWorkingStatus(status) && status !== 'joining'
+}
+
+/**
+ * Every child of a join has reached an outcome, so the parent can go on.
+ *
+ * Takes the statuses rather than the runs so the rule stays testable under
+ * plain node, and reads `isLiveStatus` rather than listing the terminal ones:
+ * a status added to the union later is far more likely to be another way a run
+ * can still change than another way it can be over, and the failure modes are
+ * not symmetric. Treating a live child as settled resumes a parent while its
+ * children are still writing; treating a settled child as live leaves the
+ * parent waiting for something that will never publish again.
+ */
+export function childrenSettled(statuses: WorkflowRunStatus[]): boolean {
+  return statuses.every(s => !isLiveStatus(s))
+}
 
 export type RunStepStatus =
   | 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
@@ -58,14 +201,26 @@ export interface RunStep {
    *  measured, so it is not asserted here. Use this to see that an agent is
    *  still moving and roughly how much it has done, never to judge how close
    *  it is to its limit. */
-  /** Why this step declared itself not applicable, when `status` is
-   *  'skipped' because the agent emitted `PIPELINE-SKIP:`. Absent for a step
-   *  the scheduler skipped after an upstream failure - those two are very
-   *  different events and the bundle must not conflate them. */
+  /** Why this step did no work, when `status` is 'skipped'. Two producers set
+   *  it: the agent emitted `PIPELINE-SKIP:` (it declared itself not
+   *  applicable), or the step's `runWhen` condition was not met (the artifact
+   *  it consumes holds nothing, so the runner never called it) - in which case
+   *  the reason names the file and what was found in it. Absent for a step the
+   *  scheduler skipped after an upstream failure. All three are very different
+   *  events and the bundle must not conflate them.
+   *
+   *  Load-bearing beyond reporting: `rehydrate` treats a step as settled only
+   *  when it is 'completed', or 'skipped' WITH a reason. A condition skip that
+   *  recorded no reason would read back as unsettled after a restart, its
+   *  successors would never be armed, and the run would wedge. */
   skipReason?: string
   assistantMessages?: number
   lastTool?: string
   lastActivityAt?: number
+  /** Runs a `triggerWorkflow` step started, in the order it dispatched them.
+   *  The step does not wait for them, so this is the only link back: without
+   *  it a dispatched child is an orphan run nobody can trace to its cause. */
+  childRunIds?: string[]
 }
 
 /** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
@@ -89,6 +244,11 @@ export interface ProductMatch {
   /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
   multiRepo?: boolean
   repos: string[]
+  /** The Jira project keys this product routes from, straight out of the
+   *  registry's `match.projects`. Carried on the run so a step can ask Jira
+   *  what that project requires - agents have Read and Write and no network,
+   *  so anything they must know about Jira has to arrive as an artifact. */
+  projects?: string[]
   /** For a container repo whose real content is sibling repos: directory under
    *  the parent checkout -> the repo that fills it. Cloning the parent alone
    *  does not produce these, because it git-ignores them. */
@@ -141,12 +301,14 @@ export interface WorkflowRun {
   autoRun: boolean
   initialPrompt: string
   /** What triggered this run: the id of the watch (registry/watches.yaml)
-   *  that dispatched it, or the reserved literal 'direct-invocation' for a
-   *  run started manually (the API route, run-ticket.mjs). Set once at
-   *  creation by the runner itself — never inferred from, or left to, an
-   *  agent's self-report. Non-nullable on purpose: "what triggered this?"
-   *  always has an honest answer, and 'direct-invocation' is it when
-   *  nothing did. */
+   *  that dispatched it, `schedule:<id>` for a cron fire
+   *  (server/utils/scheduleRunStarter.ts),
+   *  `workflow-trigger:<parentRunId>` for a child a triggerWorkflow step
+   *  dispatched, or the reserved literal 'direct-invocation' for a run started
+   *  manually (the API route, run-ticket.mjs). Set once at creation by the
+   *  runner itself — never inferred from, or left to, an agent's self-report.
+   *  Non-nullable on purpose: "what triggered this?" always has an honest
+   *  answer, and 'direct-invocation' is it when nothing did. */
   watch: string
   /** The ticket this run is for (e.g. 'DEVOPS-15'), when the caller knows it.
    *  Runner-owned like `watch`: stated once at creation, never inferred from
@@ -172,13 +334,24 @@ export interface WorkflowRun {
   baseBranch?: string
   /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
   reworks?: number
+  /**
+   * Send-backs spent per trigger, which is what the bound is actually applied to.
+   *
+   * One counter for the whole run made a CI failure and a real regression compete
+   * for the same two attempts: a verifier finding and a red check, each sent back
+   * once, left nothing for the second red check and stopped the run on a person
+   * for something routine. `ci` is the PR-checks step; `verification` is the
+   * verifier and the security review, which share one allowance because both are
+   * answering the same question about the same commit. `reworks` above stays the
+   * run total, for display and for anything already reading it.
+   */
+  reworksBy?: { ci?: number, verification?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
   ticketCommented?: boolean
-  /** Why the run is paused on the operator: a step's question, or a step that needs approval before it runs. */
   /**
    * What the runner checked before any agent ran: the compose file, the
    * checkout, git as the agents see it, docker, the Jira statuses this
@@ -193,20 +366,75 @@ export interface WorkflowRun {
   interruptions?: number
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   /**
-   * Why the run is paused, and — for an approval — whose decision it is.
-   *
-   * `role` is copied from the gated step's `gateRole` when the gate fires. Without
-   * it every holder of `answerGate` could answer every gate, so "QA answers the
-   * verification gate" was a sentence in a code comment rather than something the
-   * system did. Absent means nobody in particular: any `answerGate` holder may
-   * answer, which is the old behaviour and the right default for a workflow that
-   * never said.
+   * Why the run is stopped on the operator: a step's question, a step that needs
+   * approval before it runs, or an artifact whose entries need deciding (see
+   * `artifact`) - and, for an approval, whose decision it is.
    */
-  question?: { stepId: string, text: string, kind: 'question' | 'approval', askedAt: number, role?: Role, /** An approval raised by the runner itself: the budget is spent and continuing grants another allowance. */ reason?: 'budget' }
+  question?: {
+    stepId: string
+    text: string
+    kind: 'question' | 'approval'
+    askedAt: number
+    /**
+     * Copied from the gated step's `gateRole` when the gate fires. Without it
+     * every holder of `answerGate` could answer every gate, so "QA answers the
+     * verification gate" was a sentence in a code comment rather than something
+     * the system did. Absent means nobody in particular: any `answerGate` holder
+     * may answer, which is the old behaviour and the right default for a
+     * workflow that never said.
+     */
+    role?: Role
+    /** An approval raised by the runner itself: the budget is spent and continuing
+     *  grants another allowance, or a step has spent its send-backs and whether to
+     *  grant one more is the developer's call. */
+    reason?: 'budget' | 'rework'
+    /**
+     * The send-back this question is about, carried so that answering can perform
+     * it.
+     *
+     * On the record rather than in the runner's live map because continueRun
+     * rehydrates a paused run from disk: a pending rework held only in memory is
+     * lost when the server restarts, and Continue would then drive the wave
+     * forward from the successors the raising step already armed - straight past
+     * the step that was supposed to run again.
+     */
+    rework?: { from: string, target: string, instruction: string }
+    /**
+     * The artifact whose entries the operator is deciding about, named by the
+     * gated step's own `runWhen` - set only alongside status
+     * 'awaiting_review'.
+     *
+     * A pointer rather than the entries themselves. The drafts are large, they
+     * are already durable in the run's artifacts directory, and copying them
+     * into the run record would make two sources of truth for what is being
+     * decided - one of which the deciding endpoint then has to keep in step.
+     */
+    artifact?: string
+  }
   projectDir?: string
+  /**
+   * The workflow's declared inputs, resolved to values once when this run
+   * started, and stated to every step by artifactHeader's `## Run parameters`
+   * block.
+   *
+   * Runner-owned, exactly like `watch`, `ticketKey` and `baseCommit`: the
+   * starter states them, they are persisted here, and nothing re-derives them
+   * later or reads them back out of an agent's output. A step that wants to
+   * change one cannot - which is the point, since a run whose stated inputs
+   * drift halfway through has no honest answer to "what was this run given?".
+   *
+   * Only names the workflow declared are here: see
+   * shared/utils/workflowParameters.ts.
+   */
+  parameters?: Record<string, string>
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
   startedBy?: string
+  /** The run whose `triggerWorkflow` step started this one; absent on a run
+   *  nothing dispatched. Runner-owned, set once at creation. It is what makes
+   *  cross-workflow recursion visible: the graph model guards cycles inside
+   *  one workflow, and only this chain can see A dispatching B dispatching A. */
+  parentRunId?: string
   /** `projectDir`'s HEAD sha, captured by the runner (startRun, via
    *  gitFacts.ts's captureBaseline) the instant this run started, before any
    *  step ran. gitFacts.ts's computeFixFacts diffs the CURRENT HEAD against
@@ -219,6 +447,46 @@ export interface WorkflowRun {
    *  to a guessed base, since that fallback is exactly the fabrication this
    *  field exists to prevent. */
   baseCommit?: string
+  /**
+   * The concurrency group this run counts against, snapshotted from the
+   * workflow when the run was created.
+   *
+   * On EVERY run, not only queued ones, and for two reasons. Counting a
+   * group's in-flight runs would otherwise mean reading a workflow file per
+   * live run; and re-grouping a workflow would silently move runs already
+   * under way from one cap to another. Runner-owned like `watch`: stated once
+   * at creation, never re-derived.
+   *
+   * Absent means the default group (shared/types/workflowGroup.ts), never
+   * "uncapped".
+   */
+  group?: string
+  /**
+   * The named channel this run's transition messages go to, snapshotted from
+   * the workflow when the run was created.
+   *
+   * Snapshotted for the same reason `group` is, plus one of its own: the
+   * transition hook runs inside publish(), which holds a run record and never
+   * the workflow definition it came from. Without the snapshot there is no path
+   * from a run to its workflow's channel at the moment the message is sent.
+   *
+   * Absent falls back to a channel named `default`, then to SLACK_WEBHOOK_URL
+   * (server/utils/notify.ts).
+   */
+  notifyChannel?: string
+  /**
+   * When this run joined the queue, for a run that was queued rather than
+   * started immediately.
+   *
+   * Distinct from `startedAt` on purpose, and the distinction is load-bearing:
+   * `startedAt` is rewritten when the queue drains the run, because the run
+   * budget is measured from it (server/utils/workflowRunner.ts's
+   * budgetExceeded) and so are the reported wall clock and cost. A run that
+   * waited four hours behind a full group and kept `startedAt` from queue time
+   * would pause on a spent budget having done no work. Queue ORDER reads this
+   * field; everything about elapsed work reads `startedAt`.
+   */
+  queuedAt?: number
   steps: RunStep[]
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
@@ -246,7 +514,11 @@ export interface WorkflowRun {
    *  the record knows of, never at `now`. */
   runningSince?: number
   error?: string
-  /** The process that owns this run. A live status from a dead pid is a lie. */
+  /** The process that owns this run. A live status from a dead pid is a lie.
+   *  On a `queued` run this is the process that QUEUED it, which may well be
+   *  gone by the time a slot frees: applyInterrupted deliberately does not
+   *  look at a queued run for exactly that reason, and the owner is restated
+   *  when the queue launches it. */
   pid: number
   /** Random id of the server process that owns this run. In a container every
    *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
@@ -337,6 +609,15 @@ export interface CostAggregate {
 export interface NewRunInput {
   workflowSlug: string
   workflowName: string
+  /** See WorkflowRun.group — the caller states it from the workflow
+   *  definition, createRun carries it straight onto the persisted run. */
+  group?: string
+  /** See WorkflowRun.notifyChannel — stated from the workflow definition and
+   *  carried straight onto the persisted run, exactly like `group`. */
+  notifyChannel?: string
+  /** 'queued' for a run admitted but waiting for a slot; createRun stamps
+   *  `queuedAt` itself when this says so. Absent means the run starts now. */
+  status?: Extract<WorkflowRunStatus, 'running' | 'queued'>
   autoRun: boolean
   initialPrompt: string
   /** See WorkflowRun.watch — the caller states it, createRun carries it
@@ -346,8 +627,14 @@ export interface NewRunInput {
    *  straight onto the persisted run, unmodified. */
   ticketKey?: string
   projectDir?: string
+  /** See WorkflowRun.parameters - the caller resolves them, createRun carries
+   *  them straight onto the persisted run, unmodified. */
+  parameters?: Record<string, string>
   product?: ProductMatch
   startedBy?: string
+  /** See WorkflowRun.parentRunId — the caller states it, createRun carries it
+   *  straight onto the persisted run, unmodified. */
+  parentRunId?: string
   /** See WorkflowRun.baseCommit — startRun captures it via
    *  gitFacts.ts's captureBaseline and passes it straight through; createRun
    *  carries it onto the persisted run, unmodified. */

@@ -146,6 +146,13 @@ onMounted(async () => {
   await fetchProjects()
   await fetchOutputStyles()
 })
+// On focus only: listing sessions reads every transcript in the project. Refetches as many
+// sessions as are already shown, so returning to the tab doesn't collapse "load more".
+useAutoRefresh(async () => {
+  if (isLoadingSessions.value) return
+  if (viewMode.value === 'projects') await fetchProjects({ silent: true })
+  else if (selectedProject.value) await fetchSessions(selectedProject.value.name, Math.max(20, sessions.value.length), 0, { silent: true })
+}, { interval: 0 })
 
 // Handle project click
 async function handleProjectClick(project: typeof projects.value[0]) {

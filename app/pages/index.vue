@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 import { oversightFor } from '~~/shared/utils/oversight'
@@ -59,9 +59,13 @@ onMounted(() => {
   if (!commands.value.length) fetchCommands()
   if (!skills.value.length) fetchSkills()
   if (!workflows.value.length) fetchWorkflows()
-  timer = setInterval(() => { if (runs.value.some(r => r.status === 'running' || r.status === 'paused')) refresh() }, 10_000)
+  // isLiveStatus, so a run waiting for a slot keeps the poll going: the moment
+  // it starts is the moment this page most needs to repaint.
+  timer = setInterval(() => { if (runs.value.some(r => isLiveStatus(r.status))) refresh() }, 10_000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })
+// The live poll above stops once nothing is running; this picks up runs a watch or schedule starts.
+useAutoRefresh(refresh)
 
 const hasContent = computed(() => agents.value.length > 0 || commands.value.length > 0 || skills.value.length > 0)
 
@@ -78,16 +82,16 @@ const mineToAnswer = (r: WorkflowRun) => {
   return !want || !role.value || role.value === 'operator' || role.value === want
 }
 const attention = computed(() => runs.value
-  .filter(r => !r.dismissed && (['paused', 'failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
+  .filter(r => !r.dismissed && (isWaitingOnAPerson(r.status) || ['failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
   // Only gates are laned. A failed or interrupted run is not addressed to
   // anyone, and hiding it would leave it for nobody.
-  .filter(r => r.status !== 'paused' || mineToAnswer(r))
-  // Rank, then longest wait first — the inverse of sorting by recency. A gate
+  .filter(r => !isWaitingOnAPerson(r.status) || mineToAnswer(r))
+  // Rank, then longest wait first - the inverse of sorting by recency. A gate
   // owed to you outranks a broken run, which outranks a failing PR, which
   // outranks somebody else's gate.
   .sort((a, b) => {
     const rank = (r: WorkflowRun) =>
-      r.status === 'paused' && mineToAnswer(r) ? 0
+      isWaitingOnAPerson(r.status) && mineToAnswer(r) ? 0
       : r.status === 'failed' || r.status === 'interrupted' ? 1
       : r.ci?.status === 'failing' ? 2
       : 3
@@ -103,8 +107,8 @@ async function dismiss(ids: string[]) {
     toast.add({ title: 'Could not dismiss', description: e.data?.message || e.message, color: 'error' })
   } finally { dismissing.value = false }
 }
-/** Everything settled in the queue; a paused run still needs a decision, so it stays. */
-const dismissable = computed(() => attention.value.filter(r => r.status !== 'paused'))
+/** Everything settled in the queue; a run stopped on a person still needs one, so it stays. */
+const dismissable = computed(() => attention.value.filter(r => !isWaitingOnAPerson(r.status)))
 /**
  * My runs, most recently ACTIVE first - not most recently started.
  *
@@ -162,6 +166,13 @@ async function startFromTicket() {
     await navigateTo(`/workflows/${run.workflowSlug}?run=${run.id}`)
   } catch (e: any) {
     if (e?.statusCode === 409 && e?.data?.data?.runId) await navigateTo(`/workflows/${runbook.value.slug}?run=${e.data.data.runId}`)
+    // The workflow declares inputs this box cannot collect. Open the run dialog,
+    // which can: a toast alone would say what is missing and leave nowhere to
+    // put it.
+    else if (e?.statusCode === 400 && e?.data?.data?.missing?.length) {
+      toast.add({ title: 'This workflow needs its inputs', description: e.data.message, color: 'warning' })
+      await navigateTo(`/workflows/${runbook.value.slug}?start=1`)
+    }
     else toast.add({ title: 'Could not start the run', description: e.data?.message || e.message, color: 'error' })
   } finally {
     starting.value = false
@@ -171,16 +182,18 @@ async function startFromTicket() {
 /**
  * What this row is actually asking of the reader.
  *
- * The old `why()` built a sentence that stood in for the question — "paused
- * before Push + PR" — naming the step the run is about to take rather than the
+ * The old `why()` built a sentence that stood in for the question - "paused
+ * before Push + PR" - naming the step the run is about to take rather than the
  * decision a person owes. `question.text` was on the record the whole time and
  * rendered nowhere on this page. A queue that says a run wants you and refuses
  * to say what for is a queue you have to open every row of.
  */
 const ask = (r: WorkflowRun): string => {
+  if (r.status === 'awaiting_review') return `${r.question?.artifact ?? 'Its drafts'} is waiting on your decisions`
   if (r.status === 'paused') {
-    if (r.question?.reason === 'budget') return 'Out of budget — approve more, or stop it'
-    return r.question?.text || 'Paused — open it to see why'
+    if (r.question?.reason === 'budget') return 'Out of budget - approve more, or stop it'
+    if (r.question?.reason === 'rework') return 'Out of send-backs - grant another, or stop it'
+    return r.question?.text || 'Paused - open it to see why'
   }
   if (r.status === 'failed') return r.error || `Failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`
   if (r.status === 'interrupted') return 'Stopped when the server restarted'
@@ -194,20 +207,21 @@ const ask = (r: WorkflowRun): string => {
 /** The runner's vocabulary is not a person's: `interrupted` is what the codebase
  *  calls a process that died, and nobody outside it says that. */
 const STATUS_WORD: Record<string, string> = {
-  paused: 'Waiting', failed: 'Failed', interrupted: 'Stopped',
-  running: 'Running', completed: 'Done', stopped: 'Stopped',
+  paused: 'Waiting', awaiting_review: 'Deciding', failed: 'Failed', interrupted: 'Stopped',
+  running: 'Running', queued: 'Queued', joining: 'Joining', completed: 'Done', stopped: 'Stopped',
 }
 const statusWord = (s: string) => STATUS_WORD[s] ?? s
 
 /** Hue cannot separate "a person is blocking this" from "the machine broke it",
  *  and those two want opposite actions from the reader. */
 const kindIcon = (r: WorkflowRun) =>
-  r.status === 'paused' ? 'i-lucide-hand'
+  r.status === 'awaiting_review' ? 'i-lucide-gavel'
+  : r.status === 'paused' ? 'i-lucide-hand'
   : r.status === 'completed' && r.ci?.status === 'failing' ? 'i-lucide-git-pull-request-closed'
   : 'i-lucide-alert-triangle'
 
 /**
- * How long a PERSON has been owed — not how long ago the machine last moved.
+ * How long a PERSON has been owed - not how long ago the machine last moved.
  *
  * The queue sorted by `runLastActivityAt`, so a gate nobody had answered in six
  * hours sat below a CI check that flapped a minute ago. For a paused run the
@@ -337,6 +351,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
           <button v-if="dismissable.length" class="t-small text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} finished</button>
         </div>
         <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
+
         <div v-else-if="loadError" class="rounded-lg px-3 py-2 flex items-center gap-3 t-small" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
           <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
           <span style="color: var(--error);">Could not load runs, so this queue may be incomplete.</span>
@@ -353,7 +368,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
           <li
             v-for="r in attention" :key="r.id"
             class="attn-row t-ui"
-            :class="[`attn-row--${waitTier(r)}`, { 'attn-row--mine': r.status === 'paused' && mineToAnswer(r) }]"
+            :class="[`attn-row--${waitTier(r)}`, { 'attn-row--mine': isWaitingOnAPerson(r.status) && mineToAnswer(r) }]"
             :style="{ '--rail': RUN_STATUS_COLOR[r.status] }"
           >
             <span class="attn-rail" aria-hidden="true" />
@@ -375,9 +390,9 @@ const minedEmpty = computed(() => (role.value === 'qa'
             <RunProgressBar :steps="r.steps" />
             <span class="attn-wait tabular" :title="`Waiting ${shortWait(waitedMs(r))}`">{{ shortWait(waitedMs(r)) }}</span>
             <span class="attn-act">
-              <UButton v-if="r.status === 'paused' && mineToAnswer(r)" size="xs" variant="soft" label="Answer" :to="`/runs/${r.id}`" />
+              <UButton v-if="isWaitingOnAPerson(r.status) && mineToAnswer(r)" size="xs" variant="soft" :label="r.status === 'awaiting_review' ? 'Decide' : 'Answer'" :to="`/runs/${r.id}`" />
               <button
-                v-else-if="r.status !== 'paused'" class="attn-dismiss focus-ring" :disabled="dismissing"
+                v-else-if="!isWaitingOnAPerson(r.status)" class="attn-dismiss focus-ring" :disabled="dismissing"
                 title="Remove this run from your queue"
                 :aria-label="`Remove ${r.ticketKey || headline(r)} from your queue`"
                 @click.stop="dismiss([r.id])"
@@ -422,6 +437,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
               class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 t-small focus-ring"
               style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
             >
+
               <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ statusWord(r.status) }}</span>
               <span class="truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
               <RunProgressBar :steps="r.steps" />

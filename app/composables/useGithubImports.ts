@@ -15,16 +15,16 @@ export function useGithubImports() {
   const skillUpdatesAvailable = useState('githubSkillImportsUpdates', () => 0)
   const agentUpdatesAvailable = useState('githubAgentImportsUpdates', () => 0)
 
-  async function fetchImports(type: 'skills' | 'agents') {
-    loading.value = true
+  async function fetchImports(type: 'skills' | 'agents', { silent = false } = {}) {
+    if (!silent) loading.value = true
     try {
       const data = await $fetch<GithubImportsRegistry>(`/api/github/imports?type=${type}`)
       if (type === 'skills') skillImports.value = data.imports
       else agentImports.value = data.imports
     } catch (e) {
-      console.error(`Failed to fetch ${type} imports:`, e)
+      if (!silent) console.error(`Failed to fetch ${type} imports:`, e)
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 

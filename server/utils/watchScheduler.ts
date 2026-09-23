@@ -121,7 +121,9 @@ export async function reconcile(watch: Watch): Promise<void> {
       )
       await safeNotify(watch, ticket.key, run)
     }
-    // 'running' or 'paused': the run is still in flight — leave it dispatched.
+    // Still in flight - running, paused, or queued for a slot - so the ticket
+    // stays dispatched. A queued run falls through both branches above for
+    // exactly this reason: it has neither finished nor failed.
   }
 }
 

@@ -54,7 +54,7 @@ export const MODEL_META: Record<AgentModel, ModelMeta> = {
     badgeBg: 'bg-rose-500/15',
     badgeText: 'text-rose-400',
     color: '#E11D48',
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
   },
   opus: {
     label: 'Opus',
@@ -63,7 +63,7 @@ export const MODEL_META: Record<AgentModel, ModelMeta> = {
     badgeBg: 'bg-purple-500/15',
     badgeText: 'text-purple-400',
     color: '#7C3AED',
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
   },
   sonnet: {
     label: 'Sonnet',
@@ -72,7 +72,7 @@ export const MODEL_META: Record<AgentModel, ModelMeta> = {
     badgeBg: 'bg-blue-500/15',
     badgeText: 'text-blue-400',
     color: '#2563EB',
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
   },
   haiku: {
     label: 'Haiku',
@@ -132,6 +132,18 @@ export function getModelLabel(model: AgentModel | string | undefined): string {
 export function getModelColor(model: AgentModel | string | undefined): string {
   if (!model) return '#71717a'
   return MODEL_META[model as AgentModel]?.color ?? '#71717a'
+}
+
+/**
+ * Lookup: context window in tokens for a model.
+ *
+ * Keyed by alias, like the rest of MODEL_META. A full model id (which the chat
+ * page can pick up from a history transcript) is not in this table on purpose -
+ * the server sends the window alongside that history, so the default here is
+ * only ever a placeholder until it arrives.
+ */
+export function getModelContextWindow(model: AgentModel | string | undefined): number {
+  return MODEL_META[model as AgentModel]?.contextWindow ?? MODEL_META[DEFAULT_MODEL].contextWindow
 }
 
 /**

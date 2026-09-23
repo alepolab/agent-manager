@@ -357,6 +357,12 @@ onMounted(() => {
   fetchSources();
 });
 
+// Local import registry only; the marketplace and GitHub update checks stay on explicit load.
+useAutoRefresh(() => Promise.all([
+  fetchImports('skills', { silent: true }),
+  fetchImports('agents', { silent: true }),
+]), { interval: 0 });
+
 onMounted(async () => {
   await Promise.all([
     fetchImports('skills'),

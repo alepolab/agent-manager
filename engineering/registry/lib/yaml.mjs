@@ -18,7 +18,10 @@
  */
 
 export function parseYaml(text) {
-  const lines = text.split('\n')
+  // Split on either ending: a CRLF checkout otherwise leaves \r on every line,
+  // and `.` cannot match it, so every comment line fails to strip and reads
+  // as a parse error. Same fix as validate-registry.mjs's inline parser.
+  const lines = text.split(/\r?\n/)
   const root = {}
   const stack = [{ indent: -1, node: root }]
   const problems = []
