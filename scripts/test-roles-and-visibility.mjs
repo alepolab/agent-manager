@@ -66,9 +66,13 @@ check('assigning a role is gated client-side too',
 
 const app = read('app/app.vue')
 const navByRole = app.match(/const NAV_BY_ROLE[^}]+}/s)?.[0] ?? ''
-check("a manager is not offered a Dashboard that redirects them away",
-  /manager: \[(?!.*'\/')/.test(navByRole.replace(/\n/g, ' ')),
-  "index.vue sends a manager to /board on mount, so listing '/' advertised a page that refuses to be looked at")
+check('a manager is offered the Dashboard, which carries the board',
+  /manager: \['\/'/.test(navByRole) && !/\/board/.test(navByRole),
+  'the board is the top of the Dashboard now; /board only redirects there')
+const index = read('app/pages/index.vue')
+check('the dashboard shows a manager the board and none of the verbs',
+  /<PipelineBoard/.test(index) && /v-if="!boardOnly"/.test(index) && !/navigateTo\('\/board'\)/.test(index),
+  'a manager holds no gate and starts no run, so the queue under the board is not theirs')
 
 check('Settings is offered to every role',
   !/l\.to !== '\/settings' \|\| can\('configure'\)/.test(app),

@@ -104,7 +104,6 @@ const NAV_GROUPS: { key: string, label: string, links: { label: string, icon: st
   { key: 'operate', label: 'Operate', links: [
     { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
     { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
-    { label: 'Board', icon: 'i-lucide-gauge', to: '/board' },
     { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
     { label: 'Schedules', icon: 'i-lucide-calendar-clock', to: '/schedules' },
   ] },
@@ -134,9 +133,8 @@ const NAV_BY_ROLE: Record<string, string[]> = {
   developer: ['/', '/runs', '/agents', '/skills', '/commands'],
   qa: ['/', '/runs'],
   // A manager's screen is the board, not the run list with its buttons removed.
-  // '/' is absent on purpose: index.vue sends a manager straight to /board, so
-  // offering Dashboard here was advertising a page that refuses to be looked at.
-  manager: ['/board', '/runs'],
+  // The board is the top of the Dashboard, and for a manager the whole of it.
+  manager: ['/', '/runs'],
 }
 
 const navTop = computed(() => {

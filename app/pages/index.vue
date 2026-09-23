@@ -17,9 +17,9 @@ import { oversightFor } from '~~/shared/utils/oversight'
 const { me, can, role } = useUser()
 
 // A manager's only question — where is the pipeline stuck, how often does work
-// come back, what does it cost — is answered by /board with real figures. This
-// page was a weaker copy of it for them: no verbs, no gates they can answer.
-watch(role, (r) => { if (r === 'manager') navigateTo('/board') }, { immediate: true })
+// come back, what does it cost — is the board at the top. The queue and the
+// Recent list below it are verbs they do not hold, so for them the board is the page.
+const boardOnly = computed(() => role.value === 'manager')
 const { agents, fetchAll: fetchAgents } = useAgents()
 const { commands, fetchAll: fetchCommands } = useCommands()
 const { skills, fetchAll: fetchSkills } = useSkills()
@@ -275,7 +275,7 @@ const queueEmpty = computed(() => ({
   manager: 'Nothing open.',
   operator: 'No open gates, and nothing failing.',
 }[role.value ?? 'operator'] ?? 'Nothing waiting on you.'))
-const pageTitle = computed(() => (role.value === 'qa' ? 'Verification queue' : 'Your runs'))
+const pageTitle = computed(() => (role.value === 'qa' ? 'Verification queue' : boardOnly.value ? 'Pipeline' : 'Your runs'))
 // Not "Your runs" — that is the page's own title, and a section repeating its
 // page's heading says the section has no subject of its own.
 const minedTitle = computed(() => (role.value === 'qa' ? 'Runs you have decided on' : 'Recent'))
@@ -294,6 +294,12 @@ const minedEmpty = computed(() => (role.value === 'qa'
          matters more. -->
     <div class="page flex flex-col gap-6">
       <WelcomeOnboarding v-if="loaded && !hasContent" @created="(agent) => navigateTo(`/agents/${agent.slug}`)" />
+
+      <!-- No order class: order 0 keeps it above the form and the queue, which
+           swap between order-1 and order-2. A failed load is reported by the
+           queue, so the board stays out rather than showing zeros. -->
+      <PipelineBoard v-if="loaded && !loadError" :runs="runs" :show-gates="boardOnly" />
+      <p v-else-if="loadError && boardOnly" class="t-ui" style="color: var(--error);">Could not load runs: {{ loadError }} <button class="underline focus-ring" @click="refresh">Retry</button></p>
 
       <form v-if="can('startRun')" class="rounded-xl p-4 flex flex-wrap items-end gap-3" :class="attention.length || escalated.length ? 'order-2' : 'order-1'" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
         <div class="flex-1 min-w-[16rem]">
@@ -326,9 +332,9 @@ const minedEmpty = computed(() => (role.value === 'qa'
       </form>
 
       <!-- Needs attention -->
-      <section :class="attention.length || escalated.length ? 'order-1' : 'order-2'">
+      <section v-if="!boardOnly" :class="attention.length || escalated.length ? 'order-1' : 'order-2'">
         <div class="flex items-center gap-3 mb-2">
-          <!-- "Needs attention" is an alert system's passive voice. /board
+          <!-- "Needs attention" is an alert system's passive voice. The board
                already says "Waiting on a person"; this is the first-person form
                of the same idea. "Settled" is the codebase's word, not a reader's. -->
           <h2 class="text-section-label">Waiting on you <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
@@ -404,7 +410,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
            configuration, linking to four pages already in the sidebar — is gone.
            Nothing on a triage screen is decided by "31 commands", and it was a
            third of the page width below the primary action. -->
-      <div class="order-3">
+      <div v-if="!boardOnly" class="order-3">
         <section>
           <h2 class="text-section-label mb-2">{{ minedTitle }}</h2>
           <!-- Branches on the error, like the queue above it does. This said
