@@ -66,10 +66,23 @@ async function run(event?: H3Event): Promise<DispatchResult> {
       watch: 'direct-invocation',
       ticketKey: lead.ticketKey,
       ...(lead.productKey ? { productKey: lead.productKey } : {}),
-      // Never autoRun from a queue: the whole point is work a person can see
-      // and stop, and a queue that also ran every gate unattended would be the
-      // opposite of the control it was asked for.
-      autoRun: false,
+      // `autoRun` does NOT mean "run every gate unattended", which is what the
+      // comment that used to sit here assumed. The gate branch in
+      // workflowRunner never consults it: an `approval` step stops for a person
+      // either way, and shared/utils/oversight.ts decides whether it stops at
+      // all. All this flag controls is whether the runner continues from one
+      // wave to the next by itself (workflowRunner.ts:2291), and again after a
+      // gate has been answered (:2939).
+      //
+      // Off, a queued run therefore paused after EVERY wave and again after
+      // EVERY approval, each time with no question attached - so a person had
+      // to press Continue between steps and Approve at gates, and a run left
+      // between the two looked stranded rather than waiting. It is the same
+      // confusion that got the "Don't stop at gates" checkbox removed from the
+      // start form: a control that reads as the safeguard but is not it.
+      //
+      // The seven gates are the oversight. This is not, so it stays on.
+      autoRun: true,
       projectDir: lead.projectDir,
       startedBy: login,
     })
