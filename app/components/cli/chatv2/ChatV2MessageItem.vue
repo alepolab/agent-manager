@@ -655,6 +655,17 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
     <!-- Bash - Terminal style command display -->
     <template v-else-if="message.kind === 'tool_use' && isBash && bashCommand">
       <div class="space-y-1">
+        <!-- Intent first, mechanism second.
+             The description used to sit UNDER the terminal box, so a reader
+             scanning a long transcript met six wrapped lines of shell before
+             anything told them what it was for, and only learned the point
+             after they had already parsed the command. Agents write these
+             descriptions precisely so a person does not have to read the
+             command at all unless something looks wrong. -->
+        <p v-if="bashDescription" class="t-ui break-words" style="color: var(--text-secondary);">
+          {{ bashDescription }}
+        </p>
+
         <!-- Terminal box -->
         <div
           class="relative rounded-lg overflow-hidden"
@@ -668,16 +679,12 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             <UIcon name="i-lucide-terminal" class="size-2 md:size-2.5" style="color: white;" />
           </div>
 
-          <!-- Command -->
-          <div class="px-3 md:px-4 py-2 md:py-3 pl-8 md:pl-9 font-mono t-small md:t-small break-all" style="color: #9ece6a;">
+          <!-- break-words, not break-all: a shell command broken mid-token
+               cannot be read or copied back out with any confidence. -->
+          <div class="px-3 md:px-4 py-2 md:py-3 pl-8 md:pl-9 font-mono t-small md:t-small break-words whitespace-pre-wrap" style="color: #9ece6a;">
             <span style="color: #7aa2f7;">$</span> {{ bashCommand }}
           </div>
         </div>
-
-        <!-- Description -->
-        <p v-if="bashDescription" class="t-small px-1 italic break-words" style="color: var(--text-tertiary);">
-          {{ bashDescription }}
-        </p>
 
         <!-- Expandable output (if there's a result) -->
         <button

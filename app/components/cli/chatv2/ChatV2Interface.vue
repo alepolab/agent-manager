@@ -1678,8 +1678,18 @@ function handleClosePreview() {
           }"
           @scroll="handleMessagesScroll"
         >
-          <!-- Content column - grows with available space -->
-          <div class="max-w-[1200px] mx-auto px-4 py-4 space-y-4 min-h-full min-w-0">
+          <!-- Content column.
+               52rem, not 1200px: most of a transcript is prose and the old
+               measure ran well past the ~90 characters a line can be read at
+               without the eye losing its place on the return sweep. Code and
+               tool output scroll inside their own containers, so they are not
+               squeezed by this.
+               The flex spacer below is the whole trick for short sessions: it
+               eats the leftover height so two messages sit just above the
+               composer instead of stranded at the top of an empty screen, and
+               it collapses to nothing the moment the transcript overflows. -->
+          <div class="max-w-[52rem] mx-auto px-4 py-4 min-h-full min-w-0 flex flex-col gap-4">
+            <div class="flex-1 min-h-0" aria-hidden="true" />
             <!-- Welcome / Select State -->
             <div v-if="viewMode === 'live' && !isLiveChat && !currentSessionId" class="flex items-center justify-center h-full text-center">
               <div class="max-w-md px-6">
@@ -1757,12 +1767,19 @@ function handleClosePreview() {
           </div>
         </div>
 
-        <!-- Floating-style Controls (Thinking + Context) -->
-        <div 
+        <!-- The composer's toolbar: which model, what it may do without asking,
+             how hard it thinks, and how full the context is.
+             It used to float centre-stage over the transcript, so four
+             unlabelled pills hung in the middle of the screen with nothing
+             around them to say they belonged to the input below. Aligned left
+             on the same 52rem column as the messages and the composer, they
+             read as that composer's settings, which is what they are. -->
+        <div
           v-if="(isLiveChat || currentSessionId || (viewMode === 'history' && urlSessionId)) && !isLoadingHistoryWithDelay && !isCreatingSession"
-          class="absolute bottom-0 left-0 right-0 flex justify-center items-center gap-3 py-4 z-10"
-          style="background: linear-gradient(to top, var(--surface-base) 20%, transparent 100%); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);"
+          class="absolute bottom-0 left-0 right-0 z-10 flex justify-center pointer-events-none"
+          style="background: linear-gradient(to top, var(--surface-base) 45%, transparent 100%);"
         >
+          <div class="w-full max-w-[52rem] px-4 py-3 flex flex-wrap items-center gap-2 pointer-events-auto">
           <!-- Model Selector -->
           <ChatV2ModelSelector
             v-if="(viewMode === 'history' && urlSessionId) || (viewMode === 'live' && isLiveChat)"
@@ -1880,6 +1897,7 @@ function handleClosePreview() {
               </div>
             </div>
           </UTooltip>
+          </div>
         </div>
       </div>
 
