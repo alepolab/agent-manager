@@ -30,7 +30,7 @@
  *    do.
  */
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -77,6 +77,24 @@ const realExec: ExecLike = async (cmd, args) => {
 let injectedExec: ExecLike | null = null
 /** Test seam, matching stackLifecycle.setStackExec. */
 export function setDeployExec(fn: ExecLike | null) { injectedExec = fn }
+
+/**
+ * The applications this infra checkout can deploy, read the way deploy.sh
+ * reads them: one role per application under `roles/app_<name>`, with `_`
+ * spelled `-` in the flag. Empty when the directory cannot be read at all -
+ * an unreadable checkout must not turn into a claim that no app exists.
+ */
+export function availableApps(infraDir: string): string[] {
+  try {
+    return readdirSync(join(infraDir, 'deploy', 'ansible', 'roles'), { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name.startsWith('app_'))
+      .map(e => e.name.slice('app_'.length).replace(/_/g, '-'))
+      .sort()
+  }
+  catch {
+    return []
+  }
+}
 
 /** The secrets file configured for an environment, or null. Never a guess. */
 export function configuredSecrets(env: string): string | null {
@@ -157,13 +175,35 @@ export async function planDeploy(opts: {
     )
   }
 
+  // deploy.sh defaults APP to crm when no --app is given. That default is safe
+  // for a person who knows they left it out and catastrophic for a run that
+  // did: a PCRF ticket's deploy step would deploy CRM and report success. So
+  // the app is named or the deploy is refused, and it is checked against the
+  // roles this checkout actually has rather than against a list kept here.
+  const apps = availableApps(infraDir)
+  const app = opts.app?.trim() || ''
+  if (apps.length) {
+    if (!app) {
+      throw new DeployError(
+        `No application was named for this deploy, and deploy.sh would fall back to its own default rather than to this run's product. `
+        + `Name one of: ${apps.join(', ')}.`,
+      )
+    }
+    if (!apps.includes(app)) {
+      throw new DeployError(
+        `"${app}" is not an application this infra checkout deploys - it has no roles/app_${app.replace(/-/g, '_')}. `
+        + `It can deploy: ${apps.join(', ')}. Nothing was run, because the alternative is deploying a different product than the one asked for.`,
+      )
+    }
+  }
+
   const check = opts.check === true
   const requiresApproval = opts.env !== UNATTENDED_ENV
   const secrets = opts.secrets?.trim() || configuredSecrets(opts.env)
 
   // Flag order follows deploy.sh's own usage block.
   const args = ['--step', opts.step, '--env', opts.env]
-  if (opts.app) args.push('--app', opts.app)
+  if (app) args.push('--app', app)
   if (opts.limit) args.push('--limit', opts.limit)
   if (check) args.push('--check')
   if (secrets) args.push('--secrets', secrets)

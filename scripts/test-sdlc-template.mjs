@@ -82,9 +82,34 @@ assert.ok(cto, 'template must carry a CTO escalation step')
 assert.equal(cto.gateKind, undefined, 'the CTO gate must tier, not floor — it is an escalation, not a checkpoint')
 assert.equal(oversightForGate('docs', undefined), 'auto', 'a docs change must not stop at the CTO gate')
 
-// Release, deploy and rollback are deliberately absent: a run must stay
-// terminal at PR-open. See the template's own comment.
-assert.ok(!t.steps.some(s => s.deploy), 'release must not be wired into the run graph')
+// The environment stage drives both orchestration surfaces: the product's
+// compose stack and the infra repo's ansible entrypoint. Only dev may ever run
+// inside a run - staging and prod are refused in deployStep.ts before an
+// argument is assembled, and a template that quietly named one would be asking
+// for a carrier environment to be changed by an unattended pipeline.
+{
+  const deploys = t.steps.filter(s => s.deploy)
+  assert.equal(deploys.length, 1, 'exactly one step deploys, and it is the environment stage')
+  const [env] = deploys
+  assert.equal(env.deploy.env, 'dev', 'no run deploys anything but dev')
+  assert.equal(env.deploy.step, 'deploy', 'the environment stage brings dev to its declared state')
+  assert.equal(env.deploy.app, undefined,
+    'naming an app here would deploy that product for every ticket; the runner passes the run\'s own product')
+  assert.equal(env.stack, 'up', 'the same step owns the local compose stack')
+}
+
+// Release and rollback stay out: a run must stay terminal at PR-open. See the
+// template's own comment.
+assert.ok(!t.steps.some(s => /rollback|release/i.test(s.label)), 'release and rollback are not run steps')
+
+// The visual step needs the environment stage's facts, which are not its
+// immediate predecessor: with 'predecessors' it gets the implementation and no
+// address to open, and a visual check with no URL can only report NOT VERIFIED.
+{
+  const visual = t.steps.find(s => /visual/i.test(s.agentTemplateId))
+  assert.ok(visual, 'the full-lifecycle template must carry a visual step')
+  assert.equal(visual.contextMode, 'ancestors', 'the visual step must see the environment stage, not only the step before it')
+}
 
 // Exactly one step owns the tests, and it is not an implementation step.
 const unlocked = t.steps.filter(s => s.testsUnlocked).map(s => s.label)

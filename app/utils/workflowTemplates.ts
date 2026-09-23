@@ -200,6 +200,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'debug-investigator',
         label: 'Reproduce & Failing Test',
         next: ['pm-planner'],
+        // A defect is reproduced against the product RUNNING, so this step gets
+        // the stack - stood up by the runner from the infra repo's published
+        // contract, the same way every other workflow gets one, and never by an
+        // agent improvising a compose command. A run whose product registers no
+        // stack is told so and works without one; nothing is invented for it.
+        stack: 'up',
         // This step owns the tests, and only this step: it writes the failing
         // regression test that proves the defect, and the test-lock guardrail
         // then freezes tests for every step after it. Unlocking the implementer
@@ -534,12 +540,27 @@ export const workflowTemplates: WorkflowTemplate[] = [
     //     architecture and end-user personas are separate lanes that join at
     //     VERIFY, so each lens forms its finding without seeing the others'.
     //
-    // NOT WIRED HERE, deliberately: release, post-deploy verification and
-    // rollback. A run is a budgeted, container-owning process and a release is
-    // a calendar event spanning many tickets; holding a run open across one
-    // deadlocks the CI poller (which only inspects settled runs) and defers
-    // every teardown hung off a terminal status. Those phases belong to a
-    // separate, ticket-scoped record keyed by merged sha.
+    // The environment stage drives BOTH orchestration surfaces the estate has:
+    // the product's compose stack locally, and the infra repo's own ansible
+    // entrypoint against dev. `deploy.sh --step deploy --env dev` brings the
+    // dev environment to its declared state and is followed - by the runner,
+    // not by an agent - with the script's own `status` read, so a later step
+    // tests against a verified environment rather than an assumed one. dev is
+    // the only environment that runs unattended, which is the infra repo's own
+    // published rule; staging and prod stop at a gate in deployStep.ts before
+    // a single argument is assembled.
+    //
+    // What a dev deploy here IS: the environment brought to its declared image
+    // tags. What it is NOT: this run's branch - that is not built until CI
+    // builds it, and a step claiming otherwise would be claiming to test code
+    // that was never deployed.
+    //
+    // STILL NOT WIRED, deliberately: release and rollback. A run is a budgeted,
+    // container-owning process and a release is a calendar event spanning many
+    // tickets; holding a run open across one deadlocks the CI poller (which
+    // only inspects settled runs) and defers every teardown hung off a terminal
+    // status. Those phases belong to a separate, ticket-scoped record keyed by
+    // merged sha.
     steps: [
       // ---- Stage 1: intake and understanding -------------------------------
       // Every agentTemplateId appears exactly ONCE in this template. The
@@ -604,9 +625,14 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // ---- Stage 4-5: environment and baselines ------------------------------
       {
         agentTemplateId: 'tf-infra-engineer',
-        label: 'Stack Up & Environment Verification',
+        label: 'Stack Up, Dev Deploy & Environment Verification',
         next: ['debug-investigator'],
         stack: 'up',
+        // No `app`: the runner passes the run's own product, and deployStep.ts
+        // refuses an app the infra checkout has no ansible role for. Naming one
+        // here would deploy that product for every ticket, whatever the run is
+        // about - which is exactly the failure deploy.sh's own crm default has.
+        deploy: { env: 'dev', step: 'deploy' },
         contextMode: 'ancestors',
       },
       {
@@ -651,7 +677,12 @@ export const workflowTemplates: WorkflowTemplate[] = [
         agentTemplateId: 'visual-qa',
         label: 'UI, Visual & Accessibility Testing',
         next: ['persona-reviewer'],
-        contextMode: 'predecessors',
+        // `ancestors`, not `predecessors`: this step's address to open comes
+        // from the environment stage, which is not its immediate predecessor.
+        // With `predecessors` it saw the frontend implementation and nothing
+        // about the stack that implementation has to be viewed on - a visual
+        // check with no URL can only ever report NOT VERIFIED.
+        contextMode: 'ancestors',
       },
       {
         agentTemplateId: 'security-reviewer',

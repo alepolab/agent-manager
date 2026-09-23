@@ -168,5 +168,40 @@ const script = join(infra, 'deploy', 'ansible', 'deploy.sh')
   rmSync(noContract, { recursive: true, force: true })
 }
 
+// ---- the application is named, or nothing is deployed --------------------
+// deploy.sh defaults APP to crm when it is given none. That default is safe for
+// a person who knows they omitted it and catastrophic for a run that did: a
+// PCRF ticket's deploy step would deploy CRM and report success.
+{
+  const withRoles = mkdtempSync(join(tmpdir(), 'deploy-roles-'))
+  mkdirSync(join(withRoles, 'deploy', 'ansible', 'roles', 'app_crm'), { recursive: true })
+  mkdirSync(join(withRoles, 'deploy', 'ansible', 'roles', 'app_pcrf_server'), { recursive: true })
+  mkdirSync(join(withRoles, 'deploy', 'ansible', 'roles', 'preflight'), { recursive: true })
+  writeFileSync(join(withRoles, 'deploy', 'ansible', 'deploy.sh'), '#!/usr/bin/env bash\nVALID_ENVS="dev staging prod"\nVALID_STEPS="all setup deploy status logs down"\n')
+
+  await assert.rejects(
+    () => planDeploy({ infraDir: withRoles, env: 'dev', step: 'deploy' }),
+    (e) => {
+      assert.ok(e instanceof DeployError)
+      assert.match(e.message, /crm, pcrf-server/, 'the refusal lists what this checkout can deploy')
+      return true
+    },
+    'an unnamed app must be refused rather than silently defaulted',
+  )
+
+  await assert.rejects(
+    () => planDeploy({ infraDir: withRoles, env: 'dev', step: 'deploy', app: 'billing' }),
+    (e) => { assert.match(e.message, /roles\/app_billing/, 'and names the role that would have to exist'); return true },
+    'an app with no ansible role is refused',
+  )
+
+  // The roles directory IS the list, spelled the way the flag spells it.
+  const plan = await planDeploy({ infraDir: withRoles, env: 'dev', step: 'deploy', app: 'pcrf-server' })
+  assert.ok(plan.args.includes('--app'), `got ${JSON.stringify(plan.args)}`)
+  assert.equal(plan.args[plan.args.indexOf('--app') + 1], 'pcrf-server')
+
+  rmSync(withRoles, { recursive: true, force: true })
+}
+
 rmSync(infra, { recursive: true, force: true })
-console.log('deploy step: dev runs unattended, staging and prod need an answered gate, and no path or flag is invented')
+console.log('deploy step: dev runs unattended, staging and prod need an answered gate, the app is named or refused, and no path or flag is invented')
