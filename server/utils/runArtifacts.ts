@@ -487,6 +487,15 @@ export async function finalizeRunArtifacts(run: WorkflowRun): Promise<void> {
   // gap - something the bundle requires and this run did not produce - so it is
   // reported in the same place a reader already looks.
   if (owesAdversarialReport(run, merged)) contractMissing.push('adversarial')
+  // The same rule applied to the one verdict that was still prose. A run whose
+  // visual step completed without leaving a single image or trace has told a
+  // reviewer what the interface looks like and shown them nothing.
+  try {
+    const { visualEvidence, owesVisualEvidence } = await import('./evidenceContract.ts')
+    const visual = await visualEvidence(dir)
+    merged.visual = visual
+    if (owesVisualEvidence(run, visual)) contractMissing.push('visual evidence (a screenshot or a trace)')
+  } catch { /* counting evidence is never worth failing a run over */ }
   merged.contract_missing = contractMissing
   // The wider schema floor every run should meet, regardless of workflow —
   // see evidenceContract.ts's REQUIRED_CORE_KEYS doc comment for why this is
@@ -721,6 +730,18 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     // trace and no explanation twice, and the monitor called it exactly that:
     // "silence without explanation".
     `Browser surface: ${browserSurface(workspaceRootFor(startedBy)).summary}`,
+    '',
+    // Said here because the PR gate now enforces it, and a rule an agent meets
+    // only as a refusal at the ship step is a rule it pays for twice.
+    'Build and test in the product\'s own container, through the stack the runner',
+    'started for this run or the project\'s own container build target — `docker',
+    'compose -f <compose file> run --rm <service> <build command>`, a compose',
+    'build target, or `docker build`. A toolchain installed on this host is not',
+    'the one the product ships with, so a green host build proves nothing about',
+    'the artifact a customer runs, and the pull-request step refuses a change',
+    'whose only passing build ran on the host. Never start, stop or restart a',
+    'stack yourself and never run deploy.sh: the runner owns both, and what it',
+    'started is described in stack-facts.json in this directory.',
     ...(checkout ? [`Working checkout: ${checkout.dir}${checkout.branch ? ` on branch ${checkout.branch}` : ''}. This directory is a git worktree the runner made for this run, beside the clone and sharing its repository and remote, with the same done for every module repository nested under it: work here and only here, and leave the clone itself alone. Commit in the repository that owns the file you changed and only there; never switch branches, reset, rebase or push. The PR step pushes that branch and opens the pull request on that repository against the branch policy.${checkout.policy ? ` ${checkout.policy}` : ''}`] : []),
     '',
     // "It is not there" halted a whole run and was wrong. The provisioner
@@ -768,6 +789,9 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
       ...(product.multiRepo ? ['Multi-repo: yes. Every repo listed gets its own branch, commit and PR; plan.md must give a merge order and nothing merges until every PR in the set is approved.'] : []),
       `Branch policy: ${Object.entries(product.branches).map(([k, v]) => `${k}: ${v}`).join('; ')}`,
       `Stack: ${product.stack?.compose ?? 'not registered'} (${product.stack?.topology_default ?? '-'})`,
+      ...(product.stack?.urls?.length
+        ? [`Stack entry points: ${product.stack.urls.join(', ')} — registry facts, and the addresses a UI check opens. When the runner started the stack for this run, stack-facts.json in this directory carries what docker actually reported, including the ports it published.`]
+        : []),
       `Tests: ${Object.entries(product.tests).map(([k, v]) => `${k}: ${v}`).join('; ') || 'not registered'}`,
       ...(product.toolchain && Object.keys(product.toolchain).length
         ? [`Toolchain: ${Object.entries(product.toolchain).map(([k, v]) => `${k}=${v}`).join(' ')} — already set in your environment. Build with these; a build failure under a different one says nothing about this repository.`]

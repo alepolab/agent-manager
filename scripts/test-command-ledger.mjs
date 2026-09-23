@@ -24,7 +24,7 @@ process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'ledger-'))
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'ledger-runs-'))
 
 const {
-  parseToolLine, parseResultLine, isProjectBuild, sqlExecution, commandSegments,
+  parseToolLine, parseResultLine, isProjectBuild, isContainerBuild, sqlExecution, commandSegments,
   recordCommandLine, readCommandLedger, executionFacts, outcomeSwallowed, redactCommand,
 } = await import('../server/utils/commandLedger.ts')
 const { runArtifactsDir } = await import('../server/utils/runArtifacts.ts')
@@ -164,6 +164,42 @@ assert.equal(isProjectBuild('./scripts/gradle build'), false)
 assert.equal(isProjectBuild('tools/mvn verify'), false)
 assert.equal(isProjectBuild('./gradlew build'), true, 'the committed wrapper is the sanctioned way to build')
 assert.equal(isProjectBuild('/usr/bin/make'), true)
+
+// ── a build in the product's container, told apart from a build on this host ──
+// The PR gate refuses the second one, so the classification is load-bearing.
+for (const inContainer of [
+  'docker compose -f docker-compose.crm.yml --env-file .env run --rm crm gradle build',
+  'docker compose -f docker-compose.crm.yml build crm',
+  'docker build -t crm:test .',
+  'docker run --rm -v "$PWD":/w -w /w maven:3-eclipse-temurin-11 mvn -B test',
+  'podman run --rm gradle:8 gradle test',
+  'kubectl exec pod/crm -- mvn verify',
+]) assert.equal(isContainerBuild(inContainer), true, `should count as a container build: ${inContainer}`)
+
+for (const onHost of [
+  'gradle build',
+  './gradlew :subscriber-activity:test',
+  'mvn -B verify',
+  'npm run build',
+  'docker compose -f docker-compose.crm.yml config',
+  'docker ps',
+  'docker compose -f docker-compose.crm.yml logs crm',
+]) assert.equal(isContainerBuild(onHost), false, `should NOT count as a container build: ${onHost}`)
+
+// And the fact the gate reads follows the successful build, not any build.
+{
+  const hostThenContainer = [
+    { tool: 'Bash', command: 'gradle build', cwd: '/w/run', failed: false },
+  ]
+  assert.equal(executionFacts(hostThenContainer).builtInContainer, false, 'a host build alone is not a container build')
+  assert.equal(executionFacts([
+    ...hostThenContainer,
+    { tool: 'Bash', command: 'docker compose -f docker-compose.crm.yml run --rm crm gradle build', cwd: '/w/run', failed: false },
+  ]).builtInContainer, true, 'the container build that followed it is')
+  assert.equal(executionFacts([
+    { tool: 'Bash', command: 'docker compose -f docker-compose.crm.yml run --rm crm gradle build', cwd: '/w/run', failed: true },
+  ]).builtInContainer, false, 'a container build that FAILED proves nothing either')
+}
 
 // ── 9c. a module build is attributed to the module, not the parent ────────
 const { cwdOf } = await import('../server/utils/commandLedger.ts')

@@ -35,6 +35,12 @@ Each agent declares the skills it needs; those come from `.agents/skills/` and a
 
 Runs are persisted, survive server restarts, can be paused, stopped, restarted from any step with a note, or cloned. Budgets cap minutes and tokens per run.
 
+**The environment is the runner's job, and so is proving it.** A step that declares a stack gets one: the lifecycle is read from the infra repo's published contract (`agent/stack-contract.json`) rather than guessed, the compose stages run in the order that repo documents, and the runner then asks docker what is actually running. That answer — every service's state and healthcheck verdict, the ports it published, the entry points the registry names — is written to `stack-facts.json` in the run's artifacts and handed to the step, so a UI check has an address instead of an assumption. The same step drives `deploy/ansible/deploy.sh --step deploy --env dev` and follows it with the script's own `status` read; dev is the only environment that runs unattended, staging and prod are refused before an argument is assembled unless a person answered the gate and a secrets file is configured. Teardown happens when the run settles and never removes a volume. Every shipped workflow gets its environment this way, preflight checks the compose file and the ansible role before the first token is spent, and the stack guard hook denies an agent that tries to start, stop or deploy one itself.
+
+**Builds run in the product's container, not on the host.** The pull-request step refuses a change whose only passing build ran on this host: a toolchain installed here is not the one the product ships with, and a run once read 6,820 errors from the wrong JDK as a repository defect. `docker compose run --rm <service> <build command>`, a compose build target or `docker build` all satisfy it, and every step is told so in its own instructions rather than finding out at the gate. `AGENT_ALLOW_HOST_BUILD=1` is the explicit, logged way out for a product with no container build.
+
+**Visual verification is evidence, not prose.** The visual step drives `agent-browser` (shipped in the image, pointed at the image's chromium): accessibility snapshots to navigate cheaply, then a screenshot on disk that the agent opens with its own `Read` tool and describes — a modal covering a button and a spinner that never stopped are invisible to a DOM query. `meta.json` carries a `visual` block counted off the artifacts directory, and a visual step that completed without leaving an image or a trace is recorded as a gap in the evidence contract.
+
 **Runbook A: ticket to evidence-backed PR.** A markdown workflow at `.agents/workflows/runbook-a.md`, projected into the instance as a skill (the way `oma link` projects every oh-my-agent workflow into a Claude runtime). Its deliverable is the evidence bundle, not the diff. The steps, with the gates defined in `.agents/workflows/runbook-a/resources/phase-gates.md`:
 
 | Step | Produces |
@@ -146,13 +152,16 @@ All values are environment variables. Never write them into files in this repo.
 | `SLACK_WEBHOOK_URL` | One message per run transition to paused, completed, failed, stopped or interrupted. |
 | `CI_POLL_SECONDS`, `CI_POLLER_DISABLED` | Polling of `gh pr checks` on completed runs (default 60s). |
 | `AGENT_REGISTRY_PATH` | Override the product registry, otherwise read from the installed plugin. |
+| `ALEPO_INFRA_DIR` | The `alepo-dev-team-infra` checkout a run's stack and deploy come from (default `~/alepo-workspace/alepo-dev-team-infra`). Its `agent/stack-contract.json` supplies the compose file, the profile order and the environments `deploy.sh` accepts. |
+| `ALEPO_DEPLOY_SECRETS_<ENV>` | Path to the secrets file for a non-dev deploy, e.g. `ALEPO_DEPLOY_SECRETS_PROD`. Without it a staging or prod deploy is refused before ansible starts; no path is ever guessed. |
+| `AGENT_BROWSER_EXECUTABLE_PATH` | The browser `agent-browser` drives (set to the image's chromium by the Dockerfile). |
 | `TEAM_SEED_ON_BOOT=0` | Skip applying team standards at boot. |
 
 ## The alepo-engineering plugin
 
 `engineering/` is a Claude Code plugin marketplace with one plugin. It carries what the pipeline enforces and what it needs to route work:
 
-- `hooks/`: plan gate (no edits before `.agent/plan.md`), test lock (tests freeze once source changes), secrets guard (denies reading credential files and env dumps).
+- `hooks/`: plan gate (no edits before `.agent/plan.md`), test lock (tests freeze once source changes), secrets guard (denies reading credential files and env dumps), stack guard (denies agent-issued `compose up/down` and `deploy.sh` — the runner owns both; reads and in-container builds stay open).
 - `registry/products.yaml`: products grouped by suite, their repos, branches, stack profiles and test commands. Entries marked CONFIRM have unverified routing.
 - `registry/environments.yaml` and `registry/watches.yaml`: environment profiles, and the Jira queues a triage loop would read.
 - `recipes/*.md`: per-product stand-up and verification recipes.

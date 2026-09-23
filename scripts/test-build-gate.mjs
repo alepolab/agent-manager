@@ -27,9 +27,10 @@ process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'build-gate-runs-'))
 
 const { prEvidenceRefusal, runPrStep } = await import('../server/utils/prStep.ts')
 
-const nothingRan = { builtOk: false, buildFailed: false, buildCommands: [], sqlFilesExecuted: [] }
-const built = { builtOk: true, buildFailed: false, buildCommands: ['gradle build'], sqlFilesExecuted: [] }
-const failedBuild = { builtOk: false, buildFailed: true, buildCommands: ['gradle build'], sqlFilesExecuted: [] }
+const nothingRan = { builtOk: false, buildFailed: false, builtInContainer: false, buildCommands: [], sqlFilesExecuted: [] }
+const built = { builtOk: true, buildFailed: false, builtInContainer: true, buildCommands: ['docker compose -f docker-compose.crm.yml run --rm crm gradle build'], sqlFilesExecuted: [] }
+const failedBuild = { builtOk: false, buildFailed: true, builtInContainer: false, buildCommands: ['gradle build'], sqlFilesExecuted: [] }
+const hostBuild = { builtOk: true, buildFailed: false, builtInContainer: false, buildCommands: ['gradle build'], sqlFilesExecuted: [] }
 
 // ── 1. code with no build is refused, and the refusal says what it looked at ─
 const refusal = prEvidenceRefusal(['modules/subscriber-activity/src/Foo.java'], nothingRan)
@@ -94,4 +95,35 @@ assert.equal(forced.refused, undefined)
 assert.ok(forced.lines.some(l => l.includes('WARNING') && l.includes('AGENT_ALLOW_UNBUILT_PR')),
   'and the override is written into the run, not hidden')
 
-console.log('build gate: no build, no pull request; an unexecuted .sql does not ship; docs always do')
+// ── 6. a build on this host is not the product's build ──────────────────────
+// The toolchain here is not the one the product ships with: one real run read
+// 6,820 "AspectJ source level" errors from the wrong JDK as a repository
+// defect. The stack is already up from the infra repo's compose file, so the
+// product's own image is there to build in.
+{
+  const refusal = prEvidenceRefusal(['src/main/java/Fee.java'], hostBuild)
+  assert.ok(refusal, 'a host-only build must not become a pull request')
+  assert.match(refusal, /not in the product's own container/)
+  assert.match(refusal, /gradle build/, 'the refusal shows the command it judged')
+  assert.match(refusal, /AGENT_ALLOW_HOST_BUILD=1/, 'and names the explicit way out')
+
+  assert.equal(prEvidenceRefusal(['src/main/java/Fee.java'], built), null,
+    'the same change, built through the product\'s compose service, ships')
+
+  assert.equal(prEvidenceRefusal(['docs/runbook.md'], hostBuild), null,
+    'a docs-only change is not held to a container build either')
+
+  process.env.AGENT_ALLOW_HOST_BUILD = '1'
+  assert.equal(prEvidenceRefusal(['src/main/java/Fee.java'], hostBuild), null,
+    'the escape hatch works, and is not the default')
+  delete process.env.AGENT_ALLOW_HOST_BUILD
+
+  // A product with no container build still has to build SOMETHING: the host
+  // hatch must not become a way to ship an unbuilt change.
+  process.env.AGENT_ALLOW_HOST_BUILD = '1'
+  assert.ok(prEvidenceRefusal(['src/main/java/Fee.java'], nothingRan),
+    'allowing a host build never allows no build at all')
+  delete process.env.AGENT_ALLOW_HOST_BUILD
+}
+
+console.log('build gate: no build, no pull request; a host-only build does not ship; an unexecuted .sql does not ship; docs always do')

@@ -250,6 +250,9 @@ export function commandSegments(command: string): string[] {
     .filter(Boolean)
 }
 
+/** The binaries that ARE a build system, wherever they appear in a command. */
+const BUILD_TOOL = /^(gradlew?|mvnw?|maven|ant|make|cmake|sbt|cargo|go|npm|pnpm|yarn|bun|tsc|ng|vite|webpack|pytest|py\.test|tox|nox|python3?|dotnet|msbuild|xcodebuild|swift|composer|phpunit|rspec|rake|rubocop|bundle)$/
+
 /**
  * A build of a PROJECT, not of a handful of files.
  *
@@ -261,7 +264,20 @@ export function commandSegments(command: string): string[] {
  */
 export function isProjectBuild(command: string): boolean {
   return commandSegments(command).some((seg) => {
-    const [bin = '', ...args] = seg.split(/\s+/)
+    let [bin = '', ...args] = seg.split(/\s+/)
+    // A build INSIDE a container is still a build, and it is the one this
+    // estate asks for: `docker compose run --rm crm gradle build` names docker
+    // first and the build system fourth. Reading only the first word classified
+    // every containerised build as "no build ran" - which, with the container
+    // rule the pull-request gate now enforces, would have refused every change
+    // that followed the rule. The container preamble is skipped to the first
+    // token that IS a build tool, and the ordinary rules judge it from there.
+    if (/^(docker|podman|nerdctl|kubectl)$/.test(bin.replace(/^.*\//, ''))) {
+      const at = args.findIndex(a => BUILD_TOOL.test(a.replace(/^.*\//, '')))
+      if (at === -1) return bin.replace(/^.*\//, '') !== 'kubectl' && args[0] === 'build'
+      bin = args[at]!
+      args = args.slice(at + 1)
+    }
     // A build tool the run could have WRITTEN does not count. `./scripts/gradle`
     // is a file in the checkout the agent controls, and running it proves only
     // that the agent's own script exited 0 — the same defect as compiling six
@@ -294,6 +310,45 @@ export function isProjectBuild(command: string): boolean {
     if (name === 'composer') return /^(install|update|test)$/.test(args[0] ?? '')
     if (name === 'phpunit' || name === 'rspec' || name === 'rake' || name === 'rubocop') return true
     if (name === 'bundle') return args[0] === 'exec' && /^(rspec|rake|rubocop)$/.test(args[1] ?? '')
+    return false
+  })
+}
+
+/**
+ * A build that ran in the product's own container, rather than on whatever
+ * toolchain the host happens to have.
+ *
+ * The distinction is the one the runbook already states in words and nothing
+ * enforced: a JDK, a node version or a gradle plugin on this host is not the
+ * one the product ships with, so a green host build says nothing about the
+ * artifact a customer runs. It has already cost real runs - a module that
+ * builds under the host's JDK 17 and fails under the product's JDK 11 reads as
+ * a repository defect rather than as the wrong toolchain.
+ *
+ * A container build is one whose segment is driven by a container runtime:
+ * `docker build`, `docker run <image> gradle test`, `docker compose run|exec|build`,
+ * `podman ...`, or `kubectl exec ... -- mvn verify`. Anything else is the host,
+ * including a wrapper script in the checkout that may or may not use docker -
+ * this cannot read that script, and guessing is how a gate gets talked into
+ * accepting the thing it exists to reject.
+ */
+export function isContainerBuild(command: string): boolean {
+  return commandSegments(command).some((seg) => {
+    const [bin = '', ...args] = seg.split(/\s+/)
+    const name = bin.replace(/^.*\//, '')
+    if (!/^(docker|podman|nerdctl|kubectl)$/.test(name)) return false
+    if (name === 'kubectl') return args[0] === 'exec'
+    if (args[0] === 'build' || args[0] === 'run' || args[0] === 'exec') return true
+    // `docker compose <flags> <verb>`: the verb is the first word that is not a
+    // flag or a flag's value, and only the verbs that execute something count -
+    // `compose config` renders YAML and builds nothing.
+    if (args[0] !== 'compose') return false
+    const verbs = new Set(['build', 'run', 'exec', 'up'])
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i] ?? ''
+      if (a.startsWith('-')) { if (!a.includes('=')) i++; continue }
+      return verbs.has(a)
+    }
     return false
   })
 }
@@ -385,6 +440,9 @@ export interface ExecutionFacts {
   builtOk: boolean
   /** A project build that the tool reported as failing. */
   buildFailed: boolean
+  /** A build that succeeded AND ran through a container runtime, so the
+   *  toolchain was the product's own rather than this host's. */
+  builtInContainer: boolean
   /** Commands that reached a database client at all. */
   reachedDatabase: boolean
   /** Base filenames of .sql files that were actually fed to a database. */
@@ -405,7 +463,7 @@ export interface ExecutionFacts {
  */
 export function executionFacts(entries: CommandEntry[], within?: string): ExecutionFacts {
   const facts: ExecutionFacts = {
-    builtOk: false, buildFailed: false, reachedDatabase: false, sqlFilesExecuted: [], buildCommands: [],
+    builtOk: false, buildFailed: false, builtInContainer: false, reachedDatabase: false, sqlFilesExecuted: [], buildCommands: [],
   }
   const inScope = (e: CommandEntry) => {
     if (!within) return true
@@ -420,7 +478,10 @@ export function executionFacts(entries: CommandEntry[], within?: string): Execut
       // A success is only a success when the outcome is KNOWN and the shell did
       // not swallow it. Everything else leaves builtOk where it was: the gate
       // asks for proof, and "probably" is not proof.
-      else if (!e.unresolved && !outcomeSwallowed(e.command)) facts.builtOk = true
+      else if (!e.unresolved && !outcomeSwallowed(e.command)) {
+        facts.builtOk = true
+        if (isContainerBuild(e.command)) facts.builtInContainer = true
+      }
     }
     if (e.failed || e.unresolved) continue
     const sql = sqlExecution(e.command)

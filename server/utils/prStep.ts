@@ -121,7 +121,7 @@ const CODE_FILE = /\.(java|kt|scala|groovy|ts|tsx|js|jsx|vue|py|go|rb|php|cs|c|c
  */
 export function prEvidenceRefusal(
   changedFiles: string[],
-  facts: { builtOk: boolean, buildFailed: boolean, buildCommands: string[], sqlFilesExecuted: string[] },
+  facts: { builtOk: boolean, buildFailed: boolean, builtInContainer?: boolean, buildCommands: string[], sqlFilesExecuted: string[] },
 ): string | null {
   const code = changedFiles.filter(f => CODE_FILE.test(f))
   const sql = changedFiles.filter(f => /\.sql$/i.test(f))
@@ -137,6 +137,20 @@ export function prEvidenceRefusal(
     return `${code.length} source file(s) changed and nothing in this run proves they compile. ${ran}`
       + ' A pull request is a request for someone to merge code; this run cannot show the code builds.'
       + ' Run the product build in the checkout, or set AGENT_ALLOW_UNBUILT_PR=1 if the build genuinely cannot run here.'
+  }
+
+  // A build on this host is a build against this host's toolchain, which is not
+  // the one the product ships. The runbook has always said so in words; until
+  // now nothing read those words, and a run that compiled against whatever JDK
+  // the container happened to carry could open a pull request on the strength
+  // of it. The stack is already stood up from the infra repo's compose file, so
+  // the product's own image is there to build in.
+  if (code.length && facts.builtOk && facts.builtInContainer === false && process.env.AGENT_ALLOW_HOST_BUILD !== '1') {
+    return `${code.length} source file(s) changed and the only build that passed ran on this host, not in the product's own container: `
+      + `${facts.buildCommands.slice(0, 5).map(c => `\`${c}\``).join(', ')}.`
+      + ' A toolchain installed here is not the one the product ships with, so a green host build says nothing about the artifact a customer runs.'
+      + ' Build through the product\'s own image - `docker compose -f <the stack\'s compose file> run --rm <service> <build command>`, its compose build target, or `docker build` - and let that be the evidence.'
+      + ' If this product genuinely has no container build, set AGENT_ALLOW_HOST_BUILD=1 and say so in the run report.'
   }
 
   const unexecuted = sql.filter(f => !facts.sqlFilesExecuted.includes(f.replace(/^.*\//, '')))

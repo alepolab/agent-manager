@@ -26,6 +26,8 @@ import { agentRunsRoot } from './runArtifacts.ts'
 import { transitionReachable } from './jiraSteps.ts'
 import { credentialsFor } from './ticketNotifier.ts'
 import { agentEnvFor } from './agentCaller.ts'
+import { defaultInfraDir } from './stackRecipe.ts'
+import { availableApps } from './deployStep.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -42,6 +44,10 @@ export interface PreflightSteps {
   label: string
   jira?: { transition?: string }
   testsUnlocked?: boolean
+  /** This step has the runner bring the product's stack up. */
+  stack?: 'up'
+  /** This step drives the infra repo's deploy.sh. */
+  deploy?: { env: string, step: string, app?: string }
 }
 
 /** Below this, a run is one clone or one artifacts bundle away from a full disk. */
@@ -87,7 +93,15 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
   }
 
   const repos = run.product?.repos ?? []
-  const needsStack = steps.some(s => s.agentSlug === 'sdlc-stack-provisioner')
+  // What the STEPS declare, not who runs them. This asked for an agent named
+  // `sdlc-stack-provisioner`, which no workflow in this instance has had since
+  // the estate moved to the oh-my-agent agents - so every stack check below was
+  // silently skipped on the two templates that do stand a stack up, and a run
+  // learned its deployment compose file was missing from the stack step's own
+  // failure instead of from preflight. The legacy slug is still honoured for a
+  // workflow saved before the move.
+  const needsStack = steps.some(s => s.stack === 'up' || s.agentSlug === 'sdlc-stack-provisioner')
+  const deployStep = steps.find(s => s.deploy)
   const jiraTargets = steps.filter(s => s.jira?.transition).map(s => s.jira!.transition!)
   const unlockedStep = steps.find(s => s.testsUnlocked)
 
@@ -119,6 +133,34 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
         return existsSync(join(dir, file))
           ? { name: 'deployment compose', level: 'ok', detail: `${file} present in ${repo} on ${state.branch}` }
           : { name: 'deployment compose', level: 'fail', detail: `${repo} is on branch ${state.branch} and has no ${file}. Deploying from the product's own compose is not permitted, so the stack step would halt. Add it to the deployment repo, or check out a branch that has it.` }
+      })
+    }
+    // ── the ansible entrypoint a deploy step will drive, and the role it needs ──
+    // Both are facts on disk in the infra checkout. A run that finds out at the
+    // deploy step has already paid for every step before it, and deploy.sh
+    // defaults its app to crm rather than to this run's product.
+    if (deployStep) {
+      await guard('deploy entrypoint', async () => {
+        const infraDir = defaultInfraDir()
+        const script = join(infraDir, 'deploy', 'ansible', 'deploy.sh')
+        if (!existsSync(script)) {
+          return {
+            name: 'deploy entrypoint',
+            level: 'warn',
+            detail: `${script} is not on this host, so the ${deployStep.deploy!.env} deploy step will report that instead of deploying. Clone alepo-dev-team-infra there, or set ALEPO_INFRA_DIR.`,
+          }
+        }
+        const apps = availableApps(infraDir)
+        const app = deployStep.deploy!.app ?? run.product?.name ?? ''
+        if (!apps.length) return { name: 'deploy entrypoint', level: 'ok', detail: `${script} is present; its roles could not be listed, so the app is checked when the step runs.` }
+        return apps.includes(app)
+          ? { name: 'deploy entrypoint', level: 'ok', detail: `${script} deploys "${app}" to ${deployStep.deploy!.env} (roles/app_${app.replace(/-/g, '_')}).` }
+          : {
+              name: 'deploy entrypoint',
+              level: 'warn',
+              detail: `this workflow deploys to ${deployStep.deploy!.env}, and the infra repo has no ansible role for "${app || 'this run\'s product'}" - it deploys: ${apps.join(', ')}. `
+                + 'The deploy step will refuse rather than deploy a different product, and the rest of the run carries on.',
+            }
       })
     }
     // ── the product checkout, or a token to clone it with ──
