@@ -1626,6 +1626,14 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 {
   delete process.env.JIRA_POST_ENABLED
   const { setStackExec } = await import('../server/utils/stackLifecycle.ts')
+  // The stack step now VERIFIES what it started, and that check reads the
+  // daemon through a second module with its own seam. Stubbing only the
+  // lifecycle left verifyStack talking to real docker: the step hung on it and
+  // the run never settled inside waitForSettled's budget, which is what this
+  // suite reported rather than anything about the runner. stackHealth's seam
+  // says it plainly - "No test may reach the real daemon" - and it has to be
+  // taken up here for that to hold.
+  const { setStatusExec } = await import('../server/utils/stackHealth.ts')
   const infra = join(process.env.CLAUDE_DIR, 'infra')
   mkdirSync(infra, { recursive: true })
   writeFileSync(join(infra, '.env'), 'X=1\n')
@@ -1635,6 +1643,10 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 
   const commands = []
   setStackExec(async (cmd, args) => { commands.push(`${cmd} ${args.join(' ')}`); return '' })
+  // One running service, so verifyStack settles on the first poll instead of
+  // waiting out its budget. The shape is what `docker compose ps --format json`
+  // emits, because that is what parseStatus reads.
+  setStatusExec(async () => JSON.stringify([{ Service: 'zed', State: 'running', Health: 'healthy', ExitCode: 0, Publishers: [] }]))
 
   // A registry product whose stack points at that compose file.
   const registryDir = join(process.env.CLAUDE_DIR, 'registry')
@@ -1697,6 +1709,7 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
     'and told not to invent one, which is the behaviour this feature replaces')
 
   setStackExec(null)
+  setStatusExec(null)
   delete process.env.ALEPO_INFRA_DIR
   delete process.env.AGENT_REGISTRY_PATH
 }
