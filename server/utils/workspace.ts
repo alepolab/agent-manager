@@ -185,6 +185,19 @@ const gitRaw = async (cwd: string, args: string[]) =>
   (await execFileP('git', args, { cwd, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout
 const git = async (cwd: string, args: string[]) => (await gitRaw(cwd, args)).trim()
 
+/** Fetches `branch` and says whether origin has it. ensureRunBranch falls back
+ *  to HEAD for a branch the remote lacks, which is right for a module repo with
+ *  its own naming and wrong for a scan that was asked to read `develop`. */
+export async function remoteBranchExists(checkout: string, branch: string): Promise<boolean> {
+  try { await git(checkout, ['fetch', '--quiet', 'origin', branch]) } catch { /* decided below */ }
+  try { await git(checkout, ['rev-parse', '--verify', '--quiet', `origin/${branch}`]); return true } catch { return false }
+}
+
+/** Clones `owner/name` over HTTPS into `dest` with the given environment. */
+export async function cloneRepo(repo: string, dest: string, env: Record<string, string>): Promise<void> {
+  await execFileP('git', ['clone', '--quiet', `https://github.com/${repo}.git`, dest], { env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: '0' }, timeout: 600_000 })
+}
+
 /** The roots above keep `~` for display; filesystem work needs it expanded. */
 const expand = (p: string) => p.replace(/^~(?=\/|$)/, homedir())
 /** Where a product repo is expected for this developer: <their workspace>/<repo name>. */

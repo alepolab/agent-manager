@@ -15,11 +15,11 @@ import { resolveProduct, productByKey, productByRepo, registeredProductKeys } fr
 import { resolveModelMeta } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
-import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
+import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
+import { artifactsWritable, checkoutDirFor, cloneRepo, ensureRunBranch, findCheckout, remoteBranchExists } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 
 /**
@@ -2168,6 +2168,38 @@ function ensureRunCheckout(run: WorkflowRun): Promise<void> {
   return p
 }
 
+/**
+ * A run that names the branch it reads (a scan, via its `branch` parameter)
+ * gets its own worktree of that branch beside the product clone, cloning the
+ * product first if this host has never had it.
+ *
+ * Before this a scan read the shared clone on whatever branch it was left on -
+ * ase-crm's main, four months behind develop - and its own directory stayed
+ * empty, which is also what made every restart of it refuse.
+ */
+async function ensureBranchWorktree(run: WorkflowRun, base: string): Promise<void> {
+  const repo = run.product?.repos?.[0]
+  if (!repo) return
+  const clone = checkoutDirFor(repo, run.startedBy)
+  if (!existsSync(join(clone, '.git'))) await cloneRepo(repo, clone, await agentEnvFor(run.startedBy))
+  if (!await remoteBranchExists(clone, base)) {
+    throw new Error(`${repo} has no branch "${base}" on origin; set the run's branch parameter to one it has.`)
+  }
+  const branch = `scan/${run.id.slice(0, 8)}`
+  let worktrees: string[]
+  try {
+    worktrees = await ensureRunBranch(clone, branch, base)
+  } catch (err) {
+    throw new Error(`could not create the ${base} worktree for ${branch} beside ${clone}: ${err instanceof Error ? err.message : String(err)}. Resolve it (git worktree list / git worktree remove) and restart the run from its first step.`)
+  }
+  run.branch = branch
+  run.baseBranch = base
+  run.projectDir = worktrees[0] ?? clone
+  run.baseCommit = (await captureBaseline(run.projectDir)) ?? run.baseCommit
+  await saveRun(run)
+  log.info('run worktree ready', { runId: run.id, checkout: clone, worktree: run.projectDir, branch, base, reason: 'the run names its branch' })
+}
+
 async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // A run that has its worktree is left alone. One whose worktree is gone (a
   // developer ran `git worktree remove` after the PR merged, then restarted
@@ -2175,6 +2207,7 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // to the Claude config directory as cwd and every step ran in the wrong
   // place while the header still named the deleted path.
   if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
+  if (run.parameters?.branch?.trim() && !run.branch) return ensureBranchWorktree(run, run.parameters.branch.trim())
   const repoName = run.product?.repos?.[0]?.split('/').pop()
   const recordedClone = run.branch && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
   const checkout = (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
@@ -2250,6 +2283,7 @@ interface ResolvedStart {
   projectDir?: string
   ticketKey?: string
   workspace: string
+  parameters?: Record<string, string>
 }
 
 async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
@@ -2282,7 +2316,20 @@ async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
   // nobody dispatched still reads its own prompt: a person who typed a key
   // meant it.
   const ticketKey = opts.ticketKey ?? (opts.parentRunId ? undefined : opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1])
-  return { product, projectDir, ticketKey, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }) }
+  // A workflow that declares `branch` reads a branch of the product, and left
+  // blank that is the product's development branch from the registry - not
+  // whatever the shared clone happens to be on. The scans read ase-crm's main
+  // for a day that way: four months stale, while the work lands on develop.
+  // Filled in here, where the product is known, so the header, the worktree
+  // and the run record all state the same branch.
+  let parameters = opts.parameters
+  if (product && !parameters?.branch?.trim()) {
+    const declared = (await loadWorkflowSteps(opts.workflow.slug).catch(() => null))?.parameters
+    if (declared?.some(p => p.name === 'branch')) {
+      parameters = { ...parameters, branch: baseBranchFor(undefined, undefined, product.branches).base }
+    }
+  }
+  return { product, projectDir, ticketKey, parameters, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }) }
 }
 
 /** The run record's fields, shared by the start-now and queue-it paths so the
@@ -2302,7 +2349,7 @@ function newRunInput(opts: StartRunOpts, resolved: ResolvedStart) {
     watch: opts.watch,
     ticketKey: resolved.ticketKey,
     projectDir: resolved.projectDir,
-    parameters: opts.parameters,
+    parameters: resolved.parameters ?? opts.parameters,
     parentRunId: opts.parentRunId,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   }
