@@ -39,13 +39,13 @@ export default defineNuxtConfig({
 
   app: {
     head: {
-      title: 'Claude Code Agent Manager',
+      title: 'Alepo Agent Manager',
       htmlAttrs: { lang: 'en' },
       meta: [
         { name: 'description', content: 'Visual manager for Claude Code agents, commands, skills, and plugins. Configure AI assistants without touching the terminal.' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-        { name: 'theme-color', content: '#F7F8FA' },
-        { property: 'og:title', content: 'Agent Manager — Claude Code' },
+        { name: 'theme-color', content: '#F4F2F9' },
+        { property: 'og:title', content: 'Alepo Agent Manager — Claude Code' },
         { property: 'og:description', content: 'Visual manager for Claude Code agents, commands, skills, and plugins. Configure AI assistants without touching the terminal.' },
         { property: 'og:type', content: 'website' },
         { name: 'twitter:card', content: 'summary' },

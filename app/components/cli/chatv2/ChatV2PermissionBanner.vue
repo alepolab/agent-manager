@@ -35,7 +35,7 @@ function handleDeny() {
   <div
     v-if="permissions.length > 0"
     class="shrink-0 px-4 py-3 border-b flex flex-wrap items-center justify-between gap-4"
-    style="background: rgba(229, 169, 62, 0.1); border-color: var(--accent);"
+    style="background: rgba(var(--accent-rgb), 0.1); border-color: var(--accent);"
   >
     <div class="flex items-center gap-3 min-w-0">
       <UIcon name="i-lucide-shield-question" class="size-5 shrink-0" style="color: var(--accent);" />

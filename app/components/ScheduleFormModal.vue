@@ -163,7 +163,7 @@ async function onSave() {
 <template>
   <UModal :open="open" @update:open="emit('update:open', $event)">
     <template #content>
-      <div class="p-6 space-y-4 bg-overlay">
+      <div class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
         <h3 class="text-page-title">{{ isEditing ? 'Edit schedule' : 'New schedule' }}</h3>
 
         <form @submit.prevent="onSave">

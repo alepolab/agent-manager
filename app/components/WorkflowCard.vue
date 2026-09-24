@@ -43,7 +43,7 @@ function timeAgo(iso: string): string {
       <div class="flex items-start gap-3">
         <div
           class="size-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
-          style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.15);"
+          style="background: var(--accent-muted); border: 1px solid rgba(var(--accent-rgb), 0.15);"
         >
           <UIcon name="i-lucide-git-branch" class="size-4" style="color: var(--accent);" />
         </div>

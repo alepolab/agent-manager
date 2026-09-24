@@ -185,7 +185,7 @@ useUnsavedChanges(isDirty)
         <h1 class="t-body font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">
           {{ loading ? 'Loading...' : name }}
         </h1>
-        <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full" style="background: rgba(229, 169, 62, 0.1); color: var(--accent);">Unsaved</span>
+        <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full" style="background: rgba(var(--accent-rgb), 0.1); color: var(--accent);">Unsaved</span>
       </div>
       <div class="flex items-center gap-2">
         <ReadOnlyBadge v-if="!can('configure')" reason="changing an MCP server" />
@@ -549,7 +549,7 @@ useUnsavedChanges(isDirty)
 .field-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(229, 169, 62, 0.1);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.1);
 }
 .field-input:disabled {
   opacity: 0.5;

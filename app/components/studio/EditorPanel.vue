@@ -103,7 +103,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
             class="px-3 py-1.5 rounded-lg t-small font-medium transition-all"
             :style="{
               background: frontmatter.model === opt.value ? 'var(--accent-muted)' : 'var(--surface-raised)',
-              border: '1px solid ' + (frontmatter.model === opt.value ? 'rgba(229, 169, 62, 0.2)' : 'var(--border-subtle)'),
+              border: '1px solid ' + (frontmatter.model === opt.value ? 'rgba(var(--accent-rgb), 0.2)' : 'var(--border-subtle)'),
               color: frontmatter.model === opt.value ? 'var(--accent)' : 'var(--text-secondary)'
             }"
             @click="updateFrontmatter('model', opt.value)"
@@ -121,7 +121,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
             class="px-3 py-1.5 rounded-lg t-small font-medium transition-all"
             :style="{
               background: frontmatter.memory === opt.value ? 'var(--accent-muted)' : 'var(--surface-raised)',
-              border: '1px solid ' + (frontmatter.memory === opt.value ? 'rgba(229, 169, 62, 0.2)' : 'var(--border-subtle)'),
+              border: '1px solid ' + (frontmatter.memory === opt.value ? 'rgba(var(--accent-rgb), 0.2)' : 'var(--border-subtle)'),
               color: frontmatter.memory === opt.value ? 'var(--accent)' : 'var(--text-secondary)'
             }"
             @click="updateFrontmatter('memory', opt.value)"
@@ -141,14 +141,14 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
             class="flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition-all border text-left"
             :style="{
               background: frontmatter.tools?.includes(tool.value) ? 'var(--accent-muted)' : 'var(--surface-base)',
-              borderColor: frontmatter.tools?.includes(tool.value) ? 'rgba(229, 169, 62, 0.3)' : 'var(--border-subtle)',
+              borderColor: frontmatter.tools?.includes(tool.value) ? 'rgba(var(--accent-rgb), 0.3)' : 'var(--border-subtle)',
             }"
             @click="toggleTool(tool.value)"
           >
             <div 
               class="size-7 rounded-lg flex items-center justify-center shrink-0 transition-colors"
               :style="{ 
-                background: frontmatter.tools?.includes(tool.value) ? 'rgba(229, 169, 62, 0.1)' : 'var(--surface-raised)',
+                background: frontmatter.tools?.includes(tool.value) ? 'rgba(var(--accent-rgb), 0.1)' : 'var(--surface-raised)',
                 color: frontmatter.tools?.includes(tool.value) ? 'var(--accent)' : 'var(--text-tertiary)'
               }"
             >
@@ -245,7 +245,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
             class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all hover:border-accent/30 hover:shadow-sm group/skill" 
             style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
           >
-            <div class="size-8 rounded-lg flex items-center justify-center shrink-0 transition-colors group-hover/skill:bg-accent/10" style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.1);">
+            <div class="size-8 rounded-lg flex items-center justify-center shrink-0 transition-colors group-hover/skill:bg-accent/10" style="background: var(--accent-muted); border: 1px solid rgba(var(--accent-rgb), 0.1);">
               <UIcon name="i-lucide-sparkles" class="size-4" style="color: var(--accent);" />
             </div>
             <div class="flex-1 min-w-0">
