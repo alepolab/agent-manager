@@ -6,7 +6,8 @@ import { gateIsMine } from '~~/shared/utils/notifications'
 /**
  * A run's open decision: the question, whose it is, the evidence being
  * approved, and the answers. Moved out of WorkflowRunPanel unchanged so the run
- * stack can render it inside the card of the step that is waiting.
+ * stack can render it inside the card of the step that is waiting. Renders
+ * when a question is set, or the run is awaiting_review or paused.
  */
 const props = defineProps<{ run: WorkflowRun }>()
 const emit = defineEmits<{ respond: [reply: string], continue: [note?: string], reject: [note: string], rework: [stepId: string, note: string] }>()
@@ -20,7 +21,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 /** Gated on an artifact's entries: RunDecisionPanel owns both the question and the resume. */
 const reviewing = computed(() => props.run.status === 'awaiting_review')
 const isReply = computed(() => props.run.status === 'paused' && props.run.question?.kind === 'question')
-const shown = computed(() => !!props.run.question || reviewing.value)
+const shown = computed(() => !!props.run.question || reviewing.value || props.run.status === 'paused')
 
 const note = ref('')
 const canApprove = computed(() => !mustJustify.value || !!note.value.trim())
@@ -68,7 +69,7 @@ const askingLabel = computed(() => `${props.run.steps.find(s => s.stepId === pro
            the same size, inside a box built exactly like the two informational
            boxes above it — which is how the console's whole reason to exist came
            to look like a footnote. -->
-      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : askingLabel }}</div>
       <p class="t-head whitespace-pre-wrap" style="color: var(--text-primary);">{{ run.question.text }}</p>
       <p v-if="run.blastRadius" class="t-small mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
@@ -100,7 +101,7 @@ const askingLabel = computed(() => `${props.run.steps.find(s => s.stepId === pro
       :run="run"
     />
     <div v-else-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
-      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : askingLabel }}</div>
       <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
     </div>
     <textarea

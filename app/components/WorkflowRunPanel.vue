@@ -80,18 +80,19 @@ watch(() => expanded.value && liveFor(expanded.value).length, async () => {
         &larr; All runs ({{ runs.length }})
       </button>
       <NuxtLink v-if="!fullPage" :to="`/runs/${run.id}`" class="t-small text-label hover:underline shrink-0 focus-ring" title="Steps, live output and every evidence file, full screen">Full page &nearr;</NuxtLink>
-      </div>
-      <RunHeader :run="run" @note="(t) => emit('note', t)" @continue="emit('continue')" @stop="emit('stop')" @clone="emit('clone')" />
-      <RunGate
-        :run="run"
-        @respond="(r) => emit('respond', r)" @continue="(n) => emit('continue', n)"
-        @reject="(n) => emit('reject', n)" @rework="(s, n) => emit('rework', s, n)"
-      />
-      <details v-if="mayDrive && settledRun" class="t-small rounded-lg p-2" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-        <summary class="cursor-pointer focus-ring" style="color: var(--text-primary);">Run part of this again</summary>
-        <p class="text-label mt-1">Pick a step below and press its <span class="font-mono">↻</span> to run it again from there. Anything typed here is handed to that step as an instruction.</p>
-        <textarea v-model="note" rows="2" class="field-input w-full resize-none t-small mt-2" placeholder="Optional note for the step you restart, e.g. verify from inside the container only" aria-label="Note for the step you restart" />
-      </details>
+    </div>
+    <RunHeader :run="run" @note="(t) => emit('note', t)" @continue="emit('continue')" @stop="emit('stop')" @clone="emit('clone')" />
+    <RunGate
+      :run="run"
+      @respond="(r) => emit('respond', r)" @continue="(n) => emit('continue', n)"
+      @reject="(n) => emit('reject', n)" @rework="(s, n) => emit('rework', s, n)"
+    />
+    <details v-if="mayDrive && settledRun" class="t-small rounded-lg p-2" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+      <summary class="cursor-pointer focus-ring" style="color: var(--text-primary);">Run part of this again</summary>
+      <p class="text-label mt-1">Pick a step below and press its <span class="font-mono">↻</span> to run it again from there. Anything typed here is handed to that step as an instruction.</p>
+      <p v-if="run.steps.some(s => s.sessionId)" class="text-label mt-1">To ask a step's agent a question instead, use the speech bubble on its row — that continues the conversation in the session it already ran in, with everything it saw.</p>
+      <textarea v-model="note" rows="2" class="field-input w-full resize-none t-small mt-2" placeholder="Optional note for the step you restart, e.g. verify from inside the container only" aria-label="Note for the step you restart" />
+    </details>
 
     <!-- One row per agent. This is what the panel exists for. -->
     <div class="space-y-1">
