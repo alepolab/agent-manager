@@ -249,6 +249,21 @@ export async function productByKey(key: string): Promise<ProductMatch | undefine
   return reg && p ? productMatchFrom(key, p) : undefined
 }
 
+/**
+ * The product whose `repos` lists this owner/name, as a ProductMatch; undefined
+ * when no product claims it. Exact and case-insensitive: a repo name is an
+ * identifier, not text to word-match, and `word('crm')` matching inside
+ * "alepolab/ase-crm" is how a scan of ase-crm was filed against CRM.
+ */
+export async function productByRepo(repo: string): Promise<ProductMatch | undefined> {
+  const reg = await loadRegistry()
+  const want = repo.trim().toLowerCase()
+  if (!reg || !want) return undefined
+  const hit = Object.entries(reg.products)
+    .find(([, p]) => Array.isArray(p?.repos) && p.repos.some((r: unknown) => String(r).toLowerCase() === want))
+  return hit ? productMatchFrom(hit[0], hit[1]) : undefined
+}
+
 /** Every registered product key, for a message that has to name them. */
 export async function registeredProductKeys(): Promise<string[]> {
   const reg = await loadRegistry()

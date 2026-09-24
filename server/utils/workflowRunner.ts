@@ -11,7 +11,7 @@ import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } f
 import type { Role } from '../../shared/types/role.ts'
 import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, toWorkflowLike, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
-import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
+import { resolveProduct, productByKey, productByRepo, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
@@ -2260,10 +2260,14 @@ async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
   // Resolved once, before any agent runs, and carried on the run: agents are
   // handed registry facts rather than asked to guess which product this is.
   // Named by the caller (a smoke sweep knows which product it is testing), else
-  // resolved from the prompt's ticket key, labels and component words.
+  // by the repository a scan was pointed at, else resolved from the prompt's
+  // ticket key, labels and component words. The repo comes before the words
+  // because it is exact: "alepolab/ase-crm" word-matches the `crm` product.
+  const repo = opts.parameters?.repo?.trim()
   const product = opts.productKey
     ? await productByKey(opts.productKey)
-    : await resolveProduct(opts.initialPrompt).catch(() => undefined)
+    : (repo && await productByRepo(repo).catch(() => undefined))
+      || await resolveProduct(opts.initialPrompt).catch(() => undefined)
   if (opts.productKey && !product) throw new Error(`Unknown product "${opts.productKey}"; registered: ${(await registeredProductKeys()).join(', ')}`)
   // The checkout a product-routed run works in, when it is already on this
   // instance: then the baseline, the dirty-tree facts and the run branch all
