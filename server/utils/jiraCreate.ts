@@ -198,7 +198,13 @@ function customValues(fields: Record<string, unknown>, schema: CreateSchema | nu
   const byName = new Map((schema?.required ?? []).map(f => [f.name.toLowerCase(), f.id]))
   const byId = new Map((schema?.required ?? []).map(f => [f.id, f]))
   const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(raw)) {
+  for (const [k, given] of Object.entries(raw)) {
+    // A drafter that echoes the schema writes `{ type, value }` rather than the
+    // value. Sent as-is, Jira refused every Bug of a real run: the object is
+    // neither ADF nor a number. Unwrapped here; `option` re-wraps it below.
+    const v = given && typeof given === 'object' && !Array.isArray(given) && 'value' in given
+      ? (given as { value: unknown }).value
+      : given
     if (v === undefined || v === null || v === '') continue
     const id = byName.get(k.trim().toLowerCase()) ?? k
     out[id] = shapeFor(v, byId.get(id))
@@ -399,6 +405,31 @@ export async function recordCreatedTickets(runId: string, outcomes: CreateOutcom
   ])
 }
 
+/** Where the drafting step writes the full drafts a gate then sorts. */
+const TICKET_DRAFTS_FILE = 'ticket-drafts.json'
+
+/**
+ * Fills each entry that names a `draft_id` with the rest of that draft from
+ * ticket-drafts.json, in place. What the entry states wins - the gate's verdict,
+ * an edited summary - and only what it left out is taken from the draft.
+ *
+ * The gate is told to copy each draft whole and add its verdict. A resumed gate
+ * wrote id, summary and verdict alone, and all seven creates failed on a
+ * missing project and issue type that the drafts file held all along. Copying
+ * fifty kilobytes faithfully is the runner's job, not a model's.
+ */
+async function completeFromDrafts(runId: string, entries: Record<string, unknown>[]): Promise<void> {
+  if (!entries.some(e => typeof e.draft_id === 'string' && !e.fields)) return
+  const drafts = await readArtifactEntries(runId, TICKET_DRAFTS_FILE)
+  if (!drafts || 'error' in drafts) return
+  const byId = new Map(drafts.entries.filter(d => typeof d.draft_id === 'string').map(d => [d.draft_id as string, d]))
+  for (const entry of entries) {
+    const draft = typeof entry.draft_id === 'string' ? byId.get(entry.draft_id) : undefined
+    if (!draft) continue
+    for (const [k, v] of Object.entries(draft)) if (entry[k] === undefined) entry[k] = v
+  }
+}
+
 /**
  * Creates an issue per entry of `source`, writes the stamped entries back, and
  * records the keys.
@@ -413,6 +444,7 @@ export async function createFromArtifact(run: WorkflowRun, source: string, fetch
   if (read === null) return `Created nothing: ${source} was not written.`
   if ('error' in read) return `Created nothing: ${read.error}.`
   if (!read.entries.length) return `Created nothing: ${source} holds no entries.`
+  await completeFromDrafts(run.id, read.entries)
 
   const outcomes = await createIssuesFrom(run, read.entries.map((entry, index) => ({ index, entry })), fetchImpl)
   await writeArtifactJson(run.id, source, read.entries)
