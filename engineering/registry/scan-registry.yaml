@@ -1,0 +1,52 @@
+# Scan Registry — repositories and per-scan-type schedules
+#
+# Each entry under `repositories` names a repo and the scan types enabled for it.
+# Each scan type can override the default schedule.
+# Schedules use cron syntax (UTC). Set `enabled: false` to disable a scan type.
+
+defaults:
+  jira_project: CSUP
+  max_concurrent_pipelines: 2
+
+scan_types:
+  security:
+    description: OWASP vulnerabilities, dependency CVEs, secrets, injection vectors
+    scanner: sdlc-scanner-security
+    default_schedule: "0 2 */3 * *"
+  functional:
+    description: Static analysis, compiler warnings, failing tests
+    scanner: sdlc-scanner-functional
+    default_schedule: "0 3 */2 * *"
+  tech-debt:
+    description: Anti-patterns, code smells, TODO/FIXME/HACK comments
+    scanner: sdlc-scanner-tech-debt
+    default_schedule: "0 4 */7 * *"
+  test-gaps:
+    description: Missing unit tests, low coverage files, skipped tests
+    scanner: sdlc-scanner-test-gaps
+    default_schedule: "0 5 */3 * *"
+  e2e:
+    description: Missing end-to-end test scenarios for critical user flows
+    scanner: sdlc-scanner-e2e
+    default_schedule: "0 6 */7 * *"
+  ui:
+    description: Visual regressions, accessibility violations, broken layouts
+    scanner: sdlc-scanner-ui
+    default_schedule: "0 7 */7 * *"
+  performance:
+    description: N+1 queries, unbounded loops, missing indexes, memory leaks
+    scanner: sdlc-scanner-performance
+    default_schedule: "0 8 */5 * *"
+
+repositories: []
+  # - name: alepolab/crm
+  #   path: /opt/checkouts/crm
+  #   jira_project: CRM
+  #   scans:
+  #     security: { enabled: true, schedule: "0 1 * * *" }
+  #     functional: { enabled: true }
+  #     tech-debt: { enabled: true }
+  #     test-gaps: { enabled: true }
+  #     e2e: { enabled: true }
+  #     ui: { enabled: false }
+  #     performance: { enabled: true }

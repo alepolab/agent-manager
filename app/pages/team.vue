@@ -56,6 +56,7 @@ const loading = ref(true)
 const syncing = ref<string | null>(null)
 const error = ref<string | null>(null)
 const toast = useToast()
+const { can } = useUser()
 
 async function refresh() {
   loading.value = true
@@ -128,7 +129,8 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
   <div>
     <PageHeader title="Team">
       <template #right>
-        <UButton label="Apply team standards" icon="i-lucide-refresh-cw" size="sm" :loading="syncing === 'all'" :disabled="!status || status.drifted === 0 || !!syncing" @click="apply()" />
+        <ReadOnlyBadge v-if="!can('configure')" reason="applying team standards" />
+        <UButton v-if="can('configure')" label="Apply team standards" icon="i-lucide-refresh-cw" size="sm" :loading="syncing === 'all'" :disabled="!status || status.drifted === 0 || !!syncing" @click="apply()" />
       </template>
     </PageHeader>
     <div class="px-6 py-4 space-y-5 max-w-5xl">
@@ -190,7 +192,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
               <NuxtLink v-if="r.to" :to="r.to" class="font-mono truncate focus-ring underline" :title="`Open ${r.label}`">{{ r.label }}</NuxtLink>
               <span v-else class="font-mono truncate">{{ r.label }}</span>
               <span :style="{ color: color(r.state) }">{{ r.state }}</span>
-              <UButton size="xs" variant="ghost" color="neutral" class="ml-auto" :label="r.state === 'drifted' ? 'Apply team version' : 'Add'" :loading="syncing === r.key" :disabled="!!syncing" @click="apply([r.key])" />
+              <UButton v-if="can('configure')" size="xs" variant="ghost" color="neutral" class="ml-auto" :label="r.state === 'drifted' ? 'Apply team version' : 'Add'" :loading="syncing === r.key" :disabled="!!syncing" @click="apply([r.key])" />
             </div>
             <details v-if="r.diff" class="mt-1 ml-[4.75rem]">
               <summary class="t-small text-label cursor-pointer focus-ring">What differs</summary>
@@ -280,7 +282,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <span v-if="c.git" class="text-label font-mono truncate">{{ c.branch }} @ {{ c.head }}</span>
             <span v-else class="text-label">not a git checkout</span>
             <span class="ml-auto whitespace-nowrap" :style="{ color: c.dirty ? 'var(--warning)' : 'var(--success)' }">{{ c.dirty ? `${c.dirty} uncommitted` : 'clean' }}</span>
-            <UButton v-if="c.git && c.dirty" size="xs" variant="ghost" color="neutral" :loading="stashing === c.path" label="Park changes" @click="stash(c)" />
+            <UButton v-if="c.git && c.dirty && can('configure')" size="xs" variant="ghost" color="neutral" :loading="stashing === c.path" label="Park changes" @click="stash(c)" />
           </div>
           <details v-if="c.dirty" class="mt-0.5">
             <summary class="t-small text-label cursor-pointer focus-ring">Changed files</summary>
@@ -292,7 +294,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
       <div v-if="status" :class="[card, 't-small']" :style="cardStyle">
         <div class="font-medium mb-2" style="color: var(--text-primary);">This instance</div>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1">
-          <div><span class="text-label">Sign-in</span><div>{{ status.instance.auth === 'github' ? `GitHub, ${status.instance.githubOrg}` : 'disabled (local)' }}</div></div>
+          <div><span class="text-label">Sign-in</span><div>{{ status.instance.auth === 'github' ? `GitHub, ${status.instance.githubOrg}` : 'disabled (local)' }} <NuxtLink to="/roles" class="text-label underline focus-ring">roles</NuxtLink></div></div>
           <div><span class="text-label">Jira</span><div>{{ status.instance.jiraRead ? 'reads tickets' : 'not configured' }}{{ status.instance.jiraPost ? ', posts outcomes' : '' }} <NuxtLink to="/profile" class="text-label underline focus-ring">your credentials</NuxtLink></div></div>
           <div><span class="text-label">Slack</span><div>{{ status.instance.slack ? 'notifies' : 'off' }}</div></div>
           <div><span class="text-label">CI poller</span><div>{{ status.instance.ciPoller ? 'on' : 'off' }}</div></div>

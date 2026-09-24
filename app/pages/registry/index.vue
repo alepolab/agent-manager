@@ -13,6 +13,7 @@ import type { Problem } from '~~/shared/registry/rules'
 
 const { registry, loading, error, load, validate, importProducts } = useProducts()
 const toast = useToast()
+const { can } = useUser()
 
 onMounted(() => load())
 useAutoRefresh(() => (checking.value ? null : load({ silent: true })))
@@ -96,8 +97,9 @@ const sourceLabel = computed(() => ({
   <div>
     <PageHeader title="Products" subtitle="What a ticket routes to: repos, branch policy, stack profile and test commands.">
       <template #right>
-        <UButton label="Check the registry" icon="i-lucide-shield-check" size="sm" variant="soft" :loading="checking" @click="runValidate" />
-        <UButton label="Add product" icon="i-lucide-plus" size="sm" to="/registry/new" />
+        <ReadOnlyBadge v-if="!can('configure')" reason="editing the registry" />
+        <UButton v-if="can('configure')" label="Check the registry" icon="i-lucide-shield-check" size="sm" variant="soft" :loading="checking" @click="runValidate" />
+        <UButton v-if="can('configure')" label="Add product" icon="i-lucide-plus" size="sm" to="/registry/new" />
       </template>
     </PageHeader>
 

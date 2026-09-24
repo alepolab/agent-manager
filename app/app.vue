@@ -72,7 +72,7 @@ onMounted(async () => {
   initialized.value = true
   if (isLogin.value) return
   if (!settings.value) void loadSettings()
-  void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers()])
+  void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers(), fetchRunsAwaiting()])
 })
 
 // The shared lists live here, so pages that only read them don't refetch them too.
@@ -80,29 +80,47 @@ onMounted(async () => {
 const canRefresh = () => initialized.value && claudeDirExists.value && !isLogin.value
 useAutoRefresh(() => canRefresh() && Promise.all([
   fetchAgents({}, { silent: true }), fetchCommands({}, { silent: true }), fetchPlugins({ silent: true }),
-  fetchWorkflows({}, { silent: true }), fetchServers({ silent: true }),
+  fetchWorkflows({}, { silent: true }), fetchServers({ silent: true }), fetchRunsAwaiting(),
 ]))
 useAutoRefresh(() => canRefresh() && fetchSkills({}, { silent: true }), { interval: 0 })
 
 const { settings, load: loadSettings } = useSettings()
+const { count: runsAwaiting, fetchAll: fetchRunsAwaiting } = useRunsAwaiting()
 const { me, signOut, can, role, viewingAs, viewAs } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
-const labs = computed(() => settings.value?.agentManager?.labs === true)
-const navTopAll = [
-  { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
-  { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
-  { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
-  { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
-  { label: 'Board', icon: 'i-lucide-gauge', to: '/board' },
-  { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
-  { label: 'Products', icon: 'i-lucide-boxes', to: '/registry' },
-  { label: 'Schedules', icon: 'i-lucide-calendar-clock', to: '/schedules' },
-  { label: 'Team', icon: 'i-lucide-users', to: '/team' },
-  { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
-  { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },
-  { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins' },
-  { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp' },
-  { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
+// Per-developer, set on /profile: wanting to look at Graph or Explore is a
+// preference, and the instance-wide switch it replaced lived on a page three
+// of the four roles could not open, so nobody else could even find out it existed.
+const labs = computed(() => me.value?.profile?.labs === true)
+/**
+ * Three jobs, not one list of fourteen. Operating the pipeline and authoring
+ * the things it runs are different work at different frequencies, and they were
+ * interleaved: Runs, Board, Watches, Products and Schedules sat between
+ * Workflows and Commands. Grouping also makes a narrowed sidebar read as
+ * designed rather than truncated - a role drops whole groups instead of
+ * leaving gaps in a flat list.
+ */
+const NAV_GROUPS: { key: string, label: string, links: { label: string, icon: string, to: string }[] }[] = [
+  { key: 'operate', label: 'Operate', links: [
+    { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
+    { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
+    { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
+    { label: 'Schedules', icon: 'i-lucide-calendar-clock', to: '/schedules' },
+  ] },
+  { key: 'build', label: 'Build', links: [
+    { label: 'Agents', icon: 'i-lucide-cpu', to: '/agents' },
+    { label: 'Workflows', icon: 'i-lucide-git-branch', to: '/workflows' },
+    { label: 'Commands', icon: 'i-lucide-terminal', to: '/commands' },
+    { label: 'Skills', icon: 'i-lucide-sparkles', to: '/skills' },
+    { label: 'Plugins', icon: 'i-lucide-puzzle', to: '/plugins' },
+    { label: 'MCP Servers', icon: 'i-lucide-server', to: '/mcp' },
+  ] },
+  { key: 'instance', label: 'Instance', links: [
+    { label: 'Products', icon: 'i-lucide-boxes', to: '/registry' },
+    { label: 'Team', icon: 'i-lucide-users', to: '/team' },
+    { label: 'Roles', icon: 'i-lucide-shield', to: '/roles' },
+    { label: 'Output Styles', icon: 'i-lucide-palette', to: '/output-styles' },
+  ] },
 ]
 
 /**
@@ -115,15 +133,19 @@ const NAV_BY_ROLE: Record<string, string[]> = {
   developer: ['/', '/runs', '/agents', '/skills', '/commands'],
   qa: ['/', '/runs'],
   // A manager's screen is the board, not the run list with its buttons removed.
-  manager: ['/', '/board', '/runs'],
+  // The board is the top of the Dashboard, and for a manager the whole of it.
+  manager: ['/', '/runs'],
 }
 
 const navTop = computed(() => {
   const allowed = role.value ? NAV_BY_ROLE[role.value] : undefined
-  return navTopAll
-    .filter(l => labs.value || l.to !== '/output-styles')
-    // No role entry means operator: the full sidebar, exactly as before.
-    .filter(l => !allowed || allowed.includes(l.to))
+  return NAV_GROUPS
+    .map(g => ({ ...g, links: g.links
+      .filter(l => labs.value || l.to !== '/output-styles')
+      // No role entry means operator: the full sidebar, exactly as before.
+      .filter(l => !allowed || allowed.includes(l.to)) }))
+    // A labelled group with nothing under it is worse than no group.
+    .filter(g => g.links.length > 0)
 })
 
 /** Reload everything the sidebar counts after onboarding finishes.
@@ -151,13 +173,15 @@ const navMid = computed(() => navMidAll.filter(l => l.key !== 'cli' || can('conf
 const navBottomAll = [
   { label: 'Explore', icon: 'i-lucide-compass', to: '/explore' },
   { label: 'Graph', icon: 'i-lucide-workflow', to: '/graph' },
-  { label: 'Settings', icon: 'i-lucide-settings', to: '/settings' },
+  { label: 'Settings', icon: 'i-lucide-settings', to: '/settings/pipeline' },
 ]
-// Settings is configuration, so it goes with the rest of it: only an operator
-// is offered it, and /api/settings refuses the write regardless.
+// Settings is offered to everyone now. Its reads were always open — only the
+// writes are gated — and the values on it are what a developer or a manager
+// actually came for: which model runs the pipeline, what a run may spend,
+// where evidence lands. Each page renders its controls only under `configure`,
+// and /api/settings refuses the write regardless.
 const navBottom = computed(() => navBottomAll
-  .filter(l => labs.value || !['/explore', '/graph'].includes(l.to))
-  .filter(l => l.to !== '/settings' || can('configure')))
+  .filter(l => labs.value || !['/explore', '/graph'].includes(l.to)))
 
 function isActive(to: string) {
   if (to === '/') return route.path === '/'
@@ -166,6 +190,9 @@ function isActive(to: string) {
 }
 
 function badgeFor(to: string) {
+  // The one badge that means "waiting on you". Everything below it counts
+  // inventory, which is why this one is coloured differently in the template.
+  if (to === '/runs') return runsAwaiting.value || null
   if (to === '/agents') return agents.value.length || null
   if (to === '/commands') return commands.value.length || null
   if (to === '/skills') return skills.value.length || null
@@ -252,9 +279,18 @@ function badgeFor(to: string) {
 
         <!-- Primary Nav -->
         <nav class="flex-1 pt-1 space-y-0.5 overflow-y-auto" :class="sidebarCollapsed ? 'px-1.5' : 'px-2.5'">
-          <!-- Top Section -->
+          <!-- Top Section, grouped. The link markup below is unchanged: only the
+               wrapping v-for and the group label are new, so collapsed
+               icon-only mode, the active bar and the badges behave as before. -->
+          <template v-for="group in navTop" :key="group.key">
+          <div
+            v-if="!sidebarCollapsed"
+            class="t-label px-3 pt-2 pb-0.5 select-none"
+            style="color: var(--text-disabled); font-family: var(--font-sans);"
+          >{{ group.label }}</div>
+          <div v-else class="my-2 mx-1" style="border-top: 1px solid var(--border-subtle);" />
           <NuxtLink
-            v-for="link in navTop"
+            v-for="link in group.links"
             :key="link.to"
             :to="link.to"
             class="nav-item group flex items-center rounded-lg t-ui transition-all duration-150 relative focus-ring"
@@ -281,12 +317,14 @@ function badgeFor(to: string) {
               <span
                 v-if="badgeFor(link.to)"
                 class="font-mono t-small tabular-nums transition-colors duration-150"
-                :style="{ color: isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
+                :style="{ color: link.to === '/runs' ? 'var(--warning)' : isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
+                :title="link.to === '/runs' ? 'Runs waiting on you' : undefined"
               >
                 {{ badgeFor(link.to) }}
               </span>
             </template>
           </NuxtLink>
+          </template>
 
           <!-- Separator 1 -->
           <div class="my-3" :class="sidebarCollapsed ? 'mx-1' : 'mx-2'" style="border-top: 1px solid var(--border-subtle);" />
@@ -401,25 +439,32 @@ function badgeFor(to: string) {
              On `realRole`, never `can('configure')`: the moment you view as a
              developer you lose `configure`, so a control gated on it would
              disappear and strand you in the role you were inspecting.
-             Lives here rather than on the dashboard because it is an occasional
-             operator tool that was occupying the best line of the busiest page,
-             and because a gate or a run list is often what you want to inspect. -->
-        <div v-if="me?.realRole === 'operator' && !sidebarCollapsed" class="px-2.5 pb-1">
-          <div class="t-label mb-1" style="color: var(--text-disabled);">View as</div>
-          <div class="flex rounded-lg overflow-hidden" style="border: 1px solid var(--border-subtle);">
+             A dropdown rather than a four-button row because the row was
+             `!sidebarCollapsed` — so the one control for checking what a
+             developer sees vanished on exactly the narrow screen where you
+             would most want to check a layout. -->
+        <div v-if="me?.realRole === 'operator'" :class="sidebarCollapsed ? 'px-1.5 pb-1' : 'px-2.5 pb-1'">
+          <UDropdownMenu
+            :items="[[
+              { label: 'You (operator)', onSelect: () => switchRole('operator') },
+              { label: 'Developer', onSelect: () => switchRole('developer') },
+              { label: 'QA', onSelect: () => switchRole('qa') },
+              { label: 'Manager', onSelect: () => switchRole('manager') },
+            ]]"
+          >
             <button
-              v-for="r in ['operator', 'developer', 'qa', 'manager']" :key="r"
-              class="flex-1 py-1 t-label focus-ring transition-colors"
-              :style="{
-                background: role === r ? 'var(--accent-muted)' : 'transparent',
-                color: role === r ? 'var(--accent)' : 'var(--text-tertiary)',
-              }"
-              :title="r === 'operator' ? 'Your own role' : `See the app as a ${r}`"
-              :aria-pressed="role === r"
+              class="w-full flex items-center rounded-lg transition-all duration-150 focus-ring press-scale"
+              :class="sidebarCollapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2'"
+              :style="{ color: viewingAs ? 'var(--accent)' : 'var(--text-tertiary)' }"
+              :title="viewingAs ? `Viewing as ${role}` : 'View the app as another role'"
               :disabled="switchingRole"
-              @click="switchRole(r)"
-            >{{ r === 'operator' ? 'You' : r === 'developer' ? 'Dev' : r === 'manager' ? 'Mgr' : 'QA' }}</button>
-          </div>
+            >
+              <UIcon name="i-lucide-eye" class="size-4 shrink-0" />
+              <span v-if="!sidebarCollapsed" class="t-small truncate flex-1 text-left" style="font-family: var(--font-sans);">
+                {{ viewingAs ? `Viewing as ${role}` : 'View as' }}
+              </span>
+            </button>
+          </UDropdownMenu>
         </div>
 
         <!-- Theme toggle -->
@@ -443,17 +488,42 @@ function badgeFor(to: string) {
       </aside>
 
       <!-- Main content -->
-      <main class="flex-1 min-w-0 h-full overflow-y-auto custom-scrollbar" style="background: var(--surface-base); scrollbar-gutter: stable;">
+      <!-- A flex column, not a single scroll container: the impersonation banner
+           below takes real vertical space, and pages that declare `h-full`
+           manage their own internal scrolling. Leaving `overflow-y-auto` on
+           <main> would give those pages a second scrollbar the moment the
+           banner appeared. -->
+      <main class="flex-1 min-w-0 h-full flex flex-col" style="background: var(--surface-base);">
+        <!-- You are not seeing your own app. App-level, not just on the
+             dashboard: an operator who forgets they are impersonating reads a
+             missing control as a broken one. -->
+        <div
+          v-if="viewingAs"
+          class="shrink-0 flex flex-wrap items-center gap-2 t-small px-4 py-2"
+          style="background: var(--accent-muted); border-bottom: 1px solid var(--accent);"
+        >
+          <UIcon name="i-lucide-eye" class="size-4 shrink-0" style="color: var(--accent);" />
+          <span style="color: var(--text-primary);">
+            You are seeing this as a <span class="font-mono">{{ role }}</span>. Controls you normally have are hidden.
+          </span>
+          <button
+            class="ml-auto underline focus-ring"
+            style="color: var(--text-primary);"
+            :disabled="switchingRole"
+            @click="switchRole('operator')"
+          >Back to your own view</button>
+        </div>
+
         <!-- Setup wizard when directory doesn't exist -->
         <SetupWizard
           v-if="initialized && !claudeDirExists"
           @complete="onOnboardingComplete"
         />
 
-        <div v-show="initialized && claudeDirExists" class="h-full">
+        <div v-show="initialized && claudeDirExists" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar" style="scrollbar-gutter: stable;">
           <NuxtPage />
         </div>
-        <div v-if="!initialized" class="flex items-center justify-center h-full">
+        <div v-if="!initialized" class="flex-1 flex items-center justify-center">
           <UIcon name="i-lucide-loader-2" class="size-5 animate-spin" style="color: var(--text-disabled);" />
         </div>
       </main>

@@ -10,7 +10,7 @@
       "name": "alepo-engineering",
       "source": "./",
       "description": "Enforcement pieces for Alepo's agentic SDLC pipeline: the plan gate, the test lock, the ticket-to-repo registry, and the evidence-bundle schema.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Ashwani Singh",
         "email": "ashwani.singh@alepo.com"

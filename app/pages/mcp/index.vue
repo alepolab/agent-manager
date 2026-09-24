@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 
 const { servers, loading, error, fetchServers, addServer, toggleServer, removeServer } = useMCP()
+const { can } = useUser()
 const { isPanelOpen, pendingInput } = useChat()
 
 const isAddModalOpen = ref(false)
@@ -33,8 +34,9 @@ function testServer(name: string) {
         <span class="font-mono t-small text-meta mr-4">{{ servers.length }}</span>
       </template>
       <template #right>
-        <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
-        <UButton label="New MCP Server" icon="i-lucide-plus" size="sm" @click="() => { isAddModalOpen = true }" />
+        <ReadOnlyBadge v-if="!can('configure')" reason="adding an MCP server" />
+        <UButton v-if="can('configure')" label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
+        <UButton v-if="can('configure')" label="New MCP Server" icon="i-lucide-plus" size="sm" @click="() => { isAddModalOpen = true }" />
       </template>
     </PageHeader>
 
@@ -93,7 +95,7 @@ function testServer(name: string) {
             </div>
             
             <div class="flex items-center gap-2" @click.prevent>
-              <label class="field-toggle scale-90" @click.stop>
+              <label v-if="can('configure')" class="field-toggle scale-90" @click.stop>
                 <input
                   type="checkbox"
                   :checked="!server.disabled"

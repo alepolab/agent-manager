@@ -444,11 +444,19 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
     const positions = new Map(existingSteps.map((s: any) => [s.id, s.position]))
     const strip = (steps: any[]) => steps.map(({ position: _p, ...s }) => s)
     const same = existing && JSON.stringify(strip(existingSteps)) === JSON.stringify(built.steps) && existing.name === built.runbook.name
+      && JSON.stringify(existing.parameters) === JSON.stringify(built.runbook.parameters)
     let state: ItemState = same ? 'ok' : (existing || wfBroken) ? 'drifted' : 'missing'
+    // group, notifyChannel and workingDir name things configured on this
+    // instance - a concurrency group, a Settings channel, a checkout - so, like
+    // positions, they are carried over rather than compared or seeded.
+    const instanceKeys = Object.fromEntries((['group', 'notifyChannel', 'workingDir'] as const)
+      .filter(k => existing?.[k] !== undefined).map(k => [k, existing[k]]))
     const next = JSON.stringify({
       name: built.runbook.name,
       description: built.runbook.description,
       steps: built.steps.map(s => positions.get(s.id) ? { ...s, position: positions.get(s.id) } : s),
+      ...(built.runbook.parameters ? { parameters: built.runbook.parameters } : {}),
+      ...instanceKeys,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     }, null, 2)
     let diff: string | undefined
@@ -495,6 +503,13 @@ async function reconcile(apply: boolean, { by = 'instance', only, login }: Recon
       watches.push({ id: d.id, ...(await item(state, cur ? facts(cur) : null, facts(team))) })
     }
   }
+
+  // Copied once, never overwritten: like the product registry below, it is the
+  // instance's own list of what to scan, and the scan workflows read it.
+  const scanRegistry = resolveClaudePath('scan-registry.yaml')
+  const scanSeed = [plugin && join(plugin.installPath, 'registry', 'scan-registry.yaml'), join(shippedDir(), 'registry', 'scan-registry.yaml')]
+    .find((p): p is string => !!p && existsSync(p))
+  if (apply && scanSeed && !existsSync(scanRegistry)) { await cp(scanSeed, scanRegistry); changed++ }
 
   const reg = await loadRegistry()
   const items = reg ? Object.entries(reg.products).map(([key, p]: [string, any]) => {

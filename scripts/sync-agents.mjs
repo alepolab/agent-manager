@@ -126,6 +126,9 @@ for (const [templateId, file] of Object.entries(RUNBOOK_FILES)) {
       name: runbook.name,
       description: runbook.description,
       steps,
+      ...(runbook.parameters ? { parameters: runbook.parameters } : {}),
+      // Instance configuration, carried over as the server's team sync does.
+      ...Object.fromEntries(['group', 'notifyChannel', 'workingDir'].filter(k => existing?.[k] !== undefined).map(k => [k, existing[k]])),
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     }, null, 2))
   }

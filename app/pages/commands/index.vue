@@ -2,6 +2,7 @@
 const { commands, loading, error, groupedByDirectory, remove } = useCommands()
 const router = useRouter()
 const toast = useToast()
+const { can } = useUser()
 
 const showCreateModal = ref(false)
 const searchQuery = ref('')
@@ -41,7 +42,8 @@ const filteredCount = computed(() =>
         <span class="font-mono t-small text-meta">{{ commands.length }}</span>
       </template>
       <template #right>
-        <UButton label="New Command" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
+        <ReadOnlyBadge v-if="!can('configure')" reason="adding a command" />
+        <UButton v-if="can('configure')" label="New Command" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 

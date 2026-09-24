@@ -12,6 +12,7 @@ import type { ScheduleRow } from '~/composables/useSchedules'
 const { schedules, loading, error, firing, fetchAll, setEnabled, fire, remove } = useSchedules()
 const { workflows, fetchAll: fetchWorkflows } = useWorkflows()
 const toast = useToast()
+const { can } = useUser()
 
 const showModal = ref(false)
 /** The schedule being edited, or null when creating. */
@@ -88,7 +89,8 @@ async function onDelete(schedule: ScheduleRow) {
         <span class="t-small text-meta">{{ schedules.length }}</span>
       </template>
       <template #right>
-        <UButton label="New Schedule" icon="i-lucide-plus" size="sm" @click="openCreate" />
+        <ReadOnlyBadge v-if="!can('configure')" reason="managing schedules" />
+        <UButton v-if="can('configure')" label="New Schedule" icon="i-lucide-plus" size="sm" @click="openCreate" />
       </template>
     </PageHeader>
 
@@ -115,7 +117,7 @@ async function onDelete(schedule: ScheduleRow) {
       <div v-else-if="!schedules.length" class="flex flex-col items-center justify-center py-16 space-y-3">
         <UIcon name="i-lucide-calendar-clock" class="size-8 text-meta" />
         <p class="t-ui text-label">Nothing scheduled yet.</p>
-        <UButton label="New Schedule" icon="i-lucide-plus" size="sm" @click="openCreate" />
+        <UButton v-if="can('configure')" label="New Schedule" icon="i-lucide-plus" size="sm" @click="openCreate" />
       </div>
 
       <div v-else class="space-y-3">
@@ -126,6 +128,7 @@ async function onDelete(schedule: ScheduleRow) {
           :workflow-name="workflowName(schedule.workflowSlug)"
           :workflow-missing="workflowMissing(schedule.workflowSlug)"
           :firing="firing[schedule.id]"
+          :can-edit="can('configure')"
           @fire="onFire(schedule)"
           @edit="openEdit(schedule)"
           @delete="onDelete(schedule)"

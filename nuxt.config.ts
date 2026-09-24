@@ -75,5 +75,6 @@ export default defineNuxtConfig({
 
   routeRules: {
     '/templates': { redirect: '/explore' },
+    '/board': { redirect: '/' },
   },
 })

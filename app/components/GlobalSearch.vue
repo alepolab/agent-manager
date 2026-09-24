@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { getAgentColor } from '~/utils/colors'
 import { getModelBadgeClasses } from '~/utils/models'
+import { SETTINGS_SEARCH_INDEX } from '~/utils/settingsSearchIndex'
 
 const router = useRouter()
 const { agents } = useAgents()
@@ -64,6 +65,20 @@ const results = computed(() => {
         sublabel: plugin.description || '',
         to: `/plugins/${encodeURIComponent(plugin.id)}`,
         icon: 'i-lucide-puzzle',
+      })
+    }
+  }
+
+  // Settings last: a search for "jira" should surface the agent named after it
+  // before the host field, but "run budget" has nowhere else to be found.
+  for (const entry of SETTINGS_SEARCH_INDEX) {
+    if (entry.label.toLowerCase().includes(q) || entry.sublabel.toLowerCase().includes(q) || entry.keywords?.includes(q)) {
+      items.push({
+        type: 'Setting',
+        label: entry.label,
+        sublabel: entry.sublabel,
+        to: entry.to,
+        icon: 'i-lucide-settings',
       })
     }
   }
