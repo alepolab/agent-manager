@@ -3035,8 +3035,16 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // Scoped to runs that actually route to repositories. A workflow with no
   // product resolved has no checkout to be missing, and blocking those would
   // turn a real guard into a nuisance that gets deleted.
-  const expectsCheckout = (run.product?.repos?.length ?? 0) > 0
-  if (expectsCheckout && !hasCheckout(runWorkspace(run)) && ancestorsOf(l.graph, stepId).length > 0) {
+  //
+  // The product's own checkout counts too. The run header sends every agent to
+  // <workspace root>/<repo name>, so a run with nothing of its own - a scan,
+  // which only reads - works there from its first step. Refusing to restart it
+  // threw away a finished scan, triage and drafting every time the dev server
+  // reloaded, because its derived directory had never been meant to hold code.
+  const repos = run.product?.repos ?? []
+  const expectsCheckout = repos.length > 0
+  const sharedCheckout = repos.some(r => hasCheckout(checkoutDirFor(r, run.startedBy)))
+  if (expectsCheckout && !hasCheckout(runWorkspace(run)) && !sharedCheckout && ancestorsOf(l.graph, stepId).length > 0) {
     throw new RestartError(
       409,
       `This run targets ${run.product?.repos?.join(', ')}, but there is no checkout in ${runWorkspace(run)} — `
