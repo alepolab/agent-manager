@@ -9,6 +9,8 @@
  *
  * Open tickets, plus ones resolved in the last 30 days: a fix that is resolved
  * in Jira but not yet on the scanned branch is still found, and is not new.
+ * Except those resolved Invalid: that is how a ticket filed in error is
+ * retracted, and counting it would hide the real finding it was mistaken for.
  */
 import { adfToPlainText } from './adf.ts'
 import { jiraAuthHeader } from './jiraCredentials.ts'
@@ -35,7 +37,7 @@ export async function fetchExistingTickets(
   project: string,
   fetchImpl: FetchLike = fetch,
 ): Promise<ExistingTicket[]> {
-  const jql = `project = "${project.replace(/"/g, '')}" AND (statusCategory != Done OR resolved >= -30d) ORDER BY created DESC`
+  const jql = `project = "${project.replace(/"/g, '')}" AND (statusCategory != Done OR resolved >= -30d) AND (resolution is EMPTY OR resolution != Invalid) ORDER BY created DESC`
   const out: ExistingTicket[] = []
   let nextPageToken: string | undefined
   for (let page = 0; page < MAX_PAGES; page++) {
