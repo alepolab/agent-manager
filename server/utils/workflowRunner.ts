@@ -46,7 +46,7 @@ import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type Launc
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { childrenSettled } from '../../shared/types/run.ts'
+import { childrenSettled, isWaitingOnAPerson } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
@@ -466,7 +466,8 @@ async function publish(run: WorkflowRun) {
     // still `running`, so at a cap of 1 its children are all queued behind it,
     // and the moment it stops holding the slot is this publish. Without the
     // drain here they would wait for a run that is waiting for them.
-    if ((TERMINAL_STATUSES.includes(run.status) || run.status === 'joining') && mightHaveWaiting()) {
+    // A run stopping on a person gives its slot back the same way.
+    if ((TERMINAL_STATUSES.includes(run.status) || run.status === 'joining' || isWaitingOnAPerson(run.status)) && mightHaveWaiting()) {
       void drainRunQueue(launchQueuedRun).catch(err =>
         log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
     }

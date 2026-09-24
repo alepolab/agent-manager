@@ -122,13 +122,20 @@ export function isWorkingStatus(status: WorkflowRunStatus): boolean {
  * At a cap of 1 that is a deadlock rather than a slowdown - the children never
  * start, so the parent never stops waiting.
  *
+ * A run waiting on a person gives its slot back too. It spends nothing while it
+ * waits, and nothing bounds the wait: at the default cap of two, two fix runs
+ * stopped at an approval gate held the group shut, and every nightly scan
+ * queued behind a question nobody had answered yet. When the person answers,
+ * the run goes on at once rather than queueing again, so the group can briefly
+ * run one over its cap - the price of an approval never waiting twice.
+ *
  * Separate from `isWorkingStatus` rather than carved out of it because the two
  * questions only look alike. A joining parent still owns its checkout and its
  * process, which is what every other caller of that predicate is asking about;
  * it is only the machine's budget for concurrent WORK that it is not spending.
  */
 export function holdsGroupSlot(status: WorkflowRunStatus): boolean {
-  return isWorkingStatus(status) && status !== 'joining'
+  return isWorkingStatus(status) && status !== 'joining' && !isWaitingOnAPerson(status)
 }
 
 /**
