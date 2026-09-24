@@ -10,6 +10,12 @@ import type { RunDecision, SendBack } from '../types/run'
  * reason that names the steps, and the caller shows the workflow read-only
  * rather than reshaping it. The runner never reads this: it is a picture of
  * the graph, and `fromStack` writes the graph back as explicit `next[]`.
+ *
+ * A split's branches must all meet again at the same step, or not meet at
+ * all - a subset of them meeting somewhere else is refused too, honestly:
+ * the message names the step where that subset meets early, not the
+ * unrelated-looking "joins steps from different branches" a later step in
+ * the graph would otherwise report.
  */
 
 export type StackBlock =
@@ -92,6 +98,15 @@ export function toStack(steps: StackNode[]): StackResult {
       const join = joinOf(succ)
       if (join === undefined && stop !== undefined) {
         throw new NotDrawable(`The branches after ${name(id)} never meet again, but an earlier split expects them to.`)
+      }
+      for (let i = 0; i < succ.length; i++) {
+        for (let j = i + 1; j < succ.length; j++) {
+          const si = succ[i]!, sj = succ[j]!
+          const pairJoin = joinOf([si, sj])
+          if (pairJoin !== undefined && pairJoin !== join) {
+            throw new NotDrawable(`${name(pairJoin)} brings ${name(si)} and ${name(sj)} together before the other branches after ${name(id)} meet. The branches of one split have to meet at the same step.`)
+          }
+        }
       }
       const branches = succ.map(b => (b === join ? [] : seq(b, join)))
       if (join !== undefined && join !== stop) {

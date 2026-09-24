@@ -93,7 +93,12 @@ assert.deepEqual(toStack([step('a'), step('b'), step('c')]).blocks.map(b => b.st
   // a -> [b, c]; b -> [d, e]; c -> e; d -> f; e -> f : e joins steps from two branches
   const cross = toStack([step('a', ['b', 'c']), step('b', ['d', 'e']), step('c', ['e']), step('d', ['f']), step('e', ['f']), step('f', [])])
   assert.equal(cross.ok, false)
-  assert.match(cross.reason, /E/, 'the reason names the step by label')
+  assert.match(cross.reason, /"E"/, 'the reason names the step by label')
+
+  // a -> [b, c, d]; b -> e; c -> e; e -> f; d -> f : b and c meet at e, before d's branch meets them at f
+  const early = toStack([step('a', ['b', 'c', 'd']), step('b', ['e']), step('c', ['e']), step('e', ['f']), step('d', ['f']), step('f', [])])
+  assert.equal(early.ok, false)
+  assert.match(early.reason, /brings "B" and "C" together before the other branches after "A" meet/)
 }
 
 // ── 5. fromStack refuses a step after paths that do not rejoin ─────────────
