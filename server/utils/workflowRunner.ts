@@ -21,6 +21,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, cloneRepo, ensureRunBranch, findCheckout, remoteBranchExists } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+import { teardownRun } from './runTeardown.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -470,6 +471,16 @@ async function publish(run: WorkflowRun) {
     if ((TERMINAL_STATUSES.includes(run.status) || run.status === 'joining' || isWaitingOnAPerson(run.status)) && mightHaveWaiting()) {
       void drainRunQueue(launchQueuedRun).catch(err =>
         log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    }
+    // A run with an outcome gives back the stacks it stood up and its worktree.
+    // Here, where every ending passes - completed, failed and stopped alike -
+    // rather than as a last workflow step, which a failed run never reaches.
+    // Not awaited: `docker compose down` takes seconds and publish must not.
+    if (TERMINAL_STATUSES.includes(run.status)) {
+      const ended = run
+      void teardownRun(ended)
+        .then(report => (report.stacks.length || report.worktree) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
+        .catch(err => log.warn('tearing a run down failed', { runId: ended.id, error: err instanceof Error ? err.message : String(err) }))
     }
     // A child of a joining parent has reached its outcome, so the parent may
     // now be able to go on. Here rather than in the child's own wave loop

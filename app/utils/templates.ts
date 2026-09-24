@@ -850,26 +850,28 @@ A container that is running is not a service that is serving. Confirm health thr
 
 If the context packet names a customer or specific records, seed representative data for them — including a second subscriber or account where the bug involves interaction between two. A single-record environment hides exactly the class of bug that matters.
 
-## Tear down what you brought up
+## Name the stack for this run, and leave it up
 
-Anything you stand up to test gets removed. A stack left running holds ports,
-volumes, container names and a subnet that the next run — or another person —
-will collide with, and the collision surfaces far from here as a bind failure or
-a container that will not start, with nothing pointing back at you.
+Bring the product's stack up under the compose project \`sdlc-<run id>\` — pass
+\`-p sdlc-<run id>\` to every compose command, using the run id from the top of
+your input — and name that project in \`stack-report.md\`. The steps after you
+update and test this exact stack, so **do not tear it down**: it has to outlive
+you.
 
-Record, in your report, exactly what you started and the command that removes
-it, so the teardown is auditable rather than assumed. Say so plainly if you
-could not remove something.
+The runner removes it when the run ends — completed, failed or stopped — by that
+name and only that name, with \`down\` and never \`-v\`. A project you start
+under any other name is invisible to it and stays running for ever, holding
+ports, container names and a subnet the next run collides with. So the product's
+own services go under \`sdlc-<run id>\`, always.
 
-Two things you must NOT do while tearing down. Never remove anything you did not
-start — this estate shares one network and one SSO stack (Keycloak and URM serve
-FFM, CRM, PCRF and VMS), and a stack you did not bring up belongs to someone
-else. And never use a volume-destroying teardown (\`down -v\`, or any volume
-prune) unless you created the volume in this run: that deletes seeded data other
-runs depend on, and it cannot be undone.
+What you must NOT do. Never remove anything you did not start, and never start,
+recreate or remove the shared stacks under any name — this estate shares one network and one SSO
+stack (Keycloak and URM serve FFM, CRM, PCRF and VMS). If one is down and you
+need it, report that; a stack you did not bring up belongs to someone else. And
+never use a volume-destroying command (\`down -v\`, or any volume prune): that
+deletes seeded data other runs depend on, and it cannot be undone.
 
-If you skipped provisioning, there is nothing to tear down — say that, and do
-not run a teardown "just in case" against a stack you never started.
+If you skipped provisioning, say so; there is nothing for the runner to remove.
 
 ## Evidence or halt — there is no third option
 
@@ -1235,11 +1237,11 @@ docker build -t localhost/agent-sdlc/<repo>:<run id> <checkout path>
    always the deployment repo's \`docker-compose.<product>.yml\`, never the
    product's own: you are testing the image your build produced inside the
    topology the estate actually runs, and a product's own compose is wired
-   differently from production. Use your own compose project name and the local
+   differently from production. Use your own compose project name, \`sdlc-<run id>-verify\` (the provisioner holds \`sdlc-<run id>\`), and the local
    tag, and publish no host ports:
 
 \`\`\`
-TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id> \
+TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id>-verify \
   -f <infra checkout>/docker-compose.<product>.yml --profile <profile> up -d
 \`\`\`
 
@@ -1273,7 +1275,7 @@ docker image inspect localhost/agent-sdlc/<repo>:<run id> --format '{{index .Rep
    unreachable from where you run, so a timeout there says nothing about the
    build. A container that is running is still not a service that is serving.
 
-4. **Tear down exactly the project you created**: \`docker compose -p sdlc-<run id> down\`.
+4. **Tear down exactly the project you created**: \`docker compose -p sdlc-<run id>-verify down\`. Never the provisioner's \`sdlc-<run id>\`: Browser Trace is using it.
    Never \`down -v\` or any volume prune — that destroys seeded data other runs
    depend on and cannot be undone — and never remove anything you did not start.
 
