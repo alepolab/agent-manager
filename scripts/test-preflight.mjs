@@ -254,5 +254,52 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   }
 }
 
+// ── a workflow whose output is Jira tickets does not start without Jira ──
+// A real scan ran forty minutes with posting off and no project resolved: the
+// create step only logged "would create", and four fix runs were dispatched
+// for tickets that never existed. Every one of these used to be a warn.
+{
+  process.env.AGENT_CHANNELS_FILE = join(root, 'channels.json')
+  const createStep = { agentSlug: 'sdlc-jira-creator', label: 'Create Jira', jira: { action: 'create' } }
+  const asecrm = product({ name: 'ase-crm', projects: ['ASECRM'], stack: undefined })
+  const meta = async () => ({ ok: true, json: async () => ({ projects: [{ issuetypes: [{ name: 'Bug', fields: { priority: { allowedValues: [{ name: 'High' }] } } }] }] }) })
+  const refused = async () => ({ ok: false, json: async () => ({}) })
+
+  process.env.JIRA_POST_ENABLED = '0'
+  let r = await runPreflight(run({ product: asecrm }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'posting off fails a run that creates tickets')
+  assert.match(preflightFailure(r), /JIRA_POST_ENABLED=1/, 'and names the switch')
+
+  process.env.JIRA_POST_ENABLED = '1'
+  r = await runPreflight(run({ product: product({ stack: undefined }) }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'a product with no Jira project fails rather than letting the drafts guess one')
+  r = await runPreflight(run({}), [createStep], meta)
+  assert.match(of(r, 'jira fields').detail, /no product matched/, 'no product at all says so')
+
+  r = await runPreflight(run({ product: asecrm }), [createStep], refused)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'a project Jira will not describe fails')
+
+  const saved = { JIRA_BASE_URL: process.env.JIRA_BASE_URL }
+  delete process.env.JIRA_BASE_URL
+  r = await runPreflight(run({ product: asecrm }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'missing credentials fail')
+  process.env.JIRA_BASE_URL = saved.JIRA_BASE_URL
+
+  r = await runPreflight(run({ product: asecrm }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'ok', 'posting on, project registered, metadata readable: ok')
+  assert.equal(of(r, 'notify channels').level, 'skip', 'no notify step, nothing to check')
+
+  const notifyStep = { agentSlug: 'sdlc-notifier', label: 'Tell reviewers', notify: { channel: 'workflow updates' } }
+  r = await runPreflight(run({ product: asecrm }), [createStep, notifyStep], meta)
+  assert.equal(of(r, 'notify channels').level, 'fail', 'a notify step naming an unconfigured channel fails')
+  assert.match(of(r, 'notify channels').detail, /"workflow updates"/, 'and names the channel')
+
+  writeFileSync(process.env.AGENT_CHANNELS_FILE, JSON.stringify({ channels: [{ name: 'workflow updates', kind: 'teams', url: 'https://example.test/hook' }] }))
+  r = await runPreflight(run({ product: asecrm }), [createStep, notifyStep], meta)
+  assert.equal(of(r, 'notify channels').level, 'ok', 'a configured channel passes')
+  assert.equal(preflightFailure(r), null, 'and with everything present, nothing blocks the run')
+  delete process.env.JIRA_POST_ENABLED
+}
+
 rmSync(root, { recursive: true, force: true })
 console.log('preflight: the four things that killed real runs are caught before any agent starts')
