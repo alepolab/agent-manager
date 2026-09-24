@@ -3010,7 +3010,11 @@ That line stops the run. Nothing after your step will execute, which is the corr
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3117,7 +3121,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3217,7 +3225,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3307,7 +3319,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3408,7 +3424,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3509,7 +3529,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## Prerequisites
 
@@ -3624,7 +3648,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3760,7 +3788,11 @@ For each actionable finding (or group), assign:
 
 ## Check for existing tickets
 
-If you have access to Jira via MCP tools, search for open tickets in the same project with similar summaries or affected files. If a finding matches an existing open ticket, mark it \`existing\` with the ticket key. If you do not have Jira access, say so plainly and mark the dedup-against-Jira column as "not checked" — the drafter will note it.
+\`existing-tickets.json\` in the run artifacts directory is the product's open and recently resolved Jira tickets, fetched by the runner before the scan: key, summary, status, labels and a description excerpt. Check every finding against it. A finding is \`existing\` when a ticket there covers the same defect - the same file or component and the same root cause, not merely the same category - and you name that key in the reason. The scanner may already have named one in \`existing_ticket\`; verify it rather than trusting it. A ticket resolved recently whose fix is not yet on the scanned branch still counts as existing.
+
+Scans run nightly and file without a human review, so a finding you let through as \`actionable\` that a listed ticket already covers becomes a duplicate ticket and a duplicate fix run. When in doubt between \`existing\` and \`actionable\`, say why in the reason and prefer \`existing\` if the ticket names the same file.
+
+When the file is absent, say so plainly and mark the dedup-against-Jira column as "not checked" — the drafter will note it.
 
 ## Report
 

@@ -27,6 +27,7 @@ import { writeArtifactJson, JIRA_SCHEMA_ARTIFACT } from './runArtifacts.ts'
 import { credentialsFor } from './ticketNotifier.ts'
 import { isJiraPostingEnabled } from './jiraCredentials.ts'
 import { getChannel } from './channels.ts'
+import { fetchExistingTickets, EXISTING_TICKETS_ARTIFACT } from './existingTickets.ts'
 import { agentEnvFor } from './agentCaller.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
@@ -224,7 +225,19 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       await writeArtifactJson(run.id, JIRA_SCHEMA_ARTIFACT, { project: jiraProject, issueTypes: schema })
       const shapes = Object.entries(schema)
         .map(([type, s]) => `${type}${s.required.length ? ` (needs ${s.required.map(f => `${f.name}${f.type ? `:${f.type}` : ''}`).join(', ')})` : ''}`)
-      return { name: 'jira fields', level: 'ok', detail: `${jiraProject}: ${shapes.join('; ')} — written to ${JIRA_SCHEMA_ARTIFACT}` }
+      checks.push({ name: 'jira fields', level: 'ok', detail: `${jiraProject}: ${shapes.join('; ')} — written to ${JIRA_SCHEMA_ARTIFACT}` })
+
+      // What is already filed, for the scanner and triage to check against:
+      // neither can reach Jira, and without this a nightly scan that files
+      // without review files the same findings again every night. A failed
+      // search fails the run for that reason - filing blind is the duplicate.
+      try {
+        const tickets = await fetchExistingTickets(creds, jiraProject, fetchImpl)
+        await writeArtifactJson(run.id, EXISTING_TICKETS_ARTIFACT, { project: jiraProject, fetchedAt: new Date().toISOString(), tickets })
+        return { name: 'existing tickets', level: 'ok', detail: `${tickets.length} open or recently resolved ${jiraProject} ticket(s) — written to ${EXISTING_TICKETS_ARTIFACT}` }
+      } catch (err) {
+        return { name: 'existing tickets', level: 'fail', detail: `${jiraProject}'s existing tickets could not be read, so this run's findings could not be checked against them: ${err instanceof Error ? err.message : String(err)}` }
+      }
     })
   }
 

@@ -294,6 +294,22 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   assert.equal(of(r, 'notify channels').level, 'fail', 'a notify step naming an unconfigured channel fails')
   assert.match(of(r, 'notify channels').detail, /"workflow updates"/, 'and names the channel')
 
+  // What is already filed is fetched for the scanner and triage, which cannot
+  // reach Jira: without it a nightly scan files the same findings every night.
+  const withTickets = async (url, init) => String(url).includes('/search/jql')
+    ? { ok: true, json: async () => ({ issues: [{ key: 'ASECRM-7', fields: { summary: 'Reset token accepts a bare index', status: { name: 'To Do' }, labels: ['scan'], description: 'plain text body' } }], isLast: true }) }
+    : meta(url, init)
+  r = await runPreflight(run({ id: 'run-tickets', product: asecrm }), [createStep], withTickets)
+  assert.equal(of(r, 'existing tickets').level, 'ok', 'the existing tickets are fetched')
+  const { runArtifactsDir } = await import('../server/utils/runArtifacts.ts')
+  const written = JSON.parse(readFileSync(join(runArtifactsDir('run-tickets'), 'existing-tickets.json'), 'utf8'))
+  assert.deepEqual(written.tickets.map(t => t.key), ['ASECRM-7'], 'and written where the agents read them')
+  assert.equal(written.tickets[0].excerpt, 'plain text body')
+
+  const searchDown = async (url, init) => String(url).includes('/search/jql') ? { ok: false, status: 503, json: async () => ({}) } : meta(url, init)
+  r = await runPreflight(run({ product: asecrm }), [createStep], searchDown)
+  assert.equal(of(r, 'existing tickets').level, 'fail', 'a search that fails stops the run: filing blind is the duplicate')
+
   writeFileSync(process.env.AGENT_CHANNELS_FILE, JSON.stringify({ channels: [{ name: 'workflow updates', kind: 'teams', url: 'https://example.test/hook' }] }))
   r = await runPreflight(run({ product: asecrm }), [createStep, notifyStep], meta)
   assert.equal(of(r, 'notify channels').level, 'ok', 'a configured channel passes')
