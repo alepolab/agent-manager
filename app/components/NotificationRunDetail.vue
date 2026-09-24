@@ -6,7 +6,7 @@ import type { NotificationItem } from '~~/shared/types/notification'
 /**
  * A run's open gate, decided in place.
  *
- * WorkflowRunPanel already carries everything a gate needs: the question, whose
+ * RunStack already carries everything a gate needs: the question, whose
  * it is, the verdict card, the per-draft review, the earlier decisions and the
  * buttons. This adds what the inbox reader has not seen yet because they did not
  * start the run: what it is for, and the ticket it came from.
@@ -51,7 +51,7 @@ const headline = computed(() => {
             · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · started by ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}
           </p>
         </div>
-        <UButton :to="`/runs/${run.id}`" size="xs" variant="ghost" color="neutral" trailing-icon="i-lucide-arrow-right" label="Full run and evidence" class="shrink-0" />
+        <UButton :to="`/runs/${run.id}${run.question ? `#step-${run.question.stepId}` : ''}`" size="xs" variant="ghost" color="neutral" trailing-icon="i-lucide-arrow-right" label="Full run and evidence" class="shrink-0" />
       </div>
       <!-- The ticket text the run was started with. Collapsed: it is the
            background to the decision, not the decision. -->
@@ -67,8 +67,8 @@ const headline = computed(() => {
       <pre v-if="ticketOpen" class="t-small whitespace-pre-wrap rounded p-2 max-h-80 overflow-y-auto" style="background: var(--surface-base); color: var(--text-secondary);">{{ run.initialPrompt }}</pre>
     </div>
 
-    <WorkflowRunPanel
-      :run="run" :runs="[run]" :logs="logs" full-page
+    <RunStack
+      :run="run" :logs="logs"
       @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework"
       @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${run.id}`)"
     />

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { RUN_STATUS_COLOR, runStatusLabel } from '~/utils/runStatus'
-import { isLiveStatus } from '~~/shared/types/run'
 
 /**
  * A run, full screen: steps and their live output on the left, the evidence
@@ -18,7 +17,6 @@ useAutoRefresh(refresh)
 const { can } = useUser()
 onMounted(load)
 useHead({ title: computed(() => `${run.value ? (run.value.initialPrompt.split('\n')[0] ?? '').slice(0, 40) : 'Run'} | Agent Manager`) })
-const live = computed(() => !!run.value && isLiveStatus(run.value.status))
 </script>
 
 <template>
@@ -45,15 +43,12 @@ const live = computed(() => !!run.value && isLiveStatus(run.value.status))
       <p class="t-ui text-label">{{ error }}</p>
       <UButton to="/runs" size="sm" variant="soft" icon="i-lucide-arrow-left" label="All runs" />
     </div>
-    <!-- Stacks below `lg`. This was a fixed two-column grid at every width — about
-         37rem of minimum track before the evidence pane's own 15rem file list was
-         counted — so on anything narrower than a laptop the evidence a reviewer is
-         meant to be reading was squeezed to nothing and the page scrolled sideways. -->
-    <div v-else-if="run" class="flex-1 min-h-0 grid gap-4 page page--wide grid-cols-1 lg:grid-cols-[minmax(22rem,2fr)_minmax(0,3fr)]">
-      <div class="min-h-0 overflow-y-auto pr-1">
-        <WorkflowRunPanel :run="run" :runs="[run]" :logs="logs" full-page @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework" @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)" />
-      </div>
-      <RunArtifacts :run-id="id" :live="live" class="min-h-0" />
+    <div v-else-if="run" class="flex-1 min-h-0 overflow-y-auto page page--wide">
+      <RunStack
+        :run="run" :logs="logs"
+        @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework"
+        @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)"
+      />
     </div>
     <div v-else class="page"><SkeletonCard /></div>
   </div>
