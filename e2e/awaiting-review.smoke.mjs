@@ -239,30 +239,47 @@ async function main() {
   mkdirSync(shots, { recursive: true })
 
   // ── 3. /runs paints it as waiting on a person, and can filter for it ────
+  // /runs is a list beside the selected run's stack now (there is no more
+  // table, and Stop/Delete/Restart moved off the row and onto the opened
+  // pane's own header and cards) - see app/pages/runs/index.vue and
+  // app/components/RunDetailPane.vue. This run is the only one seeded, so at
+  // the default (1280x720) viewport it is auto-selected into the pane.
   await page.goto(`${baseUrl}/runs`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
-  await page.getByText('SMOKE-REVIEW').first().waitFor({ state: 'visible' })
-  const runsBody = await page.locator('body').innerText()
-
-  // The status is rendered uppercase everywhere; raw, it arrives as an
-  // identifier (AWAITING_REVIEW) rather than a phrase.
-  assert.ok(/AWAITING REVIEW/i.test(runsBody),
-    `the status reads as words, not as an identifier. Page text:\n${runsBody}`)
-  assert.ok(!/AWAITING_REVIEW/.test(runsBody), 'and never with its underscore showing')
-  assert.ok(/Waiting on your decisions/i.test(runsBody),
-    'the in-flight card says what it is waiting for, and that it is decisions rather than one yes')
-
-  const row = page.locator('tr', { hasText: 'SMOKE-REVIEW' }).first()
+  const row = page.locator('li', { hasText: 'SMOKE-REVIEW' }).first()
+  await row.waitFor({ state: 'visible' })
   const rowText = await row.innerText()
-  assert.ok(/\bStop\b/.test(rowText), `Stop is offered - cancelling is how it is got rid of. Row:\n${rowText}`)
-  assert.ok(!/\bDelete\b/.test(rowText),
-    `Delete is not: it is live and holds its checkout. Row:\n${rowText}`)
-  assert.ok(!/\bRestart\b/.test(rowText),
-    `nor Restart: a run awaiting a decision is continued, not restarted. Row:\n${rowText}`)
+
+  // A gate with no `question.role` is everyone's, so the viewer's own
+  // operator role owns it and the row reads "Yours" rather than the raw
+  // status - the same rule the "Waiting on me" chip counts by.
+  assert.ok(/\bYours\b/.test(rowText), `a gate that is the viewer's to answer reads "Yours" on the row. Row:\n${rowText}`)
+
+  // The pane beside the list carries the status word and the open decision -
+  // what the removed in-flight card used to say inline on the list itself.
+  const pane = page.locator('section', { has: page.getByRole('link', { name: 'Open run page' }) })
+  await pane.getByText(/AWAITING REVIEW/i).first().waitFor({ state: 'visible' })
+  const paneText = await pane.innerText()
+
+  assert.ok(!/AWAITING_REVIEW/.test(paneText), 'and never with its underscore showing')
+  assert.ok(/Waiting for your approval/i.test(paneText), 'the gate says what kind of decision this is')
+  assert.ok(paneText.includes('Decide which entries'), 'and the question itself is on the page, not just its status')
+
+  // Stop is offered on the pane's header because the run is live; Delete and
+  // Restart never were row actions to begin with in the new design, and stay
+  // off the pane too while the run is live.
+  assert.equal(await pane.getByRole('button', { name: 'Stop', exact: true }).count(), 1,
+    `Stop is offered - cancelling is how it is got rid of. Pane:\n${paneText}`)
+  assert.equal(await pane.getByRole('button', { name: 'Delete', exact: true }).count(), 0,
+    `Delete is not: it is live and holds its checkout. Pane:\n${paneText}`)
+  assert.equal(await pane.getByRole('button', { name: /^Restart/ }).count(), 0,
+    `nor Restart: a run awaiting a decision is continued, not restarted. Pane:\n${paneText}`)
 
   await page.screenshot({ path: join(shots, 'awaiting-review-runs-row.png'), fullPage: true })
 
   // A status you cannot filter for is one you cannot find in a long history.
-  await page.goto(`${baseUrl}/runs?status=awaiting_review`, { waitUntil: 'domcontentloaded' })
+  // The `status=` query is gone; `view=waiting` is its replacement, and this
+  // run - a gate stopped on the viewer's own role - is exactly what it means.
+  await page.goto(`${baseUrl}/runs?view=waiting`, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => document.body.innerText.includes('SMOKE-REVIEW'), null, { timeout: VISIBLE_TIMEOUT_MS })
 
   // ── 4. The dashboard queues it for attention and refuses to dismiss it ──
