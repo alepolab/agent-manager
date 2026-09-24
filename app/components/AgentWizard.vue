@@ -161,7 +161,7 @@ function toggleTool(tool: AgentTool) {
             class="w-full flex items-start gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-150"
             :style="{
               background: frontmatter.model === opt.value ? 'var(--accent-muted)' : 'transparent',
-              border: frontmatter.model === opt.value ? '1px solid rgba(229, 169, 62, 0.15)' : '1px solid var(--border-subtle)',
+              border: frontmatter.model === opt.value ? '1px solid rgba(var(--accent-rgb), 0.15)' : '1px solid var(--border-subtle)',
             }"
             @click="frontmatter.model = opt.value"
           >
@@ -203,7 +203,7 @@ function toggleTool(tool: AgentTool) {
             class="w-full flex items-start gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-150"
             :style="{
               background: frontmatter.memory === opt.value ? 'var(--accent-muted)' : 'transparent',
-              border: frontmatter.memory === opt.value ? '1px solid rgba(229, 169, 62, 0.15)' : '1px solid var(--border-subtle)',
+              border: frontmatter.memory === opt.value ? '1px solid rgba(var(--accent-rgb), 0.15)' : '1px solid var(--border-subtle)',
             }"
             @click="frontmatter.memory = opt.value"
           >
@@ -245,7 +245,7 @@ function toggleTool(tool: AgentTool) {
             <div 
               class="size-7 rounded-lg flex items-center justify-center shrink-0"
               :style="{ 
-                background: frontmatter.tools?.includes(tool.value) ? 'rgba(229, 169, 62, 0.1)' : 'var(--surface-raised)',
+                background: frontmatter.tools?.includes(tool.value) ? 'rgba(var(--accent-rgb), 0.1)' : 'var(--surface-raised)',
                 color: frontmatter.tools?.includes(tool.value) ? 'var(--accent)' : 'var(--text-tertiary)'
               }"
             >

@@ -219,34 +219,33 @@ function badgeFor(to: string) {
         <!-- Ambient glow at top — stronger -->
         <div
           class="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-32 pointer-events-none"
-          style="background: radial-gradient(ellipse, rgba(229, 169, 62, 0.1) 0%, transparent 70%);"
+          style="background: radial-gradient(ellipse, rgba(var(--accent-rgb), 0.1) 0%, transparent 70%);"
         />
 
         <!-- Brand -->
         <div class="h-[56px] flex items-center gap-2.5 relative" :class="sidebarCollapsed ? 'justify-center px-2' : 'px-4'">
-          <NuxtLink to="/" class="flex items-center gap-2.5 flex-1 min-w-0 group/brand" v-if="!sidebarCollapsed">
-            <div
-              class="size-7 rounded-lg flex items-center justify-center relative shrink-0 transition-transform duration-200 group-hover/brand:scale-105"
-              style="background: linear-gradient(135deg, rgba(229, 169, 62, 0.18) 0%, rgba(229, 169, 62, 0.06) 100%); border: 1px solid rgba(229, 169, 62, 0.15);"
-            >
-              <UIcon name="i-lucide-bot" class="size-3.5" style="color: var(--accent);" />
-            </div>
-            <div class="flex-1 flex flex-col min-w-0">
-              <span class="t-small font-semibold tracking-tight group-hover/brand:text-accent transition-colors" style="color: var(--text-primary); font-family: var(--font-display);">
+          <NuxtLink to="/" class="flex items-center gap-2.5 flex-1 min-w-0 group/brand" v-if="!sidebarCollapsed" aria-label="Alepo Agent Manager — home">
+            <div class="flex-1 flex flex-col gap-1 min-w-0">
+              <img src="/brand/alepo-logo-light.png" alt="Alepo" class="h-5 w-auto self-start dark:hidden transition-transform duration-200 origin-left group-hover/brand:scale-105">
+              <img src="/brand/alepo-logo-dark.png" alt="Alepo" class="h-5 w-auto self-start hidden dark:block transition-transform duration-200 origin-left group-hover/brand:scale-105">
+              <span class="t-small font-mono tracking-wider uppercase truncate" style="color: var(--text-tertiary);">
                 Agent Manager
-              </span>
-              <span class="t-small font-mono tracking-wider uppercase" style="color: var(--text-disabled);">
-                Claude Code
               </span>
             </div>
           </NuxtLink>
-          <div v-else class="size-7 rounded-lg flex items-center justify-center relative shrink-0"
-            style="background: linear-gradient(135deg, rgba(229, 169, 62, 0.18) 0%, rgba(229, 169, 62, 0.06) 100%); border: 1px solid rgba(229, 169, 62, 0.15);"
+          <!-- Collapsed, the 56px rail has room for one control: the mark expands it -->
+          <button
+            v-else
+            class="size-8 flex items-center justify-center rounded-lg shrink-0 transition-transform duration-150 focus-ring press-scale hover:scale-105"
+            title="Expand sidebar"
+            @click="sidebarCollapsed = false"
           >
-            <UIcon name="i-lucide-bot" class="size-3.5" style="color: var(--accent);" />
-          </div>
+            <img src="/favicon.svg" alt="Alepo" class="size-7 dark:hidden">
+            <img src="/brand/alepo-mark-dark.svg" alt="Alepo" class="size-7 hidden dark:block">
+          </button>
           <!-- Collapse toggle -->
           <button
+            v-if="!sidebarCollapsed"
             class="flex size-7 items-center justify-center rounded-lg transition-all duration-150 focus-ring press-scale shrink-0"
             style="color: var(--text-tertiary);"
             :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"

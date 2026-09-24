@@ -1146,7 +1146,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
                   :key="oi"
                   class="flex items-start gap-2 px-2 py-1 rounded t-small"
                   :style="{
-                    background: isOptionSubmitted(opt.label) ? 'rgba(229, 169, 62, 0.1)' : 'var(--surface-raised)',
+                    background: isOptionSubmitted(opt.label) ? 'rgba(var(--accent-rgb), 0.1)' : 'var(--surface-raised)',
                     border: isOptionSubmitted(opt.label) ? '1px solid var(--accent)' : '1px solid transparent',
                   }"
                 >
@@ -1200,7 +1200,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
       <div
         v-else
         class="px-3 py-2 md:px-4 md:py-3 rounded-xl border-2"
-        style="background: rgba(229, 169, 62, 0.05); border-color: var(--accent);"
+        style="background: rgba(var(--accent-rgb), 0.05); border-color: var(--accent);"
       >
         <div class="flex items-center gap-2 mb-2">
           <UIcon name="i-lucide-shield-question" class="size-3.5 md:size-4" style="color: var(--accent);" />
@@ -1224,7 +1224,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
                 :key="oi"
                 class="flex items-start gap-2 px-2.5 py-1.5 rounded-lg w-full text-left transition-all"
                 :style="{
-                  background: isAnswerSelected(qi, opt.label) ? 'rgba(229, 169, 62, 0.15)' : 'var(--surface-raised)',
+                  background: isAnswerSelected(qi, opt.label) ? 'rgba(var(--accent-rgb), 0.15)' : 'var(--surface-raised)',
                   borderWidth: '1px',
                   borderStyle: 'solid',
                   borderColor: isAnswerSelected(qi, opt.label) ? 'var(--accent)' : 'transparent',

@@ -146,7 +146,7 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
 .text-secondary { color: var(--text-secondary); }
 .text-meta { color: var(--text-meta); }
 .text-accent { color: var(--accent); }
-.bg-accent-subtle { background: rgba(229, 169, 62, 0.1); border-color: rgba(229, 169, 62, 0.2); }
+.bg-accent-subtle { background: rgba(var(--accent-rgb), 0.1); border-color: rgba(var(--accent-rgb), 0.2); }
 .border-error { border-color: rgba(248, 113, 113, 0.2); }
 .bg-error-subtle { background: rgba(248, 113, 113, 0.05); }
 .text-error { color: var(--error); }

@@ -402,7 +402,7 @@ useUnsavedChanges(isDirty)
               class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all hover:border-accent/30 hover:shadow-sm group/agent" 
               style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
             >
-              <div class="size-8 rounded-lg flex items-center justify-center shrink-0 transition-colors group-hover/agent:bg-accent/10" style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.1);">
+              <div class="size-8 rounded-lg flex items-center justify-center shrink-0 transition-colors group-hover/agent:bg-accent/10" style="background: var(--accent-muted); border: 1px solid rgba(var(--accent-rgb), 0.1);">
                 <UIcon name="i-lucide-user" class="size-4" style="color: var(--accent);" />
               </div>
               <div class="flex-1 min-w-0">
