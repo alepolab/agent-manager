@@ -41,19 +41,25 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  let answered: boolean | void
   try {
-    await provider.respondToPermission(permissionId, decision, updatedInput)
-
-    return {
-      success: true,
-      permissionId,
-      decision,
-      remembered: remember || false,
-    }
+    answered = await provider.respondToPermission(permissionId, decision, updatedInput)
   } catch (error: any) {
     throw createError({
       statusCode: 500,
       message: error.message || 'Failed to respond to permission',
     })
+  }
+  // It timed out, or someone answered it first. Saying "success" here told the
+  // second person their decision had landed when it had gone nowhere.
+  if (answered === false) {
+    throw createError({ statusCode: 410, message: 'That prompt is no longer waiting: it was answered or it timed out.' })
+  }
+
+  return {
+    success: true,
+    permissionId,
+    decision,
+    remembered: remember || false,
   }
 })
