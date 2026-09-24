@@ -15,7 +15,13 @@ function conditionOf(branch: StackBlock[]): string {
   const when = ctx.workflowStepOf(first.stepId)?.runWhen?.artifact
   return when ? `If ${when} exists` : 'Always'
 }
-const approvalHere = (id: string) => run.value.question?.stepId === id && run.value.question.kind === 'approval'
+/** Whether THIS card hosts the open gate — decided once by RunStack (ctx.gateAt),
+ *  not by re-deriving it here, so an approval-kind question on a step that
+ *  isn't actually gated (a runner-raised budget/rework/interruption approval)
+ *  does not also try to render inside this dashed approval card. The card
+ *  itself still shows whenever the workflow step declares `approval: true`,
+ *  regardless of whether it is hosting the live gate right now. */
+const approvalHere = (id: string) => ctx.gateAt(id) === 'approval'
 </script>
 
 <template>

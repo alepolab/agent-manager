@@ -18,6 +18,13 @@ export interface RunStackContext {
   arrivalsOf: (id: string) => (SendBackArrow & { n: number })[]
   /** Child runs by status, for a loop step. */
   childSummary: (id: string) => string
+  /**
+   * Where the run's open decision (if any) is hosted, for this step id: the
+   * approval card above it, the card itself, or nowhere (it is hosted at the
+   * top level, or the decision belongs to a different step). RunStack decides
+   * this once so a decision never renders twice and never renders nowhere.
+   */
+  gateAt: (id: string) => 'approval' | 'card' | null
   gate: {
     respond: (reply: string) => void
     continue: (note?: string) => void

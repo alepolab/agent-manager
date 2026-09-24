@@ -18,13 +18,40 @@ const emit = defineEmits<{
   note: [text: string], stop: [], restart: [stepId: string, note?: string], clone: [],
 }>()
 
+/**
+ * 'loading' while the fetch is in flight (or has not started), 'missing' only
+ * once the workflow route answers 404 (the workflow really is gone), 'loaded'
+ * on success. A non-404 failure — a network blip, a 500 — leaves this at
+ * 'loading' with `workflowLoadFailed` set, so it reads as neither "gone" nor
+ * "fine": stackForRun(null, …) would otherwise report "The workflow no longer
+ * exists", which is simply false while the request just hasn't come back yet.
+ */
+const workflowState = ref<'loading' | 'loaded' | 'missing'>('loading')
+const workflowLoadFailed = ref(false)
 const workflow = ref<Workflow | null>(null)
 watch(() => props.run.workflowSlug, async (slug) => {
-  try { workflow.value = await $fetch<Workflow>(`/api/workflows/${slug}`) }
-  catch { workflow.value = null }
+  workflowState.value = 'loading'
+  workflowLoadFailed.value = false
+  try {
+    workflow.value = await $fetch<Workflow>(`/api/workflows/${slug}`)
+    workflowState.value = 'loaded'
+  } catch (err: any) {
+    workflow.value = null
+    if (err?.statusCode === 404 || err?.response?.status === 404) workflowState.value = 'missing'
+    else workflowLoadFailed.value = true
+  }
 }, { immediate: true })
 
 const layout = computed(() => stackForRun(workflow.value?.steps, props.run.steps.map(s => s.stepId)))
+/** What the note actually says: suppressed while genuinely loading, a fetch-
+ *  failure sentence for a transient error, and stackForRun's own note (which
+ *  is already correct) for both 'missing' and 'loaded'. */
+const workflowNote = computed(() => {
+  if (workflowState.value === 'loading') {
+    return workflowLoadFailed.value ? 'The workflow could not be loaded; steps are shown in run order.' : undefined
+  }
+  return layout.value.note
+})
 const stepById = computed(() => new Map(props.run.steps.map(s => [s.stepId, s])))
 const wfById = computed(() => new Map((workflow.value?.steps ?? []).map(s => [s.id, s])))
 const graph = computed(() => (workflow.value ? buildGraph(workflow.value.steps) : null))
@@ -36,12 +63,49 @@ function readsOf(id: string): string[] {
   return ids.map(p => stepById.value.get(p)?.label ?? p)
 }
 
+/**
+ * Where this run's open decision is hosted, decided once here so it renders
+ * exactly once no matter the combination of question kind, run status,
+ * whether the gated step declares `approval: true`, or whether the workflow
+ * has loaded at all.
+ *
+ * A runner-raised approval (budget reached, rework limit spent, too many
+ * interruptions) sets `question.kind === 'approval'` on a step that usually
+ * has no `approval: true` of its own — workflowRunner.ts raises these against
+ * the step that would run next (or '' when there is none yet), not against a
+ * step the workflow author gated. Those must NOT wait for the approval card,
+ * which only exists for a step the workflow itself marks `approval: true`:
+ * they fall through to the step's own card, or to the top level when the
+ * question names no step in this run at all (including the empty stepId, and
+ * including the case where the workflow hasn't loaded yet so `wfById` cannot
+ * confirm the gated step's `approval` flag either way).
+ */
+type GateHost = { where: 'top' } | { where: 'approval' | 'card', stepId: string }
+const gateHost = computed<GateHost | null>(() => {
+  const q = props.run.question
+  if (!q) return (props.run.status === 'awaiting_review' || props.run.status === 'paused') ? { where: 'top' } : null
+  if (q.kind === 'approval' && wfById.value.get(q.stepId)?.approval) return { where: 'approval', stepId: q.stepId }
+  if (stepById.value.has(q.stepId)) return { where: 'card', stepId: q.stepId }
+  return { where: 'top' }
+})
+function gateAt(id: string): 'approval' | 'card' | null {
+  const h = gateHost.value
+  if (!h || h.where === 'top') return null
+  return h.stepId === id ? h.where : null
+}
+
 const openIds = ref(new Set<string>())
 const toggle = (id: string) => {
   const next = new Set(openIds.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
   openIds.value = next
+}
+/** Idempotent open, used to auto-open a target: calling it twice (once on
+ *  mount, once again after the workflow load resolves) must not close it. */
+function openStep(id: string) {
+  if (openIds.value.has(id)) return
+  openIds.value = new Set(openIds.value).add(id)
 }
 
 const arrows = computed(() => sendBackArrows(props.run).map((a, i) => ({ ...a, n: i + 1 })))
@@ -76,6 +140,7 @@ provide(RUN_STACK_KEY, {
   toggle,
   arrivalsOf: id => arrows.value.filter(a => a.to === id),
   childSummary,
+  gateAt,
   gate: {
     respond: r => emit('respond', r),
     continue: n => emit('continue', n),
@@ -86,25 +151,45 @@ provide(RUN_STACK_KEY, {
   openEvidence: () => { evidenceOpen.value = true },
 })
 
-/** `#step-<id>` opens that card and scrolls to it: the inbox links here. The gate's card opens by itself. */
+/**
+ * `#step-<id>` opens that card and scrolls to it: the inbox links here. A
+ * step whose card hosts the open gate opens itself too; the approval card
+ * above a gated step is already visible without opening anything.
+ *
+ * Run once on mount (so a hash link works immediately) and once more the
+ * first time the workflow finishes loading (`gateHost` cannot know an
+ * approval-flagged step is the host until `wfById` exists, so a card that
+ * should stay closed can briefly auto-open, or the real target can only be
+ * found, once the fetch resolves). `openStep` is idempotent, so calling this
+ * twice never re-closes a card the first pass already opened.
+ */
 const route = useRoute()
-onMounted(async () => {
+function scrollToStep(id: string) {
+  document.getElementById(`step-${id}`)?.scrollIntoView({ block: 'center' })
+}
+async function focusTarget() {
   const fromHash = route.hash.startsWith('#step-') ? route.hash.slice(6) : null
-  const target = fromHash ?? props.run.question?.stepId
+  const h = gateHost.value
+  const target = fromHash ?? (h && h.where !== 'top' ? h.stepId : undefined) ?? props.run.question?.stepId
   if (!target) return
-  if (props.run.question?.kind !== 'approval' || fromHash) toggle(target)
+  if (fromHash || gateHost.value?.where === 'card') openStep(target)
   await nextTick()
-  document.getElementById(`step-${target}`)?.scrollIntoView({ block: 'center' })
-})
+  scrollToStep(target)
+}
+onMounted(focusTarget)
+watch(workflowState, (s) => { if (s === 'loaded') focusTarget() }, { once: true })
 </script>
 
 <template>
   <div class="space-y-4">
     <RunHeader :run="run" @note="(t) => emit('note', t)" @continue="emit('continue')" @stop="emit('stop')" @clone="emit('clone')" />
-    <p v-if="layout.note" class="t-small text-label">{{ layout.note }}</p>
-    <!-- Waiting on a person with no step to hang the decision on: a batch review, or a step-by-step run paused between steps. -->
+    <p v-if="workflowNote" class="t-small text-label">{{ workflowNote }}</p>
+    <!-- Hosts a decision that has no step to hang on: a batch review, a step-by-step
+         run paused between steps, or a question (often a runner-raised approval —
+         budget, rework limit, too many interruptions) whose stepId names no step
+         in this run, including while the workflow hasn't loaded yet. -->
     <RunGate
-      v-if="!run.question && (run.status === 'awaiting_review' || run.status === 'paused')" :run="run"
+      v-if="gateHost?.where === 'top'" :run="run"
       @respond="(r) => emit('respond', r)" @continue="(n) => emit('continue', n)" @reject="(n) => emit('reject', n)" @rework="(s, n) => emit('rework', s, n)"
     />
     <div class="max-w-2xl mx-auto flex flex-col items-center">

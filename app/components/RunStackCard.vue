@@ -16,8 +16,13 @@ const open = computed(() => ctx.isOpen(props.stepId))
 const run = ctx.run
 const settledRun = computed(() => !isLiveStatus(run.value.status))
 const settled = computed(() => ['completed', 'failed', 'skipped'].includes(step.value.status))
-/** Question gates render in the card; approval gates render in the approval card above it (RunStackBlocks). */
-const askingHere = computed(() => run.value.question?.stepId === props.stepId && run.value.question.kind === 'question')
+/** This card hosts any open decision RunStack routed here (ctx.gateAt) —
+ *  an ordinary question, or a runner-raised approval (budget, rework limit,
+ *  too many interruptions) that has no approval card of its own to render in.
+ *  A workflow-authored approval gate renders in the approval card above this
+ *  one (RunStackBlocks) instead, whenever the gated step declares `approval:
+ *  true` — so the two never both claim the same open decision. */
+const askingHere = computed(() => ctx.gateAt(props.stepId) === 'card')
 
 const elapsed = computed(() => {
   const s = step.value
@@ -47,7 +52,7 @@ function replay() {
 <template>
   <div class="w-full space-y-1">
     <p
-      v-for="a in arrivals" :key="a.at"
+      v-for="a in arrivals" :key="`${a.at}-${a.n}`"
       class="t-small flex items-center gap-1" style="color: var(--warning);" :data-sendback-to="stepId"
     >
       <UIcon name="i-lucide-corner-left-up" class="size-3.5 shrink-0" />
