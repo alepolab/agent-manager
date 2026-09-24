@@ -66,6 +66,10 @@ function stubJira(answers, schema = schemaBody()) {
     if (String(url).includes('/issue/createmeta')) {
       return { ok: true, status: 200, json: async () => schema, text: async () => '' }
     }
+    // Who is filing, and assigning each filed issue to them, answer without
+    // consuming the queue for the same reason createmeta does.
+    if (String(url).endsWith('/myself')) return { ok: true, status: 200, json: async () => ({ accountId: 'acct-filer' }), text: async () => '' }
+    if (String(url).endsWith('/assignee')) return { ok: true, status: 204, json: async () => ({}), text: async () => '' }
     const next = answers.shift()
     if (typeof next === 'function') return next()
     return {
@@ -76,7 +80,8 @@ function stubJira(answers, schema = schemaBody()) {
     }
   }
   impl.sent = sent
-  impl.posts = () => sent.filter(s => !String(s.url).includes('/issue/createmeta'))
+  impl.posts = () => sent.filter(s => !/\/issue\/createmeta|\/myself$|\/assignee$/.test(String(s.url)))
+  impl.assigned = () => sent.filter(s => String(s.url).endsWith('/assignee')).map(s => ({ issue: String(s.url).split('/issue/')[1].split('/')[0], accountId: s.body?.accountId }))
   return impl
 }
 
@@ -413,6 +418,26 @@ function seed(id, name, entries) {
     assert.equal(out[0].jiraKey, 'SEC-80', `${row.name}: the issue files`)
     row.expect(fetchImpl.posts()[0].body.fields[row.field.id])
   }
+}
+
+// ── 12c. A filed issue is assigned to the account that filed it ──────────
+// Left alone, a scan's fourteen tickets took the project's default assignee:
+// a colleague who had nothing to do with them.
+{
+  const fetchImpl = stubJira([{ json: { key: 'SEC-75' } }, { json: { key: 'SEC-76' } }])
+  const out = await createIssuesFrom(run, [draft(), draft({ draft_id: 'DRAFT-002' })].map((entry, index) => ({ index, entry })), fetchImpl)
+  assert.deepEqual(fetchImpl.assigned(), [{ issue: 'SEC-75', accountId: 'acct-filer' }, { issue: 'SEC-76', accountId: 'acct-filer' }], 'each filed issue is assigned to the filer')
+  assert.equal(fetchImpl.sent.filter(s => String(s.url).endsWith('/myself')).length, 1, 'who the filer is, asked once per batch')
+  assert.doesNotMatch(out[0].line, /default assignee/)
+
+  // An assignment Jira refuses leaves the ticket filed and says so.
+  const refusing = stubJira([{ json: { key: 'SEC-77' } }])
+  const base = refusing
+  const impl = async (url, init) => String(url).endsWith('/assignee') ? { ok: false, status: 403, json: async () => ({}), text: async () => '' } : base(url, init)
+  impl.posts = base.posts
+  const [o] = await createIssuesFrom(run, [{ index: 0, entry: draft() }], impl)
+  assert.equal(o.jiraKey, 'SEC-77', 'a refused assignment does not un-file the ticket')
+  assert.match(o.line, /default assignee/, 'and the line says who holds it instead')
 }
 
 // ── 12b. A drafter that echoes the schema writes { type, value } ──────────

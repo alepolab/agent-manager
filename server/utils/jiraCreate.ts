@@ -246,6 +246,36 @@ function shapeFor(value: unknown, field?: { type?: string, custom?: string }): u
   return richText ? plainTextToAdf(value) : value
 }
 
+/** The account id behind these credentials, or null when Jira will not say. */
+async function filerOf(creds: { baseUrl: string, email: string, apiToken: string }, fetchImpl: FetchLike): Promise<string | null> {
+  try {
+    const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/myself`, { headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' } })
+    return res.ok ? ((await res.json() as { accountId?: string }).accountId ?? null) : null
+  } catch { return null }
+}
+
+/**
+ * Assigns a just-filed issue to the account that filed it - the developer
+ * whose credentials the run holds.
+ *
+ * Left alone, a scan's tickets took the project's default assignee: fourteen
+ * landed on a colleague who had nothing to do with them, and each pipeline
+ * comment mentioned him. A separate call rather than a create field, because a
+ * project whose create screen lacks `assignee` refuses the whole issue over it,
+ * and the ticket matters more than who holds it.
+ */
+async function assignTo(creds: { baseUrl: string, email: string, apiToken: string }, issueKey: string, accountId: string | null, fetchImpl: FetchLike): Promise<boolean> {
+  if (!accountId) return false
+  try {
+    const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`, {
+      method: 'PUT',
+      headers: { Authorization: jiraAuthHeader(creds), 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ accountId }),
+    })
+    return res.ok
+  } catch { return false }
+}
+
 /**
  * Creates an issue per entry, stamping `jira_key` and `work_type` onto the
  * entries it created.
@@ -280,6 +310,8 @@ export async function createIssuesFrom(
   }
 
   const out: CreateOutcome[] = []
+  // The filing account, looked up once and only when something is filed.
+  let filer: Promise<string | null> | undefined
   // One lookup per (project, issue type) for the whole batch.
   const schemas = new Map<string, CreateSchema | null>()
   for (const { index, entry } of entries) {
@@ -375,7 +407,9 @@ export async function createIssuesFrom(
       const workType = workTypeOf(entry, fields)
       if (workType) entry.work_type = workType
       log.info('created a jira issue', { runId: run.id, jiraKey: created.key, project })
-      out.push({ index, key, jiraKey: created.key, line: `Created ${created.key} in ${project} for ${key}${droppedPriority ? `, without priority "${droppedPriority}" (${project} does not offer it${schema?.priorities.length ? `; it offers ${schema.priorities.join(', ')}` : ''})` : ''}.` })
+      filer ??= filerOf(creds, fetchImpl)
+      const assigned = await assignTo(creds, created.key, await filer, fetchImpl)
+      out.push({ index, key, jiraKey: created.key, line: `Created ${created.key} in ${project} for ${key}${droppedPriority ? `, without priority "${droppedPriority}" (${project} does not offer it${schema?.priorities.length ? `; it offers ${schema.priorities.join(', ')}` : ''})` : ''}${assigned ? '' : ', left with the project\'s default assignee (it could not be assigned to the filing account)'}.` })
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
       out.push({ index, key, error: why, line: `Could not create an issue for ${key}: ${why}.` })
