@@ -48,6 +48,7 @@ import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type Launc
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { childrenSettled } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
+import { recordCheck, recordSendBack } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
@@ -731,6 +732,7 @@ async function runMonitor(
     const { output: review } = normalizeAgentResult(raw)
     const verdict = parseVerdict(review)
     Object.assign(rec, { monitorVerdict: verdict, monitorNote: review })
+    recordCheck(rec, verdict, review)
     // CONTINUE is the expected, silent-majority outcome; RETRY/ABORT are the
     // noteworthy ones — a monitor sending a step back, or killing the run,
     // is exactly the kind of decision a reviewer reconstructing a run needs
@@ -743,6 +745,7 @@ async function runMonitor(
   } catch (err) {
     const monitorNote = `Monitor failed: ${err instanceof Error ? err.message : 'unknown error'}`
     Object.assign(rec, { monitorVerdict: 'CONTINUE', monitorNote })
+    recordCheck(rec, 'CONTINUE', monitorNote)
     log.warn('monitor call failed; defaulting to CONTINUE', {
       stepId: rec.stepId, monitorSlug: step.monitorSlug,
       error: err instanceof Error ? err.message : String(err),
@@ -2067,6 +2070,8 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = [w.target]
     l.running = false
+    // Before publish: restartRun re-reads the run from disk.
+    recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${raiser?.agentSlug ?? w.from}` })
     await publish(run)
     log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, bucket, spent })
     return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${REWORK_LIMIT}): ${w.instruction}`, run.startedBy, { fromRunner: true })

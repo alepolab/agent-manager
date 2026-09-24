@@ -151,6 +151,30 @@ export type RunStepStatus =
   /** The step stopped to ask the operator something and waits for the answer. */
   | 'waiting'
 
+/** One monitor verdict on one visit of a step. `monitorVerdict` on the step is the latest; this is all of them. */
+export interface StepCheck {
+  visit: number
+  verdict: 'CONTINUE' | 'RETRY' | 'ABORT'
+  note: string
+  at: number
+}
+
+/**
+ * A run sent back to an earlier step by an AGENT (PIPELINE-REWORK). A person's
+ * send-back is a RunDecision instead: `decisions` is what people chose, and the
+ * manager board counts and attributes it, so agent send-backs are kept apart.
+ */
+export interface SendBack {
+  /** Step that raised it. */
+  from: string
+  /** Step the run went back to. */
+  target: string
+  instruction: string
+  /** `agent:<slug>` */
+  by: string
+  at: number
+}
+
 export interface RunStep {
   stepId: string
   label: string
@@ -165,6 +189,8 @@ export interface RunStep {
   visits: number
   monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
   monitorNote?: string
+  /** Every monitor verdict this step received, oldest first. Kept across restarts. */
+  checks?: StepCheck[]
   /** The model the agent call actually ran, as the SDK's own system/init
    *  message reported it (an observed id, e.g. 'claude-sonnet-4-6') - never
    *  the alias requested. Absent when a stub caller (tests) never returned
@@ -348,6 +374,8 @@ export interface WorkflowRun {
   reworksBy?: { ci?: number, verification?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
+  /** Agent-raised send-backs, oldest first. See SendBack. */
+  sendBacks?: SendBack[]
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
