@@ -2,6 +2,7 @@
 import { isLiveStatus, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR, runElapsedLabel, runStatusLabel } from '~/utils/runStatus'
 import { gateIsMine } from '~~/shared/utils/notifications'
+import { shortDuration } from '~/utils/runActivity'
 
 const route = useRoute()
 const router = useRouter()
@@ -133,7 +134,8 @@ const title = (r: WorkflowRun) => {
 function liveLine(r: WorkflowRun): string {
   if (r.status === 'queued') {
     const g = loadFor(r)
-    return g ? `Queued behind ${g.name}: ${g.inFlight} of ${g.maxConcurrent} running` : 'Queued'
+    const waiting = `waiting ${shortDuration(now.value - (r.queuedAt ?? r.startedAt))}`
+    return g ? `Queued behind ${g.name}: ${g.inFlight} of ${g.maxConcurrent} running · ${waiting}` : `Queued · ${waiting}`
   }
   const s = r.steps.find(x => x.status === 'running')
   if (!s) return ''
