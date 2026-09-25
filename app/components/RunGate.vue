@@ -69,7 +69,7 @@ const askingLabel = computed(() => `${props.run.steps.find(s => s.stepId === pro
            the same size, inside a box built exactly like the two informational
            boxes above it — which is how the console's whole reason to exist came
            to look like a footnote. -->
-      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : askingLabel }}</div>
+      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : askingLabel }}</div>
       <p class="t-head whitespace-pre-wrap" style="color: var(--text-primary);">{{ run.question.text }}</p>
       <p v-if="run.blastRadius" class="t-small mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
@@ -100,10 +100,6 @@ const askingLabel = computed(() => `${props.run.steps.find(s => s.stepId === pro
       v-else-if="run.question?.kind === 'approval' && run.question.reason !== 'budget'"
       :run="run"
     />
-    <div v-else-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
-      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : askingLabel }}</div>
-      <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
-    </div>
     <textarea
       v-if="!reviewing && mayAnswer && run.status === 'paused'"
       v-model="note"

@@ -193,6 +193,9 @@ watch(workflowState, (s) => { if (s === 'loaded') focusTarget() }, { once: true 
       @respond="(r) => emit('respond', r)" @continue="(n) => emit('continue', n)" @reject="(n) => emit('reject', n)" @rework="(s, n) => emit('rework', s, n)"
     />
     <div class="max-w-2xl mx-auto flex flex-col items-center">
+      <div class="w-full flex justify-end mb-2">
+        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-folder-open" label="Evidence" @click="() => { evidenceOpen = true }" />
+      </div>
       <div class="w-full rounded-lg px-3 py-2 t-small flex items-center gap-2" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
         <UIcon :name="run.watch && run.watch !== 'direct-invocation' ? 'i-lucide-radar' : 'i-lucide-play'" class="size-4 shrink-0" style="color: var(--warning);" />
         <span class="truncate">

@@ -56,7 +56,7 @@ function replay() {
       class="t-small flex items-center gap-1" style="color: var(--warning);" :data-sendback-to="stepId"
     >
       <UIcon name="i-lucide-corner-left-up" class="size-3.5 shrink-0" />
-      Sent back here ({{ a.n }}) by {{ a.by.startsWith('agent:') ? a.by.slice(6) : a.by }} from {{ ctx.stepOf(a.from)?.label ?? a.from }}<template v-if="a.note">: {{ a.note }}</template>
+      Sent back here by {{ a.by.startsWith('agent:') ? a.by.slice(6) : a.by }} from {{ ctx.stepOf(a.from)?.label ?? a.from }}<template v-if="a.note">: {{ a.note }}</template>
     </p>
     <article
       :id="`step-${stepId}`" :data-step="stepId"
@@ -86,8 +86,8 @@ function replay() {
             {{ STEP_KIND_LABEL[kind] }}<template v-if="kind === 'agent'"> · {{ step.agentSlug }}</template>
             <template v-if="wf?.monitorSlug"> · Check</template>
             <template v-if="step.status === 'skipped' && step.skipReason"> · skipped: {{ step.skipReason }}</template>
-            <template v-if="step.childRunIds?.length"> · <span data-testid="child-run-count">{{ ctx.childSummary(stepId) }}</span></template>
           </span>
+          <span v-if="step.childRunIds?.length" class="block t-small text-label truncate" data-testid="child-run-count">{{ ctx.childSummary(stepId) }}</span>
         </span>
         <span class="t-small font-mono text-label tabular-nums text-right whitespace-nowrap">
           {{ elapsed }}<template v-if="tokens"><br>{{ tokens }} tok{{ usd ? ` · ${usd}` : '' }}</template>
