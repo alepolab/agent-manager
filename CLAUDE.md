@@ -30,7 +30,7 @@ bun run typecheck    # Run TypeScript type checking
 - `/agents/[slug]` - Edit individual agent
 - `/commands` - List and manage commands
 - `/skills` - List and manage skills
-- `/workflows` - Visual workflow builder
+- `/workflows` - Workflow list; `/workflows/[slug]` builds a workflow as a stack of steps (Build) and shows its runs (Run)
 - `/graph` - Relationship visualization
 - `/explore` - Browse templates and marketplace
 - `/cli` - Chat with Claude Code against the working directory
@@ -151,7 +151,7 @@ The system automatically detects relationships between agents/commands/skills by
 - Tool progress and thinking blocks are streamed incrementally
 
 **Run stack** (`/runs`, `/runs/:id`, the notifications inbox):
-A run is drawn as its workflow's stack of steps. `shared/utils/workflowStack.ts` turns `next[]` into series/parallel blocks (`toStack`, `fromStack`, `stackForRun`) and refuses graphs it cannot draw. `RunStack.vue` renders `RunHeader` (the run as a whole), `RunStackBlocks` (recursive: steps, paths, approval cards) and `RunStackCard` (one step), and puts `RunGate` (the open decision) inside the card that waits on it, or at the top of the stack when no step does. Per-visit monitor verdicts are `RunStep.checks`; agent send-backs are `WorkflowRun.sendBacks` (human ones stay in `decisions`).
+A run is drawn as its workflow's stack of steps. `shared/utils/workflowStack.ts` turns `next[]` into series/parallel blocks (`toStack`, `fromStack`, `stackForRun`) and refuses graphs it cannot draw. `RunStack.vue` renders `RunHeader` (the run as a whole), `RunStackBlocks` (recursive: steps, paths, approval cards) and `RunStackCard` (one step), and puts `RunGate` (the open decision) inside the card that waits on it, or at the top of the stack when no step does. Per-visit monitor verdicts are `RunStep.checks`; agent send-backs are `WorkflowRun.sendBacks` (human ones stay in `decisions`). The builder (`/workflows/[slug]`) edits the same stack: `shared/utils/stackEdit.ts` holds the pure edits and `canSave`, which refuses anything `toStack` couldn't draw again; `WorkflowStackEditor` → `BuildStackBlocks` → `BuildStackCard`, with `ActionPicker` for the "+", `StepDrawer` and `TriggerDrawer` for settings.
 
 **GitHub Import Flow**:
 1. User provides GitHub URL

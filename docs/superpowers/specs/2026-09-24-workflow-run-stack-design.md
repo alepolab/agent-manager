@@ -175,9 +175,11 @@ callers (`runs/[id].vue`, `NotificationRunDetail`) use the new component.
 
 ### 3. Builder (`app/pages/workflows/[slug].vue`)
 
-The page is a header plus `RunStack` in build mode plus a right drawer. A
-**Build | Run #n** switch in the header shows the live or selected run of this
-workflow in run mode. The URL carries `?run=<id>`.
+The page is a header plus the stack plus a right drawer. A **Build | Run #n**
+switch in the header shows the live or selected run of this workflow in run
+mode. The URL carries `?run=<id>`. Build mode renders `WorkflowStackEditor` and
+`BuildStack*`, not `RunStack` in a build mode, because a run card and a build
+card do different jobs; Run mode renders `RunStack`.
 
 **Trigger card drawer**
 
@@ -204,6 +206,8 @@ writes today's fields:
 | Ask for approval | `approval: true` and `gateRole` on the step below the "+" |
 | Split into paths | a `paths` block with two empty branches and a Rejoin toggle |
 
+A step's kind is fixed once added; to change it, add the other kind and delete this one.
+
 **Step drawer**
 
 - **Setup:** the action type and, for agent steps, the agent.
@@ -215,21 +219,26 @@ writes today's fields:
   - **Notify:** channel and message.
   - **Loop:** `source` / `fromParameter`, `itemParameter`, `join`, `routeBy`,
     `routes`, fallback `slug`.
-- **Test:** see section 4.
+- **Test:** see section 4. It is built in Plan 3.
 
 **Editing**
 
 - A path's condition is its first step's `runWhen`. An empty condition means
   the branch always runs.
+- Only one level of paths can be created in the builder.
 - Drag-reordering works only among siblings at the same level.
 - Deleting a step reconnects its predecessor to its successors.
 - Deleting the Approval card clears `approval` on the step it guards.
+- The builder holds edits while a run is running: no "+", drag or delete, Save disabled, with the line "Editing is paused while a run is in progress."
+- Clearing a loop step's source or a channel step's channel keeps its kind; the step keeps an empty block.
 
 **Saving and read-only workflows**
 
 - Save calls `fromStack` and the existing `PUT /api/workflows/[slug]`.
 - When `toStack` returns `ok: false`, the page opens read-only with the reason
   and offers no editing. The file is never reshaped.
+- An empty split is dropped on save.
+- `canSave` also requires the saved workflow to redraw as the editor showed it (after dropping empty splits and unwrapping one-branch splits), and refuses a step that appears twice.
 
 **Removed:**
 
@@ -237,10 +246,13 @@ writes today's fields:
   modal and the Schedule tab
 - `@vue-flow/*` from `package.json`, if nothing else imports them (check at
   plan time)
+- The editor no longer draws the old canvas's guessed rework arrows; send-backs show on runs, from real run data.
 
 **Narrow screens:** the drawer becomes a bottom sheet.
 
 ### 4. Test a step
+
+The Test tab is Plan 3.
 
 **The Test tab has:**
 
