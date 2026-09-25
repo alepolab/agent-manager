@@ -180,4 +180,40 @@ for (const t of workflowTemplates.filter(x => ['runbook-a-jira-to-diff', 'scan-s
   assert.throws(() => E.removeBranch(openBranchFollowed2, { seq: [], index: 1 }, 1), /Nothing can follow paths that end separately/)
 }
 
+// ── 8. a rejoining split's trailing split is not forced open ───────────────
+{
+  // (a) a→[b,e]; b→[c,d]; c,d,e→f. The inner split is the last block of a
+  // branch of a rejoining split, so it rejoins at f and must stay rejoin:true.
+  const nested = [
+    step('a', ['b', 'e']), step('b', ['c', 'd']), step('c', ['f']),
+    step('d', ['f']), step('e', ['f']), step('f', []),
+  ]
+  const drawn = toStack(nested)
+  assert.ok(drawn.ok, drawn.reason)
+  const r = E.canSave(drawn.blocks, nested)
+  assert.ok(r.ok, r.reason)
+  assert.deepEqual(buildGraph(r.steps).succ, buildGraph(nested).succ, 'nested rejoin saves the graph it loaded')
+  assert.deepEqual(E.normalize(drawn.blocks), drawn.blocks, 'normalize leaves a drawn stack alone')
+}
+{
+  // (b) every drawable workflow template saves back untouched as the same graph.
+  let checked = 0
+  for (const t of workflowTemplates) {
+    const steps = materializeTemplateSteps(t, Object.fromEntries(t.steps.map(s => [s.agentTemplateId, s.agentTemplateId])))
+    const drawn = toStack(steps)
+    if (!drawn.ok) continue
+    const r = E.canSave(drawn.blocks, steps)
+    assert.ok(r.ok, `${t.id}: ${r.reason}`)
+    assert.deepEqual(buildGraph(r.steps).succ, buildGraph(steps).succ, `${t.id}: load then save untouched keeps the graph`)
+    checked++
+  }
+  assert.ok(checked >= 2, 'at least the two section-5 templates are checked')
+}
+{
+  // (c) the 7A refusal still holds: an open branch followed by a step.
+  const abcdef = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => step(id))
+  const openBranchFollowed = [S('a'), P([[S('b'), P([[S('c')], [S('d')]], false)], [S('e')]]), S('f')]
+  assert.equal(E.canSave(openBranchFollowed, abcdef).ok, false)
+}
+
 console.log('stackEdit: all checks passed')

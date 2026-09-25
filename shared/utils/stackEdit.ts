@@ -147,24 +147,27 @@ export function pruneEmptyPaths(blocks: StackBlock[]): StackBlock[] {
  * branches (nothing follows to tell them apart), a rejoin:true split keeps at
  * most one (a graph cannot tell two empty branches apart either); a split
  * left with one branch is unwrapped in place, its blocks replacing it; and a
- * split that is the last block of its sequence is rejoin:false, because
- * nothing after it could tell the difference. Applied until nothing changes,
+ * split that is the last block of an open sequence is rejoin:false, because
+ * nothing after it could tell the difference. A sequence is open when there
+ * is no rejoin to fall back to: the top level, and the branches of a
+ * rejoin:false split. Inside a branch of a rejoining split the outer rejoin
+ * follows, so a trailing split there keeps its rejoin. Applied until nothing changes,
  * since one pass can produce a new last block for the next to act on.
  */
 export function normalize(blocks: StackBlock[]): StackBlock[] {
   let cur = blocks
   while (true) {
-    const next = normalizeOnce(cur)
+    const next = normalizeOnce(cur, true)
     if (JSON.stringify(next) === JSON.stringify(cur)) return next
     cur = next
   }
 }
 
-function normalizeOnce(blocks: StackBlock[]): StackBlock[] {
+function normalizeOnce(blocks: StackBlock[], open: boolean): StackBlock[] {
   const out: StackBlock[] = []
   for (const b of blocks) {
     if (b.kind === 'step') { out.push(b); continue }
-    const branches = b.branches.map(normalizeOnce)
+    const branches = b.branches.map(br => normalizeOnce(br, !b.rejoin))
     const collapsed = b.rejoin
       ? (branches.some(br => br.length === 0) ? [...branches.filter(br => br.length > 0), []] : branches)
       : branches.filter(br => br.length > 0)
@@ -172,7 +175,7 @@ function normalizeOnce(blocks: StackBlock[]): StackBlock[] {
     if (collapsed.length === 1) { out.push(...collapsed[0]!); continue }
     out.push({ ...b, branches: collapsed })
   }
-  if (out.length) {
+  if (open && out.length) {
     const last = out[out.length - 1]!
     if (last.kind === 'paths' && last.rejoin) out[out.length - 1] = { ...last, rejoin: false }
   }
