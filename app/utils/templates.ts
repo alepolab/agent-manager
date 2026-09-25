@@ -1794,7 +1794,7 @@ ${SDLC_STANDING_RULES}`,
     icon: 'i-lucide-flame',
     frontmatter: {
       name: 'sdlc-smoke-check',
-      description: 'Checks one product out, builds it and runs its tests, and says whether the registry entry is right.',
+      description: 'Checks one product out, builds it, runs its tests, checks the stack\'s clocks agree, and says whether the registry entry is right.',
       model: MODEL.SONNET,
       color: 'orange',
       tools: ['Bash', 'Read', 'Write', 'Glob', 'Grep'],
@@ -1824,14 +1824,52 @@ the exit code in your report. A test suite that needs a running stack, a
 database or credentials you do not have is reported as such — N/A with the
 exact reason — never as a pass and never as a failure of the code.
 
-## 3. The report
+## 3. Clock alignment
+
+Any stack you stood up to run those tests gets its clocks checked, because a
+test suite cannot see this class of defect and a green suite is exactly when it
+ships. Run, from the agent-manager checkout:
+
+    node engineering/scripts/check-clock-alignment.mjs --stack <pcrf|aaa|ocs>
+
+Capture the whole output to \`clock-alignment.log\` in the run artifacts
+directory and quote it verbatim in your report — it is written to be pasted into
+a release issue as G4 evidence, so do not summarise or reformat it. The exit
+code is the verdict, not your reading of the prose:
+
+| exit | verdict | what it means |
+|---|---|---|
+| 0 | \`ALIGNED\` | every clock read agrees on its UTC offset |
+| 1 | \`SKEWED\` | two reachable clocks disagree — report it, never pass it |
+| 1 | \`MISCONFIGURED\` | the clocks agree, but a container ignores the \`TZ\` it was given because its image has no tzdata, so the agreement is accidental |
+| 2 | \`UNKNOWN\` | a clock could not be read. **Not a pass.** Start the stack and re-run |
+
+A non-zero exit is a \`SMOKE: FAIL\` even when the build and the tests were
+green. If this product's stack has no entry in that script, say so in the report
+with the product key — do not hand-roll a substitute check, and never report the
+clocks as aligned because you could not measure them.
+
+Why this is a step and not someone's checklist. Several products here compare a
+*naive* \`DATETIME\` column against a wall clock, and they do not all read the
+same one. PCRF EMS is the worked example: \`isExpired()\` reads the JVM clock
+while the query beside it reads the database's \`CURRENT_TIMESTAMP\`, both
+against the same \`EXPIRYDATE\`, in the same release. Let those two containers
+resolve different zones and one stored value is two different instants — EMS
+calls a lapsed credit source live and permits the debit (PCRFV-1884). The same
+split already shipped a production regression on \`CREATEDATE\` (PCRFV-1874), and
+an engine-versus-EMS divergence was observed in the field on a customer-bound
+release (SBN-3787). Every one of those was green in CI.
+
+## 4. The report
 
 Write \`smoke-report.md\` into the run artifacts directory with: the product,
 each repository with branch and commit, the build tool detected, the command
-run, the exit code, the duration, the failing tests if any, and what the
-registry entry should say. End your output with exactly these lines:
+run, the exit code, the duration, the failing tests if any, the clock-alignment
+verdict from §3, and what the registry entry should say. End your output with
+exactly these lines:
 
 SMOKE: PASS | FAIL | N/A — <command> exit <code> in <seconds>s, <one sentence>
+CLOCKS: <the CLOCKS line from §3 verbatim, or "N/A — no stack was stood up">
 REGISTRY: <the unit test command the registry should carry, or "as registered">
 
 If the checkout itself is impossible (no access, repository gone), end with
