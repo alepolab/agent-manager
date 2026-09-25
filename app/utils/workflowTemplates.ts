@@ -35,7 +35,7 @@ export interface WorkflowTemplateStep {
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string, fields?: Record<string, string> }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
   /** See WorkflowStep.produces. */
@@ -247,7 +247,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // The outcome comment rides this step, not the last one: this is the moment the
       // code work is finished, which is what that comment describes.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-dev-done', label: 'Jira: Dev Done', next: ['jira-ready-for-qa'], jira: { transition: 'Dev Done', comment: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-ready-for-qa', label: 'Jira: Ready for QA', next: ['jira-qa-in-progress'], jira: { transition: 'Ready for QA' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-ready-for-qa', label: 'Jira: Ready for QA', next: ['jira-qa-in-progress'], jira: { transition: 'Ready for QA', fields: { 'CI Release Details': '{pr_or_branch}' } }, monitorSlug: 'sdlc-step-monitor' },
       // Immediately before the fan-out. A step cannot fire while its siblings start,
       // so this is the closest honest moment to "QA has begun" the graph can express.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-qa-in-progress', label: 'Jira: QA In Progress', next: ['sdlc-verifier', 'sdlc-trace-capture', 'sdlc-security-review'], jira: { transition: 'QA In Progress' }, monitorSlug: 'sdlc-step-monitor' },
@@ -278,7 +278,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // human qualifies that claim before it is made. Starting the run is what
       // justifies the In Progress transition above; nothing justifies this except
       // someone having looked.
-      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-qa-done', label: 'Jira: QA Done', next: [], jira: { transition: 'QA Done', attach: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-qa-done', label: 'Jira: QA Done', next: [], jira: { transition: 'QA Done', attach: true, fields: { 'CI Release Details': '{pr}' } }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
     ],
   },
   {
@@ -310,7 +310,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // Placed exactly as in Runbook A - straight after the implementation step, ahead
       // of review and QA - so the two runbooks tell the board the same story.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-dev-done', label: 'Jira: Dev Done', next: ['jira-ready-for-qa'], jira: { transition: 'Dev Done', comment: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-ready-for-qa', label: 'Jira: Ready for QA', next: ['sdlc-ce-review'], jira: { transition: 'Ready for QA' }, monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-ready-for-qa', label: 'Jira: Ready for QA', next: ['sdlc-ce-review'], jira: { transition: 'Ready for QA', fields: { 'CI Release Details': '{pr_or_branch}' } }, monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', produces: ['review.md'], next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
       // Gate 2 of 4: the diff. Rebuilding the stack is the first step that acts on the
       // change, so approval here is the last moment a person sees it before it runs.
@@ -335,7 +335,7 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // for a person. Attaching the evidence is the pipeline ASSERTING the work is
       // finished, to an audience of reporters, watchers and whoever is on support
       // that week. A human qualifies that claim before it is made.
-      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-qa-done', label: 'Jira: QA Done', next: [], jira: { transition: 'QA Done', attach: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-qa-done', label: 'Jira: QA Done', next: [], jira: { transition: 'QA Done', attach: true, fields: { 'CI Release Details': '{pr}' } }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
     ],
   },
   {

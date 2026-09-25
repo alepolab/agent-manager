@@ -4,6 +4,7 @@ import { isJiraPostingEnabled, jiraAuthHeader } from './jiraCredentials.ts'
 import { credentialsFor, notifyTicketOutcome } from './ticketNotifier.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
 import { createFromArtifact } from './jiraCreate.ts'
+import { plainTextToAdf } from './adf.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -28,6 +29,19 @@ export interface JiraStepConfig {
   action?: 'create'
   /** The artifact `action: 'create'` reads its drafts from. */
   source?: string
+  /**
+   * Fields to fill, by field name. One on the transition's screen is sent with
+   * the move - ASECRM refuses "Ready For QA" with "Add CI Release Details"
+   * otherwise - and any other is set on the issue itself, so a later step can
+   * replace what an earlier one wrote. Names match loosely ("CI Release
+   * Details" finds "CI-Release Details").
+   *
+   * Placeholders: `{pr}` the run's pull request link(s) from meta.json;
+   * `{branch}` the run branch on GitHub; `{pr_or_branch}` the PR when there is
+   * one, else the branch. A field whose value needs something the run does not
+   * have yet is left alone and the step says so.
+   */
+  fields?: Record<string, string>
 }
 
 /**
@@ -88,7 +102,13 @@ export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchIm
       ? lines.join('\n')
       : 'PIPELINE-SKIP: this run has no ticket key, so there is nothing in Jira to move or to comment on.'
   }
-  if (cfg.transition) lines.push(await moveTicket(run, key, cfg.transition, fetchImpl))
+  let rest = cfg.fields
+  if (cfg.transition) {
+    const moved = await moveTicket(run, key, cfg.transition, fetchImpl, cfg.fields)
+    lines.push(moved.line)
+    rest = moved.rest
+  }
+  if (rest && Object.keys(rest).length) lines.push(await setIssueFields(run, key, rest, fetchImpl))
   if (cfg.attach) lines.push(await attachArtifacts(run, key, fetchImpl))
   if (cfg.comment) {
     // The notifier renders, records the artifact and posts only when enabled.
@@ -168,7 +188,13 @@ const REVIEW_WORDS = /review|dev\s*\.?\s*done|development done|resolved|fixed|ve
 /** The disambiguator for each intent, when a project offers several in-progress statuses. */
 const WORDS_FOR: Record<string, RegExp> = { 'in progress': WORK_WORDS, 'dev done': REVIEW_WORDS }
 
-interface Transition { id: string, name: string, to?: { name?: string, statusCategory?: { key?: string } } }
+interface Transition {
+  id: string
+  name: string
+  to?: { name?: string, statusCategory?: { key?: string } }
+  /** The transition's screen, present when listed with `expand=transitions.fields`. */
+  fields?: Record<string, { name?: string, schema?: { type?: string, custom?: string } }>
+}
 
 /**
  * What this step should do with the ticket, decided from the ticket's OWN
@@ -271,14 +297,20 @@ function matchTransition(target: string, transitions: Transition[]): Transition 
   return undefined
 }
 
-async function moveTicket(run: WorkflowRun, key: string, target: string, fetchImpl: FetchLike): Promise<string> {
-  if (!isJiraPostingEnabled()) return `Would move ${key} to "${target}"; not done: JIRA_POST_ENABLED is not 1 on this instance.`
+/**
+ * Moves the ticket, sending whichever of `fields` sit on the transition's
+ * screen. `rest` is what it did not send - every field, when no move was
+ * made - for the caller to set on the issue instead.
+ */
+async function moveTicket(run: WorkflowRun, key: string, target: string, fetchImpl: FetchLike, fields?: Record<string, string>): Promise<{ line: string, rest?: Record<string, string> }> {
+  const line = (l: string) => ({ line: l, rest: fields })
+  if (!isJiraPostingEnabled()) return { line: `Would move ${key} to "${target}"; not done: JIRA_POST_ENABLED is not 1 on this instance.` }
   const creds = await credentialsFor(run)
   const headers = { Authorization: jiraAuthHeader(creds), Accept: 'application/json', 'Content-Type': 'application/json' }
   const issueUrl = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}`
   const url = `${issueUrl}/transitions`
-  const listed = await fetchImpl(url, { headers })
-  if (!listed.ok) return `Could not read the transitions of ${key} (HTTP ${listed.status}); the ticket was not moved.`
+  const listed = await fetchImpl(fields ? `${url}?expand=transitions.fields` : url, { headers })
+  if (!listed.ok) return line(`Could not read the transitions of ${key} (HTTP ${listed.status}); the ticket was not moved.`)
   const transitions = (((await listed.json()) as { transitions?: Transition[] })?.transitions) ?? []
   // The same resolver preflight used, so the two cannot drift apart.
   //
@@ -290,18 +322,97 @@ async function moveTicket(run: WorkflowRun, key: string, target: string, fetchIm
   // and the read is skipped.
   let r = resolveTransition(target, transitions, undefined)
   if (r.needsCurrent) r = resolveTransition(target, transitions, await currentStatus(issueUrl, headers, fetchImpl))
-  if (r.already) return `${key} is ${r.why}; left as is.`
+  if (r.already) return line(`${key} is ${r.why}; left as is.`)
   if (!r.hit) {
-    return `${key} could not be moved to "${target}": ${r.why}. Left as is - the ticket's own workflow offers no safe next step, which is not a problem with this run. Name the status this project uses on the step, or move it by hand.`
+    return line(`${key} could not be moved to "${target}": ${r.why}. Left as is - the ticket's own workflow offers no safe next step, which is not a problem with this run. Name the status this project uses on the step, or move it by hand.`)
   }
   const hit = r.hit
   const to = hit.to?.name ?? hit.name
-  const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify({ transition: { id: hit.id } }) })
-  if (!res.ok) return `Moving ${key} to "${to}" failed (HTTP ${res.status}): ${(await res.text().catch(() => '')).slice(0, 300)}. The ticket was not moved.`
+  const filled = fields ? await fillFields(run, Object.entries(hit.fields ?? {}), fields) : { values: {}, notes: [], rest: {} }
+  const body = { transition: { id: hit.id }, ...(Object.keys(filled.values).length ? { fields: filled.values } : {}) }
+  const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) })
+  const noted = filled.notes.length ? ` ${filled.notes.join(' ')}` : ''
+  if (!res.ok) return { line: `Moving ${key} to "${to}" failed (HTTP ${res.status}): ${(await res.text().catch(() => '')).slice(0, 300)}. The ticket was not moved.${noted}`, rest: filled.rest }
   // Why this status, in the resolver's own words: a move that came from the
   // category rather than the configured name must say so, or a reader cannot
   // tell a deliberate resolution from a coincidence.
-  return `Moved ${key} to "${to}" (transition "${hit.name}"; ${r.why}).`
+  return { line: `Moved ${key} to "${to}" (transition "${hit.name}"; ${r.why}).${noted}`, rest: filled.rest }
+}
+
+/** Sets `fields` on the issue itself, for those its edit screen offers. */
+async function setIssueFields(run: WorkflowRun, key: string, fields: Record<string, string>, fetchImpl: FetchLike): Promise<string> {
+  const names = Object.keys(fields).map(n => `"${n}"`).join(', ')
+  if (!isJiraPostingEnabled()) return `Would set ${names} on ${key}; not done: JIRA_POST_ENABLED is not 1 on this instance.`
+  const creds = await credentialsFor(run)
+  const headers = { Authorization: jiraAuthHeader(creds), Accept: 'application/json', 'Content-Type': 'application/json' }
+  const issueUrl = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}`
+  const meta = await fetchImpl(`${issueUrl}/editmeta`, { headers })
+  if (!meta.ok) return `Could not read what ${key} lets you edit (HTTP ${meta.status}); ${names} not set.`
+  const editable = ((await meta.json()) as { fields?: Transition['fields'] })?.fields ?? {}
+  const filled = await fillFields(run, Object.entries(editable), fields)
+  const unreachable = Object.keys(filled.rest).map(n => `"${n}" is not editable on ${key}, so it was not set.`)
+  const notes = [...filled.notes, ...unreachable].join(' ')
+  if (!Object.keys(filled.values).length) return notes
+  const res = await fetchImpl(issueUrl, { method: 'PUT', headers, body: JSON.stringify({ fields: filled.values }) })
+  if (!res.ok) return `Setting fields on ${key} failed (HTTP ${res.status}): ${(await res.text().catch(() => '')).slice(0, 300)}.`
+  return notes
+}
+
+const fieldKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+/** The run's pull request and branch links. Placeholders are not links, and a branch needs a repo to live in. */
+async function runLinks(run: WorkflowRun): Promise<{ prs: string[], branches: string[] }> {
+  let repos: { repo?: unknown, pr?: unknown }[] = []
+  try {
+    const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
+    if (Array.isArray(meta?.fix?.repos)) repos = meta.fix.repos
+  } catch { /* no meta yet */ }
+  const prs = repos.map(r => r.pr).filter((p): p is string => typeof p === 'string' && /^https?:\/\//.test(p) && !p.includes('example.invalid'))
+  const names = [...new Set([...repos.map(r => r.repo), ...(run.product?.repos ?? [])].filter((r): r is string => typeof r === 'string' && /^[^/\s]+\/[^/\s]+$/.test(r)))]
+  const branch = run.branch?.split('/').map(encodeURIComponent).join('/')
+  return { prs, branches: branch ? names.map(n => `https://github.com/${n}/tree/${branch}`) : [] }
+}
+
+/** A field's value with its placeholders filled, or why it cannot be yet. */
+function resolveTemplate(template: string, links: { prs: string[], branches: string[] }): { value: string } | { missing: string } {
+  const pick: Record<string, string[]> = {
+    '{pr_or_branch}': links.prs.length ? links.prs : links.branches,
+    '{pr}': links.prs,
+    '{branch}': links.branches,
+  }
+  let value = template
+  for (const [token, found] of Object.entries(pick)) {
+    if (!value.includes(token)) continue
+    if (!found.length) return { missing: token === '{pr}' ? 'this run has not opened a pull request yet' : 'this run has no branch in a known repository yet' }
+    value = value.replaceAll(token, found.join('\n'))
+  }
+  return { value }
+}
+
+/**
+ * The configured fields that `available` offers, resolved and shaped for it.
+ * `rest` is every field `available` does not offer, for another route to set.
+ */
+async function fillFields(run: WorkflowRun, available: [string, { name?: string, schema?: { type?: string, custom?: string } }][], wanted: Record<string, string>): Promise<{ values: Record<string, unknown>, notes: string[], rest: Record<string, string> }> {
+  const values: Record<string, unknown> = {}
+  const notes: string[] = []
+  const rest: Record<string, string> = {}
+  let links: Awaited<ReturnType<typeof runLinks>> | undefined
+  for (const [name, template] of Object.entries(wanted)) {
+    const found = available.find(([id, f]) => fieldKey(f.name ?? '') === fieldKey(name) || id === name)
+    if (!found) { rest[name] = template; continue }
+    links ??= await runLinks(run)
+    const resolved = resolveTemplate(template, links)
+    if ('missing' in resolved) {
+      notes.push(`"${name}" was left as it is: ${resolved.missing}.`)
+      continue
+    }
+    const [id, f] = found
+    const richText = f.schema?.custom?.includes('textarea') || f.schema?.type === 'doc'
+    values[id] = richText ? plainTextToAdf(resolved.value) : resolved.value
+    notes.push(`Set "${f.name ?? name}" to ${resolved.value}.`)
+  }
+  return { values, notes, rest }
 }
 
 /** The ticket's status now, with Jira's category key; null when it cannot be read. */
