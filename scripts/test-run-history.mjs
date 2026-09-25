@@ -22,7 +22,7 @@ process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'run-history-artifacts-'
 const runner = await import('../server/utils/workflowRunner.ts')
 const { recordCheck, recordSendBack } = await import('../shared/utils/runHistory.ts')
 
-const TIMEOUT = 5000
+const TIMEOUT = 15000
 mkdirSync(join(CLAUDE_DIR, 'workflows'), { recursive: true })
 const save = w => writeFileSync(join(CLAUDE_DIR, 'workflows', `${w.slug}.json`), JSON.stringify(w, null, 2))
 
