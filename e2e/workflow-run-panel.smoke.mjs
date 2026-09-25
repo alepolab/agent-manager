@@ -321,32 +321,75 @@ try {
   // the global page finds that run and reports the same settled count the
   // panel does - the two views reading one run differently is exactly the
   // drift that made extracting app/utils/runStatus.ts worth doing.
-  await page.goto(`${baseUrl}/runs`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  //
+  // /runs is a master-detail page now (app/pages/runs/index.vue): a `ul` of run
+  // rows on the left (`aria-live="polite"`, one `button` per run with
+  // `aria-current` marking the open one) and, on the right, a detail pane
+  // (RunDetailPane.vue) that renders the very same RunStack used in Run mode
+  // above - so the assertions below reuse the same `run-progress-count` /
+  // `run-progress-bar` / `article[data-step]` selectors, just against the
+  // detail pane's copy of them rather than the workflow page's.
+  async function loadRunsList(url) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+        await page.waitForFunction(
+          () => document.querySelector('ul[aria-live="polite"]') !== null,
+          null, { timeout: ROW_VISIBLE_TIMEOUT_MS },
+        )
+        return
+      } catch (err) {
+        if (attempt === 4) throw err
+        await new Promise(r => setTimeout(r, 3000))
+      }
+    }
+  }
+  await loadRunsList(`${baseUrl}/runs`)
 
-  const historyRows = page.locator('[data-testid="run-history-row"]')
-  await historyRows.first().waitFor({ state: 'visible', timeout: 30_000 })
-  assert.equal(await historyRows.count(), 1,
-    'the history page must list the one seeded run, found via GET /api/runs rather than a workflow slug')
+  // Exactly one row: a locator that fails loudly if the seeded run is missing
+  // (zero rows) or duplicated (two rows) rather than silently picking "first".
+  const runRows = page.locator('ul[aria-live="polite"] > li button')
+  await runRows.first().waitFor({ state: 'visible', timeout: 30_000 })
+  assert.equal(await runRows.count(), 1,
+    'the history page must list exactly the one seeded run, found via GET /api/runs rather than a workflow slug')
 
-  const historyCount = page.locator('[data-testid="run-history-count"]').first()
-  const historyCountText = (await historyCount.textContent()).replace(/\s+/g, ' ').trim()
-  assert.equal(historyCountText, '1 / 3',
-    `history must report the same settled count as the panel, got "${historyCountText}"`)
+  // Select it. The page can auto-select the first (and only) run on load, but
+  // clicking it is still correct either way, and is what proves the row is
+  // actually the thing that opens the detail pane rather than a coincidence.
+  await runRows.first().click()
+  await page.waitForFunction(
+    () => document.querySelector('ul[aria-live="polite"] > li button')?.getAttribute('aria-current') === 'true',
+    null, { timeout: ROW_VISIBLE_TIMEOUT_MS },
+  )
 
-  const historySegments = page.locator('[data-testid="run-history-bar"] > span')
-  assert.equal(await historySegments.count(), 3,
-    'history rows carry one segment per step, matching the panel')
+  // The detail pane renders RunStack for the selected run - same testids, same
+  // per-step cards, as the panel assertions above. Scoped to the detail
+  // `<section>` (identified by containing an `article[data-step]`, which only
+  // the detail pane renders): the run's own row in the list on the left also
+  // carries a `run-progress-bar` (app/pages/runs/index.vue renders one per
+  // row), so an unscoped query here double-counts both bars' segments.
+  const pane = page.locator('section').filter({ has: page.locator('article[data-step]') })
 
-  // Expanding is the only way to see per-step detail from history, so a broken
-  // toggle makes the page a dead end rather than an obviously empty one.
-  await historyRows.first().locator('button').first().click()
-  const intakeRow = page.getByText(stepIntake.label, { exact: false }).first()
-  await intakeRow.waitFor({ state: 'visible', timeout: 15_000 })
+  const paneCountEl = pane.locator('[data-testid="run-progress-count"]')
+  await paneCountEl.waitFor({ state: 'visible', timeout: 30_000 })
+  const paneCountText = (await paneCountEl.textContent()).replace(/\s+/g, ' ').trim()
+  assert.equal(paneCountText, '1 / 3',
+    `the /runs detail pane must report the same settled count as the panel, got "${paneCountText}"`)
+
+  const paneSegments = pane.locator('[data-testid="run-progress-bar"] > span')
+  assert.equal(await paneSegments.count(), 3,
+    'the detail pane\'s bar carries one segment per step, matching the panel')
+
+  const paneIntakeCard = pane.locator(`article[data-step="${stepIntake.id}"]`)
+  await paneIntakeCard.waitFor({ state: 'visible', timeout: 30_000 })
+  const paneIntakeText = await paneIntakeCard.innerText()
+  assert.ok(paneIntakeText.includes(stepIntake.label),
+    `the detail pane's card for step "${stepIntake.id}" does not carry the label "${stepIntake.label}". Text:\n${paneIntakeText}`)
 
   console.log(
     'PASS: workflow run panel rendered all 3 seeded step rows (completed, running, pending) '
-    + 'with correct labels and status colors; run history page listed the same run '
-    + 'with a matching settled count and expandable step detail',
+    + 'with correct labels and status colors; /runs listed exactly the one seeded run and its '
+    + 'detail pane rendered the same run stack with a matching settled count and step card',
   )
 } catch (err) {
   exitCode = 1
