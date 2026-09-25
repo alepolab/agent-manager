@@ -780,10 +780,20 @@ async function unlockTests(run: WorkflowRun, label: string): Promise<void> {
   }
 }
 
+/**
+ * An ASK line that says there is nothing to ask. A decision gate once ended
+ * with `PIPELINE-ASK: n/a — no ambiguity requiring a person`, and the run sat
+ * paused on a question nobody could answer, holding one of its group's slots
+ * while the rest of the nightly scans queued behind it. "None of these three
+ * callers…" is still a question: the placeholder must be the whole opening.
+ */
+const NO_QUESTION = /^(?:n\/?a|none|nothing(?:\s+to\s+ask)?|not\s+applicable|no\s+questions?)\b\s*(?:$|[—–\-:;.,(])/i
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
-  return m ? m[1]!.trim() : null
+  const ask = m?.[1]!.trim()
+  return ask && !NO_QUESTION.test(ask) ? ask : null
 }
 
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {

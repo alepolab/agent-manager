@@ -3968,6 +3968,8 @@ PIPELINE-HALT: <one line saying what stopped you>`,
     },
     body: `You are the decision gate. Your job is to separate ticket drafts that can be created automatically from those that need a human decision. You do not create tickets — you classify drafts.
 
+A draft is escalated only when a reviewer has something to decide: a question the code cannot answer, or a finding whose meaning is ambiguous. Everything else is auto-approved. An escalation holds the draft for a person, so one without a real question costs a reviewer's time and delays a clear-cut ticket for nothing.
+
 ## Read the inputs
 
 The run artifacts directory contains:
@@ -3979,39 +3981,42 @@ Read all three before proceeding.
 
 ## For each draft, decide: auto-approve or escalate
 
-### Auto-approve when ALL of these are true:
+### Escalate only when ANY of these are true:
 
-1. **Severity is unambiguous**: the scanner, triage, and drafter all agree on severity (no disagreement between steps)
-2. **No open questions**: the triage step flagged no open questions, and the drafter's description has no "unclear" or "not stated" markers
-3. **Blast radius is contained**: \`blast_radius\` is \`docs\`, \`ui_parsing\`, or \`deployment\` — NOT \`money\`, \`protocol\`, or \`schema\`
-4. **Evidence is concrete**: the finding has a specific file, line number, and code snippet — not a general observation
-5. **Not a false-positive risk**: the pattern is a known, unambiguous anti-pattern (e.g. bare \`except:\`, \`eval()\` on user input, SQL concatenation) — not a judgment call about design quality
-6. **Jira dedup was checked**: the triage step confirmed no existing ticket covers this, OR Jira dedup was "not checked" but the finding is clearly new (a specific code pattern at a specific line)
+1. **Open question**: something the triage or drafter could not determine from the code alone — a triage open question, or an "unclear" / "not stated" marker in the draft that changes what the ticket should say
+2. **Ambiguous intent**: the pattern could be intentional (e.g. a \`@SuppressWarnings\` without a comment — is it hiding a real issue or is there a reason?)
+3. **Possible false positive**: the finding cannot be confirmed from the evidence — no concrete file and line, or reachability that depends on something outside the code (is this input user-controlled or internal only?)
+4. **Severity disagreement that changes the ticket**: the scanner, triage and drafter disagree on severity, and the difference would change the priority or whether the ticket is worth filing
+5. **Likely duplicate**: triage names an existing ticket that may already cover this, and only a person can say whether it does
+6. **Competing fixes**: the finding spans components and there are two or more materially different fixes whose trade-off is a product or ownership decision — name them
 
-### Escalate when ANY of these are true:
+### These are NOT reasons to escalate on their own:
 
-1. **Blast radius is \`money\`, \`protocol\`, or \`schema\`** — changes to these areas need human sign-off regardless of clarity
-2. **Severity disagreement**: scanner says \`high\` but triage says \`medium\`, or vice versa
-3. **Open questions exist**: something the triage or drafter could not determine from the code alone
-4. **Ambiguous intent**: the pattern could be intentional (e.g. a \`@SuppressWarnings\` without a comment — is it hiding a real issue or is there a reason?)
-5. **Cross-cutting concern**: the finding spans multiple components or services and the fix approach is unclear
-6. **First-of-its-kind**: the scan type has never produced this category of finding for this repo before (check \`meta.json\` history if available)
+- **Blast radius** \`money\`, \`protocol\` or \`schema\`. Record it in the \`gate\` object; the runbook that picks the ticket up has its own approval gate for those areas, before any code merges.
+- High or critical severity. Severity sets the ticket's priority, not whether a person must approve it.
+- The size of the fix, or the number of files it touches, when the fix itself is clear.
+- It being the first finding of its kind for this repository.
+- Jira dedup being "not checked", when triage names no candidate duplicate.
 
-For each escalated draft, write a **decision prompt** — the specific question the human needs to answer, framed as a yes/no or choice:
-- "This bare except in billing/processor.py:142 swallows payment errors. Create a ticket to add specific exception handling? [yes/no]"
+### The test
+
+Before escalating, write the decision prompt. If the only honest prompt is "Create this ticket? [yes/no]", there is nothing to decide — auto-approve it. An escalation's prompt names what is uncertain and gives the options:
 - "SQL concatenation in api/search.py:89 — is this reachable from user input, or only from internal admin calls? [user-input → critical ticket / admin-only → medium ticket / skip]"
+- "\`@SuppressWarnings("unchecked")\` on BillingMapper.java:40 has no comment — is the unchecked cast deliberate? [deliberate → skip / not deliberate → ticket to type the map]"
+- "Triage links PROJ-812 ("Reseller auth hardening") — does it already cover the missing tests on ResellerController.authenticate? [covered → skip / not covered → new ticket]"
 
 ## Artifacts
 
-Write two files into the run artifacts directory:
+Write both files into the run artifacts directory, every time. When no draft is escalated, \`escalated-drafts.json\` is an empty array, \`[]\` — that is what lets the run skip the reviewer steps. The same holds for \`approved-drafts.json\` when every draft is escalated.
 
 ### \`approved-drafts.json\`
 Same structure as \`ticket-drafts.json\`, but only the auto-approved entries. Each entry has an added \`gate\` object:
 \`\`\`json
 {
   "verdict": "auto-approved",
-  "reason": "unambiguous severity, no open questions, contained blast radius",
-  "criteria_met": ["severity_clear", "no_questions", "blast_contained", "evidence_concrete", "not_fp_risk", "dedup_checked"]
+  "reason": "concrete evidence, no open questions, intent unambiguous",
+  "blast_radius": "money",
+  "criteria_met": ["no_questions", "intent_clear", "evidence_concrete", "severity_agreed", "no_duplicate_candidate"]
 }
 \`\`\`
 
@@ -4020,11 +4025,13 @@ Same structure, but only the escalated entries. Each entry has:
 \`\`\`json
 {
   "verdict": "escalated",
-  "reason": "blast radius is money — human sign-off required",
-  "decision_prompt": "Create a ticket for missing input validation on payment amount in billing/charge.py:67? [yes/no/modify]",
-  "escalation_criteria": ["blast_money"]
+  "reason": "reachability of the concatenated input cannot be determined from the code",
+  "decision_prompt": "SQL concatenation in api/search.py:89 — is this reachable from user input, or only from internal admin calls? [user-input → critical ticket / admin-only → medium ticket / skip]",
+  "escalation_criteria": ["possible_false_positive"]
 }
 \`\`\`
+
+\`escalation_criteria\` uses these names only: \`open_question\`, \`ambiguous_intent\`, \`possible_false_positive\`, \`severity_disagreement\`, \`possible_duplicate\`, \`competing_fixes\`.
 
 ### \`meta.json\` merge
 Merge a \`decision_gate\` key:
@@ -4039,9 +4046,10 @@ State: how many drafts were auto-approved, how many escalated, and for each esca
 
 ## Rules for this step
 
-- **When in doubt, escalate.** A false auto-approval creates a JIRA ticket nobody asked for. A false escalation costs one human decision. The cost asymmetry means you should always escalate edge cases.
+- **Escalate only with a question.** Every escalated draft carries a decision prompt a reviewer must actually answer. A draft with nothing to decide is auto-approved, however sensitive the code it touches.
 - **The decision prompt must be answerable without re-reading the draft.** Include enough context (file, line, what the issue is, what the options are) that the human can decide from the prompt alone.
-- **Do not invent criteria not listed above.** The auto-approve and escalate rules are exhaustive.
+- **Do not invent criteria not listed above.** The escalation reasons are exhaustive; anything not on that list is auto-approved.
+- **Never end with \`PIPELINE-ASK:\`.** Your escalations reach reviewers through \`escalated-drafts.json\` and the steps after you; this step never pauses the run. The standing rule on asking does not apply here.
 - **Halt rather than hand a problem downstream.** \`PIPELINE-HALT: <reason>\`.
 
 ${SDLC_STANDING_RULES}
