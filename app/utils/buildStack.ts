@@ -29,3 +29,11 @@ export interface BuildStackContext {
 }
 
 export const BUILD_STACK_KEY: InjectionKey<BuildStackContext> = Symbol('build-stack')
+
+export function triggerSummary(schedules: { name: string }[], watches: { name: string }[]): string {
+  const parts = [
+    ...watches.map(w => `Jira watch ${w.name}`),
+    ...(schedules.length ? [`${schedules.length} ${schedules.length === 1 ? 'schedule' : 'schedules'}`] : []),
+  ]
+  return parts.length ? parts.join(' · ') : 'Run manually'
+}
