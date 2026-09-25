@@ -145,7 +145,6 @@ Wherever it lands, the hosted decision has everything that sat at the top of
 
 - the gate banner text and role, and whether it is yours
 - `RunDecisionPanel` and `RunVerdictCard`
-- "Earlier decisions"
 - the Reply, Approve, Send back, Reject and "Continue with a fresh allowance"
   actions
 
@@ -160,6 +159,7 @@ Wherever it lands, the hosted decision has everything that sat at the top of
 - the PR links, with the CI status link (status colour, checks as a tooltip)
   beside them
 - the note-to-agent box
+- "Earlier decisions on this run"
 - Clone and Stop, where Stop asks for a second click to confirm
 
 **Agent send-backs get recorded.** Where the runner applies a rework
@@ -299,8 +299,8 @@ endpoint calls `startTestRun`, a new function in `workflowRunner.ts`, which:
 **`/runs`** is a two-column page.
 
 - **The list** has one row per run:
-  - ticket or first prompt line, workflow name
-  - status pill, elapsed time, cost
+  - ticket or first prompt line, status pill
+  - workflow name, duration and who started it (no cost)
   - a segmented progress bar, one segment per step
   - a live line for running runs (`assistantMessages`, `lastTool`,
     `lastActivityAt`, from what `RunLiveCard` shows today)
