@@ -20,19 +20,19 @@ const { can } = useUser()
 /**
  * Hiding a button is a courtesy to the person; it is not a control on the edit.
  *
- * Every mutation on this canvas funnels through the five handlers below, and
- * three of them need no button at all: clicking an edge deletes it, dragging a
- * node moves it, dropping an agent adds a step. Guarding the markup alone would
- * leave all three reachable. The server refuses the Save that would persist any
- * of it, so the damage was never permanent - but a canvas that silently discards
- * your edits on reload is a worse answer than one that does not accept them.
+ * Every edit on this page goes through the stack editor and the drawers, and
+ * some need no obvious button: dragging a card moves a step. So the guard is
+ * `editable`, handed to each of them as read-only, not the markup alone. The
+ * server refuses the Save that would persist any of it, so the damage was never
+ * permanent - but a page that silently discards your edits on reload is a worse
+ * answer than one that does not accept them.
  */
 const readOnly = computed(() => !can('configure'))
 const workflowRun = useWorkflowRun(slug)
 const { run, runs, logs, attach, refresh: refreshRun, start } = workflowRun
 const { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond } = useRunActionToasts(workflowRun)
-// The PAGE fetches, not the panel: the tab's own label carries the count, so it
-// is needed before the panel mounts.
+// The PAGE fetches, not the drawer: the trigger card's summary carries the count,
+// so it is needed before the drawer mounts.
 const { fetchAll: fetchSchedules, forWorkflow } = useSchedules()
 const scheduleRows = forWorkflow(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string> } | undefined>()
@@ -64,17 +64,17 @@ function cloneRun() {
   showRunModal.value = true
 }
 
-// The panel and the canvas nodes both read per-step status off the server-owned run.
-// These mirror the shape the old client-side engine exposed, so the rest of the page
-// (node status badges, the complete banner, next-step labels) is unchanged.
+// Per-step status is read off the server-owned run. These say what state it is in,
+// which decides whether a new run may start, whether the stack is editable, and
+// whether the page opens on the run.
 const isRunning = computed(() => run.value?.status === 'running')
 const isPaused = computed(() => run.value?.status === 'paused')
 /** Stopped on a person who has entries to decide about. Like paused for every
- *  purpose on this page: the canvas may not start a second run, and the run
- *  controls stay up. */
+ *  purpose on this page: no second run may start, and the run controls stay
+ *  up. */
 const isReviewing = computed(() => run.value?.status === 'awaiting_review')
 /** Admitted but waiting for a slot in its concurrency group. Distinct from
- *  running: the canvas is still editable (launchQueuedRun re-reads the
+ *  running: the stack is still editable (launchQueuedRun re-reads the
  *  definition, so an edit made while it waits is the one that runs), but
  *  nothing may start a second run of this workflow. */
 const isQueued = computed(() => run.value?.status === 'queued')
@@ -105,7 +105,12 @@ const notDrawable = ref<string | null>(null)
 const selected = ref<Selection>(null)
 const drawerTab = ref<'triggers' | 'inputs' | 'settings'>('triggers')
 const mode = ref<'build' | 'run'>('build')
-const editable = computed(() => !readOnly.value && !notDrawable.value)
+/** Not while a run is working: a restart rebuilds from the file, so a save
+ *  mid-run would change what the restart runs. Queued is fine - it re-reads
+ *  the definition when it launches. */
+const editable = computed(() => !readOnly.value && !notDrawable.value && !isRunning.value)
+/** Editable but for the run, so the page says why rather than going quiet. */
+const pausedByRun = computed(() => !readOnly.value && !notDrawable.value && isRunning.value)
 /** The stack as last loaded or saved. A move or a split changes the blocks
  *  before it changes any step, so the steps alone cannot say it is unsaved. */
 const savedBlocks = ref('[]')
@@ -117,7 +122,7 @@ function layOut() {
   else { blocks.value = workflowSteps.value.map(s => ({ kind: 'step' as const, stepId: s.id })); notDrawable.value = r.reason }
 }
 
-// Edges are deleted by a click and nodes moved by a drag; leaving discards both silently without this.
+// Steps are moved by a drag and deleted in two clicks; leaving discards both silently without this.
 const isDirty = computed(() => !!workflow.value && JSON.stringify({ n: name.value, d: description.value, s: workflowSteps.value, b: JSON.stringify(blocks.value) }) !== JSON.stringify({ n: workflow.value.name, d: workflow.value.description, s: workflow.value.steps, b: savedBlocks.value }))
 // useUnsavedChanges(anyDirty) is called below, once the refs it reads exist.
 /** The concurrency group this workflow's runs count against. '' is ungrouped,
@@ -164,6 +169,9 @@ function applyWorkflow(data: Workflow) {
   notifyChannel.value = data.notifyChannel ?? ''
   layOut()
   savedBlocks.value = JSON.stringify(blocks.value)
+  // A reload can drop the step the drawer was showing.
+  const sel = selected.value
+  if (sel?.kind === 'step' && !data.steps.some(s => s.id === sel.stepId)) selected.value = null
 }
 
 // Load workflow
@@ -179,6 +187,8 @@ onMounted(async () => {
   // a run outlives this tab, so a reload must not lose it. Then honour any
   // one-shot intent in the URL, which may point at a finished run instead.
   await attach()
+  // A run still working opens on the run, the way the run bar used to show it.
+  if (isRunning.value || isPaused.value || isReviewing.value) mode.value = 'run'
   applyQueryIntent()
   // Fire-and-forget: the tab label's count can arrive a moment later, and
   // nothing above it should wait on a schedule read.
@@ -363,20 +373,23 @@ const parallelHint = computed(() => graph.value.entries.length > 1
       <!-- Editable name -->
       <div class="flex-1 min-w-0 basis-32">
         <input
-          v-if="editingName"
+          v-if="editingName && editable"
           v-model="name"
           class="field-input t-body font-medium w-full max-w-xs"
           @blur="editingName = false"
           @keydown.enter="editingName = false"
         />
         <button
-          v-else
+          v-else-if="editable"
           class="t-body font-medium truncate text-left max-w-full"
           style="color: var(--text-primary);"
           @click="editingName = true"
         >
           {{ name || 'Untitled Workflow' }}
         </button>
+        <span v-else data-testid="workflow-name" class="block t-body font-medium truncate" style="color: var(--text-primary);">
+          {{ name || 'Untitled Workflow' }}
+        </span>
       </div>
 
       <!-- Build | Run: the definition, or what a run of it did. -->
@@ -439,7 +452,9 @@ const parallelHint = computed(() => graph.value.entries.length > 1
           :disabled="!canRun"
           @click="() => { showRunModal = true }"
         />
-        <UButton v-if="editable" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" :disabled="!anyDirty" @click="save" />
+        <!-- Disabled rather than hidden while a run works, so the button does not
+             jump when the run ends. -->
+        <UButton v-if="editable || pausedByRun" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" :disabled="!editable || !anyDirty" @click="save" />
         <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
         <!-- Said out loud rather than left as an absence: a page with its controls
              quietly removed is indistinguishable from a broken one, and the
@@ -453,7 +468,7 @@ const parallelHint = computed(() => graph.value.entries.length > 1
     <!-- Description -->
     <div class="px-4 py-2 flex items-center gap-3 min-w-0" style="border-bottom: 1px solid var(--border-subtle);">
       <input
-        v-if="editingDescription"
+        v-if="editingDescription && editable"
         v-model="description"
         class="field-input t-small w-full max-w-lg"
         placeholder="Workflow description..."
@@ -461,13 +476,16 @@ const parallelHint = computed(() => graph.value.entries.length > 1
         @keydown.enter="editingDescription = false"
       />
       <button
-        v-else
+        v-else-if="editable"
         class="t-small text-left flex-1 truncate min-w-0"
         style="color: var(--text-tertiary);"
         @click="editingDescription = true"
       >
         {{ description || 'Click to add a description...' }}
       </button>
+      <span v-else class="t-small flex-1 truncate min-w-0" style="color: var(--text-tertiary);">
+        {{ description }}
+      </span>
       <span
         v-if="parallelHint"
         class="t-small shrink-0 hidden sm:inline"
@@ -477,6 +495,10 @@ const parallelHint = computed(() => graph.value.entries.length > 1
         <UIcon name="i-lucide-git-branch" class="size-3 -mt-px" /> parallel branches share one folder
       </span>
     </div>
+
+    <p v-if="pausedByRun" data-testid="editing-paused" class="px-4 py-1.5 t-small" style="color: var(--text-tertiary); border-bottom: 1px solid var(--border-subtle);">
+      Editing is paused while a run is in progress.
+    </p>
 
     <ExternalChangeBanner v-if="externalPending" class="mx-4 my-2" @reload="external.reload" @keep="keepMine" />
     <div
