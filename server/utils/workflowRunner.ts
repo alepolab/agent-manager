@@ -43,7 +43,8 @@ import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import { runNotifyStep, type NotifyStepConfig } from './notifySteps.ts'
-import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
+import { admit, drainRunQueue, groupOf, inFlightForGroup, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
+import { capFor } from './workflowGroups.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
@@ -468,9 +469,13 @@ async function publish(run: WorkflowRun) {
     // and the moment it stops holding the slot is this publish. Without the
     // drain here they would wait for a run that is waiting for them.
     // A run stopping on a person gives its slot back the same way.
-    if ((TERMINAL_STATUSES.includes(run.status) || run.status === 'joining' || isWaitingOnAPerson(run.status)) && mightHaveWaiting()) {
-      void drainRunQueue(launchQueuedRun).catch(err =>
-        log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    // An interrupted run waiting for a slot goes before the queue: it has
+    // work done that a queued run does not.
+    if (TERMINAL_STATUSES.includes(run.status) || run.status === 'joining' || isWaitingOnAPerson(run.status)) {
+      void resumeAwaitingSlot()
+        .catch(err => log.warn('resuming interrupted runs failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+        .then(() => mightHaveWaiting() ? drainRunQueue(launchQueuedRun) : 0)
+        .catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
     }
     // A run with an outcome gives back the stacks it stood up and its worktree.
     // Here, where every ending passes - completed, failed and stopped alike -
@@ -2709,13 +2714,37 @@ const MAX_INTERRUPTIONS = 3
  * resuming a run that keeps being interrupted, which would otherwise be a loop
  * that spends money on every boot.
  */
-export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paused: string[], skipped: string[] }> {
-  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[] }
-  for (const run of await listRuns()) {
-    if (run.status !== 'interrupted') continue
+/** Interrupted runs a resume left for want of a slot; resumed as runs settle. */
+const awaitingSlot = new Set<string>()
+let resumingWaiting: Promise<unknown> | null = null
+
+/** Resumes what `resumeInterruptedRuns` left waiting, one pass at a time. */
+function resumeAwaitingSlot(): Promise<unknown> {
+  if (!awaitingSlot.size) return Promise.resolve()
+  resumingWaiting ??= resumeInterruptedRuns(new Set(awaitingSlot)).finally(() => { resumingWaiting = null })
+  return resumingWaiting
+}
+
+export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resumed: string[], paused: string[], skipped: string[], waiting: string[] }> {
+  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], waiting: [] as string[] }
+  const all = await listRuns()
+  // Within its group's cap, oldest first. Every interrupted run used to resume
+  // at once whatever its group allowed: after a burst of reloads nine Runbook A
+  // runs came back together against a cap of 2, each standing up a ~2 GiB
+  // stack, and the machine ran out of memory and took the server down with it.
+  // One that finds its group full stays interrupted - it is not counted as
+  // another interruption - and is resumed when a run settles and frees a slot.
+  const inFlight = new Map<string, number>()
+  const interrupted = all.filter(r => r.status === 'interrupted').sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+  for (const run of interrupted) {
+    if (only && !only.has(run.id)) continue
+    awaitingSlot.delete(run.id)
     const frozen = run.steps.find(s => s.status === 'running')
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
     if (!frozen) { out.skipped.push(run.id); continue }
+    const group = groupOf(run)
+    if (!inFlight.has(group)) inFlight.set(group, await inFlightForGroup(group, all))
+    if (inFlight.get(group)! >= await capFor(group)) { out.waiting.push(run.id); awaitingSlot.add(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
     if (run.interruptions > MAX_INTERRUPTIONS) {
       frozen.status = 'pending'
@@ -2735,6 +2764,7 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
     await saveRun(run)
     try {
       await continueRun(run.id)
+      inFlight.set(group, inFlight.get(group)! + 1)
       out.resumed.push(run.id)
       log.info('resumed a run the previous process left mid-step', { runId: run.id, stepId: frozen.stepId, interruptions: run.interruptions })
     } catch (err) {

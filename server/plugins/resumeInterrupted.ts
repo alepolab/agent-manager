@@ -22,8 +22,8 @@ export default defineNitroPlugin(() => {
   setTimeout(() => {
     resumeInterruptedRuns()
       .then((r) => {
-        if (r.resumed.length || r.paused.length) {
-          console.log(`[resume] ${r.resumed.length} run(s) resumed, ${r.paused.length} paused for a person, ${r.skipped.length} left alone`)
+        if (r.resumed.length || r.paused.length || r.waiting.length) {
+          console.log(`[resume] ${r.resumed.length} run(s) resumed, ${r.waiting.length} waiting for a slot in their group, ${r.paused.length} paused for a person, ${r.skipped.length} left alone`)
         }
       })
       .catch(err => console.error('[resume] could not resume interrupted runs:', err?.message ?? err))
