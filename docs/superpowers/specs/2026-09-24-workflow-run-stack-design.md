@@ -38,7 +38,7 @@ three places: `WorkflowRunBar` above the canvas, the "Run details" slideover
 
 - A change to the workflow file format. Every edit writes the fields that exist
   today. The only additions are to the run record: `origin: 'test'`,
-  `stopAfter`, `RunStep.headAtStart`, and agent entries in `decisions`.
+  `stopAfter`, `RunStep.headAtStart`, `RunStep.checks` and `WorkflowRun.sendBacks`.
 - Any change to how monitors, retries, gates, rework limits or the graph engine
   decide what runs next.
 - A cost estimate on the Test button.
@@ -74,18 +74,27 @@ one line.
     split either rejoins at one step or every branch ends separately.
     Anything else (cross edges between branches, back edges, a branch that
     rejoins at a step in another split) returns `ok: false` with a reason that
-    names the steps involved.
+    names the steps involved. `toStack` also refuses a split whose branches
+    meet at different steps (e.g. two of three branches rejoin before the
+    third), with a reason naming the steps.
   - Nested paths are allowed in the layout, but the builder only creates one
     level.
 - `fromStack(blocks, steps): WorkflowStep[]` is the inverse. It writes explicit
   `next[]` on every step and leaves every other field, `position` included,
-  untouched.
+  untouched. The builder (Plan 2) must check that
+  `toStack(fromStack(blocks)).ok` before saving, since `fromStack` itself
+  doesn't refuse an unrejoinable shape.
 - Pure functions with no Vue or server imports, so both layers can use them.
 
 ### 2. Run stack components
 
 **`RunStack.vue`** takes a `workflow`, plus an optional `run` and `logs`. It walks
 the blocks and renders:
+
+When the workflow can't be loaded, the stack shows the run's steps in run
+order with a note saying so. While the workflow is still loading, it shows
+them in run order too, but with no note — a fetch that hasn't come back yet
+is not the same as one that failed.
 
 - **The trigger card:** the manual prompt and parameters, or the watch or
   schedule that started the run.
@@ -95,7 +104,9 @@ the blocks and renders:
 - **The Approval card** above any step with `approval: true`.
 - **Send-back arrows** in run mode, built from `run.decisions` entries with
   `verdict: 'sent-back'`. Each runs from the deciding step to `target`, and its
-  label gives who sent it, the note, and "n of 2".
+  label gives who sent it, the note, and "n of 2". Drawn as a marker above the
+  target card that says who sent the work back, from which step, why, and
+  which number it is. No line is drawn in the margin.
 
 **`RunStackCard.vue`** has two modes:
 
@@ -109,7 +120,9 @@ the blocks and renders:
     - **In:** the artifacts the step read, per its `contextMode`.
     - **Out:** `produces` and the step's artifacts.
     - **Check:** one tab per visit, each with that visit's `monitorVerdict`
-      and `monitorNote`.
+      and `monitorNote`. Read from `RunStep.checks`, which the runner appends
+      on every monitor verdict. Before this, a step kept only its latest
+      verdict.
     - **Log tail:** the existing `LogLines`.
     - **Actions:**
       - Replay from here: `POST /api/runs/:id/restart`.
@@ -118,8 +131,17 @@ the blocks and renders:
   - **Loop over items:** shows its child runs as a count by status and links to
     `/runs?parent=<runId>`.
 
-**The gate moves into the stack.** The card for `run.question.stepId` hosts
-everything at the top of `WorkflowRunPanel` today, moved and not rewritten:
+**The gate moves into the stack.** The open decision is hosted in exactly one
+place, chosen in `RunStack`: in the Approval card when the question is an
+approval and the loaded workflow step has `approval: true`; otherwise in the
+step's own card, when the step is in the run — this covers approvals the
+runner raises itself (budget, send-back limit, repeated interruptions), which
+can sit on any step; otherwise at the top of the stack. With no question, a
+run that is paused (a step-by-step run between steps) or `awaiting_review`
+gets its decision at the top.
+
+Wherever it lands, the hosted decision has everything that sat at the top of
+`WorkflowRunPanel` today, moved and not rewritten:
 
 - the gate banner text and role, and whether it is yours
 - `RunDecisionPanel` and `RunVerdictCard`
@@ -133,21 +155,18 @@ everything at the top of `WorkflowRunPanel` today, moved and not rewritten:
 - elapsed time
 - tokens against `budget.maxTokens`
 - cost
+- the run's error message, when it has one
+- the PR links, with the CI status link (status colour, checks as a tooltip)
+  beside them
 - the note-to-agent box
-- Clone and Stop
+- Clone and Stop, where Stop asks for a second click to confirm
 
 **Agent send-backs get recorded.** Where the runner applies a rework
-(`workflowRunner.ts`, the `l.rework` hand-over around line 2032), it also
-appends a `RunDecision` with:
-
-- `verdict: 'sent-back'`
-- `by: 'agent:<slug>'`
-- `note` set to the instruction
-- `target`
-- `waitedMs: 0`
-
-Human send-backs already write one. Without this, only human send-backs would be
-drawn.
+(`workflowRunner.ts`, the `l.rework` hand-over around line 2032), it appends a
+`SendBack { from, target, instruction, by: 'agent:<slug>', at }` to
+`run.sendBacks`. Agent send-backs don't go into `run.decisions`, because
+`PipelineBoard` lists, counts and attributes that array as decisions people
+made. `sendBackArrows(run)` merges both sources for the stack.
 
 **Removed:** `WorkflowRunBar.vue` and the "Run details" slideover.
 `WorkflowRunPanel.vue` is removed once its pieces live in `RunStack` and its
@@ -288,6 +307,9 @@ endpoint calls `startTestRun`, a new function in `workflowRunner.ts`, which:
   - "Waiting on me" uses `isWaitingOnAPerson` plus the gate-role test from the
     notifications inbox.
   - `?parent=<runId>` filters to one run's children.
+  - Chip counts respect the text filter, "Started by me" and the parent
+    filter: a count next to a chip is always "among what's already shown",
+    never the whole unfiltered list.
 - **Bulk action:** "Delete N failed" stays.
 - **The right column** shows the selected run in `RunStack`, run mode.
 - **Narrow screens:** list only. A row opens `/runs/:id`.

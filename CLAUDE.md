@@ -34,7 +34,7 @@ bun run typecheck    # Run TypeScript type checking
 - `/graph` - Relationship visualization
 - `/explore` - Browse templates and marketplace
 - `/cli` - Chat with Claude Code against the working directory
-- `/runs` - Pipeline runs: status, cost, restart, clone, stop
+- `/runs` - Runs list with the selected run's stack beside it; `/runs/:id` the same stack full page
 - `/watches` - Jira queues that feed the pipeline
 - `/team` - Drift against the alepo-engineering plugin, Apply team standards
 - `/profile` - Per-developer Jira credentials
@@ -149,6 +149,9 @@ The system automatically detects relationships between agents/commands/skills by
 - System prompt is either the default "Agent Manager" prompt or the selected agent's instructions
 - Session IDs enable conversation continuation across multiple messages
 - Tool progress and thinking blocks are streamed incrementally
+
+**Run stack** (`/runs`, `/runs/:id`, the notifications inbox):
+A run is drawn as its workflow's stack of steps. `shared/utils/workflowStack.ts` turns `next[]` into series/parallel blocks (`toStack`, `fromStack`, `stackForRun`) and refuses graphs it cannot draw. `RunStack.vue` renders `RunHeader` (the run as a whole), `RunStackBlocks` (recursive: steps, paths, approval cards) and `RunStackCard` (one step), and puts `RunGate` (the open decision) inside the card that waits on it. Per-visit monitor verdicts are `RunStep.checks`; agent send-backs are `WorkflowRun.sendBacks` (human ones stay in `decisions`).
 
 **GitHub Import Flow**:
 1. User provides GitHub URL
