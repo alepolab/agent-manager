@@ -265,9 +265,20 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       await credentialsFor(run) // throws when the starter has no usable credentials
       return null
     })
+    // Only the next move can be checked from where the ticket is now: "Ready
+    // for QA" is reached from DEV DONE, not from "In Progress", so probing it
+    // before the run warned on every ASECRM run that it was unreachable, and
+    // every one of those warnings was wrong. Statuses the ticket already holds
+    // are passed over, so a restarted run checks the move it will actually make.
+    let checkedNext = false
     for (const target of [...new Set(jiraTargets)]) {
+      if (checkedNext) {
+        add(`jira: ${target}`, 'skip', 'checked when the step runs: it is reached from wherever the earlier Jira steps leave the ticket')
+        continue
+      }
       await guard(`jira: ${target}`, async () => {
         const r = await transitionReachable(run, run.ticketKey!, target, fetchImpl)
+        if (!r.already) checkedNext = true
         // Never fatal. Only the FIRST status is even reachable from where the
         // ticket is now — a later one is reached from wherever the run leaves
         // it, which no check before the run can know — but an unreachable

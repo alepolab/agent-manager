@@ -105,9 +105,27 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   ]
   const r = await runPreflight(run({ ticketKey: 'SCN-658' }), steps, jira)
   assert.equal(of(r, 'jira: In Progress').level, 'ok', JSON.stringify(of(r, 'jira: In Progress')))
-  assert.equal(of(r, 'jira: Dev Done').level, 'warn',
-    'a later status is reached from wherever the run leaves the ticket, which no check before the run can know')
+  // A later status is reached from wherever the run leaves the ticket, which no
+  // check before the run can know. It used to be probed from the current status
+  // anyway and warned on every ASECRM run that "Ready for QA" was unreachable
+  // from "In Progress" - true, and irrelevant, since it follows DEV DONE.
+  assert.equal(of(r, 'jira: Dev Done').level, 'skip', 'a later status is not probed from here')
+  assert.match(of(r, 'jira: Dev Done').detail, /checked when the step runs/)
   assert.equal(preflightFailure(r), null, 'so a later status never blocks the run')
+
+  // A restarted run whose ticket already holds the first status checks the
+  // move it will actually make next, and still no further.
+  const inProgress = async (url) => {
+    const u = String(url)
+    if (u.endsWith('?fields=status')) return new Response(JSON.stringify({ fields: { status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } } }), { status: 200 })
+    if (u.endsWith('/transitions')) return new Response(JSON.stringify({ transitions: [{ id: '31', name: 'Resolve Issue', to: { name: 'DEV DONE', statusCategory: { key: 'done' } } }] }), { status: 200 })
+    return new Response('{}', { status: 200 })
+  }
+  const restarted = await runPreflight(run({ ticketKey: 'ASECRM-215' }), [...steps,
+    { agentSlug: 'sdlc-jira-tracker', label: 'Jira: Ready for QA', jira: { transition: 'Ready for QA' } }], inProgress)
+  assert.equal(of(restarted, 'jira: In Progress').level, 'ok', 'already there')
+  assert.equal(of(restarted, 'jira: Dev Done').level, 'ok', JSON.stringify(of(restarted, 'jira: Dev Done')))
+  assert.equal(of(restarted, 'jira: Ready for QA').level, 'skip', 'the one after the next move is not probed')
 
   // The SCN-658 shape, which CSUP-7516 then repeated in production: the ticket
   // sits in an untriaged status whose only transition lands in `done`

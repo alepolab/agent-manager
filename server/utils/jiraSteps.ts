@@ -245,7 +245,7 @@ export function resolveTransition(
  * `moveTicket` answers, exported so preflight can ask it before a run starts
  * instead of a step discovering it 40 minutes in.
  */
-export async function transitionReachable(run: WorkflowRun, key: string, target: string, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean, detail: string }> {
+export async function transitionReachable(run: WorkflowRun, key: string, target: string, fetchImpl: FetchLike = fetch): Promise<{ ok: boolean, detail: string, already?: boolean }> {
   const creds = await credentialsFor(run)
   const headers = { Authorization: jiraAuthHeader(creds), Accept: 'application/json', 'Content-Type': 'application/json' }
   const issueUrl = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}`
@@ -255,7 +255,7 @@ export async function transitionReachable(run: WorkflowRun, key: string, target:
   const current = await currentStatus(issueUrl, headers, fetchImpl)
   const r = resolveTransition(target, transitions, current)
   if (r.hit) return { ok: true, detail: `${r.why} from "${current?.name ?? 'the current status'}"` }
-  if (r.already) return { ok: true, detail: `${key} is ${r.why}` }
+  if (r.already) return { ok: true, already: true, detail: `${key} is ${r.why}` }
   // Not reachable is not a failure of the run. The step reports it and the
   // work goes on: fixing the bug never depended on the bookkeeping.
   return { ok: false, detail: `${key} is in "${current?.name ?? 'an unknown status'}" and ${r.why}; the step will leave the ticket where it is and say so.` }
