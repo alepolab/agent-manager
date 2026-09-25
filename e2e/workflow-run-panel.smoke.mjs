@@ -48,6 +48,19 @@ const repoRoot = join(__dirname, '..')
 const SERVER_READY_TIMEOUT_MS = 90_000
 const ROW_VISIBLE_TIMEOUT_MS = 30_000
 
+// Bounds for the ERR_NETWORK_CHANGED retry loops below (loadRunMode, loadRunsList).
+// Worst case per loop, if the network flake persists for every attempt:
+// LOAD_RETRY_ATTEMPTS * (LOAD_GOTO_TIMEOUT_MS + LOAD_WAIT_TIMEOUT_MS) + (LOAD_RETRY_ATTEMPTS - 1) * LOAD_RETRY_SLEEP_MS
+// = 3 * (20s + 20s) + 2 * 3s = 126s. There are two such loops in this file, so
+// 252s covers both retrying maximally, leaving comfortable margin under the
+// external `timeout 400` for server startup and the rest of the smoke's
+// assertions - none of which retry, so a genuine (non-network) failure now
+// surfaces on the first attempt instead of being multiplied by the retry loop.
+const LOAD_RETRY_ATTEMPTS = 3
+const LOAD_GOTO_TIMEOUT_MS = 20_000
+const LOAD_WAIT_TIMEOUT_MS = 20_000
+const LOAD_RETRY_SLEEP_MS = 3_000
+
 /** Ask the OS for an unused port rather than guessing one - guessing risks colliding
  *  with the deployed container on 3030 or anything else already listening. */
 function getFreePort() {
@@ -242,23 +255,27 @@ try {
   const page = await browser.newPage()
   page.setDefaultTimeout(ROW_VISIBLE_TIMEOUT_MS)
 
-  /** The host's docker bridges churn, and Chromium aborts module loads with
-   *  ERR_NETWORK_CHANGED when they do; retry a bounded number of times rather
-   *  than failing this smoke on a one-off network blip. Also covers `?run=`
-   *  being a one-shot intent applied only after the run list itself has
-   *  loaded client-side, which the plain "mode-run selected" wait accounts for. */
+  /** Guards against intermittent ERR_NETWORK_CHANGED on this host - the docker
+   *  bridges churn, and Chromium aborts module loads when they do. Only that
+   *  error is retried: anything else (a real assertion of app breakage, e.g.
+   *  Run mode never actually selecting) is rethrown from the first attempt, so
+   *  a genuine regression fails fast with a FAIL message instead of being
+   *  multiplied by the retry loop and killed from outside by `timeout 400`
+   *  with no message and a leaked dev server. Also covers `?run=` being a
+   *  one-shot intent applied only after the run list itself has loaded
+   *  client-side, which the "mode-run selected" wait accounts for. */
   async function loadRunMode(url) {
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < LOAD_RETRY_ATTEMPTS; attempt++) {
       try {
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: LOAD_GOTO_TIMEOUT_MS })
         await page.waitForFunction(
           () => document.querySelector('[data-testid=mode-run]')?.getAttribute('aria-selected') === 'true',
-          null, { timeout: ROW_VISIBLE_TIMEOUT_MS },
+          null, { timeout: LOAD_WAIT_TIMEOUT_MS },
         )
         return
       } catch (err) {
-        if (attempt === 4) throw err
-        await new Promise(r => setTimeout(r, 3000))
+        if (!String(err?.message).includes('ERR_NETWORK_CHANGED') || attempt === LOAD_RETRY_ATTEMPTS - 1) throw err
+        await new Promise(r => setTimeout(r, LOAD_RETRY_SLEEP_MS))
       }
     }
   }
@@ -329,18 +346,20 @@ try {
   // above - so the assertions below reuse the same `run-progress-count` /
   // `run-progress-bar` / `article[data-step]` selectors, just against the
   // detail pane's copy of them rather than the workflow page's.
+  // Same ERR_NETWORK_CHANGED-only retry as loadRunMode above - anything else
+  // rethrows on the first attempt.
   async function loadRunsList(url) {
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < LOAD_RETRY_ATTEMPTS; attempt++) {
       try {
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: LOAD_GOTO_TIMEOUT_MS })
         await page.waitForFunction(
           () => document.querySelector('ul[aria-live="polite"]') !== null,
-          null, { timeout: ROW_VISIBLE_TIMEOUT_MS },
+          null, { timeout: LOAD_WAIT_TIMEOUT_MS },
         )
         return
       } catch (err) {
-        if (attempt === 4) throw err
-        await new Promise(r => setTimeout(r, 3000))
+        if (!String(err?.message).includes('ERR_NETWORK_CHANGED') || attempt === LOAD_RETRY_ATTEMPTS - 1) throw err
+        await new Promise(r => setTimeout(r, LOAD_RETRY_SLEEP_MS))
       }
     }
   }

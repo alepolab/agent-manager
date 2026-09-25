@@ -41,6 +41,20 @@ const repoRoot = join(__dirname, '..')
 const SERVER_READY_TIMEOUT_MS = 120_000
 const VISIBLE_TIMEOUT_MS = 30_000
 
+// Bounds for the ERR_NETWORK_CHANGED retry loop in load() below. Worst case,
+// if the network flake persists for every attempt:
+// LOAD_RETRY_ATTEMPTS * (LOAD_GOTO_TIMEOUT_MS + LOAD_WAIT_TIMEOUT_MS) + (LOAD_RETRY_ATTEMPTS - 1) * LOAD_RETRY_SLEEP_MS
+// = 3 * (20s + 20s) + 2 * 3s = 126s. load() is called twice (sections 3 and
+// 6), so 252s covers both maximally retrying, leaving comfortable margin
+// under the external `timeout 400` for server startup and the rest of the
+// smoke - none of which retry, so a real regression fails on the first
+// attempt instead of being multiplied by the retry loop and killed from
+// outside with no FAIL message and a leaked dev server.
+const LOAD_RETRY_ATTEMPTS = 3
+const LOAD_GOTO_TIMEOUT_MS = 20_000
+const LOAD_WAIT_TIMEOUT_MS = 20_000
+const LOAD_RETRY_SLEEP_MS = 3_000
+
 function getFreePort() {
   return new Promise((resolve, reject) => {
     const srv = createServer()
@@ -162,22 +176,31 @@ async function main() {
   const shots = join(repoRoot, 'test-results')
   mkdirSync(shots, { recursive: true })
 
-  /** The host's docker bridges churn, and Chromium aborts module loads with
-   *  ERR_NETWORK_CHANGED when they do; retry a load until the trigger card
-   *  mounts, borrowed from the same retry used to check this page in Task 5. */
+  /** Guards against intermittent ERR_NETWORK_CHANGED on this host - the docker
+   *  bridges churn, and Chromium aborts module loads when they do. Only that
+   *  error is retried: anything else (the trigger card genuinely never
+   *  mounting) is rethrown from the first attempt, so a real regression fails
+   *  fast with a FAIL message instead of being multiplied by the retry loop
+   *  and killed from outside by `timeout 400` with no message and a leaked
+   *  dev server. */
   async function load(url) {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < LOAD_RETRY_ATTEMPTS; i++) {
       try {
-        if (url) await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
-        else await page.reload({ waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
-        await page.getByTestId('trigger-card').waitFor({ timeout: 20_000 })
+        if (url) await page.goto(url, { waitUntil: 'domcontentloaded', timeout: LOAD_GOTO_TIMEOUT_MS })
+        else await page.reload({ waitUntil: 'domcontentloaded', timeout: LOAD_GOTO_TIMEOUT_MS })
+        await page.getByTestId('trigger-card').waitFor({ timeout: LOAD_WAIT_TIMEOUT_MS })
         return
-      } catch (e) { if (i === 5) throw e; await new Promise(r => setTimeout(r, 3000)) }
+      } catch (e) {
+        if (!String(e?.message).includes('ERR_NETWORK_CHANGED') || i === LOAD_RETRY_ATTEMPTS - 1) throw e
+        await new Promise(r => setTimeout(r, LOAD_RETRY_SLEEP_MS))
+      }
     }
   }
 
+  const wfPath = join(claudeDir, 'workflows', `${SLUG}.json`)
   const plus = () => page.getByRole('button', { name: 'Add a step here' })
-  const readWf = () => JSON.parse(readFileSync(join(claudeDir, 'workflows', `${SLUG}.json`), 'utf8'))
+  const readWf = () => JSON.parse(readFileSync(wfPath, 'utf8'))
+  const readWfText = () => readFileSync(wfPath, 'utf8')
 
   /** ActionPicker's popover content (reka-ui) stays mounted through its exit
    *  transition after `choose()` flips `open` to false, so a `role="menuitem"`
@@ -244,6 +267,7 @@ async function main() {
   await page.getByText('Workflow saved').first().waitFor()
 
   const afterSave = readWf()
+  const afterSaveText = readWfText()
   const stepA = afterSave.steps.find(s => s.id === 'a')
   const stepC = afterSave.steps.find(s => s.id === 'c')
   assert.ok(stepA, '"a" survives the edit')
@@ -281,8 +305,13 @@ async function main() {
     `the toast explains why the refusal happened. Page text:\n${toastText}`)
   assert.equal(await rejoinBox.isChecked(), true, 'the checkbox resets itself rather than staying unticked')
 
-  const afterRefusal = readWf()
-  assert.deepEqual(afterRefusal, afterSave, 'a refused edit changes nothing on disk')
+  // Compare the raw file text, not parsed objects: deepEqual on parsed JSON
+  // would pass even if the file were rewritten byte-for-byte differently
+  // (key order, whitespace) with the same data - the point here is that a
+  // refused edit touches the file not at all, so the actual bytes on disk
+  // must be identical, not merely equivalent once parsed.
+  const afterRefusalText = readWfText()
+  assert.equal(afterRefusalText, afterSaveText, 'a refused edit changes nothing on disk, byte for byte')
   await page.screenshot({ path: join(shots, 'builder-04-rejoin-refused.png'), fullPage: true })
 
   console.log('workflow builder smoke: all assertions passed')
