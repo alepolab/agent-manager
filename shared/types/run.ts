@@ -497,6 +497,26 @@ export interface WorkflowRun {
    * field; everything about elapsed work reads `startedAt`.
    */
   queuedAt?: number
+  /**
+   * A person's decision recorded while the run's group was full: the run waits
+   * in the queue, ahead of newer runs, and the queue carries the decision out
+   * when a slot frees. Answering a question or approving a gate used to put
+   * the run straight back to running whatever its group allowed - a paused run
+   * gives its slot back, the queue fills it, and each answer took the group one
+   * over its cap.
+   */
+  parked?: {
+    action: 'continue' | 'respond' | 'restart'
+    /** The status to return to before the decision is carried out. */
+    from: WorkflowRunStatus
+    note?: string
+    reply?: string
+    stepId?: string
+    startedBy?: string
+    grantApproval?: boolean
+    question?: WorkflowRun['question']
+    at: number
+  }
   steps: RunStep[]
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage

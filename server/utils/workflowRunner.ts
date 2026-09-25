@@ -2660,6 +2660,62 @@ export async function enqueueRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * admission: what a run was GIVEN must not change under it, even when what it
  * will DO can.
  */
+/**
+ * Lets a person's decision go ahead when its group has a slot, or records it
+ * on the run and queues the run - ahead of newer runs, since it has work done
+ * - for launchQueuedRun to carry out. Returns the queued run, or null to go
+ * ahead now.
+ */
+async function parkUnlessSlot(run: WorkflowRun, decision: Omit<NonNullable<WorkflowRun['parked']>, 'from' | 'at' | 'question'>): Promise<WorkflowRun | null> {
+  const { run: out, queued } = await admit({
+    group: groupOf(run),
+    start: async () => run,
+    enqueue: async () => {
+      run.parked = { ...decision, from: run.status, question: run.question, at: Date.now() }
+      // A run the answer came to never waited in the queue before, so its own
+      // start stands for its age: older than anything queued since.
+      run.queuedAt = run.startedAt
+      run.question = undefined
+      run.status = 'queued'
+      // currentStepIds stays: it names the step an answer goes to.
+      noteQueued()
+      await publish(run)
+      log.info('decision recorded; the run waits for a slot', { runId: run.id, action: decision.action, group: groupOf(run) })
+      return run
+    },
+  })
+  if (!queued) return null
+  // The slot may free before the next settle; a drain now starts it if so.
+  void drainRunQueue(launchQueuedRun).catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+  return out
+}
+
+/** Carries out a decision parkUnlessSlot recorded, now that the run has its slot. */
+async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
+  const p = run.parked!
+  run.parked = undefined
+  run.queuedAt = undefined
+  run.status = p.from
+  run.question = p.question
+  await saveRun(run)
+  try {
+    if (p.action === 'continue') await continueRun(run.id, p.note, { grantApproval: p.grantApproval, admitted: true })
+    else if (p.action === 'respond') await respondToRun(run.id, p.reply ?? '', { admitted: true })
+    else await restartRun(run.id, p.stepId!, p.note, p.startedBy, { admitted: true })
+    return 'launched'
+  } catch (err) {
+    // Back where the person left it, with the reason: a refused restart is
+    // something they can act on, and the run must not read as lost.
+    const back = await getRun(run.id)
+    if (back) {
+      back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
+      await publish(back)
+    }
+    log.warn('a parked decision could not be carried out', { runId: run.id, action: p.action, error: err instanceof Error ? err.message : String(err) })
+    return 'failed'
+  }
+}
+
 export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcome> {
   const fail = async (run: WorkflowRun, why: string): Promise<LaunchOutcome> => {
     run.status = 'failed'
@@ -2677,6 +2733,7 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   const run = await getRun(queued.id)
   if (!run) return 'failed'
   if (run.status !== 'queued') return 'deferred'
+  if (run.parked) return launchParked(run)
 
   const wf = await loadWorkflowSteps(run.workflowSlug)
   if (!wf) return fail(run, `the workflow "${run.workflowSlug}" was deleted while this run waited for a slot`)
@@ -2841,7 +2898,7 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
     }
     await saveRun(run)
     try {
-      await continueRun(run.id)
+      await continueRun(run.id, undefined, { admitted: true })
       inFlight.set(group, inFlight.get(group)! + 1)
       out.resumed.push(run.id)
       log.info('resumed a run the previous process left behind', { runId: run.id, stepId: frozen?.stepId ?? '(between steps)', interruptions: run.interruptions })
@@ -2858,11 +2915,23 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
 export class ApprovalNeedsReason extends Error {}
 
 export async function continueRun(
-  runId: string, note?: string, opts: { grantApproval?: boolean } = {},
+  runId: string, note?: string, opts: { grantApproval?: boolean, /** The run already has its slot: the queue, or a resume that checked the cap. */ admitted?: boolean } = {},
 ): Promise<WorkflowRun | null> {
   // Default true: every existing caller means "yes, run it". Only the decision
   // endpoint passes false, and only when the operator approved no entry at all.
   const grantApproval = opts.grantApproval ?? true
+  if (!opts.admitted) {
+    const stored = await getRun(runId)
+    if (stored && (stored.status === 'paused' || stored.status === 'awaiting_review') && !live.get(runId)?.running) {
+      // Refused before it is recorded, exactly as the unparked path refuses it.
+      const q = stored.question
+      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && needsJustification(stored.blastRadius) && !note?.trim()) {
+        throw new ApprovalNeedsReason(`This run is classified \`${stored.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
+      }
+      const parked = await parkUnlessSlot(stored, { action: 'continue', note, grantApproval })
+      if (parked) return parked
+    }
+  }
   let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds
   // name what was executing; restarting from those is the honest resume.
@@ -2872,7 +2941,8 @@ export async function continueRun(
       const from = stored.currentStepIds[0]
         ?? stored.steps.find(s => s.status === 'running' || s.status === 'pending')?.stepId
       if (!from) return stored
-      return restartRun(runId, from)
+      // An interrupted run already counts against its group (runQueue.resumable).
+      return restartRun(runId, from, undefined, undefined, { admitted: true })
     }
     // Paused with nothing in memory: the process that paused it is gone (a
     // container restart leaves pid 1 in place, so only the record tells).
@@ -2968,7 +3038,14 @@ export async function continueRun(
  * awaiting the run's creation — not the reply itself, just the durable record that
  * one is in flight.
  */
-export async function respondToRun(runId: string, reply: string): Promise<WorkflowRun | null> {
+export async function respondToRun(runId: string, reply: string, opts: { admitted?: boolean } = {}): Promise<WorkflowRun | null> {
+  const stored = await getRun(runId)
+  if (!opts.admitted && stored?.status === 'paused') {
+    const parked = await parkUnlessSlot(stored, { action: 'respond', reply })
+    if (parked) return parked
+  }
+  // After a restart the process holding the question is gone; the record is enough to answer it.
+  if (stored?.status === 'paused' && !live.get(runId)) await rehydrate(stored).catch(() => undefined)
   const run = await getRun(runId)
   const l = live.get(runId)
   if (!run || !l || run.status !== 'paused') return run
@@ -3204,7 +3281,7 @@ const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted'
  * step's output, under the same run id and artifacts directory. The previous
  * attempt of each reset step is snapshotted the way monitor retries are.
  */
-export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string, opts: { /** The runner itself hands a running run over (a widened run); the settled-status gate is the operator's, not its. */ fromRunner?: boolean } = {}): Promise<WorkflowRun> {
+export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string, opts: { /** The runner itself hands a running run over (a widened run); the settled-status gate is the operator's, not its. */ fromRunner?: boolean, /** The run already has its slot: the queue, or a resume that checked the cap. */ admitted?: boolean } = {}): Promise<WorkflowRun> {
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
   if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
@@ -3215,6 +3292,13 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
         ? 'record your decisions instead'
         : 'wait for it to settle'
     throw new RestartError(409, `A ${run.status} run cannot be restarted; ${instead}`)
+  }
+  // A person's restart waits for a slot like any start. The runner's own
+  // hand-overs (widen, rework) keep the slot the run already holds, and an
+  // interrupted run is counted against its group already.
+  if (!opts.fromRunner && !opts.admitted && run.status !== 'interrupted') {
+    const parked = await parkUnlessSlot(run, { action: 'restart', stepId, note, startedBy })
+    if (parked) return parked
   }
   // Same scope as starting a run: what conflicts is a shared working directory.
   const active = await findRunInWorkspace(runWorkspace(run), run.id)

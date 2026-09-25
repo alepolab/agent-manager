@@ -28,6 +28,7 @@ const mayDrive = computed(() => can('runEngine'))
  * the backstop for a role nobody on this instance holds.
  */
 const gateOwner = computed(() => props.run?.question?.role)
+const PARKED_LABEL = { continue: 'Your decision is', respond: 'Your answer is', restart: 'The restart is' } as const
 /** A pause the runner raised about itself - budget spent, model unreachable - rather than a gate on the work. */
 const runnerPause = computed(() => props.run?.question?.reason === 'budget' || props.run?.question?.reason === 'auth')
 /**
@@ -342,6 +343,16 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <ol class="list-decimal ml-4 space-y-0.5 mt-1"><li v-for="q in intake.open_questions" :key="q">{{ q }}</li></ol>
       <p v-if="!settledRun" class="text-label mt-1">Answer in the note below and restart the step that needs the answer.</p>
     </details>
+    <!-- A decision taken while the group was full: recorded, and carried out
+         by the queue when a slot frees - it is not lost and not re-asked. -->
+    <div v-if="run.status === 'queued' && run.parked" class="rounded-lg p-3 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" role="status">
+      <p class="t-head m-0" style="color: var(--text-primary);">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
+      <p class="m-0 text-label">
+        Its group is running as many runs as it allows. This run goes ahead of newer ones in the queue and
+        {{ run.parked.action === 'restart' ? 'restarts' : 'continues' }} the moment a slot frees.
+        <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
+      </p>
+    </div>
     <div v-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
       <!-- The eyebrow is the label; the question is the thing to read. These were
            the same size, inside a box built exactly like the two informational
