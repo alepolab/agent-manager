@@ -1788,6 +1788,19 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(new Set(kids.map(k => k.projectDir)).size, 2, 'each child works in its own checkout')
   assert.ok(kids.every(k => k.projectDir.includes('CSUP-')), 'named after the entry it was dispatched for')
 
+  // ── 28a'. Re-running the dispatch does not start a ticket twice ─────────
+  // Restarting a scan's create step re-runs the dispatch after it; the tickets
+  // it had already dispatched must keep their one child, not gain a second.
+  // A restart rebuilds the run from its workflow on disk, like the children do.
+  writeFileSync(join(wfDir, 'scan-demo.json'), JSON.stringify(dispatchFlow(ROUTING)))
+  const beforeRedo = (await store.listRuns()).length
+  await runner.restartRun(d1.id, 'd')
+  const redo = await runner.waitForSettled(d1.id, TIMEOUT)
+  const redoStep = redo.steps.find(s => s.stepId === 'd')
+  assert.equal((await store.listRuns()).length, beforeRedo, 'no new child for a ticket that already has one')
+  assert.deepEqual([...redoStep.childRunIds].sort(), [...step1.childRunIds].sort(), 'the existing children are the step\'s children')
+  assert.match(redoStep.output, /CSUP-1 already has run .*; not dispatched again/)
+
   // ── 28b. Nothing to dispatch is an outcome, not a failure ───────────────
   runner.setAgentCaller(scanWriting('[]'))
   let d2 = await runner.startRun({ workflow: dispatchFlow(ROUTING), initialPrompt: 'scan', watch: 'direct-invocation', autoRun: true })

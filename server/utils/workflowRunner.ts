@@ -1657,7 +1657,24 @@ async function runDispatchStep(
   const children: { id: string, run: string, slug: string }[] = []
   let queuedCount = 0
   const stuck: string[] = []
+  // A ticket this run already dispatched, to a child that is still going or
+  // finished, is not dispatched again. Restarting a create step re-runs the
+  // dispatch after it, and a scan whose Jira step was restarted to file the
+  // ten tickets it had failed on would otherwise have started a second fix
+  // pipeline for each of the two it had filed the first time. A stopped or
+  // failed child does not count: dispatching again is how that one is redone.
+  const live = new Map<string, WorkflowRun>()
+  for (const r of await listRuns()) {
+    if (r.parentRunId === run.id && r.ticketKey && !['stopped', 'failed'].includes(r.status)) live.set(r.ticketKey, r)
+  }
   for (const item of items) {
+    const existing = item.ticketKey ? live.get(item.ticketKey) : undefined
+    if (existing) {
+      childRunIds.push(existing.id)
+      children.push({ id: item.key, run: existing.id, slug: existing.workflowSlug })
+      lines.push(`${item.ticketKey} already has run ${existing.id} (${existing.status}); not dispatched again.`)
+      continue
+    }
     try {
       const { run: child, queued } = await startChild(item)
       // Both started and queued children are recorded. A queued child used to

@@ -451,16 +451,32 @@ const TICKET_DRAFTS_FILE = 'ticket-drafts.json'
  * wrote id, summary and verdict alone, and all seven creates failed on a
  * missing project and issue type that the drafts file held all along. Copying
  * fifty kilobytes faithfully is the runner's job, not a model's.
+ *
+ * The fill goes all the way down. A re-run gate kept `fields` but wrote it
+ * without `custom`, and without the description or the acceptance criteria:
+ * the old check only completed an entry with no `fields` at all, so it did
+ * nothing, and ten Bug drafts whose Steps to Reproduce and Business Value sat
+ * in ticket-drafts.json were refused for lacking them. The two Tasks were
+ * filed with an empty body.
  */
-async function completeFromDrafts(runId: string, entries: Record<string, unknown>[]): Promise<void> {
-  if (!entries.some(e => typeof e.draft_id === 'string' && !e.fields)) return
+export async function completeFromDrafts(runId: string, entries: Record<string, unknown>[]): Promise<void> {
+  if (!entries.some(e => typeof e.draft_id === 'string')) return
   const drafts = await readArtifactEntries(runId, TICKET_DRAFTS_FILE)
   if (!drafts || 'error' in drafts) return
   const byId = new Map(drafts.entries.filter(d => typeof d.draft_id === 'string').map(d => [d.draft_id as string, d]))
   for (const entry of entries) {
     const draft = typeof entry.draft_id === 'string' ? byId.get(entry.draft_id) : undefined
-    if (!draft) continue
-    for (const [k, v] of Object.entries(draft)) if (entry[k] === undefined) entry[k] = v
+    if (draft) fillMissing(entry, draft)
+  }
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** Copies into `into` what it lacks from `from`, recursing into objects both hold. */
+function fillMissing(into: Record<string, unknown>, from: Record<string, unknown>): void {
+  for (const [k, v] of Object.entries(from)) {
+    if (into[k] === undefined || into[k] === null || into[k] === '') into[k] = v
+    else if (isPlainObject(into[k]) && isPlainObject(v)) fillMissing(into[k] as Record<string, unknown>, v)
   }
 }
 
