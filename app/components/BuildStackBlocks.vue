@@ -23,12 +23,19 @@ function onDrop(e: DragEvent, to: number) {
   dragFrom = null
   if (from !== to) ctx.move(props.seq, from, to)
 }
+
+/** A refused change leaves the model alone, so put the box back to what it says. */
+function onRejoin(e: Event, i: number, current: boolean) {
+  const el = e.target as HTMLInputElement
+  ctx.setRejoin({ seq: props.seq, index: i }, el.checked)
+  el.checked = current
+}
 </script>
 
 <template>
   <template v-for="(b, i) in blocks" :key="b.kind === 'step' ? b.stepId : `paths-${i}`">
     <div v-if="!ctx.readOnly.value" class="flex flex-col items-center">
-      <ActionPicker :agents="ctx.agents.value" :allow-split="!nested" :allow-approval="b.kind === 'step' && !ctx.stepOf(b.stepId)?.approval" @choose="(c) => ctx.apply(c, { seq, index: i })" />
+      <ActionPicker :agents="ctx.agents.value" :allow-split="!nested && i > 0" :allow-approval="b.kind === 'step' && !ctx.stepOf(b.stepId)?.approval" @choose="(c) => ctx.apply(c, { seq, index: i })" />
       <div class="w-0.5 h-3" style="background: var(--border-default);" aria-hidden="true" />
     </div>
     <div v-else-if="i > 0" class="w-0.5 h-5 mx-auto" style="background: var(--border-default);" aria-hidden="true" />
@@ -60,7 +67,7 @@ function onDrop(e: DragEvent, to: number) {
               v-if="firstStepOf(br) && !ctx.readOnly.value"
               class="field-input t-small font-mono flex-1 min-w-0" :value="ctx.stepOf(firstStepOf(br)!)?.runWhen?.artifact ?? ''"
               placeholder="Always (or: runs if this file exists)" :aria-label="`Condition for path ${j + 1}`"
-              @change="(e) => ctx.setCondition(firstStepOf(br)!, (e.target as HTMLInputElement).value)"
+              @change="(e) => { const el = e.target as HTMLInputElement; el.value = el.value.trim(); ctx.setCondition(firstStepOf(br)!, el.value) }"
             >
             <p v-else class="t-small font-mono text-label truncate flex-1">{{ firstStepOf(br) ? (ctx.stepOf(firstStepOf(br)!)?.runWhen?.artifact ? `If ${ctx.stepOf(firstStepOf(br)!)?.runWhen?.artifact} exists` : 'Always') : 'Goes straight on' }}</p>
             <UButton v-if="!ctx.readOnly.value" size="xs" variant="ghost" color="neutral" icon="i-lucide-x" :aria-label="`Remove path ${j + 1}`" @click="ctx.removeBranch({ seq, index: i }, j)" />
@@ -70,12 +77,12 @@ function onDrop(e: DragEvent, to: number) {
       </div>
       <div v-if="!ctx.readOnly.value" class="flex flex-wrap items-center gap-3 t-small">
         <UButton size="xs" variant="soft" icon="i-lucide-plus" label="Add path" @click="ctx.addBranch({ seq, index: i })" />
-        <label class="flex items-center gap-1.5"><input type="checkbox" :checked="b.rejoin" @change="(e) => ctx.setRejoin({ seq, index: i }, (e.target as HTMLInputElement).checked)"> Rejoin after paths</label>
+        <label class="flex items-center gap-1.5"><input type="checkbox" :checked="b.rejoin" @change="(e) => onRejoin(e, i, b.rejoin)"> Rejoin after paths</label>
       </div>
     </div>
   </template>
 
   <div v-if="!ctx.readOnly.value && !endsOpen" class="flex flex-col items-center">
-    <ActionPicker :agents="ctx.agents.value" :allow-split="!nested" :allow-approval="false" @choose="(c) => ctx.apply(c, { seq, index: blocks.length })" />
+    <ActionPicker :agents="ctx.agents.value" :allow-split="!nested && blocks.length > 0" :allow-approval="false" @choose="(c) => ctx.apply(c, { seq, index: blocks.length })" />
   </div>
 </template>

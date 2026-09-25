@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowStep } from '~/types'
-import type { StackBlock } from '~~/shared/utils/workflowStack'
+import { stepIdsOf, type StackBlock } from '~~/shared/utils/workflowStack'
 import * as E from '~~/shared/utils/stackEdit'
 import { BUILD_STACK_KEY, type PickerChoice, type Selection } from '~/utils/buildStack'
 
@@ -66,7 +66,14 @@ provide(BUILD_STACK_KEY, {
   }),
   move: (seq, from, to) => edit(() => setBlocks(E.moveWithin(props.blocks, seq, from, to))),
   addBranch: at => edit(() => setBlocks(E.addBranch(props.blocks, at))),
-  removeBranch: (at, branch) => edit(() => setBlocks(E.removeBranch(props.blocks, at, branch))),
+  removeBranch: (at, branch) => edit(() => {
+    const blocks = E.removeBranch(props.blocks, at, branch)
+    const kept = new Set(stepIdsOf(blocks))
+    const dropped = new Set(stepIdsOf(props.blocks).filter(id => !kept.has(id)))
+    setBlocks(blocks)
+    emit('update:steps', props.steps.filter(s => !dropped.has(s.id)))
+    if (props.selected?.kind === 'step' && dropped.has(props.selected.stepId)) emit('update:selected', null)
+  }),
   setRejoin: (at, rejoin) => edit(() => setBlocks(E.setRejoin(props.blocks, at, rejoin))),
   setCondition: (id, artifact) => patchStep(id, { runWhen: artifact.trim() ? { artifact: artifact.trim() } : undefined }),
   clearApproval: id => patchStep(id, { approval: undefined, gateRole: undefined }),
