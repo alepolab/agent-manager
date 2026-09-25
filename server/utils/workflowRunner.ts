@@ -31,10 +31,11 @@ import { teardownRun } from './runTeardown.ts'
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
+import { DECISION_FILE, briefFeedback, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -176,6 +177,8 @@ interface Live {
   running: boolean
   /** A step found the fault outside the run's scope; runWave re-provisions and continues from there. */
   widen?: { from: string, target: string, reason: string, added: string[] }
+  /** A step could not reach the model with this process's credentials; the run pauses rather than fails. */
+  authFailure?: { stepId: string, message: string }
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
   /** Steps whose `runWhen` condition is waived for one evaluation, because an
@@ -816,6 +819,21 @@ async function unlockTests(run: WorkflowRun, label: string): Promise<void> {
  */
 const NO_QUESTION = /^(?:n\/?a|none|nothing(?:\s+to\s+ask)?|not\s+applicable|no\s+questions?)\b\s*(?:$|[—–\-:;.,(])/i
 
+/** Steps sent back for a missing decision brief on their current question, by run and step; cleared when it pauses. */
+const briefRequested = new Set<string>()
+
+/**
+ * The agent could not reach the model at all: no login, a refused key, an
+ * expired token. That is this server's environment, not the step's work, and
+ * every step after it would fail the same way in seconds. A server started
+ * without the Anthropic settings failed nine runs in a row like this - each
+ * failure freed a slot, and the next resumed run failed into the same error.
+ */
+const AUTH_FAILURE = /not logged in|please run \/login|invalid (x-)?api[ -]?key|authentication_error|oauth token (has )?expired|\b401\b.*(unauthori[sz]ed|authentication)|credit balance is too low/i
+export function isAuthFailure(message: string): boolean {
+  return AUTH_FAILURE.test(message)
+}
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
@@ -1126,9 +1144,36 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
     const ask = parseAsk(output)
     if (ask) {
+      // The question reaches a person with its brief, or not at all on the
+      // first try: a step that asked without one is sent back, once, in the
+      // same session, to write it from the work it has already done. A second
+      // miss still pauses - a question with no brief beats a run that cannot
+      // ask - and the pane falls back to the step's report.
+      const briefPath = resolveRunArtifact(run.id, DECISION_FILE)
+      const parsed = parseDecisionBrief(briefPath ? await readFile(briefPath, 'utf8').catch(() => null) : null)
+      const attempt = `${run.id}:${id}`
+      if ('error' in parsed && !briefRequested.has(attempt) && canRevisit(l.graph, l.state, id)) {
+        briefRequested.add(attempt)
+        const why = `Decision brief: ${parsed.error}.`
+        logLine(l, run, rec, why)
+        log.warn('step asked without a usable decision brief', { runId: run.id, stepId: id, error: parsed.error })
+        Object.assign(rec, { output, model, usage, error: why })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+        const session = resumableSession(rec)
+        if (session) l.resumeFrom[id] = session
+        l.retryFeedback[id] = briefFeedback(parsed.error)
+        l.state.status[id] = 'completed'
+        armNode(l.state, id)
+        return true
+      }
+      briefRequested.delete(attempt)
       l.outputs[id] = output
-      Object.assign(rec, { status: 'waiting', output, model, usage })
-      run.question = { stepId: id, text: ask, kind: 'question', askedAt: Date.now() }
+      Object.assign(rec, { status: 'waiting', output, model, usage, error: undefined })
+      const askedAt = Date.now()
+      run.question = { stepId: id, text: ask, kind: 'question', askedAt, ...('brief' in parsed ? { brief: parsed.brief } : {}) }
+      // Filed under the question it answered, so the next question cannot
+      // arrive wearing this one's brief.
+      if (briefPath && 'brief' in parsed) await rename(briefPath, `${briefPath.replace(/\.json$/, '')}-${askedAt}.json`).catch(() => {})
       l.waiting = id
       log.info('step asked the operator', () => ({ runId: run.id, stepId: id, agentSlug: step.agentSlug, question: preview(ask) }))
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
@@ -1250,6 +1295,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
+    // Credentials, not work: the step goes back to pending with its visit
+    // returned, and the run pauses once the wave settles (see runWave).
+    const message = err instanceof Error ? err.message : String(err)
+    if (!l.stopped && isAuthFailure(message)) {
+      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.status[id] = 'pending'
+      armNode(l.state, id)
+      Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+      l.authFailure ??= { stepId: id, message }
+      logLine(l, run, rec, `could not reach the model: ${message}`)
+      log.error('step could not reach the model; the run will pause', { runId: run.id, stepId: id, error: message })
+      return true
+    }
     // Whatever the agent left running outlives the agent: `docker run` is a
     // client, so aborting the CLI mid-build leaves the build going. Reaped
     // before the retry below, because the retry re-runs the same command and a
@@ -2081,6 +2139,22 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return failRunAfterWave(l, run, runnable)
   }
 
+  if (l.authFailure) {
+    const { stepId, message } = l.authFailure
+    l.authFailure = undefined
+    run.status = 'paused'
+    run.question = {
+      stepId, kind: 'approval', reason: 'auth', askedAt: Date.now(),
+      text: `"${stepOf(l, stepId)?.label ?? stepId}" could not reach the model: ${message}. This is the server's own credentials, not the run's work - check how the server was started (its environment needs the Anthropic settings), then Continue to run the step again. Nothing was lost.`,
+    }
+    run.currentStepIds = []
+    run.nextStepIds = [stepId]
+    l.running = false
+    log.warn('run paused: the model could not be reached', { runId: run.id, stepId })
+    await publish(run)
+    return run
+  }
+
   // A step is waiting on the operator: nothing else starts until they answer.
   if (l.widen) {
     // Re-provision with the wider scope and continue from there: the same reset
@@ -2847,12 +2921,13 @@ export async function continueRun(
     // it cannot be satisfied without having read something. Reject already
     // demanded a reason; approve did not, which had it backwards - saying yes to
     // a money change is the answer that needs the justification.
-    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius) && !note?.trim()) {
+    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && needsJustification(run.blastRadius) && !note?.trim()) {
       l.running = false
       throw new ApprovalNeedsReason(
         `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
     }
     if (run.question.reason === 'budget') extendBudget(run)
+    else if (run.question.reason === 'auth') { /* the step is already pending and armed */ }
     // Withholding the approval is what lets a review that approved nothing take
     // effect. l.approved waives runWhen (see resolveConditions), so granting it
     // here would run the step over an artifact the operator just emptied - the

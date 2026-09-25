@@ -1092,7 +1092,17 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
   let asks = 0
   runner.setAgentCaller(async (agentSlug, input) => {
-    if (agentSlug === 'agent-a' && asks < 2) { asks++; return `PIPELINE-ASK: question number ${asks}?` }
+    if (agentSlug === 'agent-a' && asks < 2) {
+      asks++
+      // A step asks with its decision brief, or is sent back to write one
+      // (test-decision-brief.mjs); this case is about pausing, so it writes one.
+      const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+      writeFileSync(join(dir, 'decision.json'), JSON.stringify({
+        question: `question number ${asks}?`, situation: 'The step needs a choice.',
+        options: [{ key: 'a', label: 'this', next: 'n', delivers: 'd', leaves: 'l' }, { key: 'b', label: 'that', next: 'n', delivers: 'd', leaves: 'l' }],
+      }))
+      return `PIPELINE-ASK: question number ${asks}?`
+    }
     return `out ${agentSlug}`
   })
   let q = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })

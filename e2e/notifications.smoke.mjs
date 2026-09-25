@@ -224,7 +224,13 @@ async function main() {
 
     // ── 5. Deciding it in the pane lands on the run and moves on ────────────
     await page.getByPlaceholder(/Optional note for the step about to run/).fill('Out of scope for this sprint')
+    // A decision can take a while to act on, and the pane used to show nothing
+    // meanwhile. The request is held back here so that interval is observable.
+    await page.route('**/api/runs/*/reject', async (route) => { await new Promise(r => setTimeout(r, 1500)); await route.continue() })
     await page.getByRole('button', { name: 'Reject run' }).click()
+    await page.getByRole('status').filter({ hasText: 'Rejection recorded' }).waitFor({ state: 'visible' })
+    assert.ok(await page.getByRole('button', { name: /Approve and run/ }).isDisabled(), 'no second decision while the first is in flight')
+    await page.screenshot({ path: join(shots, 'notifications-sending.png'), fullPage: true })
     await page.waitForFunction((q) => new URL(location.href).searchParams.get('item') === `run:${q}`, QUESTION, { timeout: VISIBLE_TIMEOUT_MS })
     const rejected = JSON.parse(readFileSync(join(claudeDir, 'workflow-runs', `${GATE}.json`), 'utf-8'))
     assert.notEqual(rejected.status, 'paused', 'the rejection reached the run')

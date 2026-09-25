@@ -54,6 +54,16 @@ These hold at every step in this pipeline, not just this one:
 
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.** The plan gate needs \`.agent/plan.md\`, and it travels with the commit as the statement of intent; everything else there is scratch. Evidence lives in the run artifacts directory Agent Manager serves, never in the repository. Staging the whole tree at once is never how you stage: name the files you commit.
 - **Ask when only a person can answer.** If you reach a decision that is genuinely the developer's — two behaviours the ticket could mean, a credential or access you do not have, an action that cannot be undone — end your output with one line, \`PIPELINE-ASK: <one precise question>\`, and stop. The run pauses, the developer answers, and you run again with your previous output and their answer. Never ask what the ticket, the repository or the run artifacts can tell you; a question that a search would have answered wastes a person's time.
+
+  The person answering has not read the ticket, the repository or your report, and sees your question in an inbox. So before the \`PIPELINE-ASK:\` line, write \`decision.json\` into the run artifacts directory - the inbox lays it out, and a question without it is sent back to you:
+  - \`question\`: the same one-line question.
+  - \`situation\`: two or three plain sentences - what you were doing and what stops you.
+  - \`criteria\`: \`[{ "ref": "criterion 2", "text": "<its full text>" }]\` for every acceptance criterion you mention anywhere. Never "criteria 2-3" alone.
+  - \`findings\`: one established fact per entry, with every module, file, ticket or number explained in words.
+  - \`options\`: \`[{ "key": "a", "label", "next": what the next step will do if chosen, "delivers": what the ticket ends up with, "leaves": what is left undone or becomes a follow-up, "risk" (optional) }]\`, at least two.
+  - \`recommendation\`: \`{ "option": "a", "why": "<one sentence>" }\`.
+
+  A real run asked whether to "(a) fix the \`trouble-ticket\` 0.3062-vs-0.32 ratchet breach … (b) additionally raise one named module … or (c) narrow the oracle to criterion 4", and the developer could not answer: they had never seen criteria 2-4, did not know what trouble-ticket was, and could not tell what any option would lead to. The \`PIPELINE-ASK:\` line itself stays one short question.
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -2589,7 +2599,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <one precise question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <one precise question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step's work.** If an instruction belongs to a later stage, note it and leave it.
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2722,7 +2732,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2848,7 +2858,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2982,7 +2992,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**

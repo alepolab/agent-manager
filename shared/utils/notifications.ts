@@ -15,6 +15,7 @@ import { isWaitingOnAPerson } from '../types/run.ts'
 export function gateAsk(run: Pick<WorkflowRun, 'status' | 'question'>): string {
   if (run.status === 'awaiting_review') return `${run.question?.artifact ?? 'Its drafts'} is waiting on your decisions`
   if (run.question?.reason === 'budget') return 'Out of budget - approve more, or stop it'
+  if (run.question?.reason === 'auth') return 'Could not reach the model - fix the server\'s credentials, then retry'
   if (run.question?.reason === 'rework') return 'Out of send-backs - grant another, or stop it'
   return run.question?.text || 'Paused - open it to see why'
 }

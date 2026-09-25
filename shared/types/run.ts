@@ -1,4 +1,5 @@
 import type { Role } from './role'
+import type { DecisionBrief } from '../utils/decisionBrief'
 
 export type WorkflowRunStatus =
   /**
@@ -394,7 +395,9 @@ export interface WorkflowRun {
     /** An approval raised by the runner itself: the budget is spent and continuing
      *  grants another allowance, or a step has spent its send-backs and whether to
      *  grant one more is the developer's call. */
-    reason?: 'budget' | 'rework'
+    reason?: 'budget' | 'rework' | 'auth'
+    /** For a step's question: what a person needs to answer it (shared/utils/decisionBrief.ts). */
+    brief?: DecisionBrief
     /**
      * The send-back this question is about, carried so that answering can perform
      * it.
