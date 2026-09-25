@@ -702,12 +702,34 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
     ? ancestorsOf(l.graph, id).reverse()
     : (l.graph.forwardPreds[id] ?? [])
   if (!preds.length) return initialPrompt
-  const parts = preds.map(p => ({ label: recOf(run, p).label, text: l.outputs[p] ?? '' }))
+  const parts = preds.map(p => ({ label: recOf(run, p).label, text: passedOn(l, run, p, initialPrompt) }))
   // The budget is 'ancestors'-only: that mode is the one whose fan-in is
   // unbounded by the graph. The default path has always passed upstream
   // output through whole, and a step legitimately emitting a large diff or
   // log dump must keep doing so.
   return useAncestors ? joinBudgeted(parts) : joinInputs(parts)
+}
+
+/**
+ * What a step hands the step after it. A Jira or notify step is the runner's
+ * own bookkeeping: its output is one status line, and passing only that on cut
+ * the work off from everything upstream. Runbook A's intake follows "Jira: In
+ * Progress", so for every run its whole input was 'Moved ASECRM-223 to "In
+ * Progress"' - the ticket never reached it. ASECRM-221's intake noticed and dug
+ * the ticket out of the Jira step's recorded input; ASECRM-223's asked a person
+ * what the ticket was about. The verifier, trace and security review, which
+ * follow "Jira: QA In Progress", likewise received a status line in place of
+ * the fix's report. Such a step now passes on what it was given, with its line
+ * after it.
+ */
+function passedOn(l: Live, run: WorkflowRun, p: string, initialPrompt: string): string {
+  const out = l.outputs[p] ?? ''
+  const step = stepOf(l, p)
+  if (!step?.jira && !step?.notify) return out
+  // What the step was given: remembered when it ran in this process, otherwise
+  // rebuilt the same way, which is what a run resumed after a restart needs.
+  const given = l.lastInputs[p] ?? computeInput(l, run, p, initialPrompt)
+  return given ? `${given}\n\n---\n\n${out}` : out
 }
 
 /** The one place that tells apart a plain-string test stub's result from
