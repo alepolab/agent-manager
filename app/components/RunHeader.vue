@@ -15,6 +15,27 @@ const mayDrive = computed(() => can('runEngine'))
 const settledRun = computed(() => !isLiveStatus(props.run.status))
 const anyRunning = computed(() => props.run.steps.some(s => s.status === 'running'))
 
+// Stop is irreversible for whatever step is mid-flight: ask once, inline, then
+// forget - the same two-click confirm /runs used to give it in its table row.
+const confirmingStop = ref(false)
+let stopTimer: ReturnType<typeof setTimeout> | null = null
+function handleStop() {
+  if (!confirmingStop.value) {
+    confirmingStop.value = true
+    if (stopTimer) clearTimeout(stopTimer)
+    stopTimer = setTimeout(() => { confirmingStop.value = false }, 4000)
+    return
+  }
+  confirmingStop.value = false
+  if (stopTimer) clearTimeout(stopTimer)
+  emit('stop')
+}
+// A different run replacing this one (RunDetailPane keys on id, but this
+// component itself does not remount) must not leave a stale "Confirm stop"
+// armed against the run now showing.
+watch(() => props.run.id, () => { confirmingStop.value = false; if (stopTimer) clearTimeout(stopTimer) })
+onUnmounted(() => { if (stopTimer) clearTimeout(stopTimer) })
+
 /** Steering a running run: the note reaches the agent working now, or the next step to start. */
 const steer = ref('')
 const sent = ref<string | null>(null)
@@ -84,6 +105,7 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
       <span class="t-small text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
       <span class="t-small text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(run, now) }}</span>
     </div>
+    <p v-if="run.error" class="t-small" style="color: var(--error);">{{ run.error }}</p>
     <RunProgressBar :steps="run.steps" :aria-label="`${progress.done} of ${progress.total} steps settled`" />
 
     <!-- What this run was actually given. Shown because a reader deciding
@@ -113,7 +135,7 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
          96 minutes over 11 steps, and the first thing the page showed was a box
          of intake questions telling the reader to restart a step — on a run that
          was over. What the run PRODUCED is the answer to why anyone opened it. -->
-    <div v-if="prLinks.length" class="flex flex-wrap gap-2">
+    <div v-if="prLinks.length || run.ci" class="flex flex-wrap items-center gap-2">
       <!-- Named as an outcome and an action. A bare "alepolab/billing_cpp14/pull/106"
            says what it is and never what it is doing on the page or what to do
            with it — which is the whole answer to why this run existed. -->
@@ -129,6 +151,13 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
         </span>
         <UIcon name="i-lucide-external-link" class="size-3.5 shrink-0 ml-1" />
       </a>
+      <a
+        v-if="run.ci"
+        :href="run.ci.pr" target="_blank" rel="noopener"
+        class="ml-1 normal-case font-sans t-small underline self-center"
+        :title="run.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || run.ci.error || ''"
+        :style="{ color: run.ci.status === 'failing' ? STATUS_COLOR.failed : run.ci.status === 'passing' ? STATUS_COLOR.completed : 'inherit' }"
+      >CI {{ run.ci.status }}</a>
     </div>
 
     <!-- Open on a live run, where they are a prompt to act. Collapsed on a
@@ -191,7 +220,11 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
     <div class="flex flex-wrap gap-2">
       <UButton v-if="mayDrive && run.status === 'running'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!steer.trim()" @click="sendNote" />
       <UButton v-if="mayDrive && run.status === 'interrupted'" size="xs" icon="i-lucide-play" label="Resume" @click="emit('continue')" />
-      <UButton v-if="mayDrive && isLiveStatus(run.status)" size="xs" variant="ghost" color="neutral" label="Stop" @click="emit('stop')" />
+      <UButton
+        v-if="mayDrive && isLiveStatus(run.status)"
+        size="xs" :variant="confirmingStop ? 'solid' : 'ghost'" :color="confirmingStop ? 'error' : 'neutral'"
+        :label="confirmingStop ? 'Confirm stop' : 'Stop'" @click="handleStop"
+      />
       <UButton v-if="mayDrive && settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
     </div>
   </div>

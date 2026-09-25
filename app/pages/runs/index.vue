@@ -96,18 +96,25 @@ const VIEWS = [
   { value: 'running', label: 'Running' },
   { value: 'failed', label: 'Failed' },
 ] as const
-const inView = (r: WorkflowRun) =>
-  view.value === 'waiting' ? waitingOnMe(r)
-  : view.value === 'running' ? isLiveStatus(r.status)
-  : view.value === 'failed' ? r.status === 'failed'
+// One predicate for both the per-row filter and the chip counts, so a count
+// next to "Failed" always means "failed among what q/mine/parent already show" -
+// never the whole unfiltered list.
+const matchesView = (r: WorkflowRun, v: string) =>
+  v === 'waiting' ? waitingOnMe(r)
+  : v === 'running' ? isLiveStatus(r.status)
+  : v === 'failed' ? r.status === 'failed'
   : true
-const countOf = (v: string) => runs.value.filter(r => (v === 'waiting' ? waitingOnMe(r) : v === 'running' ? isLiveStatus(r.status) : v === 'failed' ? r.status === 'failed' : true)).length
+const inView = (r: WorkflowRun) => matchesView(r, view.value)
 
-const shown = computed(() => runs.value.filter(r =>
+// Everything q/mine/parent let through, before the view chip is applied - the
+// base both `shown` and the chip counts filter from.
+const baseShown = computed(() => runs.value.filter(r =>
   (!filter.value || [r.workflowName, r.initialPrompt.split('\n')[0] ?? '', r.startedBy ?? '', r.product?.name ?? '', r.ticketKey ?? ''].some(v => v.toLowerCase().includes(filter.value.toLowerCase())))
   && (!mine.value || r.startedBy === me.value?.login)
-  && (!parent.value || r.parentRunId === parent.value)
-  && inView(r)))
+  && (!parent.value || r.parentRunId === parent.value)))
+const countOf = (v: string) => baseShown.value.filter(r => matchesView(r, v)).length
+
+const shown = computed(() => baseShown.value.filter(r => inView(r)))
 
 /** Wide screens open the run beside the list; narrow ones go to its page. */
 function select(r: WorkflowRun) {
@@ -185,6 +192,7 @@ async function deleteFailed() {
       catch { /* keep going; report the total at the end */ }
     }
     await refresh()
+    if (targets.some(t => t.id === openId.value)) openId.value = ''
     toast.add({ title: `Deleted ${done} of ${targets.length} failed run(s)`, color: done === targets.length ? 'success' : 'warning' })
   } finally {
     bulkDeleting.value = false

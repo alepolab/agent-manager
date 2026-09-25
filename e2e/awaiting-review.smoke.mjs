@@ -264,6 +264,18 @@ async function main() {
   assert.ok(/Waiting for your approval/i.test(paneText), 'the gate says what kind of decision this is')
   assert.ok(paneText.includes('Decide which entries'), 'and the question itself is on the page, not just its status')
 
+  // The eyebrow alone only proves a run is gated, not that /runs shows the
+  // actual batch of decisions - that is RunDecisionPanel, mounted in the pane.
+  // It fetches its own queue, so wait for the count rather than reading the
+  // "Reading the drafts…" placeholder that paneText above may have caught.
+  const paneDecisionPanel = pane.locator('[data-testid="run-decision-panel"]')
+  await paneDecisionPanel.waitFor({ state: 'visible' })
+  await page.waitForFunction(
+    () => /Awaiting your decision\s*—\s*3 drafts/i.test(document.querySelector('[data-testid="run-decision-panel"]')?.innerText ?? ''),
+    null, { timeout: VISIBLE_TIMEOUT_MS })
+  assert.ok(/Awaiting your decision\s*—\s*3 drafts/i.test(await paneDecisionPanel.innerText()),
+    `the pane shows how many decisions are waiting, not just that some are.`)
+
   // Stop is offered on the pane's header because the run is live; Delete and
   // Restart never were row actions to begin with in the new design, and stay
   // off the pane too while the run is live.
@@ -271,8 +283,13 @@ async function main() {
     `Stop is offered - cancelling is how it is got rid of. Pane:\n${paneText}`)
   assert.equal(await pane.getByRole('button', { name: 'Delete', exact: true }).count(), 0,
     `Delete is not: it is live and holds its checkout. Pane:\n${paneText}`)
-  assert.equal(await pane.getByRole('button', { name: /^Restart/ }).count(), 0,
-    `nor Restart: a run awaiting a decision is continued, not restarted. Pane:\n${paneText}`)
+  // Nothing in the pane may let a reviewer restart or resume around the gate:
+  // Replay is a per-step control and Resume only ever shows for an interrupted
+  // run, neither of which this awaiting_review run is.
+  assert.equal(await pane.getByRole('button', { name: /^Replay/ }).count(), 0,
+    `nor a per-step Replay: a run awaiting a decision is continued, not restarted. Pane:\n${paneText}`)
+  assert.equal(await pane.getByRole('button', { name: /^Resume$/ }).count(), 0,
+    `nor Resume: that is for an interrupted run, not one waiting on a decision. Pane:\n${paneText}`)
 
   await page.screenshot({ path: join(shots, 'awaiting-review-runs-row.png'), fullPage: true })
 
