@@ -151,10 +151,11 @@ Wherever it lands, the hosted decision has everything that sat at the top of
 
 **The run header** (inside `RunStack`, run mode) has:
 
-- status pill and ticket
+- status pill (the ticket shows on the trigger card at the top of the stack)
 - elapsed time
-- tokens against `budget.maxTokens`
-- cost
+- tokens against `budget.maxTokens` (there is no separate dollar cost figure
+  in the header; that was removed on request, and totals still come from
+  `server/utils/costReport.ts`)
 - the run's error message, when it has one
 - the PR links, with the CI status link (status colour, checks as a tooltip)
   beside them
