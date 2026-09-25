@@ -5,9 +5,9 @@ import { gateIsMine } from '~~/shared/utils/notifications'
 
 /**
  * A run's open decision: the question, whose it is, the evidence being
- * approved, and the answers. Moved out of WorkflowRunPanel unchanged so the run
- * stack can render it inside the card of the step that is waiting. Renders
- * when a question is set, or the run is awaiting_review or paused.
+ * approved, and the answers. Shared by RunStack, which renders it inside the
+ * card of the step that is waiting. Renders when a question is set, or the
+ * run is awaiting_review or paused.
  */
 const props = defineProps<{ run: WorkflowRun }>()
 const emit = defineEmits<{ respond: [reply: string], continue: [note?: string], reject: [note: string], rework: [stepId: string, note: string] }>()

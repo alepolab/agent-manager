@@ -213,7 +213,7 @@ async function main() {
 
   // ── 3. The runs page paints the queued run as waiting, not as started ───
   // /runs is a single `li` list beside a detail pane now, not a table plus a
-  // separate "in flight" section of RunLiveCards - see app/pages/runs/index.vue
+  // separate "in flight" section of its own cards - see app/pages/runs/index.vue
   // and app/components/RunDetailPane.vue.
   await page.goto(`${baseUrl}/runs`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
   await page.getByText('SMOKE-2').first().waitFor({ state: 'visible' })
@@ -338,7 +338,11 @@ async function main() {
     'and the file is untouched by the refusal')
 
   // ── 6. The workflow editor shows and saves its group ────────────────────
+  // The group picker moved into the trigger drawer's Settings tab, behind the
+  // trigger card - it is no longer inline on the builder page.
   await page.goto(`${baseUrl}/workflows/${SLUG}`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  await page.getByTestId('trigger-card').click()
+  await page.getByTestId('trigger-tab-settings').click()
   const picker = page.getByLabel('Concurrency group')
   await picker.waitFor({ state: 'visible' })
   assert.equal(await picker.inputValue(), 'smoke-sdlc',

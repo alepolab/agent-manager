@@ -4,8 +4,8 @@ import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RU
 
 /**
  * A run as a whole: what it is, how far it got, what it was given, what it
- * produced and cost, and the controls that act on all of it. Moved out of
- * WorkflowRunPanel so the panel and the run stack share one header.
+ * produced and cost, and the controls that act on all of it. Shared by
+ * RunStack, which renders it above the run's step cards.
  */
 const props = defineProps<{ run: WorkflowRun }>()
 const emit = defineEmits<{ note: [text: string], continue: [], stop: [], clone: [] }>()

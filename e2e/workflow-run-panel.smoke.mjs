@@ -1,15 +1,15 @@
 /**
- * Browser smoke test for the workflow run status panel
- * (app/pages/workflows/[slug].vue, app/components/WorkflowRunPanel.vue,
- * app/composables/useWorkflowRun.ts).
+ * Browser smoke test for the workflow run stack
+ * (app/pages/workflows/[slug].vue's Run mode, app/components/RunStack.vue,
+ * app/components/RunStackCard.vue, app/composables/useWorkflowRun.ts).
  *
- * Why this exists: the panel's data path is covered by scripts/test-workflow-runner.mjs
+ * Why this exists: the run's data path is covered by scripts/test-workflow-runner.mjs
  * and friends, which prove the server produces correct per-agent rows. None of that
  * proves the browser actually paints them - a broken template, a v-if that hides every
  * row, a class name typo, all pass a fully green data-path suite. This test starts a
  * real dev server against a seeded, disposable CLAUDE_DIR (never the deployed
- * container), opens the page in a real (headless) browser, and asserts the three step
- * rows the seed describes are visible with their labels and status colors.
+ * container), opens the page in Run mode in a real (headless) browser, and asserts the
+ * three seeded steps render as step cards with their labels and status.
  *
  * This is NOT part of the fast scripts/test-*.mjs sweep - it boots a dev server and a
  * browser, so it takes tens of seconds rather than milliseconds. Run it on its own:
@@ -237,44 +237,67 @@ try {
   const baseUrl = `http://127.0.0.1:${port}`
   await waitForServer(baseUrl, SERVER_READY_TIMEOUT_MS)
 
-  // ── 3. Load the workflow page in a real browser ──────────────────────────
+  // ── 3. Load the workflow's run directly into Run mode ────────────────────
   browser = await chromium.launch()
   const page = await browser.newPage()
   page.setDefaultTimeout(ROW_VISIBLE_TIMEOUT_MS)
-  await page.goto(`${baseUrl}/workflows/${slug}`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
 
-  // ── 4. Assert the three seeded step rows are visible with label + status ─
-  const STATUS_COLOR = {
-    completed: 'var(--success, #22c55e)',
-    running: 'var(--info, #3b82f6)',
-    pending: 'var(--text-disabled, #9ca3af)',
+  /** The host's docker bridges churn, and Chromium aborts module loads with
+   *  ERR_NETWORK_CHANGED when they do; retry a bounded number of times rather
+   *  than failing this smoke on a one-off network blip. Also covers `?run=`
+   *  being a one-shot intent applied only after the run list itself has
+   *  loaded client-side, which the plain "mode-run selected" wait accounts for. */
+  async function loadRunMode(url) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+        await page.waitForFunction(
+          () => document.querySelector('[data-testid=mode-run]')?.getAttribute('aria-selected') === 'true',
+          null, { timeout: ROW_VISIBLE_TIMEOUT_MS },
+        )
+        return
+      } catch (err) {
+        if (attempt === 4) throw err
+        await new Promise(r => setTimeout(r, 3000))
+      }
+    }
   }
+  await loadRunMode(`${baseUrl}/workflows/${slug}?run=${run.id}`)
+
+  // ── 4. Assert the three seeded steps render as run-stack cards ───────────
+  const STATUS_DOT_LABEL = { completed: 'completed', running: 'running', pending: 'pending' }
   const expectedRows = [
-    { label: stepIntake.label, agentSlug: stepIntake.agentSlug, status: 'completed' },
-    { label: stepStack.label, agentSlug: stepStack.agentSlug, status: 'running' },
-    { label: stepTest.label, agentSlug: stepTest.agentSlug, status: 'pending' },
+    { stepId: stepIntake.id, label: stepIntake.label, agentSlug: stepIntake.agentSlug, status: 'completed' },
+    { stepId: stepStack.id, label: stepStack.label, agentSlug: stepStack.agentSlug, status: 'running' },
+    { stepId: stepTest.id, label: stepTest.label, agentSlug: stepTest.agentSlug, status: 'pending' },
   ]
 
   for (const expected of expectedRows) {
-    // Each run-panel row is a <button> containing the status dot, the label and the
-    // agent slug (app/components/WorkflowRunPanel.vue) - match on both label and
-    // agent slug together so this can't accidentally match an unrelated element.
-    const row = page.locator('button', { hasText: expected.label }).filter({ hasText: expected.agentSlug }).first()
+    // Each run-stack step is an `article[data-step]` (app/components/RunStackCard.vue) -
+    // locate by the id rather than by text, so a card that renders with the wrong
+    // label still gets found and its text checked, rather than the test itself
+    // failing to locate anything.
+    const card = page.locator(`article[data-step="${expected.stepId}"]`)
     try {
-      await row.waitFor({ state: 'visible' })
+      await card.waitFor({ state: 'visible' })
     } catch (err) {
       throw new Error(
-        `Expected a visible workflow-run-panel row for step "${expected.label}" `
+        `Expected a visible run-stack card for step "${expected.label}" (${expected.stepId}) `
         + `(agent: ${expected.agentSlug}, status: ${expected.status}) but it never became visible `
-        + `within ${ROW_VISIBLE_TIMEOUT_MS}ms. WorkflowRunPanel.vue is rendering no matching row.`,
+        + `within ${ROW_VISIBLE_TIMEOUT_MS}ms. RunStack.vue is rendering no matching card.`,
       )
     }
 
-    const dotStyle = await row.locator('span.rounded-full').first().getAttribute('style')
+    const cardText = await card.innerText()
     assert.ok(
-      dotStyle && dotStyle.includes(STATUS_COLOR[expected.status]),
-      `Step "${expected.label}" row is visible, but its status dot does not show the "${expected.status}" `
-      + `color (expected style to include ${STATUS_COLOR[expected.status]}, got "${dotStyle}")`,
+      cardText.includes(expected.label),
+      `Card for step "${expected.stepId}" is visible, but its text does not carry the label "${expected.label}". Text:\n${cardText}`,
+    )
+
+    const dotLabel = await card.locator('[role="img"][aria-label]').first().getAttribute('aria-label')
+    assert.equal(
+      dotLabel, STATUS_DOT_LABEL[expected.status],
+      `Step "${expected.label}" card is visible, but its status dot's aria-label is "${dotLabel}", not "${expected.status}"`,
     )
   }
 

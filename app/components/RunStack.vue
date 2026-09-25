@@ -10,7 +10,8 @@ import { isLiveStatus, isWaitingOnAPerson } from '~~/shared/types/run'
  * A run as a vertical stack of its steps, laid out like its workflow: the
  * header, then every step as a card, parallel steps side by side, the open
  * decision inside the card that waits on it, and send-backs marked where they
- * landed. Same events as WorkflowRunPanel, so either can sit behind a run.
+ * landed. This is the only view a run renders behind, in Run mode of
+ * `app/pages/workflows/[slug].vue`.
  */
 const props = defineProps<{ run: WorkflowRun, logs?: Record<string, string[]> }>()
 const emit = defineEmits<{
