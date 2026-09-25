@@ -51,7 +51,7 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
       <p v-else class="text-label">Runs in the pipeline itself, with no model call.</p>
       <div class="field-group">
         <label class="flex items-center gap-2">
-          <input type="checkbox" :checked="!!step.approval" :disabled="readOnly" @change="(e) => { emit('patch', { approval: (e.target as HTMLInputElement).checked || undefined }) }">
+          <input type="checkbox" :checked="!!step.approval" :disabled="readOnly" @change="(e) => { emit('patch', (e.target as HTMLInputElement).checked ? { approval: true } : { approval: undefined, gateRole: undefined }) }">
           Ask for approval before this step runs
         </label>
         <span class="field-hint">The run pauses on the run page until it is approved, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>

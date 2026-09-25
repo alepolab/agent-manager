@@ -67,15 +67,15 @@ const settingsContextMode = computed({
   get: () => props.step.contextMode ?? 'predecessors',
   set: (value?: string) => patch({ contextMode: value === 'ancestors' ? 'ancestors' : undefined }),
 })
-/** The channel a notify step posts to. Emptying it removes the whole notify
- *  block, for the same reason emptying a dispatch source removes that one: a
- *  message with no destination is config that can never fire. */
+/** The channel a notify step posts to. Emptying it resets the block to
+ *  `{ channel: '' }` rather than removing it: the block is what makes this a
+ *  notify step (stepKind), and a step's kind is fixed once added. */
 const settingsNotifyChannel = computed({
   get: () => props.step.notify?.channel ?? '',
   set: (value: string) => {
     const channel = value.trim()
     const current = props.step.notify
-    patch({ notify: channel ? { ...current, channel } : undefined })
+    patch({ notify: channel ? { ...current, channel } : { channel: '' } })
   },
 })
 const settingsNotifyMessage = computed({
@@ -88,10 +88,11 @@ const settingsNotifyMessage = computed({
   },
 })
 
-/** The artifact a dispatch step fans out over. Emptying it removes the whole
- *  triggerWorkflow block - a step with a routing table and no source to read it
- *  against is config that can never fire - unless the step fans out over a run
- *  parameter instead, which is the other half of the same field.
+/** The artifact a dispatch step fans out over. Emptying it resets the
+ *  triggerWorkflow block to `{}` - a routing table with no source to read it
+ *  against is config that can never fire, but the block itself is what makes
+ *  this a loop step (stepKind) - unless the step fans out over a run parameter
+ *  instead, which is the other half of the same field.
  *
  *  Setting one source clears the other rather than leaving both: naming both is
  *  a step the runner refuses, and a step cannot be saved into a state whose
@@ -105,7 +106,7 @@ const settingsTriggerSource = computed({
     patch({
       triggerWorkflow: source
         ? { ...rest, source }
-        : (current?.fromParameter ? { ...current, source: undefined } : undefined),
+        : (current?.fromParameter ? { ...current, source: undefined } : {}),
     })
   },
 })
@@ -121,7 +122,7 @@ const settingsTriggerFromParameter = computed({
     patch({
       triggerWorkflow: fromParameter
         ? { ...rest, fromParameter }
-        : (current?.source ? { ...current, fromParameter: undefined } : undefined),
+        : (current?.source ? { ...current, fromParameter: undefined } : {}),
     })
   },
 })
@@ -242,21 +243,6 @@ function setJiraSource(value: string) {
       </div>
 
       <div class="field-group">
-        <label class="field-label">Max visits per run</label>
-        <input
-          :value="settingsMaxVisits"
-          type="number"
-          min="1"
-          max="20"
-          class="field-input w-24"
-          @change="(e) => { settingsMaxVisits = (e.target as HTMLInputElement).valueAsNumber }"
-        >
-        <span class="field-hint">
-          How many times a loop or a monitor retry may bring this step back. Default {{ DEFAULT_MAX_VISITS }}.
-        </span>
-      </div>
-
-      <div class="field-group">
         <label class="field-label">Monitor agent</label>
         <USelectDropdown v-model="settingsMonitor" :options="monitorOptions" placeholder="No monitor" />
         <span class="field-hint">
@@ -367,6 +353,21 @@ function setJiraSource(value: string) {
         <input v-model="settingsTriggerSlug" type="text" class="field-input" placeholder="runbook-a-ticket-to-evidence-backed-pr">
       </template>
       <span class="field-hint">Runner-executed, no model call. Starts one run per item, each in its own checkout, from either an artifact this run's earlier steps wrote or a run input holding one item per line. The input is the way to fan out over a list somebody types when they start the run — scanning five repositories needs no step to produce a file first — and it has no field to route on, so it goes to one workflow. <strong>Every target workflow must declare the input you name above</strong>, or the step fails before starting anything: a child that was not told which item it is for would work on whatever its checkout contained. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. <strong>Waiting</strong> holds this run at <code>JOINING</code> until every child has settled, then writes <code>children.json</code> — one entry per child with its status — so one step downstream can report on the whole fan-out. A joining run spends no slot in its group, so a group that dispatches and receives can be capped at 1; without waiting, this step completes as soon as the children exist and each reports to its own run, and this run holds a slot while it dispatches, so such a group needs a cap of at least 2.</span>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">Max visits per run</label>
+      <input
+        :value="settingsMaxVisits"
+        type="number"
+        min="1"
+        max="20"
+        class="field-input w-24"
+        @change="(e) => { settingsMaxVisits = (e.target as HTMLInputElement).valueAsNumber }"
+      >
+      <span class="field-hint">
+        How many times a loop or a monitor retry may bring this step back. Default {{ DEFAULT_MAX_VISITS }}.
+      </span>
     </div>
 
     <div class="field-group">
