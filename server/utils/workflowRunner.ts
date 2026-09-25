@@ -2666,16 +2666,17 @@ export async function enqueueRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * - for launchQueuedRun to carry out. Returns the queued run, or null to go
  * ahead now.
  */
-async function parkUnlessSlot(run: WorkflowRun, decision: Omit<NonNullable<WorkflowRun['parked']>, 'from' | 'at' | 'question'>): Promise<WorkflowRun | null> {
+async function parkUnlessSlot(run: WorkflowRun, decision: Omit<NonNullable<WorkflowRun['parked']>, 'from' | 'at'>): Promise<WorkflowRun | null> {
   const { run: out, queued } = await admit({
     group: groupOf(run),
     start: async () => run,
     enqueue: async () => {
-      run.parked = { ...decision, from: run.status, question: run.question, at: Date.now() }
+      run.parked = { ...decision, from: run.status, at: Date.now() }
       // A run the answer came to never waited in the queue before, so its own
       // start stands for its age: older than anything queued since.
       run.queuedAt = run.startedAt
-      run.question = undefined
+      // The question stays: the decision still has to be carried out against
+      // it. `queued` is what takes it out of the inbox.
       run.status = 'queued'
       // currentStepIds stays: it names the step an answer goes to.
       noteQueued()
@@ -2693,10 +2694,11 @@ async function parkUnlessSlot(run: WorkflowRun, decision: Omit<NonNullable<Workf
 /** Carries out a decision parkUnlessSlot recorded, now that the run has its slot. */
 async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
   const p = run.parked!
+  // Still `queued` on disk until the decision takes effect. Writing the old
+  // status back first made the run read as `paused` - settled, and asking -
+  // for the moment in between, to the inbox and to anyone waiting on it.
   run.parked = undefined
   run.queuedAt = undefined
-  run.status = p.from
-  run.question = p.question
   await saveRun(run)
   try {
     if (p.action === 'continue') await continueRun(run.id, p.note, { grantApproval: p.grantApproval, admitted: true })
@@ -2708,6 +2710,7 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
     // something they can act on, and the run must not read as lost.
     const back = await getRun(run.id)
     if (back) {
+      if (back.status === 'queued') back.status = p.from
       back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
       await publish(back)
     }
@@ -2947,7 +2950,7 @@ export async function continueRun(
     // Paused with nothing in memory: the process that paused it is gone (a
     // container restart leaves pid 1 in place, so only the record tells).
     // Rebuild the scheduling state from disk and take ownership.
-    if (stored?.status !== 'paused' && stored?.status !== 'awaiting_review') return stored
+    if (stored?.status !== 'paused' && stored?.status !== 'awaiting_review' && !(opts.admitted && stored?.status === 'queued')) return stored
     l = await rehydrate(stored)
     stored.pid = process.pid
     stored.bootId = BOOT_ID
@@ -2960,7 +2963,7 @@ export async function continueRun(
   if (l.running) return getRun(runId)
   l.running = true
   const run = await getRun(runId)
-  if (!run || (run.status !== 'paused' && run.status !== 'awaiting_review')) {
+  if (!run || (run.status !== 'paused' && run.status !== 'awaiting_review' && !(opts.admitted && run.status === 'queued'))) {
     l.running = false
     return run
   }
@@ -3045,10 +3048,11 @@ export async function respondToRun(runId: string, reply: string, opts: { admitte
     if (parked) return parked
   }
   // After a restart the process holding the question is gone; the record is enough to answer it.
-  if (stored?.status === 'paused' && !live.get(runId)) await rehydrate(stored).catch(() => undefined)
+  const answerable = (status?: WorkflowRun['status']) => status === 'paused' || (opts.admitted && status === 'queued')
+  if (answerable(stored?.status) && !live.get(runId)) await rehydrate(stored!).catch(() => undefined)
   const run = await getRun(runId)
   const l = live.get(runId)
-  if (!run || !l || run.status !== 'paused') return run
+  if (!run || !l || !answerable(run.status)) return run
   const id = run.currentStepIds[0]
   if (!id) return run
   // Continue the session that asked the question: it already holds the brief
@@ -3285,7 +3289,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
   if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
-  if (!opts.fromRunner && !RESTARTABLE.includes(run.status)) {
+  if (!opts.fromRunner && !RESTARTABLE.includes(run.status) && !(opts.admitted && run.status === 'queued')) {
     const instead = run.status === 'paused'
       ? 'continue it instead'
       : run.status === 'awaiting_review'

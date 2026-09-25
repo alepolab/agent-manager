@@ -353,7 +353,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
         <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
       </p>
     </div>
-    <div v-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
+    <div v-if="run.question && !run.parked" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
       <!-- The eyebrow is the label; the question is the thing to read. These were
            the same size, inside a box built exactly like the two informational
            boxes above it — which is how the console's whole reason to exist came
@@ -386,18 +386,18 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
          label and one line of agent prose, with the measured change, the test
          results and the security verdict all sitting unread in the bundle. -->
     <RunVerdictCard
-      v-else-if="run.question?.kind === 'approval' && !runnerPause"
+      v-else-if="run.question?.kind === 'approval' && !runnerPause && !run.parked"
       :run="run"
     />
     <!-- A step's question: its brief, laid out for someone who has not read
          the ticket or the report. This used to be a second copy of the banner
          above, which printed the question twice. -->
     <RunDecisionBrief
-      v-else-if="run.question?.kind === 'question' && run.question.brief"
+      v-else-if="run.question?.kind === 'question' && run.question.brief && !run.parked"
       :brief="run.question.brief" :can-answer="mayAnswer && run.status === 'paused'" @choose="chooseOption"
     />
     <details
-      v-if="run.question?.kind === 'question' && askContext" :open="!run.question.brief"
+      v-if="run.question?.kind === 'question' && askContext && !run.parked" :open="!run.question.brief"
       class="rounded-lg p-3 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
     >
       <summary class="cursor-pointer font-medium" style="color: var(--text-primary);">

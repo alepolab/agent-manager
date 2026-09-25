@@ -514,7 +514,6 @@ export interface WorkflowRun {
     stepId?: string
     startedBy?: string
     grantApproval?: boolean
-    question?: WorkflowRun['question']
     at: number
   }
   steps: RunStep[]

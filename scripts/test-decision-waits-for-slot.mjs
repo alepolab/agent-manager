@@ -53,6 +53,26 @@ runner.setAgentCaller(async (slug, input) => {
   return `out ${slug}`
 })
 
+/**
+ * Waits for a parked run to finish while reading its record from disk as fast
+ * as it can, and fails if it ever reads `from` again: carrying the decision out
+ * once wrote the old status back first, so a reader in that window saw the run
+ * paused - settled, asking - and CI's waitForSettled resolved on it.
+ */
+async function finishesWithoutReverting(id, from) {
+  const seen = new Set()
+  const deadline = Date.now() + TIMEOUT
+  for (;;) {
+    const r = await store.getRun(id)
+    seen.add(r.status)
+    if (['completed', 'failed', 'stopped'].includes(r.status)) break
+    if (Date.now() > deadline) throw new Error(`${id} did not finish; saw ${[...seen]}`)
+    await new Promise(res => setImmediate(res))
+  }
+  assert.ok(!seen.has(from), `never read as ${from} again while its decision was carried out: saw ${[...seen].join(', ')}`)
+  return runner.waitForSettled(id, TIMEOUT)
+}
+
 const occupy = async (who) => {
   held = new Promise(r => { release = r })
   const { run, queued } = await runner.startOrQueue({ workflow: busy, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: who })
@@ -71,12 +91,11 @@ const occupy = async (who) => {
   assert.equal(answered.status, 'queued', 'the group is full: the answer waits')
   assert.equal(answered.parked.action, 'respond')
   assert.equal(answered.parked.reply, 'option a', 'the answer itself is on the record')
-  assert.equal(answered.question, undefined, 'and the inbox no longer asks for it')
+  assert.ok(!['paused', 'awaiting_review'].includes(answered.status), 'and the inbox no longer asks for it')
   assert.equal(replies.length, 0, 'nothing ran')
 
   release()
-  await runner.waitForSettled(b.id, TIMEOUT)
-  const done = await runner.waitForSettled(q.id, TIMEOUT)
+  const done = await finishesWithoutReverting(q.id, 'paused')
   assert.equal(done.status, 'completed', done.error)
   assert.match(replies[0], /option a/, 'the recorded answer reached the step')
   assert.equal(done.parked, undefined)
@@ -93,8 +112,7 @@ const occupy = async (who) => {
   assert.equal(approved.status, 'queued')
   assert.equal(approved.parked.action, 'continue')
   release()
-  await runner.waitForSettled(b.id, TIMEOUT)
-  const done = await runner.waitForSettled(g.id, TIMEOUT)
+  const done = await finishesWithoutReverting(g.id, 'paused')
   assert.equal(done.status, 'completed', 'the approval was carried out, not asked again')
   assert.equal(done.steps.find(s => s.stepId === 's').status, 'completed')
 }
@@ -110,8 +128,7 @@ const occupy = async (who) => {
   assert.equal(restarted.status, 'queued')
   assert.equal(restarted.parked.action, 'restart')
   release()
-  await runner.waitForSettled(b.id, TIMEOUT)
-  assert.equal((await runner.waitForSettled(f.id, TIMEOUT)).status, 'completed')
+  assert.equal((await finishesWithoutReverting(f.id, 'failed')).status, 'completed')
 }
 
 // ── With a slot free, a decision goes ahead at once ─────────────────────────
