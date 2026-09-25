@@ -50,6 +50,7 @@ function onRejoin(e: Event, i: number, current: boolean) {
         style="background: var(--surface-raised); border: 1px dashed var(--border-default); color: var(--text-secondary);"
       >
         <UIcon name="i-lucide-hand" class="size-3.5" />
+        <!-- "2" is REWORK_LIMIT in server/utils/workflowRunner.ts (server-only); change both together. -->
         <span class="flex-1">Approval by {{ ctx.stepOf(b.stepId)?.gateRole ?? 'anyone' }} · can send the work back to any earlier step, up to 2 times</span>
         <UButton v-if="!ctx.readOnly.value" size="xs" variant="ghost" color="neutral" icon="i-lucide-x" aria-label="Remove this approval" @click="ctx.clearApproval(b.stepId)" />
       </section>

@@ -129,6 +129,7 @@ for (const t of workflowTemplates.filter(x => ['runbook-a-jira-to-diff', 'scan-s
   assert.deepEqual(E.newStep('jira-create', {}).jira, { action: 'create' })
   assert.deepEqual(E.newStep('notify', {}).notify, { channel: '' })
   assert.throws(() => E.newStep('agent', {}), /Choose an agent/)
+  assert.equal(E.newStep('agent', { agentSlug: 'sdlc-verifier', label: 'Verifier' }).label, 'Verifier', 'a supplied label names the step')
 }
 
 // ── 7. edits the stack can't hold are refused, and save proves the drawing ─

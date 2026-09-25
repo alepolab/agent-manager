@@ -236,11 +236,12 @@ export interface NewStep {
   triggerWorkflow?: Record<string, never>
 }
 
-export function newStep(kind: ActionKind, opts: { agentSlug?: string, id?: string }): NewStep {
+/** `label` names an agent step (the agent's display name); the slug stands in without one. */
+export function newStep(kind: ActionKind, opts: { agentSlug?: string, id?: string, label?: string }): NewStep {
   const id = opts.id ?? crypto.randomUUID()
   if (kind === 'agent') {
     if (!opts.agentSlug) throw new Error('Choose an agent for this step.')
-    return { id, agentSlug: opts.agentSlug, label: opts.agentSlug }
+    return { id, agentSlug: opts.agentSlug, label: opts.label || opts.agentSlug }
   }
   const base = { id, agentSlug: ACTION_AGENT[kind], label: ACTION_LABEL[kind] }
   if (kind === 'jira') return { ...base, jira: {} }

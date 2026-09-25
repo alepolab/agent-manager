@@ -43,7 +43,8 @@ function apply(choice: PickerChoice, slot: E.Slot) {
       if (!below || below.kind !== 'step') throw new Error('An approval goes above a step. Add the step first.')
       return patchStep(below.stepId, { approval: true })
     }
-    const s = E.newStep(choice.action, { agentSlug: choice.agentSlug }) as WorkflowStep
+    const label = props.agents.find(a => a.slug === choice.agentSlug)?.name
+    const s = E.newStep(choice.action, { agentSlug: choice.agentSlug, label }) as WorkflowStep
     const blocks = E.insertStep(props.blocks, slot, s.id)
     emit('update:steps', [...props.steps, s])
     setBlocks(blocks)

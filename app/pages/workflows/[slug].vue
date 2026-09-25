@@ -5,6 +5,7 @@ import { toStack, type StackBlock } from '~~/shared/utils/workflowStack'
 import { canSave } from '~~/shared/utils/stackEdit'
 import { triggerSummary, type Selection } from '~/utils/buildStack'
 import { producesError } from '~/utils/produces'
+import { isLiveStatus } from '~~/shared/types/run'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,6 +69,11 @@ function cloneRun() {
 // which decides whether a new run may start, whether the stack is editable, and
 // whether the page opens on the run.
 const isRunning = computed(() => run.value?.status === 'running')
+/** Running, or joining its children: both go through rehydrate while live, so
+ *  a restart rebuilds from the file and a save now would change what it runs. */
+const editLocked = computed(() => run.value?.status === 'running' || run.value?.status === 'joining')
+/** Anything not yet over, queued included: the page opens on such a run. */
+const isLive = computed(() => !!run.value && isLiveStatus(run.value.status))
 const isPaused = computed(() => run.value?.status === 'paused')
 /** Stopped on a person who has entries to decide about. Like paused for every
  *  purpose on this page: no second run may start, and the run controls stay
@@ -79,7 +85,7 @@ const isReviewing = computed(() => run.value?.status === 'awaiting_review')
  *  nothing may start a second run of this workflow. */
 const isQueued = computed(() => run.value?.status === 'queued')
 
-/** Clicking a previous (terminal) run in the panel's history list just shows it - no stream needed. */
+/** Show a run already in `runs` (the newest, when Run mode opens with none) - no stream needed. */
 function attachRun(id: string) {
   const found = runs.value.find(r => r.id === id)
   if (found) run.value = found
@@ -105,12 +111,12 @@ const notDrawable = ref<string | null>(null)
 const selected = ref<Selection>(null)
 const drawerTab = ref<'triggers' | 'inputs' | 'settings'>('triggers')
 const mode = ref<'build' | 'run'>('build')
-/** Not while a run is working: a restart rebuilds from the file, so a save
- *  mid-run would change what the restart runs. Queued is fine - it re-reads
- *  the definition when it launches. */
-const editable = computed(() => !readOnly.value && !notDrawable.value && !isRunning.value)
+/** Not while a run is working (running or joining): a restart rebuilds from
+ *  the file, so a save mid-run would change what the restart runs. Queued is
+ *  fine - it re-reads the definition when it launches. */
+const editable = computed(() => !readOnly.value && !notDrawable.value && !editLocked.value)
 /** Editable but for the run, so the page says why rather than going quiet. */
-const pausedByRun = computed(() => !readOnly.value && !notDrawable.value && isRunning.value)
+const pausedByRun = computed(() => !readOnly.value && !notDrawable.value && editLocked.value)
 /** The stack as last loaded or saved. A move or a split changes the blocks
  *  before it changes any step, so the steps alone cannot say it is unsaved. */
 const savedBlocks = ref('[]')
@@ -187,8 +193,9 @@ onMounted(async () => {
   // a run outlives this tab, so a reload must not lose it. Then honour any
   // one-shot intent in the URL, which may point at a finished run instead.
   await attach()
-  // A run still working opens on the run, the way the run bar used to show it.
-  if (isRunning.value || isPaused.value || isReviewing.value) mode.value = 'run'
+  // A live run opens on the run, unless the URL names a tab (?tab=schedule|inputs
+  // opens the trigger drawer, which lives in Build mode).
+  if (isLive.value && !route.query.tab) mode.value = 'run'
   applyQueryIntent()
   // Fire-and-forget: the tab label's count can arrive a moment later, and
   // nothing above it should wait on a schedule read.
@@ -198,7 +205,7 @@ onMounted(async () => {
 const parametersDirty = computed(() =>
   JSON.stringify(workflowParameters.value.filter(p => p.name.trim())) !== JSON.stringify(savedParameters.value))
 
-/** Everything unsaved, not just the canvas.
+/** Everything unsaved, not just the stack.
  *
  *  isDirty covers name, description and steps. It was also what guarded the
  *  page against being left, so editing only an input, the concurrency group or
@@ -286,6 +293,7 @@ onMounted(async () => {
 })
 
 async function save() {
+  if (!editable.value) return
   if (!workflow.value) return
   const r = canSave(blocks.value, workflowSteps.value)
   if (!r.ok) { toast.add({ title: 'This can’t be saved yet', description: r.reason, color: 'warning' }); return }
