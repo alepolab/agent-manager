@@ -28,6 +28,27 @@ const mayDrive = computed(() => can('runEngine'))
  * the backstop for a role nobody on this instance holds.
  */
 const gateOwner = computed(() => props.run?.question?.role)
+const PARKED_LABEL = { continue: 'Your decision is', respond: 'Your answer is', restart: 'The restart is' } as const
+/** A pause the runner raised about itself - budget spent, model unreachable - rather than a gate on the work. */
+const runnerPause = computed(() => props.run?.question?.reason === 'budget' || props.run?.question?.reason === 'auth')
+/**
+ * The asking step's own report, behind its question. Shown open when the step
+ * wrote no decision brief - the one `PIPELINE-ASK:` line alone named "criteria
+ * 2-3" and three options with nothing to explain them - and collapsed beneath
+ * the brief when it did.
+ */
+const askContext = computed(() => {
+  const q = props.run?.question
+  if (q?.kind !== 'question') return ''
+  const out = props.run?.steps.find(s => s.stepId === q.stepId)?.output ?? ''
+  return out.replace(/^PIPELINE-ASK:.*$/m, '').trim()
+})
+const noteBox = ref<HTMLTextAreaElement | null>(null)
+/** An option chosen from the brief becomes the reply, for the person to send or add to. */
+function chooseOption(text: string) {
+  note.value = text
+  nextTick(() => noteBox.value?.focus())
+}
 const mineToAnswer = computed(() =>
   !gateOwner.value || !role.value || role.value === 'operator' || role.value === gateOwner.value)
 const mayAnswer = computed(() => can('answerGate') && mineToAnswer.value)
@@ -63,8 +84,38 @@ const notePlaceholder = computed(() => ({
   restart: 'Optional note for the step you restart, e.g. verify from inside the container only',
 }[noteMode.value]))
 const sent = ref<string | null>(null)
+
+/**
+ * A decision this person has just sent and the run has not yet acted on.
+ * Approving can take a while - the runner re-checks the environment before the
+ * next step starts - and the panel used to show nothing in the meantime, so
+ * "Approve and run" looked like a button that had not registered the click.
+ * Cleared when the run leaves the gate (its status or question changes, which
+ * the live stream reports), and after a minute regardless, so a request that
+ * failed - reported by its own toast - does not leave the panel locked.
+ */
+const sending = ref<null | 'respond' | 'continue' | 'reject' | 'rework'>(null)
+let sendingTimer: ReturnType<typeof setTimeout> | undefined
+function markSending(kind: NonNullable<typeof sending.value>) {
+  sending.value = kind
+  clearTimeout(sendingTimer)
+  sendingTimer = setTimeout(() => { sending.value = null }, 60_000)
+}
+watch(() => [props.run?.status, props.run?.question?.stepId, props.run?.question?.askedAt], () => {
+  sending.value = null
+  clearTimeout(sendingTimer)
+})
+onBeforeUnmount(() => clearTimeout(sendingTimer))
+const SENDING_LABEL: Record<NonNullable<typeof sending.value>, string> = {
+  continue: 'Approval recorded - starting the next step…',
+  respond: 'Reply recorded - the step is picking it up…',
+  reject: 'Rejection recorded - ending the run…',
+  rework: 'Send-back recorded - restarting that step…',
+}
+
 function send(kind: 'respond' | 'note' | 'continue' | 'reject' | 'rework') {
   const text = note.value.trim()
+  if (kind !== 'note') markSending(kind)
   if (kind === 'rework') { emit('rework', reworkTarget.value, text); note.value = ''; reworkTarget.value = ''; return }
   if (kind === 'reject') { emit('reject', text); note.value = ''; return }
   if (kind === 'respond') emit('respond', text)
@@ -292,12 +343,22 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <ol class="list-decimal ml-4 space-y-0.5 mt-1"><li v-for="q in intake.open_questions" :key="q">{{ q }}</li></ol>
       <p v-if="!settledRun" class="text-label mt-1">Answer in the note below and restart the step that needs the answer.</p>
     </details>
-    <div v-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
+    <!-- A decision taken while the group was full: recorded, and carried out
+         by the queue when a slot frees - it is not lost and not re-asked. -->
+    <div v-if="run.status === 'queued' && run.parked" class="rounded-lg p-3 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" role="status">
+      <p class="t-head m-0" style="color: var(--text-primary);">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
+      <p class="m-0 text-label">
+        Its group is running as many runs as it allows. This run goes ahead of newer ones in the queue and
+        {{ run.parked.action === 'restart' ? 'restarts' : 'continues' }} the moment a slot frees.
+        <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
+      </p>
+    </div>
+    <div v-if="run.question && !run.parked" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
       <!-- The eyebrow is the label; the question is the thing to read. These were
            the same size, inside a box built exactly like the two informational
            boxes above it — which is how the console's whole reason to exist came
            to look like a footnote. -->
-      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'auth' ? 'Could not reach the model' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
       <p class="t-head whitespace-pre-wrap" style="color: var(--text-primary);">{{ run.question.text }}</p>
       <p v-if="run.blastRadius" class="t-small mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
@@ -325,13 +386,25 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
          label and one line of agent prose, with the measured change, the test
          results and the security verdict all sitting unread in the bundle. -->
     <RunVerdictCard
-      v-else-if="run.question?.kind === 'approval' && run.question.reason !== 'budget'"
+      v-else-if="run.question?.kind === 'approval' && !runnerPause && !run.parked"
       :run="run"
     />
-    <div v-else-if="run.question" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
-      <div class="font-medium" style="color: var(--text-primary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
-      <p class="whitespace-pre-wrap">{{ run.question.text }}</p>
-    </div>
+    <!-- A step's question: its brief, laid out for someone who has not read
+         the ticket or the report. This used to be a second copy of the banner
+         above, which printed the question twice. -->
+    <RunDecisionBrief
+      v-else-if="run.question?.kind === 'question' && run.question.brief && !run.parked"
+      :brief="run.question.brief" :can-answer="mayAnswer && run.status === 'paused'" @choose="chooseOption"
+    />
+    <details
+      v-if="run.question?.kind === 'question' && askContext && !run.parked" :open="!run.question.brief"
+      class="rounded-lg p-3 t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+    >
+      <summary class="cursor-pointer font-medium" style="color: var(--text-primary);">
+        {{ run.question.brief ? "The step's full report" : 'The step wrote no decision brief - its report' }}
+      </summary>
+      <pre class="whitespace-pre-wrap font-sans mt-2 max-h-96 overflow-y-auto" style="color: var(--text-secondary);">{{ askContext }}</pre>
+    </details>
 
     <!-- What was decided at this run's earlier gates. A four-gate runbook used
          to arrive at its last gate with no record of who approved the first
@@ -352,6 +425,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
          typed, so it is offered directly. -->
     <textarea
       v-if="!reviewing && ((mayDrive && run.status === 'running') || (mayAnswer && run.status === 'paused'))"
+      ref="noteBox"
       v-model="note"
       rows="2"
       class="field-input w-full resize-none t-small"
@@ -523,22 +597,23 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
     </div>
 
     <div class="flex gap-2">
-      <UButton v-if="mayAnswer && !reviewing && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :disabled="!note.trim()" @click="send('respond')" />
+      <UButton v-if="mayAnswer && !reviewing && noteMode === 'reply'" size="xs" icon="i-lucide-send" label="Reply" :loading="sending === 'respond'" :disabled="!!sending || !note.trim()" @click="send('respond')" />
       <UButton
         v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'"
         size="xs" icon="i-lucide-check"
-        :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : 'Approve and run'"
-        :disabled="run.question.reason !== 'budget' && !canApprove"
-        :title="run.question.reason !== 'budget' && !canApprove ? 'Say why this is right before approving' : ''"
+        :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : run.question.reason === 'auth' ? 'Retry the step' : 'Approve and run'"
+        :loading="sending === 'continue'"
+        :disabled="!!sending || (!runnerPause && !canApprove)"
+        :title="!runnerPause && !canApprove ? 'Say why this is right before approving' : ''"
         @click="send('continue')"
       />
-      <UButton v-else-if="mayAnswer && run.status === 'paused'" size="xs" label="Continue" @click="send('continue')" />
+      <UButton v-else-if="mayAnswer && run.status === 'paused'" size="xs" label="Continue" :loading="sending === 'continue'" :disabled="!!sending" @click="send('continue')" />
       <!-- The reviewer's third answer, and the one that was missing: hand the
            work back to a named earlier step with the instruction it works from.
            The runner has always been able to do this; only an agent could ask
            for it. "Reject run" beside it ends the run - they were previously the
            same button, labelled as this one and behaving as that one. -->
-      <template v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget' && reworkCandidates.length && reworksLeft > 0">
+      <template v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && !runnerPause && reworkCandidates.length && reworksLeft > 0">
         <select v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to">
           <option value="">Send back to…</option>
           <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}</option>
@@ -546,15 +621,17 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
         <UButton
           size="xs" variant="soft" color="warning" icon="i-lucide-corner-up-left"
           :label="`Send back (${reworksLeft} left)`"
-          :disabled="!reworkTarget || !note.trim()"
+          :loading="sending === 'rework'"
+          :disabled="!!sending || !reworkTarget || !note.trim()"
           :title="!reworkTarget ? 'Choose the step it goes back to' : !note.trim() ? 'Say what needs to change' : 'That step runs again with your instruction'"
           @click="send('rework')"
         />
       </template>
       <UButton
-        v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && run.question.reason !== 'budget'"
+        v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && !runnerPause"
         size="xs" variant="ghost" color="error" icon="i-lucide-circle-x" label="Reject run"
-        :disabled="!note.trim()" :title="note.trim() ? 'End the run and record why' : 'Say why first'"
+        :loading="sending === 'reject'"
+        :disabled="!!sending || !note.trim()" :title="note.trim() ? 'End the run and record why' : 'Say why first'"
         @click="send('reject')"
       />
       <UButton v-if="mayDrive && noteMode === 'steer'" size="xs" variant="soft" icon="i-lucide-message-square" :label="anyRunning ? 'Send to running agent' : 'Send note to next step'" :disabled="!note.trim()" @click="send('note')" />
@@ -565,6 +642,10 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <UButton v-if="mayDrive && settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
       <p v-if="!mayAnswer && run.status === 'paused'" class="t-small text-label self-center">This run is waiting on a decision from a developer.</p>
     </div>
+    <p v-if="sending" class="t-small flex items-center gap-1.5 m-0" style="color: var(--text-secondary);" role="status" aria-live="polite">
+      <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
+      {{ SENDING_LABEL[sending] }}
+    </p>
   </div>
 
   <div v-else-if="runs.length" class="space-y-1">

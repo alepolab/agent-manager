@@ -64,7 +64,8 @@ check('health is proved from inside the network',
   'the agent runs inside a container; a timeout against a host port says nothing about the build')
 
 check('teardown is scoped and non-destructive',
-  /docker compose -p sdlc-<run id> down\\`/.test(verifier)
+  /docker compose -p sdlc-<run id>-verify down\\`/.test(verifier)
+  && /Never the provisioner's \\`sdlc-<run id>\\`/.test(verifier)
   && /Never \\`down -v\\`/.test(verifier)
   && /never remove anything you did not start/.test(verifier),
   'down -v destroys seeded data other runs depend on, and a shared estate means someone else owns the stacks you did not start')

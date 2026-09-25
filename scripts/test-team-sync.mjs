@@ -232,7 +232,7 @@ rmSync(bare, { recursive: true, force: true })
   // group, channel and checkout, which are this instance's and must survive.
   const scanPath = join(process.env.CLAUDE_DIR, 'workflows', 'scan-security-to-dispatch.json')
   const scan = JSON.parse(readFileSync(scanPath, 'utf8'))
-  assert.deepEqual(scan.parameters.map(p => p.name), ['projectDir', 'repo'], 'workflow parameters are seeded')
+  assert.deepEqual(scan.parameters.map(p => p.name), ['projectDir', 'repo', 'branch'], 'workflow parameters are seeded')
   Object.assign(scan, { group: 'scans', notifyChannel: 'ops', workingDir: '/checkouts/crm' })
   scan.steps[0].label = 'renamed locally'
   writeFileSync(scanPath, JSON.stringify(scan, null, 2))

@@ -565,6 +565,12 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     '',
     ...(runId
       ? [
+          `Run id: ${runId}`,
+          // Stated, not left to be read out of a URL: the runner removes this
+          // run's stacks by exactly this name when it ends, and a stack under
+          // any other name stays running for ever. See runTeardown.ts.
+          `Compose project for any stack this run stands up: sdlc-${runId.toLowerCase()} (the verifier's own: sdlc-${runId.toLowerCase()}-verify).`,
+          '',
           `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
           `and shown on the run page at ${appUrl}/runs/${runId}. Link that in a pull`,
           'request body; never copy artifacts into the repository to make them reachable.',

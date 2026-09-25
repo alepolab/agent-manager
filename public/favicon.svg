@@ -1,6 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect x="4" y="8" width="24" height="18" rx="4" fill="#e5a93e"/>
-  <circle cx="12" cy="17" r="2" fill="#0a0a0f"/>
-  <circle cx="20" cy="17" r="2" fill="#0a0a0f"/>
-  <rect x="14" y="2" width="4" height="6" rx="2" fill="#e5a93e"/>
+  <style>
+    .mast { stroke: #1d1729 }
+    @media (prefers-color-scheme: dark) { .mast { stroke: #f4f2f9 } }
+  </style>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b47f0"/>
+      <stop offset="1" stop-color="#2d1d8f"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#g)" stroke-width="2.6" stroke-linecap="round">
+    <path d="M9.3 18.7a9.5 9.5 0 1 1 13.4 0"/>
+    <path d="M12.8 15.2a4.5 4.5 0 1 1 6.4 0"/>
+  </g>
+  <circle cx="16" cy="12" r="2.2" fill="#5b47f0"/>
+  <path class="mast" d="M16 15.5 9.5 29M16 15.5 22.5 29" stroke-width="2.8" stroke-linecap="round" fill="none"/>
 </svg>

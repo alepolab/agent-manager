@@ -105,9 +105,27 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
   ]
   const r = await runPreflight(run({ ticketKey: 'SCN-658' }), steps, jira)
   assert.equal(of(r, 'jira: In Progress').level, 'ok', JSON.stringify(of(r, 'jira: In Progress')))
-  assert.equal(of(r, 'jira: Dev Done').level, 'warn',
-    'a later status is reached from wherever the run leaves the ticket, which no check before the run can know')
+  // A later status is reached from wherever the run leaves the ticket, which no
+  // check before the run can know. It used to be probed from the current status
+  // anyway and warned on every ASECRM run that "Ready for QA" was unreachable
+  // from "In Progress" - true, and irrelevant, since it follows DEV DONE.
+  assert.equal(of(r, 'jira: Dev Done').level, 'skip', 'a later status is not probed from here')
+  assert.match(of(r, 'jira: Dev Done').detail, /checked when the step runs/)
   assert.equal(preflightFailure(r), null, 'so a later status never blocks the run')
+
+  // A restarted run whose ticket already holds the first status checks the
+  // move it will actually make next, and still no further.
+  const inProgress = async (url) => {
+    const u = String(url)
+    if (u.endsWith('?fields=status')) return new Response(JSON.stringify({ fields: { status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } } }), { status: 200 })
+    if (u.endsWith('/transitions')) return new Response(JSON.stringify({ transitions: [{ id: '31', name: 'Resolve Issue', to: { name: 'DEV DONE', statusCategory: { key: 'done' } } }] }), { status: 200 })
+    return new Response('{}', { status: 200 })
+  }
+  const restarted = await runPreflight(run({ ticketKey: 'ASECRM-215' }), [...steps,
+    { agentSlug: 'sdlc-jira-tracker', label: 'Jira: Ready for QA', jira: { transition: 'Ready for QA' } }], inProgress)
+  assert.equal(of(restarted, 'jira: In Progress').level, 'ok', 'already there')
+  assert.equal(of(restarted, 'jira: Dev Done').level, 'ok', JSON.stringify(of(restarted, 'jira: Dev Done')))
+  assert.equal(of(restarted, 'jira: Ready for QA').level, 'skip', 'the one after the next move is not probed')
 
   // The SCN-658 shape, which CSUP-7516 then repeated in production: the ticket
   // sits in an untriaged status whose only transition lands in `done`
@@ -252,6 +270,69 @@ const product = (over = {}) => ({ name: 'pms', repos: ['alepolab/pms'], branches
     globalThis.fetch = realFetch
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
   }
+}
+
+// ── a workflow whose output is Jira tickets does not start without Jira ──
+// A real scan ran forty minutes with posting off and no project resolved: the
+// create step only logged "would create", and four fix runs were dispatched
+// for tickets that never existed. Every one of these used to be a warn.
+{
+  process.env.AGENT_CHANNELS_FILE = join(root, 'channels.json')
+  const createStep = { agentSlug: 'sdlc-jira-creator', label: 'Create Jira', jira: { action: 'create' } }
+  const asecrm = product({ name: 'ase-crm', projects: ['ASECRM'], stack: undefined })
+  const meta = async () => ({ ok: true, json: async () => ({ projects: [{ issuetypes: [{ name: 'Bug', fields: { priority: { allowedValues: [{ name: 'High' }] } } }] }] }) })
+  const refused = async () => ({ ok: false, json: async () => ({}) })
+
+  process.env.JIRA_POST_ENABLED = '0'
+  let r = await runPreflight(run({ product: asecrm }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'posting off fails a run that creates tickets')
+  assert.match(preflightFailure(r), /JIRA_POST_ENABLED=1/, 'and names the switch')
+
+  process.env.JIRA_POST_ENABLED = '1'
+  r = await runPreflight(run({ product: product({ stack: undefined }) }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'a product with no Jira project fails rather than letting the drafts guess one')
+  r = await runPreflight(run({}), [createStep], meta)
+  assert.match(of(r, 'jira fields').detail, /no product matched/, 'no product at all says so')
+
+  r = await runPreflight(run({ product: asecrm }), [createStep], refused)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'a project Jira will not describe fails')
+
+  const saved = { JIRA_BASE_URL: process.env.JIRA_BASE_URL }
+  delete process.env.JIRA_BASE_URL
+  r = await runPreflight(run({ product: asecrm }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'fail', 'missing credentials fail')
+  process.env.JIRA_BASE_URL = saved.JIRA_BASE_URL
+
+  r = await runPreflight(run({ product: asecrm }), [createStep], meta)
+  assert.equal(of(r, 'jira fields').level, 'ok', 'posting on, project registered, metadata readable: ok')
+  assert.equal(of(r, 'notify channels').level, 'skip', 'no notify step, nothing to check')
+
+  const notifyStep = { agentSlug: 'sdlc-notifier', label: 'Tell reviewers', notify: { channel: 'workflow updates' } }
+  r = await runPreflight(run({ product: asecrm }), [createStep, notifyStep], meta)
+  assert.equal(of(r, 'notify channels').level, 'fail', 'a notify step naming an unconfigured channel fails')
+  assert.match(of(r, 'notify channels').detail, /"workflow updates"/, 'and names the channel')
+
+  // What is already filed is fetched for the scanner and triage, which cannot
+  // reach Jira: without it a nightly scan files the same findings every night.
+  const withTickets = async (url, init) => String(url).includes('/search/jql')
+    ? { ok: true, json: async () => ({ issues: [{ key: 'ASECRM-7', fields: { summary: 'Reset token accepts a bare index', status: { name: 'To Do' }, labels: ['scan'], description: 'plain text body' } }], isLast: true }) }
+    : meta(url, init)
+  r = await runPreflight(run({ id: 'run-tickets', product: asecrm }), [createStep], withTickets)
+  assert.equal(of(r, 'existing tickets').level, 'ok', 'the existing tickets are fetched')
+  const { runArtifactsDir } = await import('../server/utils/runArtifacts.ts')
+  const written = JSON.parse(readFileSync(join(runArtifactsDir('run-tickets'), 'existing-tickets.json'), 'utf8'))
+  assert.deepEqual(written.tickets.map(t => t.key), ['ASECRM-7'], 'and written where the agents read them')
+  assert.equal(written.tickets[0].excerpt, 'plain text body')
+
+  const searchDown = async (url, init) => String(url).includes('/search/jql') ? { ok: false, status: 503, json: async () => ({}) } : meta(url, init)
+  r = await runPreflight(run({ product: asecrm }), [createStep], searchDown)
+  assert.equal(of(r, 'existing tickets').level, 'fail', 'a search that fails stops the run: filing blind is the duplicate')
+
+  writeFileSync(process.env.AGENT_CHANNELS_FILE, JSON.stringify({ channels: [{ name: 'workflow updates', kind: 'teams', url: 'https://example.test/hook' }] }))
+  r = await runPreflight(run({ product: asecrm }), [createStep, notifyStep], meta)
+  assert.equal(of(r, 'notify channels').level, 'ok', 'a configured channel passes')
+  assert.equal(preflightFailure(r), null, 'and with everything present, nothing blocks the run')
+  delete process.env.JIRA_POST_ENABLED
 }
 
 rmSync(root, { recursive: true, force: true })

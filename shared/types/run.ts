@@ -1,4 +1,5 @@
 import type { Role } from './role'
+import type { DecisionBrief } from '../utils/decisionBrief'
 
 export type WorkflowRunStatus =
   /**
@@ -122,13 +123,20 @@ export function isWorkingStatus(status: WorkflowRunStatus): boolean {
  * At a cap of 1 that is a deadlock rather than a slowdown - the children never
  * start, so the parent never stops waiting.
  *
+ * A run waiting on a person gives its slot back too. It spends nothing while it
+ * waits, and nothing bounds the wait: at the default cap of two, two fix runs
+ * stopped at an approval gate held the group shut, and every nightly scan
+ * queued behind a question nobody had answered yet. When the person answers,
+ * the run goes on at once rather than queueing again, so the group can briefly
+ * run one over its cap - the price of an approval never waiting twice.
+ *
  * Separate from `isWorkingStatus` rather than carved out of it because the two
  * questions only look alike. A joining parent still owns its checkout and its
  * process, which is what every other caller of that predicate is asking about;
  * it is only the machine's budget for concurrent WORK that it is not spending.
  */
 export function holdsGroupSlot(status: WorkflowRunStatus): boolean {
-  return isWorkingStatus(status) && status !== 'joining'
+  return isWorkingStatus(status) && status !== 'joining' && !isWaitingOnAPerson(status)
 }
 
 /**
@@ -387,7 +395,9 @@ export interface WorkflowRun {
     /** An approval raised by the runner itself: the budget is spent and continuing
      *  grants another allowance, or a step has spent its send-backs and whether to
      *  grant one more is the developer's call. */
-    reason?: 'budget' | 'rework'
+    reason?: 'budget' | 'rework' | 'auth'
+    /** For a step's question: what a person needs to answer it (shared/utils/decisionBrief.ts). */
+    brief?: DecisionBrief
     /**
      * The send-back this question is about, carried so that answering can perform
      * it.
@@ -487,6 +497,25 @@ export interface WorkflowRun {
    * field; everything about elapsed work reads `startedAt`.
    */
   queuedAt?: number
+  /**
+   * A person's decision recorded while the run's group was full: the run waits
+   * in the queue, ahead of newer runs, and the queue carries the decision out
+   * when a slot frees. Answering a question or approving a gate used to put
+   * the run straight back to running whatever its group allowed - a paused run
+   * gives its slot back, the queue fills it, and each answer took the group one
+   * over its cap.
+   */
+  parked?: {
+    action: 'continue' | 'respond' | 'restart'
+    /** The status to return to before the decision is carried out. */
+    from: WorkflowRunStatus
+    note?: string
+    reply?: string
+    stepId?: string
+    startedBy?: string
+    grantApproval?: boolean
+    at: number
+  }
   steps: RunStep[]
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage

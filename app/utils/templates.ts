@@ -54,6 +54,16 @@ These hold at every step in this pipeline, not just this one:
 
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.** The plan gate needs \`.agent/plan.md\`, and it travels with the commit as the statement of intent; everything else there is scratch. Evidence lives in the run artifacts directory Agent Manager serves, never in the repository. Staging the whole tree at once is never how you stage: name the files you commit.
 - **Ask when only a person can answer.** If you reach a decision that is genuinely the developer's — two behaviours the ticket could mean, a credential or access you do not have, an action that cannot be undone — end your output with one line, \`PIPELINE-ASK: <one precise question>\`, and stop. The run pauses, the developer answers, and you run again with your previous output and their answer. Never ask what the ticket, the repository or the run artifacts can tell you; a question that a search would have answered wastes a person's time.
+
+  The person answering has not read the ticket, the repository or your report, and sees your question in an inbox. So before the \`PIPELINE-ASK:\` line, write \`decision.json\` into the run artifacts directory - the inbox lays it out, and a question without it is sent back to you:
+  - \`question\`: the same one-line question.
+  - \`situation\`: two or three plain sentences - what you were doing and what stops you.
+  - \`criteria\`: \`[{ "ref": "criterion 2", "text": "<its full text>" }]\` for every acceptance criterion you mention anywhere. Never "criteria 2-3" alone.
+  - \`findings\`: one established fact per entry, with every module, file, ticket or number explained in words.
+  - \`options\`: \`[{ "key": "a", "label", "next": what the next step will do if chosen, "delivers": what the ticket ends up with, "leaves": what is left undone or becomes a follow-up, "risk" (optional) }]\`, at least two.
+  - \`recommendation\`: \`{ "option": "a", "why": "<one sentence>" }\`.
+
+  A real run asked whether to "(a) fix the \`trouble-ticket\` 0.3062-vs-0.32 ratchet breach … (b) additionally raise one named module … or (c) narrow the oracle to criterion 4", and the developer could not answer: they had never seen criteria 2-4, did not know what trouble-ticket was, and could not tell what any option would lead to. The \`PIPELINE-ASK:\` line itself stays one short question.
 - **Do only your own step's work.** The brief you receive describes the whole run, so it contains constraints and instructions addressed to *other* stages — how the final step should handle the pull request, what the verifier must prove, and so on. Those are not yours to act on. A real run died here: the intake step read a "write the PR body as \`pr-body.md\`" instruction meant for the seventh step, wrote a PR body describing a fix that had not been made, and exhausted its entire turn budget before finishing its own job. If an instruction plainly belongs to a later stage, note it and leave it; the step that owns it will receive it too.
 - **A negative result is a failed search until you have widened it.** "Not found" is a claim about the world and deserves the same scepticism as "found". Before concluding something is absent — a file, a package, a config key — broaden the search at least once: a different path, a looser pattern, a case-insensitive match. This matters most when the absence is about to stop the run: a real run halted the whole pipeline on "plugin not installed" when the plugin was installed, four directories deeper than it looked. Verify absence as hard as you would verify presence.
 - **A placeholder that passes is worse than a failure that is honest.** \`plugin_version: "unknown"\` passed schema validation because the field was typed as any string — a placeholder wearing the shape of verified evidence is unverifiable and indistinguishable from the truth to a reviewer. Where you cannot compute a value honestly, leave it out and let validation reject the bundle. That is the correct outcome, not a failure of nerve.
@@ -541,13 +551,14 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\`, \`stack_required\` and \`stack_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\`, \`blast_radius_reason\`, \`stack_required\` and \`stack_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
 - \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch once it is written — from develop, whatever the origin, unless the product's registry names a hotfix branch for it — and no code step runs before this file says which.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
+- \`blast_radius_reason\` — one sentence naming the code path that puts the change in that class, e.g. "SecurityConfig decides which HTTP paths need a token, so this changes the API's auth contract (protocol)". A reviewer approving a \`schema\`, \`protocol\` or \`money\` change reads this sentence to know what to check; "touches security" tells them nothing.
 
 Two more keys decide whether the provisioning step stands a stack up, and the runner holds it to your answer:
 
@@ -850,26 +861,28 @@ A container that is running is not a service that is serving. Confirm health thr
 
 If the context packet names a customer or specific records, seed representative data for them — including a second subscriber or account where the bug involves interaction between two. A single-record environment hides exactly the class of bug that matters.
 
-## Tear down what you brought up
+## Name the stack for this run, and leave it up
 
-Anything you stand up to test gets removed. A stack left running holds ports,
-volumes, container names and a subnet that the next run — or another person —
-will collide with, and the collision surfaces far from here as a bind failure or
-a container that will not start, with nothing pointing back at you.
+Bring the product's stack up under the compose project \`sdlc-<run id>\` — pass
+\`-p sdlc-<run id>\` to every compose command, using the run id from the top of
+your input — and name that project in \`stack-report.md\`. The steps after you
+update and test this exact stack, so **do not tear it down**: it has to outlive
+you.
 
-Record, in your report, exactly what you started and the command that removes
-it, so the teardown is auditable rather than assumed. Say so plainly if you
-could not remove something.
+The runner removes it when the run ends — completed, failed or stopped — by that
+name and only that name, with \`down\` and never \`-v\`. A project you start
+under any other name is invisible to it and stays running for ever, holding
+ports, container names and a subnet the next run collides with. So the product's
+own services go under \`sdlc-<run id>\`, always.
 
-Two things you must NOT do while tearing down. Never remove anything you did not
-start — this estate shares one network and one SSO stack (Keycloak and URM serve
-FFM, CRM, PCRF and VMS), and a stack you did not bring up belongs to someone
-else. And never use a volume-destroying teardown (\`down -v\`, or any volume
-prune) unless you created the volume in this run: that deletes seeded data other
-runs depend on, and it cannot be undone.
+What you must NOT do. Never remove anything you did not start, and never start,
+recreate or remove the shared stacks under any name — this estate shares one network and one SSO
+stack (Keycloak and URM serve FFM, CRM, PCRF and VMS). If one is down and you
+need it, report that; a stack you did not bring up belongs to someone else. And
+never use a volume-destroying command (\`down -v\`, or any volume prune): that
+deletes seeded data other runs depend on, and it cannot be undone.
 
-If you skipped provisioning, there is nothing to tear down — say that, and do
-not run a teardown "just in case" against a stack you never started.
+If you skipped provisioning, say so; there is nothing for the runner to remove.
 
 ## Evidence or halt — there is no third option
 
@@ -1235,11 +1248,11 @@ docker build -t localhost/agent-sdlc/<repo>:<run id> <checkout path>
    always the deployment repo's \`docker-compose.<product>.yml\`, never the
    product's own: you are testing the image your build produced inside the
    topology the estate actually runs, and a product's own compose is wired
-   differently from production. Use your own compose project name and the local
+   differently from production. Use your own compose project name, \`sdlc-<run id>-verify\` (the provisioner holds \`sdlc-<run id>\`), and the local
    tag, and publish no host ports:
 
 \`\`\`
-TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id> \
+TAG=localhost/agent-sdlc/<repo>:<run id> docker compose -p sdlc-<run id>-verify \
   -f <infra checkout>/docker-compose.<product>.yml --profile <profile> up -d
 \`\`\`
 
@@ -1273,7 +1286,7 @@ docker image inspect localhost/agent-sdlc/<repo>:<run id> --format '{{index .Rep
    unreachable from where you run, so a timeout there says nothing about the
    build. A container that is running is still not a service that is serving.
 
-4. **Tear down exactly the project you created**: \`docker compose -p sdlc-<run id> down\`.
+4. **Tear down exactly the project you created**: \`docker compose -p sdlc-<run id>-verify down\`. Never the provisioner's \`sdlc-<run id>\`: Browser Trace is using it.
    Never \`down -v\` or any volume prune — that destroys seeded data other runs
    depend on and cannot be undone — and never remove anything you did not start.
 
@@ -2551,13 +2564,14 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the objective, the acceptance criteria, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\` and \`blast_radius_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — this is a feature pipeline, so exactly one of: \`feature\`, \`change_request\`. Use \`feature\` for new capability; \`change_request\` for a modification to existing behaviour that is not a bug.
 - \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system), \`qa\` (found by QA or CI on a release candidate), \`development\` (everything else, including every feature and change request — this is almost always \`development\` for this pipeline). Write it as soon as the packet exists: the runner cuts the run branch from it — a production request is from main, a QA request from ci-release, everything else starts from develop — and no code step runs before this file says which.
 - \`class\` — \`null\` for features and change requests. This field is required only for bugs.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key.
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Assess based on what the feature touches, not the feature's importance.
+- \`blast_radius_reason\` — one sentence naming the code path that puts the change in that class, e.g. "SecurityConfig decides which HTTP paths need a token, so this changes the API's auth contract (protocol)". A reviewer approving a \`schema\`, \`protocol\` or \`money\` change reads this sentence to know what to check; "touches security" tells them nothing.
 
 Do **not** write \`plugin_version\`, \`identity\`, \`model\`, \`watch\` or \`cost\`. Those are runner-owned provenance: the server process writes them and re-asserts them over anything an agent puts there. If you find one of these keys already present in \`meta.json\`, leave it exactly as it is.
 
@@ -2585,7 +2599,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <one precise question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <one precise question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step's work.** If an instruction belongs to a later stage, note it and leave it.
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2718,7 +2732,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2844,7 +2858,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2978,7 +2992,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -3010,7 +3024,11 @@ That line stops the run. Nothing after your step will execute, which is the corr
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3117,7 +3135,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3217,7 +3239,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3307,7 +3333,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3408,7 +3438,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3509,7 +3543,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## Prerequisites
 
@@ -3624,7 +3662,11 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Checkout
 
-Confirm the repository is checked out at the path the Checkouts line names. Clone it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+Scan the Working checkout line at the top of your input: a git worktree the runner made for this run on the branch it was asked to read (the \`branch\` parameter, usually \`develop\`). Scan it and nothing else, and never switch its branch. Only if there is no Working checkout line, fall back to the path the Checkouts line names, cloning it over HTTPS if missing. Record the branch, HEAD commit, and \`git remote -v\`.
+
+## Already filed
+
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3760,7 +3802,11 @@ For each actionable finding (or group), assign:
 
 ## Check for existing tickets
 
-If you have access to Jira via MCP tools, search for open tickets in the same project with similar summaries or affected files. If a finding matches an existing open ticket, mark it \`existing\` with the ticket key. If you do not have Jira access, say so plainly and mark the dedup-against-Jira column as "not checked" — the drafter will note it.
+\`existing-tickets.json\` in the run artifacts directory is the product's open and recently resolved Jira tickets, fetched by the runner before the scan: key, summary, status, labels and a description excerpt. Check every finding against it. A finding is \`existing\` when a ticket there covers the same defect - the same file or component and the same root cause, not merely the same category - and you name that key in the reason. The scanner may already have named one in \`existing_ticket\`; verify it rather than trusting it. A ticket resolved recently whose fix is not yet on the scanned branch still counts as existing.
+
+Scans run nightly and file without a human review, so a finding you let through as \`actionable\` that a listed ticket already covers becomes a duplicate ticket and a duplicate fix run. When in doubt between \`existing\` and \`actionable\`, say why in the reason and prefer \`existing\` if the ticket names the same file.
+
+When the file is absent, say so plainly and mark the dedup-against-Jira column as "not checked" — the drafter will note it.
 
 ## Report
 
@@ -3934,6 +3980,8 @@ PIPELINE-HALT: <one line saying what stopped you>`,
     },
     body: `You are the decision gate. Your job is to separate ticket drafts that can be created automatically from those that need a human decision. You do not create tickets — you classify drafts.
 
+A draft is escalated only when a reviewer has something to decide: a question the code cannot answer, or a finding whose meaning is ambiguous. Everything else is auto-approved. An escalation holds the draft for a person, so one without a real question costs a reviewer's time and delays a clear-cut ticket for nothing.
+
 ## Read the inputs
 
 The run artifacts directory contains:
@@ -3945,39 +3993,42 @@ Read all three before proceeding.
 
 ## For each draft, decide: auto-approve or escalate
 
-### Auto-approve when ALL of these are true:
+### Escalate only when ANY of these are true:
 
-1. **Severity is unambiguous**: the scanner, triage, and drafter all agree on severity (no disagreement between steps)
-2. **No open questions**: the triage step flagged no open questions, and the drafter's description has no "unclear" or "not stated" markers
-3. **Blast radius is contained**: \`blast_radius\` is \`docs\`, \`ui_parsing\`, or \`deployment\` — NOT \`money\`, \`protocol\`, or \`schema\`
-4. **Evidence is concrete**: the finding has a specific file, line number, and code snippet — not a general observation
-5. **Not a false-positive risk**: the pattern is a known, unambiguous anti-pattern (e.g. bare \`except:\`, \`eval()\` on user input, SQL concatenation) — not a judgment call about design quality
-6. **Jira dedup was checked**: the triage step confirmed no existing ticket covers this, OR Jira dedup was "not checked" but the finding is clearly new (a specific code pattern at a specific line)
+1. **Open question**: something the triage or drafter could not determine from the code alone — a triage open question, or an "unclear" / "not stated" marker in the draft that changes what the ticket should say
+2. **Ambiguous intent**: the pattern could be intentional (e.g. a \`@SuppressWarnings\` without a comment — is it hiding a real issue or is there a reason?)
+3. **Possible false positive**: the finding cannot be confirmed from the evidence — no concrete file and line, or reachability that depends on something outside the code (is this input user-controlled or internal only?)
+4. **Severity disagreement that changes the ticket**: the scanner, triage and drafter disagree on severity, and the difference would change the priority or whether the ticket is worth filing
+5. **Likely duplicate**: triage names an existing ticket that may already cover this, and only a person can say whether it does
+6. **Competing fixes**: the finding spans components and there are two or more materially different fixes whose trade-off is a product or ownership decision — name them
 
-### Escalate when ANY of these are true:
+### These are NOT reasons to escalate on their own:
 
-1. **Blast radius is \`money\`, \`protocol\`, or \`schema\`** — changes to these areas need human sign-off regardless of clarity
-2. **Severity disagreement**: scanner says \`high\` but triage says \`medium\`, or vice versa
-3. **Open questions exist**: something the triage or drafter could not determine from the code alone
-4. **Ambiguous intent**: the pattern could be intentional (e.g. a \`@SuppressWarnings\` without a comment — is it hiding a real issue or is there a reason?)
-5. **Cross-cutting concern**: the finding spans multiple components or services and the fix approach is unclear
-6. **First-of-its-kind**: the scan type has never produced this category of finding for this repo before (check \`meta.json\` history if available)
+- **Blast radius** \`money\`, \`protocol\` or \`schema\`. Record it in the \`gate\` object; the runbook that picks the ticket up has its own approval gate for those areas, before any code merges.
+- High or critical severity. Severity sets the ticket's priority, not whether a person must approve it.
+- The size of the fix, or the number of files it touches, when the fix itself is clear.
+- It being the first finding of its kind for this repository.
+- Jira dedup being "not checked", when triage names no candidate duplicate.
 
-For each escalated draft, write a **decision prompt** — the specific question the human needs to answer, framed as a yes/no or choice:
-- "This bare except in billing/processor.py:142 swallows payment errors. Create a ticket to add specific exception handling? [yes/no]"
+### The test
+
+Before escalating, write the decision prompt. If the only honest prompt is "Create this ticket? [yes/no]", there is nothing to decide — auto-approve it. An escalation's prompt names what is uncertain and gives the options:
 - "SQL concatenation in api/search.py:89 — is this reachable from user input, or only from internal admin calls? [user-input → critical ticket / admin-only → medium ticket / skip]"
+- "\`@SuppressWarnings("unchecked")\` on BillingMapper.java:40 has no comment — is the unchecked cast deliberate? [deliberate → skip / not deliberate → ticket to type the map]"
+- "Triage links PROJ-812 ("Reseller auth hardening") — does it already cover the missing tests on ResellerController.authenticate? [covered → skip / not covered → new ticket]"
 
 ## Artifacts
 
-Write two files into the run artifacts directory:
+Write both files into the run artifacts directory, every time. When no draft is escalated, \`escalated-drafts.json\` is an empty array, \`[]\` — that is what lets the run skip the reviewer steps. The same holds for \`approved-drafts.json\` when every draft is escalated.
 
 ### \`approved-drafts.json\`
 Same structure as \`ticket-drafts.json\`, but only the auto-approved entries. Each entry has an added \`gate\` object:
 \`\`\`json
 {
   "verdict": "auto-approved",
-  "reason": "unambiguous severity, no open questions, contained blast radius",
-  "criteria_met": ["severity_clear", "no_questions", "blast_contained", "evidence_concrete", "not_fp_risk", "dedup_checked"]
+  "reason": "concrete evidence, no open questions, intent unambiguous",
+  "blast_radius": "money",
+  "criteria_met": ["no_questions", "intent_clear", "evidence_concrete", "severity_agreed", "no_duplicate_candidate"]
 }
 \`\`\`
 
@@ -3986,11 +4037,13 @@ Same structure, but only the escalated entries. Each entry has:
 \`\`\`json
 {
   "verdict": "escalated",
-  "reason": "blast radius is money — human sign-off required",
-  "decision_prompt": "Create a ticket for missing input validation on payment amount in billing/charge.py:67? [yes/no/modify]",
-  "escalation_criteria": ["blast_money"]
+  "reason": "reachability of the concatenated input cannot be determined from the code",
+  "decision_prompt": "SQL concatenation in api/search.py:89 — is this reachable from user input, or only from internal admin calls? [user-input → critical ticket / admin-only → medium ticket / skip]",
+  "escalation_criteria": ["possible_false_positive"]
 }
 \`\`\`
+
+\`escalation_criteria\` uses these names only: \`open_question\`, \`ambiguous_intent\`, \`possible_false_positive\`, \`severity_disagreement\`, \`possible_duplicate\`, \`competing_fixes\`.
 
 ### \`meta.json\` merge
 Merge a \`decision_gate\` key:
@@ -4005,9 +4058,10 @@ State: how many drafts were auto-approved, how many escalated, and for each esca
 
 ## Rules for this step
 
-- **When in doubt, escalate.** A false auto-approval creates a JIRA ticket nobody asked for. A false escalation costs one human decision. The cost asymmetry means you should always escalate edge cases.
+- **Escalate only with a question.** Every escalated draft carries a decision prompt a reviewer must actually answer. A draft with nothing to decide is auto-approved, however sensitive the code it touches.
 - **The decision prompt must be answerable without re-reading the draft.** Include enough context (file, line, what the issue is, what the options are) that the human can decide from the prompt alone.
-- **Do not invent criteria not listed above.** The auto-approve and escalate rules are exhaustive.
+- **Do not invent criteria not listed above.** The escalation reasons are exhaustive; anything not on that list is auto-approved.
+- **Never end with \`PIPELINE-ASK:\`.** Your escalations reach reviewers through \`escalated-drafts.json\` and the steps after you; this step never pauses the run. The standing rule on asking does not apply here.
 - **Halt rather than hand a problem downstream.** \`PIPELINE-HALT: <reason>\`.
 
 ${SDLC_STANDING_RULES}

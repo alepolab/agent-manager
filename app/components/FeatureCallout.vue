@@ -29,7 +29,7 @@ async function dismiss() {
   <div
     v-if="!dismissed"
     class="rounded-xl px-4 py-3 flex items-start gap-3 mb-4"
-    style="background: rgba(229, 169, 62, 0.06); border: 1px solid rgba(229, 169, 62, 0.12);"
+    style="background: rgba(var(--accent-rgb), 0.06); border: 1px solid rgba(var(--accent-rgb), 0.12);"
   >
     <UIcon name="i-lucide-info" class="size-4 shrink-0 mt-0.5" style="color: var(--accent);" />
     <div class="flex-1 min-w-0">

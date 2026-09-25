@@ -9,39 +9,16 @@ import { isLiveStatus } from '~~/shared/types/run'
  */
 const route = useRoute()
 const id = route.params.id as string
-const { run, logs, error, load, refresh, continueRun, stop, restart, respond, sendNote, reject, rework } = useRun(id)
+const runApi = useRun(id)
+const { run, logs, error, load, refresh, continueRun, stop, respond } = runApi
+const { onReject, onRework, onNote, onRestart } = useRunActionToasts(runApi)
 useAutoRefresh(refresh)
 // The builder and Clone are pipeline controls; a reviewer opening the run they
 // hold a gate on has no use for either, and the API refuses them anyway.
 const { can } = useUser()
-async function onReject(note: string) {
-  try {
-    await reject(note)
-    // This toast used to say "Sent back", which described something the route
-    // does not do: reject stops the run. Sending back to a step is `onRework`.
-    toast.add({ title: 'Run rejected', description: 'The run is stopped and your reason is on the record.', color: 'success' })
-  } catch (e: any) { toast.add({ title: 'Could not reject it', description: e.data?.message || e.message, color: 'error' }) }
-}
-async function onRework(stepId: string, note: string) {
-  try {
-    await rework(stepId, note)
-    const label = run.value?.steps.find(s => s.stepId === stepId)?.label ?? 'that step'
-    toast.add({ title: `Sent back to ${label}`, description: 'It restarts with your instruction.', color: 'success' })
-  } catch (e: any) { toast.add({ title: 'Could not send it back', description: e.data?.message || e.message, color: 'error' }) }
-}
-async function onNote(text: string) {
-  try {
-    const r = await sendNote(text)
-    toast.add({ title: r.delivered?.length ? `Sent to ${r.delivered.join(', ')}` : 'Note queued for the next step', color: 'success' })
-  } catch (e: any) { toast.add({ title: 'Could not send the note', description: e.data?.message || e.message, color: 'error' }) }
-}
-const toast = useToast()
 onMounted(load)
 useHead({ title: computed(() => `${run.value ? (run.value.initialPrompt.split('\n')[0] ?? '').slice(0, 40) : 'Run'} | Agent Manager`) })
 const live = computed(() => !!run.value && isLiveStatus(run.value.status))
-async function onRestart(stepId: string, note?: string) {
-  try { await restart(stepId, note) } catch (e: any) { toast.add({ title: 'Could not restart', description: e.data?.message || e.message, color: 'error' }) }
-}
 </script>
 
 <template>

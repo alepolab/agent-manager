@@ -15,7 +15,7 @@ defineProps<{
   <div v-if="message.role === 'user'" class="flex justify-end chat-msg-enter">
     <div
       class="max-w-[80%] rounded-2xl rounded-br-md px-4 py-2.5 t-ui leading-relaxed"
-      style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.1); color: var(--text-primary); font-family: var(--font-sans);"
+      style="background: var(--accent-muted); border: 1px solid rgba(var(--accent-rgb), 0.1); color: var(--text-primary); font-family: var(--font-sans);"
     >
       {{ message.content }}
     </div>
@@ -28,7 +28,7 @@ defineProps<{
         class="size-6 rounded-lg flex items-center justify-center transition-all duration-300"
         :style="{
           background: isStreaming ? 'var(--accent-muted)' : 'var(--badge-subtle-bg)',
-          border: isStreaming ? '1px solid rgba(229, 169, 62, 0.15)' : '1px solid var(--border-subtle)',
+          border: isStreaming ? '1px solid rgba(var(--accent-rgb), 0.15)' : '1px solid var(--border-subtle)',
         }"
       >
         <UIcon

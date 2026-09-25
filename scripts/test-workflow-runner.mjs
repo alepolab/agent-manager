@@ -955,7 +955,9 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 // run whose process is still alive. It held its group's slot and its
 // workspace until the server was restarted.
 {
-  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  // Interrupted too: section 15 leaves one for a boot resume that never comes
+  // here, and an interrupted run that will resume holds its group slot.
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running' || r.status === 'interrupted') await runner.stopRun(r.id)
   const queue = await import('../server/utils/runQueue.ts')
   const before = new Set((await store.listRuns('demo')).map(r => r.id))
 
@@ -1092,7 +1094,17 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
   let asks = 0
   runner.setAgentCaller(async (agentSlug, input) => {
-    if (agentSlug === 'agent-a' && asks < 2) { asks++; return `PIPELINE-ASK: question number ${asks}?` }
+    if (agentSlug === 'agent-a' && asks < 2) {
+      asks++
+      // A step asks with its decision brief, or is sent back to write one
+      // (test-decision-brief.mjs); this case is about pausing, so it writes one.
+      const dir = input.match(/Write every artifact you produce into: (\S+)/)[1]
+      writeFileSync(join(dir, 'decision.json'), JSON.stringify({
+        question: `question number ${asks}?`, situation: 'The step needs a choice.',
+        options: [{ key: 'a', label: 'this', next: 'n', delivers: 'd', leaves: 'l' }, { key: 'b', label: 'that', next: 'n', delivers: 'd', leaves: 'l' }],
+      }))
+      return `PIPELINE-ASK: question number ${asks}?`
+    }
     return `out ${agentSlug}`
   })
   let q = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
@@ -1787,6 +1799,19 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   // checkout corrupt each other, and the run lock is scoped to the directory.
   assert.equal(new Set(kids.map(k => k.projectDir)).size, 2, 'each child works in its own checkout')
   assert.ok(kids.every(k => k.projectDir.includes('CSUP-')), 'named after the entry it was dispatched for')
+
+  // ── 28a'. Re-running the dispatch does not start a ticket twice ─────────
+  // Restarting a scan's create step re-runs the dispatch after it; the tickets
+  // it had already dispatched must keep their one child, not gain a second.
+  // A restart rebuilds the run from its workflow on disk, like the children do.
+  writeFileSync(join(wfDir, 'scan-demo.json'), JSON.stringify(dispatchFlow(ROUTING)))
+  const beforeRedo = (await store.listRuns()).length
+  await runner.restartRun(d1.id, 'd')
+  const redo = await runner.waitForSettled(d1.id, TIMEOUT)
+  const redoStep = redo.steps.find(s => s.stepId === 'd')
+  assert.equal((await store.listRuns()).length, beforeRedo, 'no new child for a ticket that already has one')
+  assert.deepEqual([...redoStep.childRunIds].sort(), [...step1.childRunIds].sort(), 'the existing children are the step\'s children')
+  assert.match(redoStep.output, /CSUP-1 already has run .*; not dispatched again/)
 
   // ── 28b. Nothing to dispatch is an outcome, not a failure ───────────────
   runner.setAgentCaller(scanWriting('[]'))

@@ -18,6 +18,7 @@ import { join } from 'node:path'
 const root = mkdtempSync(join(tmpdir(), 'resume-'))
 process.env.CLAUDE_DIR = join(root, 'claude')
 process.env.AGENT_RUNS_DIR = join(root, 'runs')
+process.env.AGENT_WORKSPACE_ROOT = join(root, 'ws')
 mkdirSync(process.env.CLAUDE_DIR, { recursive: true })
 
 const store = await import('../server/utils/workflowRunStore.ts')
@@ -141,6 +142,31 @@ for (const [label, present] of [['transcript present', true], ['transcript gone'
   await runner.waitForSettled(handed.id, TIMEOUT)
   assert.ok(calls.every(c => c.resume === undefined),
     'a runner hand-over carries new scope or a new instruction, so the step gets the whole brief')
+}
+
+// ── a run that reads the product's own checkout can be restarted mid-way ──
+// The guard below exists because a restart into a directory with no code cost
+// $50. But a scan never has code of its own: the header sends it to
+// <workspace root>/<repo name>. Refusing it meant every dev-server reload threw
+// away a finished scan, triage and drafting.
+{
+  await clear(); transcript()
+  runner.setAgentCaller(async (slug) => ({ output: `out ${slug}`, model: 'm', usage: null, sessionId: SESSION }))
+  let r = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  const derived = join(root, 'ws', 'nightly-scan')
+  mkdirSync(derived, { recursive: true })
+  const stored = await store.getRun(r.id)
+  await store.saveRun({ ...stored, product: { name: 'demo', repos: ['alepolab/demo'], branches: {}, tests: {} }, projectDir: derived })
+
+  await assert.rejects(runner.restartRun(r.id, 'b', 'reloaded'), (e) => e.statusCode === 409 && /no checkout/.test(e.message),
+    'no code anywhere: a partial restart is still refused')
+
+  mkdirSync(join(root, 'ws', 'demo', '.git'), { recursive: true })
+  const back = await runner.restartRun(r.id, 'b', 'reloaded')
+  assert.notEqual(back.status, 'failed', 'the product checkout the header names is enough to restart from a later step')
+  const settled = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(settled.status, 'completed', `and the restarted step runs to the end: ${settled.error ?? ''}`)
 }
 
 rmSync(root, { recursive: true, force: true })

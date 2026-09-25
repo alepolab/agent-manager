@@ -54,3 +54,37 @@ export function useRun(id: string) {
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
   }
 }
+
+/**
+ * The gate and run actions with the toasts that report them, shared by the run
+ * page and the /notifications detail pane, so both say the same thing about
+ * what a button just did.
+ */
+export function useRunActionToasts(r: Pick<ReturnType<typeof useRun>, 'run' | 'reject' | 'rework' | 'sendNote' | 'restart'>) {
+  const toast = useToast()
+  async function onReject(note: string) {
+    try {
+      await r.reject(note)
+      // This toast used to say "Sent back", which described something the route
+      // does not do: reject stops the run. Sending back to a step is `onRework`.
+      toast.add({ title: 'Run rejected', description: 'The run is stopped and your reason is on the record.', color: 'success' })
+    } catch (e: any) { toast.add({ title: 'Could not reject it', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onRework(stepId: string, note: string) {
+    try {
+      await r.rework(stepId, note)
+      const label = r.run.value?.steps.find(s => s.stepId === stepId)?.label ?? 'that step'
+      toast.add({ title: `Sent back to ${label}`, description: 'It restarts with your instruction.', color: 'success' })
+    } catch (e: any) { toast.add({ title: 'Could not send it back', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onNote(text: string) {
+    try {
+      const res = await r.sendNote(text)
+      toast.add({ title: res.delivered?.length ? `Sent to ${res.delivered.join(', ')}` : 'Note queued for the next step', color: 'success' })
+    } catch (e: any) { toast.add({ title: 'Could not send the note', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onRestart(stepId: string, note?: string) {
+    try { await r.restart(stepId, note) } catch (e: any) { toast.add({ title: 'Could not restart', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  return { onReject, onRework, onNote, onRestart }
+}

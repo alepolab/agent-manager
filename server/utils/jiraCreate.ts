@@ -198,7 +198,13 @@ function customValues(fields: Record<string, unknown>, schema: CreateSchema | nu
   const byName = new Map((schema?.required ?? []).map(f => [f.name.toLowerCase(), f.id]))
   const byId = new Map((schema?.required ?? []).map(f => [f.id, f]))
   const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(raw)) {
+  for (const [k, given] of Object.entries(raw)) {
+    // A drafter that echoes the schema writes `{ type, value }` rather than the
+    // value. Sent as-is, Jira refused every Bug of a real run: the object is
+    // neither ADF nor a number. Unwrapped here; `option` re-wraps it below.
+    const v = given && typeof given === 'object' && !Array.isArray(given) && 'value' in given
+      ? (given as { value: unknown }).value
+      : given
     if (v === undefined || v === null || v === '') continue
     const id = byName.get(k.trim().toLowerCase()) ?? k
     out[id] = shapeFor(v, byId.get(id))
@@ -240,6 +246,36 @@ function shapeFor(value: unknown, field?: { type?: string, custom?: string }): u
   return richText ? plainTextToAdf(value) : value
 }
 
+/** The account id behind these credentials, or null when Jira will not say. */
+async function filerOf(creds: { baseUrl: string, email: string, apiToken: string }, fetchImpl: FetchLike): Promise<string | null> {
+  try {
+    const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/myself`, { headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json' } })
+    return res.ok ? ((await res.json() as { accountId?: string }).accountId ?? null) : null
+  } catch { return null }
+}
+
+/**
+ * Assigns a just-filed issue to the account that filed it - the developer
+ * whose credentials the run holds.
+ *
+ * Left alone, a scan's tickets took the project's default assignee: fourteen
+ * landed on a colleague who had nothing to do with them, and each pipeline
+ * comment mentioned him. A separate call rather than a create field, because a
+ * project whose create screen lacks `assignee` refuses the whole issue over it,
+ * and the ticket matters more than who holds it.
+ */
+async function assignTo(creds: { baseUrl: string, email: string, apiToken: string }, issueKey: string, accountId: string | null, fetchImpl: FetchLike): Promise<boolean> {
+  if (!accountId) return false
+  try {
+    const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`, {
+      method: 'PUT',
+      headers: { Authorization: jiraAuthHeader(creds), 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ accountId }),
+    })
+    return res.ok
+  } catch { return false }
+}
+
 /**
  * Creates an issue per entry, stamping `jira_key` and `work_type` onto the
  * entries it created.
@@ -274,6 +310,8 @@ export async function createIssuesFrom(
   }
 
   const out: CreateOutcome[] = []
+  // The filing account, looked up once and only when something is filed.
+  let filer: Promise<string | null> | undefined
   // One lookup per (project, issue type) for the whole batch.
   const schemas = new Map<string, CreateSchema | null>()
   for (const { index, entry } of entries) {
@@ -369,7 +407,9 @@ export async function createIssuesFrom(
       const workType = workTypeOf(entry, fields)
       if (workType) entry.work_type = workType
       log.info('created a jira issue', { runId: run.id, jiraKey: created.key, project })
-      out.push({ index, key, jiraKey: created.key, line: `Created ${created.key} in ${project} for ${key}${droppedPriority ? `, without priority "${droppedPriority}" (${project} does not offer it${schema?.priorities.length ? `; it offers ${schema.priorities.join(', ')}` : ''})` : ''}.` })
+      filer ??= filerOf(creds, fetchImpl)
+      const assigned = await assignTo(creds, created.key, await filer, fetchImpl)
+      out.push({ index, key, jiraKey: created.key, line: `Created ${created.key} in ${project} for ${key}${droppedPriority ? `, without priority "${droppedPriority}" (${project} does not offer it${schema?.priorities.length ? `; it offers ${schema.priorities.join(', ')}` : ''})` : ''}${assigned ? '' : ', left with the project\'s default assignee (it could not be assigned to the filing account)'}.` })
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
       out.push({ index, key, error: why, line: `Could not create an issue for ${key}: ${why}.` })
@@ -399,6 +439,47 @@ export async function recordCreatedTickets(runId: string, outcomes: CreateOutcom
   ])
 }
 
+/** Where the drafting step writes the full drafts a gate then sorts. */
+const TICKET_DRAFTS_FILE = 'ticket-drafts.json'
+
+/**
+ * Fills each entry that names a `draft_id` with the rest of that draft from
+ * ticket-drafts.json, in place. What the entry states wins - the gate's verdict,
+ * an edited summary - and only what it left out is taken from the draft.
+ *
+ * The gate is told to copy each draft whole and add its verdict. A resumed gate
+ * wrote id, summary and verdict alone, and all seven creates failed on a
+ * missing project and issue type that the drafts file held all along. Copying
+ * fifty kilobytes faithfully is the runner's job, not a model's.
+ *
+ * The fill goes all the way down. A re-run gate kept `fields` but wrote it
+ * without `custom`, and without the description or the acceptance criteria:
+ * the old check only completed an entry with no `fields` at all, so it did
+ * nothing, and ten Bug drafts whose Steps to Reproduce and Business Value sat
+ * in ticket-drafts.json were refused for lacking them. The two Tasks were
+ * filed with an empty body.
+ */
+export async function completeFromDrafts(runId: string, entries: Record<string, unknown>[]): Promise<void> {
+  if (!entries.some(e => typeof e.draft_id === 'string')) return
+  const drafts = await readArtifactEntries(runId, TICKET_DRAFTS_FILE)
+  if (!drafts || 'error' in drafts) return
+  const byId = new Map(drafts.entries.filter(d => typeof d.draft_id === 'string').map(d => [d.draft_id as string, d]))
+  for (const entry of entries) {
+    const draft = typeof entry.draft_id === 'string' ? byId.get(entry.draft_id) : undefined
+    if (draft) fillMissing(entry, draft)
+  }
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** Copies into `into` what it lacks from `from`, recursing into objects both hold. */
+function fillMissing(into: Record<string, unknown>, from: Record<string, unknown>): void {
+  for (const [k, v] of Object.entries(from)) {
+    if (into[k] === undefined || into[k] === null || into[k] === '') into[k] = v
+    else if (isPlainObject(into[k]) && isPlainObject(v)) fillMissing(into[k] as Record<string, unknown>, v)
+  }
+}
+
 /**
  * Creates an issue per entry of `source`, writes the stamped entries back, and
  * records the keys.
@@ -413,6 +494,7 @@ export async function createFromArtifact(run: WorkflowRun, source: string, fetch
   if (read === null) return `Created nothing: ${source} was not written.`
   if ('error' in read) return `Created nothing: ${read.error}.`
   if (!read.entries.length) return `Created nothing: ${source} holds no entries.`
+  await completeFromDrafts(run.id, read.entries)
 
   const outcomes = await createIssuesFrom(run, read.entries.map((entry, index) => ({ index, entry })), fetchImpl)
   await writeArtifactJson(run.id, source, read.entries)

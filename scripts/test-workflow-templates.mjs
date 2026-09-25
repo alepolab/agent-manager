@@ -556,10 +556,12 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 // at develop rather than jumping to main.
 {
   const prov = AGENT_TEMPLATES.find(t => t.id === 'sdlc-stack-provisioner')
-  assert.ok(prov.body.includes('Tear down what you brought up'),
-    'the provisioner must be told to decommission what it started; a leaked stack collides with the next run')
-  assert.ok(/never use a volume-destroying\s+teardown/i.test(prov.body),
-    'teardown must exclude volume destruction it did not create - that deletes seeded data other runs depend on')
+  // The provisioner's stack has to outlive it - the steps after it use it - so
+  // it names the stack for the run and the runner takes it down when the run
+  // ends (server/utils/runTeardown.ts). A stack under any other name leaks.
+  assert.ok(prov.body.includes('Name the stack for this run, and leave it up') && prov.body.includes('-p sdlc-<run id>'),
+    'the provisioner must stand its stack up under sdlc-<run id>, the one name the runner tears down')
+  assert.ok(prov.body.includes('never use a volume-destroying command'), 'and never destroy a volume')
   assert.ok(/never remove anything you did not\s+start/i.test(prov.body),
     'teardown must not touch stacks this run did not bring up - the sso stack is shared')
 

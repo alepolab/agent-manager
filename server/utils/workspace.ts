@@ -185,6 +185,19 @@ const gitRaw = async (cwd: string, args: string[]) =>
   (await execFileP('git', args, { cwd, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout
 const git = async (cwd: string, args: string[]) => (await gitRaw(cwd, args)).trim()
 
+/** Fetches `branch` and says whether origin has it. ensureRunBranch falls back
+ *  to HEAD for a branch the remote lacks, which is right for a module repo with
+ *  its own naming and wrong for a scan that was asked to read `develop`. */
+export async function remoteBranchExists(checkout: string, branch: string): Promise<boolean> {
+  try { await git(checkout, ['fetch', '--quiet', 'origin', branch]) } catch { /* decided below */ }
+  try { await git(checkout, ['rev-parse', '--verify', '--quiet', `origin/${branch}`]); return true } catch { return false }
+}
+
+/** Clones `owner/name` over HTTPS into `dest` with the given environment. */
+export async function cloneRepo(repo: string, dest: string, env: Record<string, string>): Promise<void> {
+  await execFileP('git', ['clone', '--quiet', `https://github.com/${repo}.git`, dest], { env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: '0' }, timeout: 600_000 })
+}
+
 /** The roots above keep `~` for display; filesystem work needs it expanded. */
 const expand = (p: string) => p.replace(/^~(?=\/|$)/, homedir())
 /** Where a product repo is expected for this developer: <their workspace>/<repo name>. */
@@ -309,6 +322,17 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
     // every submodule as an EMPTY directory, and git commands inside it answer
     // for the parent, so the empty placeholder would have read as "already on
     // the branch" and the module's own worktree would never have been made.
+    // Any worktree already on the branch is the run's, wherever it sits. The
+    // branch can be checked out once only, and ASECRM-219, 235 and 267 each had
+    // theirs at the ticket's workspace directory itself - made there before
+    // the run recorded it - so adding the `@branch` one beside it failed with
+    // "already used by worktree", and the run with it.
+    const onBranch = existsSync(join(wt, '.git')) ? undefined : await worktreeOnBranch(r, branch)
+    if (onBranch) {
+      await excludeFromGit(onBranch, '.agent/evidence-run/')
+      out.push(onBranch)
+      continue
+    }
     if (existsSync(join(wt, '.git'))) {
       const current = await git(wt, ['branch', '--show-current']).catch(() => '')
       if (current !== branch) throw new Error(`${wt} exists and is on ${current || 'no branch'}, not ${branch}`)
@@ -319,6 +343,16 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
     out.push(wt)
   }
   return out
+}
+
+/** The path of an existing worktree of `repo` checked out on `branch`, if there is one. */
+async function worktreeOnBranch(repo: string, branch: string): Promise<string | undefined> {
+  const list = await git(repo, ['worktree', 'list', '--porcelain']).catch(() => '')
+  for (const entry of list.split(/\n\n+/)) {
+    const path = entry.match(/^worktree (.+)$/m)?.[1]
+    if (path && entry.includes(`\nbranch refs/heads/${branch}`) && existsSync(join(path, '.git'))) return path
+  }
+  return undefined
 }
 
 /** Git repositories one level under the checkout or under its modules/ directory. */
