@@ -15,8 +15,8 @@ const props = defineProps<{ item: Extract<NotificationItem, { kind: 'gate' }> }>
 const emit = defineEmits<{ decided: [] }>()
 
 const runApi = useRun(props.item.runId)
-const { run, logs, error, load, continueRun, stop, respond } = runApi
-const { onReject, onRework, onNote, onRestart } = useRunActionToasts(runApi)
+const { run, logs, error, load } = runApi
+const { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond } = useRunActionToasts(runApi)
 onMounted(load)
 
 // The run streams over SSE, so a decision taken here — or by someone else,
@@ -51,7 +51,7 @@ const headline = computed(() => {
             · {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · started by ${run.startedBy}` : '' }}{{ run.branch ? ` · ${run.branch}` : '' }}
           </p>
         </div>
-        <UButton :to="`/runs/${run.id}${run.question ? `#step-${run.question.stepId}` : ''}`" size="xs" variant="ghost" color="neutral" trailing-icon="i-lucide-arrow-right" label="Full run and evidence" class="shrink-0" />
+        <UButton :to="`/runs/${run.id}${run.question?.stepId ? `#step-${run.question.stepId}` : ''}`" size="xs" variant="ghost" color="neutral" trailing-icon="i-lucide-arrow-right" label="Full run and evidence" class="shrink-0" />
       </div>
       <!-- The ticket text the run was started with. Collapsed: it is the
            background to the decision, not the decision. -->
@@ -69,8 +69,8 @@ const headline = computed(() => {
 
     <RunStack
       :run="run" :logs="logs"
-      @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework"
-      @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${run.id}`)"
+      @continue="onContinue" @respond="onRespond" @reject="onReject" @rework="onRework"
+      @note="onNote" @stop="onStop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${run.id}`)"
     />
   </div>
   <SkeletonCard v-else />

@@ -60,7 +60,7 @@ export function useRun(id: string) {
  * page and the /notifications detail pane, so both say the same thing about
  * what a button just did.
  */
-export function useRunActionToasts(r: Pick<ReturnType<typeof useRun>, 'run' | 'reject' | 'rework' | 'sendNote' | 'restart'>) {
+export function useRunActionToasts(r: Pick<ReturnType<typeof useRun>, 'run' | 'reject' | 'rework' | 'sendNote' | 'restart' | 'stop' | 'continueRun' | 'respond'>) {
   const toast = useToast()
   async function onReject(note: string) {
     try {
@@ -86,5 +86,14 @@ export function useRunActionToasts(r: Pick<ReturnType<typeof useRun>, 'run' | 'r
   async function onRestart(stepId: string, note?: string) {
     try { await r.restart(stepId, note) } catch (e: any) { toast.add({ title: 'Could not restart', description: e.data?.message || e.message, color: 'error' }) }
   }
-  return { onReject, onRework, onNote, onRestart }
+  async function onStop() {
+    try { await r.stop() } catch (e: any) { toast.add({ title: 'Failed to stop', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onContinue(note?: string) {
+    try { await r.continueRun(note) } catch (e: any) { toast.add({ title: 'Failed to continue', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onRespond(reply: string) {
+    try { await r.respond(reply) } catch (e: any) { toast.add({ title: 'Failed to reply', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  return { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond }
 }
