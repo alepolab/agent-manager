@@ -1,4 +1,4 @@
-import { fromStack, toStack, type StackBlock, type StackNode } from './workflowStack.ts'
+import { fromStack, stepIdsOf, toStack, type StackBlock, type StackNode } from './workflowStack.ts'
 
 /**
  * The edits the stack builder can make. Every function returns a new array and
@@ -56,7 +56,9 @@ export function findStep(blocks: StackBlock[], stepId: string, seq: SeqPath = []
 }
 
 export function insertStep(blocks: StackBlock[], slot: Slot, stepId: string): StackBlock[] {
+  if (findStep(blocks, stepId)) throw new Error('That step is already in the workflow.')
   return mapSeq(blocks, slot.seq, (s) => {
+    if (slot.index < 0 || slot.index > s.length) throw new Error('Move out of range.')
     if (slot.index >= s.length && endsOpen(s)) throw new Error(OPEN_END)
     return [...s.slice(0, slot.index), { kind: 'step', stepId }, ...s.slice(slot.index)]
   })
@@ -76,6 +78,7 @@ export function moveWithin(blocks: StackBlock[], seq: SeqPath, from: number, to:
     next.splice(to, 0, moved!)
     const open = next.findIndex(b => b.kind === 'paths' && !b.rejoin)
     if (open !== -1 && open !== next.length - 1) throw new Error('Paths that end separately have to stay last.')
+    if (!seq.length && next[0]!.kind === 'paths') throw new Error('A split needs a step before it.')
     return next
   })
 }
@@ -84,6 +87,8 @@ export function moveWithin(blocks: StackBlock[], seq: SeqPath, from: number, to:
 export function splitAt(blocks: StackBlock[], slot: Slot): StackBlock[] {
   if (slot.seq.length) throw new Error('The builder makes one level of paths. Split before or after this one instead.')
   return mapSeq(blocks, slot.seq, (s) => {
+    if (slot.index < 0 || slot.index > s.length) throw new Error('Move out of range.')
+    if (slot.index === 0) throw new Error('A split needs a step before it.')
     if (slot.index >= s.length && endsOpen(s)) throw new Error(OPEN_END)
     return [...s.slice(0, slot.index), { kind: 'paths', branches: [[], []], rejoin: true }, ...s.slice(slot.index)]
   })
@@ -106,12 +111,17 @@ export function removeBranch(blocks: StackBlock[], at: Slot, branch: number): St
   return mapPaths(blocks, at, (p, s) => {
     const left = p.branches.filter((_, j) => j !== branch)
     if (left.length === p.branches.length) throw new Error(`The split has no branch ${branch + 1}.`)
-    if (left.length === 1) return [...s.slice(0, at.index), ...left[0]!, ...s.slice(at.index + 1)]
+    if (left.length === 1) {
+      const rest = s.slice(at.index + 1)
+      if (rest.length && endsOpen(left[0]!)) throw new Error(OPEN_END)
+      return [...s.slice(0, at.index), ...left[0]!, ...rest]
+    }
     return s.map((b, i) => (i === at.index ? { ...p, branches: left } : b))
   })
 }
 
 export function setRejoin(blocks: StackBlock[], at: Slot, rejoin: boolean): StackBlock[] {
+  if (!rejoin && at.seq.length > 0) throw new Error('A path inside another split has to rejoin.')
   return mapPaths(blocks, at, (p, s) => {
     if (!rejoin && at.index !== s.length - 1) throw new Error('Steps follow these paths, so they have to rejoin.')
     return s.map((b, i) => (i === at.index ? { ...p, rejoin } : b))
@@ -131,15 +141,66 @@ export function pruneEmptyPaths(blocks: StackBlock[]): StackBlock[] {
 }
 
 /**
- * The stack as steps to save, or why it cannot be saved. Proves the result
- * draws again (the spec's `toStack(fromStack(blocks)).ok`), so the builder can
- * never write a file it would then open read-only.
+ * The shape the stack would redraw as: nested splits normalized bottom-up,
+ * then at each sequence level — a split whose branches are all empty is
+ * dropped; a split that ends in a rejoin:false keeps none of its empty
+ * branches (nothing follows to tell them apart), a rejoin:true split keeps at
+ * most one (a graph cannot tell two empty branches apart either); a split
+ * left with one branch is unwrapped in place, its blocks replacing it; and a
+ * split that is the last block of its sequence is rejoin:false, because
+ * nothing after it could tell the difference. Applied until nothing changes,
+ * since one pass can produce a new last block for the next to act on.
+ */
+export function normalize(blocks: StackBlock[]): StackBlock[] {
+  let cur = blocks
+  while (true) {
+    const next = normalizeOnce(cur)
+    if (JSON.stringify(next) === JSON.stringify(cur)) return next
+    cur = next
+  }
+}
+
+function normalizeOnce(blocks: StackBlock[]): StackBlock[] {
+  const out: StackBlock[] = []
+  for (const b of blocks) {
+    if (b.kind === 'step') { out.push(b); continue }
+    const branches = b.branches.map(normalizeOnce)
+    const collapsed = b.rejoin
+      ? (branches.some(br => br.length === 0) ? [...branches.filter(br => br.length > 0), []] : branches)
+      : branches.filter(br => br.length > 0)
+    if (collapsed.length === 0) continue
+    if (collapsed.length === 1) { out.push(...collapsed[0]!); continue }
+    out.push({ ...b, branches: collapsed })
+  }
+  if (out.length) {
+    const last = out[out.length - 1]!
+    if (last.kind === 'paths' && last.rejoin) out[out.length - 1] = { ...last, rejoin: false }
+  }
+  return out
+}
+
+/**
+ * The stack as steps to save, or why it cannot be saved. Refuses a step id
+ * used twice outright, then proves the result draws back as the shape shown
+ * (`toStack(fromStack(normalize(blocks)))` equals `normalize(blocks)`), so the
+ * builder can never write a file it would then open differently.
  */
 export function canSave<T extends StackNode>(blocks: StackBlock[], steps: T[]): { ok: true, steps: T[] } | { ok: false, reason: string } {
+  const ids = stepIdsOf(blocks)
+  const dup = ids.find((id, i) => ids.indexOf(id) !== i)
+  if (dup !== undefined) {
+    const label = steps.find(s => s.id === dup)?.label ?? dup
+    return { ok: false, reason: `Step "${label}" appears twice.` }
+  }
   try {
-    const out = fromStack(pruneEmptyPaths(blocks), steps)
+    const shown = normalize(blocks)
+    const out = fromStack(shown, steps)
     const back = toStack(out)
-    return back.ok ? { ok: true, steps: out } : { ok: false, reason: back.reason }
+    if (!back.ok) return { ok: false, reason: back.reason }
+    if (JSON.stringify(back.blocks) !== JSON.stringify(shown)) {
+      return { ok: false, reason: 'This would save as a different shape than the one shown. Undo the last change to the paths and try again.' }
+    }
+    return { ok: true, steps: out }
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) }
   }

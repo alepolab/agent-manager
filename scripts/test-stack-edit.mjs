@@ -131,4 +131,53 @@ for (const t of workflowTemplates.filter(x => ['runbook-a-jira-to-diff', 'scan-s
   assert.throws(() => E.newStep('agent', {}), /Choose an agent/)
 }
 
+// ── 7. edits the stack can't hold are refused, and save proves the drawing ─
+{
+  // A: canSave must prove the saved workflow redraws as the editor shows it,
+  // not just that it is drawable.
+  const abcdef = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => step(id))
+  const openBranchFollowed = [S('a'), P([[S('b'), P([[S('c')], [S('d')]], false)], [S('e')]]), S('f')]
+  const rOpen = E.canSave(openBranchFollowed, abcdef)
+  assert.equal(rOpen.ok, false, 'a branch that never rejoins the outer split would save as a different shape than shown')
+
+  const abc = ['a', 'b', 'c'].map(id => step(id))
+  const threeBranches = [S('a'), P([[S('b')], [], []]), S('c')]
+  const rThree = E.canSave(threeBranches, abc)
+  assert.ok(rThree.ok, rThree.reason)
+  assert.deepEqual(buildGraph(rThree.steps).succ, { a: ['b', 'c'], b: ['c'], c: [] })
+
+  const ab = ['a', 'b'].map(id => step(id))
+  const openLast = [S('a'), P([[S('b')], []], false)]
+  const rOpenLast = E.canSave(openLast, ab)
+  assert.ok(rOpenLast.ok, rOpenLast.reason)
+  assert.deepEqual(stepIdsOf(toStack(rOpenLast.steps).blocks), ['a', 'b'], 'normalizes to "a b"')
+
+  const rDup = E.canSave([S('a'), S('b'), S('a')], ab)
+  assert.equal(rDup.ok, false)
+  assert.match(rDup.reason, /appears twice/)
+}
+
+{
+  // B: edits the stack can't hold are refused at edit time, with a message a
+  // person can act on.
+  assert.throws(() => E.insertStep([S('a'), S('b')], { seq: [], index: 1 }, 'a'), /already in the workflow/)
+  assert.throws(() => E.insertStep([S('a'), S('b')], { seq: [], index: -1 }, 'n'), /out of range/)
+  assert.throws(() => E.insertStep([S('a'), S('b')], { seq: [], index: 3 }, 'n'), /out of range/)
+
+  assert.throws(() => E.splitAt([S('a'), S('b')], { seq: [], index: -1 }), /out of range/)
+  assert.throws(() => E.splitAt([S('a'), S('b')], { seq: [], index: 3 }), /out of range/)
+  assert.throws(() => E.splitAt([S('a'), S('b')], { seq: [], index: 0 }), /needs a step before it/)
+
+  const rejoiningSplit = [S('a'), P([[S('b')], [S('c')]])]
+  assert.throws(() => E.moveWithin(rejoiningSplit, [], 1, 0), /needs a step before it/)
+  // Existing case in section 3 covers where both rules could fire: "have to stay last" wins.
+
+  const nestedSplit = [S('a'), P([[S('b'), P([[S('c')], [S('d')]])], [S('e')]])]
+  const nestedAt = { seq: [{ block: 1, branch: 0 }], index: 1 }
+  assert.throws(() => E.setRejoin(nestedSplit, nestedAt, false), /A path inside another split has to rejoin/)
+
+  const openBranchFollowed2 = [S('a'), P([[S('b'), P([[S('c')], [S('d')]], false)], [S('e')]]), S('f')]
+  assert.throws(() => E.removeBranch(openBranchFollowed2, { seq: [], index: 1 }, 1), /Nothing can follow paths that end separately/)
+}
+
 console.log('stackEdit: all checks passed')
