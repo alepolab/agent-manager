@@ -1978,11 +1978,16 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // (approval + a file to consume) is the whole condition, exactly as
     // resolveConditions gates on the file rather than on an announcement.
     artifact = step?.runWhen?.artifact
+    // Why intake put the change in this class. "Classified `protocol`, which
+    // stops for a person" asked a reviewer to approve without saying which code
+    // made it protocol - ASECRM-215 was `deployment` at the scan gate and
+    // `protocol` here, and nothing on the gate said why.
+    const why = artifact ? undefined : (await readClassification(run))?.blast_radius_reason
     run.question = {
       stepId: gate, kind: 'approval', askedAt: Date.now(),
       text: artifact
         ? `Decide which entries of ${artifact} to act on before "${label}" runs`
-        : `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}`,
+        : `${run.ticketKey ? `${run.ticketKey}: approve` : 'Approve'} "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}${typeof why === 'string' && why.trim() ? ` Why \`${run.blastRadius}\`: ${why.trim()}` : ''}`,
       ...(gateRole ? { role: gateRole } : {}),
       ...(artifact ? { artifact } : {}),
     }
@@ -2160,7 +2165,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * have pushed it. Idempotent: a run that already has its branch is left alone.
  */
 /** Intake's classification from meta.json, once it has written one. */
-async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string } | null> {
+async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string, blast_radius_reason?: string } | null> {
   try {
     const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
     // `blast_radius` is read here because it is written here: intake merges all
@@ -2173,7 +2178,7 @@ async function readClassification(run: WorkflowRun): Promise<{ work_type?: strin
     // literal, and no test caught it: test-oversight.mjs exercises oversightFor()
     // in isolation and never asks whether anything populates its input.
     return meta && typeof meta === 'object'
-      ? { work_type: meta.work_type, origin: meta.origin, blast_radius: meta.blast_radius }
+      ? { work_type: meta.work_type, origin: meta.origin, blast_radius: meta.blast_radius, blast_radius_reason: meta.blast_radius_reason }
       : null
   } catch { return null }
 }

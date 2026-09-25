@@ -541,13 +541,14 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the problem, the intended outcome, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\`, \`stack_required\` and \`stack_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\`, \`blast_radius_reason\`, \`stack_required\` and \`stack_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — exactly one of: \`bug\`, \`feature\`, \`change_request\`, \`infra\`, \`docs\`, \`security\`.
 - \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system: CSUP and other support projects, a hotfix request, a P1 on a deployment), \`qa\` (found by QA or CI on a release candidate: ci-release, UAT, staging, a regression in a release), \`development\` (everything else, including every feature and change request). Write it as soon as the packet exists: the runner cuts the run branch once it is written — from develop, whatever the origin, unless the product's registry names a hotfix branch for it — and no code step runs before this file says which.
 - \`class\` — required (non-null) when \`work_type\` is \`bug\`, \`null\` otherwise. Exactly one of: \`parsing\`, \`dates\`, \`validation\`, \`state\`, \`protocol\`, \`leak\`, \`capacity\`, \`degradation\`, or \`null\`.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key: the schema requires a string, and the field's job is to always answer "what triggered this?" — a null makes "nothing triggered it" indistinguishable from "the field was forgotten".
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Use \`deployment\` when the failure mode is in how the system is deployed or operated — compose mounts, topology, provisioning — rather than in code behaviour; do not stretch \`schema\` to cover it.
+- \`blast_radius_reason\` — one sentence naming the code path that puts the change in that class, e.g. "SecurityConfig decides which HTTP paths need a token, so this changes the API's auth contract (protocol)". A reviewer approving a \`schema\`, \`protocol\` or \`money\` change reads this sentence to know what to check; "touches security" tells them nothing.
 
 Two more keys decide whether the provisioning step stands a stack up, and the runner holds it to your answer:
 
@@ -2553,13 +2554,14 @@ Write two files into the run artifacts directory named at the top of your input:
 - \`intent.md\` — the objective, the acceptance criteria, the affected systems, the constraints, and the open questions. "Not stated" is the correct answer for anything the ticket does not say.
 - \`context-packet.json\` — the exact context you worked from, as JSON. This is what later steps and the final bundle's provenance are hashed from, so it must be the real packet, not a restatement.
 
-Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\` and \`blast_radius\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
+Then merge \`ticket\`, \`watch\`, \`work_type\`, \`origin\`, \`class\`, \`product\`, \`blast_radius\` and \`blast_radius_reason\` into \`meta.json\` in that same directory. Four of those are closed enums — the bundle schema rejects anything outside these exact strings, so use one verbatim, never a paraphrase:
 
 - \`work_type\` — this is a feature pipeline, so exactly one of: \`feature\`, \`change_request\`. Use \`feature\` for new capability; \`change_request\` for a modification to existing behaviour that is not a bug.
 - \`origin\` — where the work comes from, exactly one of: \`production\` (a customer or support incident on a live system), \`qa\` (found by QA or CI on a release candidate), \`development\` (everything else, including every feature and change request — this is almost always \`development\` for this pipeline). Write it as soon as the packet exists: the runner cuts the run branch from it — a production request is from main, a QA request from ci-release, everything else starts from develop — and no code step runs before this file says which.
 - \`class\` — \`null\` for features and change requests. This field is required only for bugs.
 - \`watch\` — the id of the watch that dispatched this run. When you were invoked directly rather than by a watcher, write the reserved literal \`direct-invocation\`. Never \`null\` and never omit the key.
 - \`blast_radius\` — exactly one of: \`docs\`, \`ui_parsing\`, \`schema\`, \`protocol\`, \`money\`, \`deployment\`. Assess based on what the feature touches, not the feature's importance.
+- \`blast_radius_reason\` — one sentence naming the code path that puts the change in that class, e.g. "SecurityConfig decides which HTTP paths need a token, so this changes the API's auth contract (protocol)". A reviewer approving a \`schema\`, \`protocol\` or \`money\` change reads this sentence to know what to check; "touches security" tells them nothing.
 
 Do **not** write \`plugin_version\`, \`identity\`, \`model\`, \`watch\` or \`cost\`. Those are runner-owned provenance: the server process writes them and re-asserts them over anything an agent puts there. If you find one of these keys already present in \`meta.json\`, leave it exactly as it is.
 

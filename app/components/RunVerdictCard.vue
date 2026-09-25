@@ -26,6 +26,7 @@ const props = defineProps<{ run: WorkflowRun }>()
 interface FixRepo { repo?: string, commits?: string[], pr?: string }
 interface Meta {
   blast_radius?: string
+  blast_radius_reason?: string
   work_type?: string
   class?: string
   fix?: { files_changed?: number, lines_changed?: number, tests_added?: number, repos?: FixRepo[] }
@@ -40,6 +41,8 @@ const meta = ref<Meta | null>(null)
 const metaMissing = ref(false)
 const files = ref<string[]>([])
 const tests = ref<{ label: string, passed: boolean, from: string } | null>(null)
+/** Which files and commits, measured from git - see server/utils/gitFacts.ts computeChangeSummary. */
+const changes = ref<{ commits: { sha: string, subject: string }[], files: { path: string, added: number | null, removed: number | null }[] } | null>(null)
 const loading = ref(true)
 
 /** Reports the bundle writes as prose. Linked, never summarised into a verdict. */
@@ -77,6 +80,11 @@ async function load() {
       const j = parseJunit(xml)
       if (j) { tests.value = { label: junitLabel(j), passed: junitPassed(j), from: name }; break }
     } catch { /* try the next one */ }
+  }
+  try {
+    changes.value = await $fetch(`/api/runs/${id}/changes`)
+  } catch {
+    changes.value = null
   }
   loading.value = false
 }
@@ -170,6 +178,31 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           </div>
         </div>
 
+        <!-- 2b. Why this class, in intake's words. Missing reads as missing. -->
+        <p v-if="run.blastRadius && meta?.blast_radius_reason" class="m-0 t-small">
+          <span class="text-label">Why <span class="font-mono">{{ run.blastRadius }}</span>:</span> {{ meta.blast_radius_reason }}
+        </p>
+        <p v-else-if="run.blastRadius" class="m-0 t-small text-label">
+          Intake recorded no reason for classifying this <span class="font-mono">{{ run.blastRadius }}</span>.
+        </p>
+
+        <!-- 2c. What changed: the commit subjects are the change described in
+             its author's words, and the file list is what to read. -->
+        <div v-if="changes?.commits.length" class="space-y-0.5">
+          <div v-for="c in changes.commits" :key="c.sha" class="flex gap-2 t-small">
+            <span class="font-mono text-label shrink-0">{{ c.sha.slice(0, 9) }}</span>
+            <span style="color: var(--text-primary);">{{ c.subject }}</span>
+          </div>
+        </div>
+        <details v-if="changes?.files.length" class="t-small">
+          <summary class="cursor-pointer text-label">{{ changes.files.length }} changed file(s)</summary>
+          <div v-for="f in changes.files" :key="f.path" class="flex gap-2 font-mono mt-0.5">
+            <span class="tabular-nums shrink-0" style="color: var(--success);">+{{ f.added ?? '?' }}</span>
+            <span class="tabular-nums shrink-0" style="color: var(--error);">−{{ f.removed ?? '?' }}</span>
+            <span class="truncate" :title="f.path">{{ f.path }}</span>
+          </div>
+        </details>
+
         <!-- 3. Did it reproduce, and does it pass now. -->
         <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">
           <span v-if="meta?.oracle?.kind">
@@ -213,7 +246,10 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 
         <div v-if="presentReports.length" class="flex flex-wrap gap-x-3 gap-y-1 t-small">
           <span class="text-label">Reports:</span>
-          <span v-for="r in presentReports" :key="r.file" class="font-mono">{{ r.label }}</span>
+          <a
+            v-for="r in presentReports" :key="r.file" :href="`/api/runs/${run.id}/artifacts/${r.file}`"
+            target="_blank" rel="noopener" class="font-mono underline" style="color: var(--accent);"
+          >{{ r.label }}</a>
         </div>
       </template>
     </div>
