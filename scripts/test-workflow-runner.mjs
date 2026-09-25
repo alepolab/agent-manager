@@ -955,7 +955,9 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
 // run whose process is still alive. It held its group's slot and its
 // workspace until the server was restarted.
 {
-  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running') await runner.stopRun(r.id)
+  // Interrupted too: section 15 leaves one for a boot resume that never comes
+  // here, and an interrupted run that will resume holds its group slot.
+  for (const r of await store.listRuns('demo')) if (r.status === 'paused' || r.status === 'running' || r.status === 'interrupted') await runner.stopRun(r.id)
   const queue = await import('../server/utils/runQueue.ts')
   const before = new Set((await store.listRuns('demo')).map(r => r.id))
 

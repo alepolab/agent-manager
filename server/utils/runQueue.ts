@@ -90,7 +90,22 @@ function serialised<T>(fn: () => Promise<T>): Promise<T> {
  */
 export async function inFlightForGroup(group: string, runs?: WorkflowRun[]): Promise<number> {
   const all = runs ?? await listRuns()
-  return all.filter(r => holdsGroupSlot(r.status) && groupOf(r) === group).length
+  return all.filter(r => (holdsGroupSlot(r.status) || resumable(r)) && groupOf(r) === group).length
+}
+
+/**
+ * An interrupted run the boot resume will bring back holds its slot meanwhile.
+ * Uncounted, the queue saw every run a reload interrupted as a free slot and
+ * started queued runs into them; when the interrupted ones resumed, the group
+ * was over its cap - three Runbook A runs against a cap of 2, with seven more
+ * waiting to come back. One waiting on a person does not count, as a paused
+ * run does not.
+ */
+export function resumable(r: WorkflowRun): boolean {
+  // With the boot resume turned off nothing brings it back, and counting it
+  // would hold the slot until a person noticed.
+  if (process.env.RESUME_ON_BOOT === '0') return false
+  return r.status === 'interrupted' && !r.question && !r.steps.some(s => s.status === 'waiting')
 }
 
 /**

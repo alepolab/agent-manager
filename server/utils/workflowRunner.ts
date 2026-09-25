@@ -44,12 +44,12 @@ import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import { runNotifyStep, type NotifyStepConfig } from './notifySteps.ts'
-import { admit, drainRunQueue, groupOf, inFlightForGroup, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
+import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
 import { capFor } from './workflowGroups.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { childrenSettled, isWaitingOnAPerson } from '../../shared/types/run.ts'
+import { childrenSettled, holdsGroupSlot, isWaitingOnAPerson } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
@@ -2815,12 +2815,16 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
     awaitingSlot.delete(run.id)
     const frozen = run.steps.find(s => s.status === 'running')
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
-    if (!frozen) { out.skipped.push(run.id); continue }
+    // One that died between steps has nothing frozen and nothing to reset: it
+    // is resumed as it is. Left alone it stayed interrupted for good, and now
+    // that an interrupted run holds its group slot, it would hold it forever.
     const group = groupOf(run)
-    if (!inFlight.has(group)) inFlight.set(group, await inFlightForGroup(group, all))
+    // Only the runs actually working: every interrupted one counts toward the
+    // cap for the queue (runQueue.resumable), including this one.
+    if (!inFlight.has(group)) inFlight.set(group, all.filter(r => holdsGroupSlot(r.status) && groupOf(r) === group).length)
     if (inFlight.get(group)! >= await capFor(group)) { out.waiting.push(run.id); awaitingSlot.add(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
-    if (run.interruptions > MAX_INTERRUPTIONS) {
+    if (frozen && run.interruptions > MAX_INTERRUPTIONS) {
       frozen.status = 'pending'
       run.status = 'paused'
       run.question = {
@@ -2840,7 +2844,7 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
       await continueRun(run.id)
       inFlight.set(group, inFlight.get(group)! + 1)
       out.resumed.push(run.id)
-      log.info('resumed a run the previous process left mid-step', { runId: run.id, stepId: frozen.stepId, interruptions: run.interruptions })
+      log.info('resumed a run the previous process left behind', { runId: run.id, stepId: frozen?.stepId ?? '(between steps)', interruptions: run.interruptions })
     } catch (err) {
       out.skipped.push(run.id)
       log.warn('could not resume an interrupted run', { runId: run.id, error: err instanceof Error ? err.message : String(err) })

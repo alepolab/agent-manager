@@ -83,8 +83,15 @@ await groups.replaceGroups([
   // workspace lock (isWorkingStatus) still covers it. But nothing bounds how
   // long a person takes: two fix runs at an approval gate held the default
   // group of two shut, and every nightly scan queued behind them.
-  assert.equal(await queue.inFlightForGroup('sdlc'), 1,
-    'only running occupies a slot; paused, awaiting_review, queued, joining and the terminal statuses do not')
+  //
+  // An interrupted run DOES count, because the boot resume brings it back: left
+  // uncounted, the queue started queued runs into the slots a reload had
+  // interrupted, and the group went over its cap when they resumed.
+  assert.equal(await queue.inFlightForGroup('sdlc'), 2,
+    'running and interrupted occupy a slot; paused, awaiting_review, queued, joining and the terminal statuses do not')
+  process.env.RESUME_ON_BOOT = '0'
+  assert.equal(await queue.inFlightForGroup('sdlc'), 1, 'unless nothing will resume it')
+  delete process.env.RESUME_ON_BOOT
 
   // `joining` does NOT count, and this is the one exclusion that is a
   // correctness requirement rather than an accounting choice. A joining parent
