@@ -75,8 +75,6 @@ const allRuns = computed(() => (run.value ? [run.value, ...runs.value.filter(r =
  *  it runs. Queued is not: launchQueuedRun re-reads the definition, so an edit
  *  made while it waits is the one that runs. */
 const editLocked = computed(() => allRuns.value.some(r => r.status === 'running' || r.status === 'joining'))
-/** Anything not yet over, queued included: the page opens on such a run. */
-const isLive = computed(() => !!run.value && isLiveStatus(run.value.status))
 /** Any run of this workflow not yet over - paused, awaiting review and queued
  *  included. The server refuses a second run then (findActiveRun). */
 const anyLive = computed(() => allRuns.value.some(r => isLiveStatus(r.status)))
@@ -189,10 +187,9 @@ onMounted(async () => {
   // Attach to whatever the server is already running for this workflow, if anything -
   // a run outlives this tab, so a reload must not lose it. Then honour any
   // one-shot intent in the URL, which may point at a finished run instead.
+  // The page always opens in Build mode; a live run is one click away on the
+  // Run tab. Only ?run= / ?clone= and starting a run switch to it.
   await attach()
-  // A live run opens on the run, unless the URL names a tab (?tab=schedule|inputs
-  // opens the trigger drawer, which lives in Build mode).
-  if (isLive.value && !route.query.tab) mode.value = 'run'
   applyQueryIntent()
   // Fire-and-forget: the tab label's count can arrive a moment later, and
   // nothing above it should wait on a schedule read.

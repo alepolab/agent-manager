@@ -177,7 +177,8 @@ callers (`runs/[id].vue`, `NotificationRunDetail`) use the new component.
 
 The page is a header plus the stack plus a right drawer. A **Build | Run #n**
 switch in the header shows the live or selected run of this workflow in run
-mode. The URL carries `?run=<id>`. Build mode renders `WorkflowStackEditor` and
+mode. The page always opens in Build mode, even while a run is live; only
+`?run=<id>`, `?clone=<id>` or starting a run switch it to Run mode. Build mode renders `WorkflowStackEditor` and
 `BuildStack*`, not `RunStack` in a build mode, because a run card and a build
 card do different jobs; Run mode renders `RunStack`.
 
