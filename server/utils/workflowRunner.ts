@@ -907,7 +907,14 @@ That file is the whole of this task. Do not edit, stage or commit anything in th
 /** Every change waiting at an approval gate without a brief gets one, one at a time. At boot. */
 export async function backfillChangeBriefs(): Promise<string[]> {
   const written: string[] = []
-  for (const r of await listRuns()) {
+  const runs = await listRuns()
+  // A marker left by a process that stopped mid-write: no one is writing it now,
+  // and the card would say it was being written for ever.
+  for (const r of runs) {
+    const pending = resolveRunArtifact(r.id, CHANGE_BRIEF_PENDING)
+    if (pending) await rm(pending, { force: true }).catch(() => {})
+  }
+  for (const r of runs) {
     if (r.status !== 'paused') continue
     if (await ensureChangeBrief(r) === 'written') written.push(r.id)
   }

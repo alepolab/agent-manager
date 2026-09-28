@@ -85,10 +85,15 @@ const settle = async (id) => {
   const before = asks.length
   assert.ok(before >= 2, 'asked')
   rmSync(join(dirOf, 'change-brief.json'), { force: true })
+  // As a server stopped mid-write leaves it.
+  const stale = (await runner.startOrQueue({ workflow: { ...wf, steps: [wf.steps[0]] }, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev3' })).run
+  await runner.waitForSettled(stale.id, 8000)
+  writeFileSync(join(runArtifactsDir(stale.id), 'change-brief.pending'), 'then')
   writeGood = true
   const written = await runner.backfillChangeBriefs()
   assert.deepEqual(written, [run.id], 'the waiting gate without a usable brief got one at boot')
   assert.ok(!existsSync(join(dirOf, 'change-brief.pending')))
+  assert.ok(!existsSync(join(runArtifactsDir(stale.id), 'change-brief.pending')), 'a stale marker is cleared at boot')
 }
 
 console.log('ok - a change waiting at a gate gets a brief of its advantages and disadvantages from the step that made it')
