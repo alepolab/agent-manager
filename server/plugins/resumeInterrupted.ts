@@ -15,7 +15,7 @@
  * ponytail: a fixed delay, not a handshake — make it a signal if seeding ever
  * grows slow enough to matter.
  */
-import { resumeInterruptedRuns, resumeQuotaPaused } from '../utils/workflowRunner.ts'
+import { backfillChangeBriefs, resumeInterruptedRuns, resumeQuotaPaused } from '../utils/workflowRunner.ts'
 
 export default defineNitroPlugin(() => {
   if (process.env.RESUME_ON_BOOT === '0') return
@@ -31,5 +31,10 @@ export default defineNitroPlugin(() => {
       // on a timer - with the queue held - if it has not.
       .then(() => resumeQuotaPaused())
       .catch(err => console.error('[resume] could not resume quota-paused runs:', err?.message ?? err))
+      // Changes already waiting at a gate without a brief of what approving
+      // them gains and risks: written now, one run at a time.
+      .then(() => backfillChangeBriefs())
+      .then(ids => { if (ids.length) console.log(`[resume] wrote a change brief for ${ids.length} run(s) waiting at a gate`) })
+      .catch(err => console.error('[resume] could not write change briefs:', err?.message ?? err))
   }, 5000)
 })

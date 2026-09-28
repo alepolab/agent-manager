@@ -31,11 +31,11 @@ import { claimableStack, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardown
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
-import { DECISION_FILE, briefFeedback, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -847,6 +847,71 @@ export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 
   const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
   // A minute's margin: a request exactly at the reset time is often still refused.
   return s ? now + Number(s[1]) * 1000 + 60_000 : now + fallbackMs
+}
+
+/** The steps that make a run's change, and so know what approving it gains and risks. */
+const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work)$/
+
+/**
+ * Asks the step that made the change for its reviewer's brief, when a gate
+ * holds that change and the brief is missing: ASECRM-288's approval showed
+ * commits and files, and whoever approved it still had to read a 200-line
+ * plan to learn what approving gained or risked. The implementers write the
+ * brief themselves now; this covers a run whose change was made before they
+ * did, or a step that skipped it.
+ *
+ * After the pause, never before it: the run holds no slot while it waits, and
+ * the person can decide without the brief if they choose to. The card shows
+ * it is being written from CHANGE_BRIEF_PENDING. Continues the implementer's
+ * session when its transcript is still there, which is the cheap and the
+ * well-informed way; otherwise the same agent starts cold from the artifacts.
+ */
+const briefsWriting = new Set<string>()
+export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | 'written' | 'none' | 'failed'> {
+  const maker = [...run.steps].reverse().find(s => CHANGE_MAKERS.test(s.agentSlug) && s.status === 'completed')
+  if (!maker || run.question?.kind !== 'approval' || run.question.reason || run.question.artifact) return 'none'
+  const file = resolveRunArtifact(run.id, CHANGE_BRIEF_FILE)
+  const pending = resolveRunArtifact(run.id, CHANGE_BRIEF_PENDING)
+  if (!file || !pending) return 'none'
+  if ('brief' in parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))) return 'present'
+  if (briefsWriting.has(run.id)) return 'none'
+  briefsWriting.add(run.id)
+  await writeFile(pending, new Date().toISOString()).catch(() => {})
+  try {
+    const env = await envResolver(run.startedBy).catch(() => ({}))
+    let feedback = ''
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const resume = resumableSession(maker)
+      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.
+
+That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
+      await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
+      const parsed = parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))
+      if ('brief' in parsed) {
+        log.info('change brief written for a gate', { runId: run.id, by: maker.agentSlug, resumed: !!resume })
+        return 'written'
+      }
+      feedback = `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+      log.warn('change brief unusable', { runId: run.id, attempt, error: parsed.error })
+    }
+    return 'failed'
+  } catch (err) {
+    log.warn('could not write a change brief', { runId: run.id, error: err instanceof Error ? err.message : String(err) })
+    return 'failed'
+  } finally {
+    briefsWriting.delete(run.id)
+    await rm(pending, { force: true }).catch(() => {})
+  }
+}
+
+/** Every change waiting at an approval gate without a brief gets one, one at a time. At boot. */
+export async function backfillChangeBriefs(): Promise<string[]> {
+  const written: string[] = []
+  for (const r of await listRuns()) {
+    if (r.status !== 'paused') continue
+    if (await ensureChangeBrief(r) === 'written') written.push(r.id)
+  }
+  return written
 }
 
 /**
@@ -2196,6 +2261,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     l.running = false
     log.info('run waits for a person', { runId: run.id, stepId: gate, artifact })
     await publish(run)
+    if (!artifact) void ensureChangeBrief(run)
     return run
   }
 

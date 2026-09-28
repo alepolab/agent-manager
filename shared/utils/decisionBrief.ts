@@ -16,6 +16,11 @@
 /** The file a step writes into its run artifacts directory before `PIPELINE-ASK:`. */
 export const DECISION_FILE = 'decision.json'
 
+/** The same shape, written by the step that made a change, for whoever approves it at a gate. */
+export const CHANGE_BRIEF_FILE = 'change-brief.json'
+/** Present while the runner is having that brief written; the approval card says so. */
+export const CHANGE_BRIEF_PENDING = 'change-brief.pending'
+
 export interface DecisionOption {
   /** "a", "b", … - what the person answers with. */
   key: string

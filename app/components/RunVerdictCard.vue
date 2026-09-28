@@ -2,7 +2,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { oversightReason, needsJustification } from '~~/shared/utils/oversight'
 import { parseJunit, junitLabel, junitPassed } from '~/utils/junit'
-import { parseDecisionBrief, type DecisionBrief } from '~~/shared/utils/decisionBrief'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 
 /**
  * What a reviewer is actually approving.
@@ -45,6 +45,14 @@ const tests = ref<{ label: string, passed: boolean, from: string } | null>(null)
 /** Which files and commits, measured from git - see server/utils/gitFacts.ts computeChangeSummary. */
 /** The implementer's brief for whoever approves the change: what it gains and what it risks. */
 const brief = ref<DecisionBrief | null>(null)
+/** The runner is having the brief written (workflowRunner ensureChangeBrief); checked again until it lands. */
+const briefPending = ref(false)
+let briefPoll: ReturnType<typeof setTimeout> | null = null
+watch(briefPending, (on) => {
+  if (briefPoll) clearTimeout(briefPoll)
+  briefPoll = on ? setTimeout(() => load(true), 15_000) : null
+})
+onUnmounted(() => { if (briefPoll) clearTimeout(briefPoll) })
 const changes = ref<{ commits: { sha: string, subject: string }[], files: { path: string, added: number | null, removed: number | null }[] } | null>(null)
 const loading = ref(true)
 
@@ -58,11 +66,14 @@ const REPORTS: { file: string, label: string }[] = [
 ]
 const presentReports = computed(() => REPORTS.filter(r => files.value.includes(r.file)))
 
-async function load() {
-  loading.value = true
-  metaMissing.value = false
-  meta.value = null
-  tests.value = null
+/** `quiet`: re-read for a brief being written, without blanking the card meanwhile. */
+async function load(quiet = false) {
+  if (!quiet) {
+    loading.value = true
+    metaMissing.value = false
+    meta.value = null
+    tests.value = null
+  }
   const id = props.run.id
   try {
     meta.value = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/meta.json`, { responseType: 'text' }))
@@ -74,10 +85,11 @@ async function load() {
   } catch {
     files.value = []
   }
-  brief.value = null
-  if (files.value.includes('change-brief.json')) {
+  if (!quiet) brief.value = null
+  briefPending.value = files.value.includes(CHANGE_BRIEF_PENDING)
+  if (files.value.includes(CHANGE_BRIEF_FILE)) {
     try {
-      const parsed = parseDecisionBrief(await $fetch<string>(`/api/runs/${id}/artifacts/change-brief.json`, { responseType: 'text' }))
+      const parsed = parseDecisionBrief(await $fetch<string>(`/api/runs/${id}/artifacts/${CHANGE_BRIEF_FILE}`, { responseType: 'text' }))
       if ('brief' in parsed) brief.value = parsed.brief
     } catch { /* the measured facts below still stand */ }
   }
@@ -98,7 +110,7 @@ async function load() {
   }
   loading.value = false
 }
-watch(() => [props.run.id, props.run.question?.stepId], load, { immediate: true })
+watch(() => [props.run.id, props.run.question?.stepId], () => load(), { immediate: true })
 
 const gatedStep = computed(() => props.run.steps.find(s => s.stepId === props.run.question?.stepId))
 
@@ -215,6 +227,10 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 
         <!-- 2d. What approving gains and risks, in the implementer's words. -->
         <RunDecisionBrief v-if="brief" :brief="brief" :can-answer="false" approval />
+        <p v-else-if="briefPending" class="m-0 t-small text-label flex items-center gap-1.5">
+          <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
+          The step that made this change is writing its advantages and disadvantages. It shows here when it is done.
+        </p>
         <p v-else class="m-0 t-small text-label">The step that made this change wrote no brief of its advantages and disadvantages.</p>
 
         <!-- 3. Did it reproduce, and does it pass now. -->
