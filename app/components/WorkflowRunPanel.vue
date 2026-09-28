@@ -30,7 +30,7 @@ const mayDrive = computed(() => can('runEngine'))
 const gateOwner = computed(() => props.run?.question?.role)
 const PARKED_LABEL = { continue: 'Your decision is', respond: 'Your answer is', restart: 'The restart is' } as const
 /** A pause the runner raised about itself - budget spent, model unreachable - rather than a gate on the work. */
-const runnerPause = computed(() => props.run?.question?.reason === 'budget' || props.run?.question?.reason === 'auth')
+const runnerPause = computed(() => ['budget', 'auth', 'quota'].includes(props.run?.question?.reason ?? ''))
 /**
  * The asking step's own report, behind its question. Shown open when the step
  * wrote no decision brief - the one `PIPELINE-ASK:` line alone named "criteria
@@ -358,7 +358,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
            the same size, inside a box built exactly like the two informational
            boxes above it — which is how the console's whole reason to exist came
            to look like a footnote. -->
-      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'auth' ? 'Could not reach the model' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
+      <div class="t-label" style="color: var(--text-secondary);">{{ run.question.reason === 'budget' ? 'Budget reached' : run.question.reason === 'auth' ? 'Could not reach the model' : run.question.reason === 'quota' ? 'Waiting for the quota to reset' : run.question.reason === 'rework' ? 'Send-backs spent' : run.question.kind === 'approval' ? 'Waiting for your approval' : `${run.steps.find(s => s.stepId === run?.question?.stepId)?.label ?? 'A step'} is asking you` }}</div>
       <p class="t-head whitespace-pre-wrap" style="color: var(--text-primary);">{{ run.question.text }}</p>
       <p v-if="run.blastRadius" class="t-small mt-1 text-label">
         Blast radius <span class="font-mono">{{ run.blastRadius }}</span>{{ mustJustify ? ' — owner-gated: a written reason is required to approve.' : '' }}
@@ -601,7 +601,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
       <UButton
         v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'"
         size="xs" icon="i-lucide-check"
-        :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : run.question.reason === 'auth' ? 'Retry the step' : 'Approve and run'"
+        :label="run.question.reason === 'budget' ? 'Continue with a fresh allowance' : run.question.reason === 'auth' ? 'Retry the step' : run.question.reason === 'quota' ? 'Retry now' : 'Approve and run'"
         :loading="sending === 'continue'"
         :disabled="!!sending || (!runnerPause && !canApprove)"
         :title="!runnerPause && !canApprove ? 'Say why this is right before approving' : ''"

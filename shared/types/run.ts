@@ -395,7 +395,9 @@ export interface WorkflowRun {
     /** An approval raised by the runner itself: the budget is spent and continuing
      *  grants another allowance, or a step has spent its send-backs and whether to
      *  grant one more is the developer's call. */
-    reason?: 'budget' | 'rework' | 'auth'
+    reason?: 'budget' | 'rework' | 'auth' | 'quota'
+    /** For a `quota` pause: when the provider said the quota resets. The run resumes on its own then. */
+    resumeAt?: number
     /** For a step's question: what a person needs to answer it (shared/utils/decisionBrief.ts). */
     brief?: DecisionBrief
     /**
@@ -505,6 +507,14 @@ export interface WorkflowRun {
    * gives its slot back, the queue fills it, and each answer took the group one
    * over its cap.
    */
+  /**
+   * The compose project this run's stack steps use, when it is not the run's
+   * own `sdlc-<id>`: an up stack of the same product it claimed from another
+   * run (server/utils/runTeardown.ts). Absent means its own.
+   */
+  stackProject?: string
+  /** The run whose stack `stackProject` names. */
+  stackClaimedFrom?: string
   parked?: {
     action: 'continue' | 'respond' | 'restart'
     /** The status to return to before the decision is carried out. */

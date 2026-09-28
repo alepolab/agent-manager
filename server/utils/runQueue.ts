@@ -192,7 +192,7 @@ export async function admit<T extends WorkflowRun>(opts: {
     const free = cap - await inFlightForGroup(opts.group, runs)
     const ahead = (await waiting(opts.group, runs)).length
 
-    if (free > 0 && ahead === 0) {
+    if (free > 0 && ahead === 0 && !quotaBlocked()) {
       const started = await opts.start()
       const staged = typeof (started as { rest?: unknown }).rest === 'function'
         ? started as { run: T, rest: () => Promise<unknown> }
@@ -222,6 +222,19 @@ export async function admit<T extends WorkflowRun>(opts: {
  */
 let mayHaveWaiting = true
 export function noteQueued() { mayHaveWaiting = true }
+
+/**
+ * Until when nothing new starts because the model's quota is spent. Every run
+ * started into a spent quota fails - or now pauses - within seconds, and its
+ * slot goes to the next queued run, which does the same: on 2026-09-24 that
+ * took five scans in forty seconds. Set from the reset time the provider
+ * states; see workflowRunner.ts's quota pause.
+ */
+let quotaBlockedUntil = 0
+export function blockForQuota(until: number) { quotaBlockedUntil = Math.max(quotaBlockedUntil, until) }
+export function quotaBlocked(now = Date.now()): number | null { return quotaBlockedUntil > now ? quotaBlockedUntil : null }
+/** The reset has come: lift the hold, if `now` is past it. */
+export function releaseQuota(now = Date.now()) { if (quotaBlockedUntil <= now) quotaBlockedUntil = 0 }
 export function mightHaveWaiting() { return mayHaveWaiting }
 
 /**
@@ -236,6 +249,7 @@ export function mightHaveWaiting() { return mayHaveWaiting }
  */
 export function drainRunQueue(launch: Launcher): Promise<number> {
   return serialised(async () => {
+    if (quotaBlocked()) return 0
     const runs = await listRuns()
     const queued = runs.filter(r => r.status === 'queued')
     if (!queued.length) {

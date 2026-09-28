@@ -15,7 +15,7 @@
  * ponytail: a fixed delay, not a handshake — make it a signal if seeding ever
  * grows slow enough to matter.
  */
-import { resumeInterruptedRuns } from '../utils/workflowRunner.ts'
+import { resumeInterruptedRuns, resumeQuotaPaused } from '../utils/workflowRunner.ts'
 
 export default defineNitroPlugin(() => {
   if (process.env.RESUME_ON_BOOT === '0') return
@@ -27,5 +27,9 @@ export default defineNitroPlugin(() => {
         }
       })
       .catch(err => console.error('[resume] could not resume interrupted runs:', err?.message ?? err))
+      // Runs waiting out a spent quota: back now if its reset has passed, and
+      // on a timer - with the queue held - if it has not.
+      .then(() => resumeQuotaPaused())
+      .catch(err => console.error('[resume] could not resume quota-paused runs:', err?.message ?? err))
   }, 5000)
 })

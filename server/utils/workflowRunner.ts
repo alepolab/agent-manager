@@ -21,7 +21,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, cloneRepo, ensureRunBranch, findCheckout, remoteBranchExists } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
-import { teardownRun } from './runTeardown.ts'
+import { claimableStack, teardownRun } from './runTeardown.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -44,7 +44,7 @@ import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import { runNotifyStep, type NotifyStepConfig } from './notifySteps.ts'
-import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
+import { admit, blockForQuota, releaseQuota, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
 import { capFor } from './workflowGroups.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
@@ -179,6 +179,8 @@ interface Live {
   widen?: { from: string, target: string, reason: string, added: string[] }
   /** A step could not reach the model with this process's credentials; the run pauses rather than fails. */
   authFailure?: { stepId: string, message: string }
+  /** A step hit the model's quota; the run pauses until `until`. */
+  quotaFailure?: { stepId: string, message: string, until: number }
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
   /** Steps whose `runWhen` condition is waived for one evaluation, because an
@@ -834,6 +836,73 @@ export function isAuthFailure(message: string): boolean {
   return AUTH_FAILURE.test(message)
 }
 
+/**
+ * The model's quota or rate limit is spent, and when it resets. The provider
+ * says so in the error: "Request rejected (429) · … Quota resets in 3551s".
+ * Retrying before then fails the same way, so the reset time is the retry
+ * time. With no time stated, `fallbackMs` stands in and the run says so.
+ */
+export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
+  if (!/\b429\b|rate[ -]?limit|quota|usage limit/i.test(message) || isAuthFailure(message)) return null
+  const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
+  // A minute's margin: a request exactly at the reset time is often still refused.
+  return s ? now + Number(s[1]) * 1000 + 60_000 : now + fallbackMs
+}
+
+/**
+ * Takes over an up stack of this run's product when one is free to take (see
+ * runTeardown.claimableStack), before the provisioner would stand up another.
+ * One claim at a time, and saved before the next is decided: two runs that
+ * both saw the same stack free would otherwise both work in it.
+ */
+let claiming: Promise<unknown> = Promise.resolve()
+function claimStack(run: WorkflowRun): Promise<void> {
+  const next = claiming.then(async () => {
+    const found = await claimableStack(run, await listRuns()).catch(() => null)
+    if (!found) return
+    run.stackProject = found.project
+    run.stackClaimedFrom = found.from
+    await saveRun(run)
+    log.info('run claimed an existing stack', { runId: run.id, project: found.project, from: found.from })
+  })
+  claiming = next.catch(() => {})
+  return next
+}
+
+/** Runs paused on the quota come back at its reset time, on their own. One timer per reset time. */
+const quotaTimers = new Map<number, ReturnType<typeof setTimeout>>()
+export function scheduleQuotaResume(at: number): void {
+  blockForQuota(at)
+  if (quotaTimers.has(at)) return
+  const t = setTimeout(() => {
+    quotaTimers.delete(at)
+    void resumeQuotaPaused().catch(err => log.warn('resuming runs after the quota reset failed', { error: err instanceof Error ? err.message : String(err) }))
+  }, Math.max(1000, at - Date.now()))
+  t.unref?.()
+  quotaTimers.set(at, t)
+}
+
+/**
+ * Continues every run paused on the quota whose reset time has passed, oldest
+ * first, then lets the queue fill what is left. Each continue goes through the
+ * group cap like any decision, so a burst of them waits its turn. Also called
+ * at boot, which is what keeps a restart from stranding them.
+ */
+export async function resumeQuotaPaused(now = Date.now()): Promise<string[]> {
+  releaseQuota(now)
+  const resumed: string[] = []
+  const paused = (await listRuns()).filter(r => r.status === 'paused' && r.question?.reason === 'quota')
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+  for (const r of paused) {
+    const at = r.question?.resumeAt ?? 0
+    if (at > now) { scheduleQuotaResume(at); continue }
+    await continueRun(r.id).catch(err => log.warn('could not resume a run after the quota reset', { runId: r.id, error: err instanceof Error ? err.message : String(err) }))
+    resumed.push(r.id)
+  }
+  if (mightHaveWaiting()) await drainRunQueue(launchQueuedRun)
+  return resumed
+}
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
@@ -869,12 +938,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
+  if (step.agentSlug === 'sdlc-stack-provisioner' && !run.stackProject) await claimStack(run)
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
   const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined, run.parameters) + body
+  } : undefined, run.parameters, run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -1306,6 +1376,19 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       l.authFailure ??= { stepId: id, message }
       logLine(l, run, rec, `could not reach the model: ${message}`)
       log.error('step could not reach the model; the run will pause', { runId: run.id, stepId: id, error: message })
+      return true
+    }
+    // The quota, not the work: the same, and the run waits for the reset time.
+    const until = l.stopped ? null : quotaResetAt(message)
+    if (until) {
+      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.status[id] = 'pending'
+      armNode(l.state, id)
+      Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+      if (!l.quotaFailure || until > l.quotaFailure.until) l.quotaFailure = { stepId: l.quotaFailure?.stepId ?? id, message, until }
+      scheduleQuotaResume(until)
+      logLine(l, run, rec, `the model's quota is spent until ${new Date(until).toLocaleTimeString()}: ${message}`)
+      log.warn('step hit the model quota; the run will wait for the reset', { runId: run.id, stepId: id, until: new Date(until).toISOString() })
       return true
     }
     // Whatever the agent left running outlives the agent: `docker run` is a
@@ -2139,6 +2222,23 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return failRunAfterWave(l, run, runnable)
   }
 
+  if (l.quotaFailure) {
+    const { stepId, message, until } = l.quotaFailure
+    l.quotaFailure = undefined
+    const stated = /resets? in \d+\s*s\b|retry[- ]after/i.test(message)
+    run.status = 'paused'
+    run.question = {
+      stepId, kind: 'approval', reason: 'quota', resumeAt: until, askedAt: Date.now(),
+      text: `"${stepOf(l, stepId)?.label ?? stepId}" hit the model's quota: ${message}. The run resumes on its own at ${new Date(until).toLocaleString()}${stated ? ', when the provider said it resets' : ' - the provider gave no reset time, so it tries again in 15 minutes'}. Nothing new starts before then. Nothing was lost.`,
+    }
+    run.currentStepIds = []
+    run.nextStepIds = [stepId]
+    l.running = false
+    log.warn('run paused until the quota resets', { runId: run.id, stepId, until: new Date(until).toISOString() })
+    await publish(run)
+    return run
+  }
+
   if (l.authFailure) {
     const { stepId, message } = l.authFailure
     l.authFailure = undefined
@@ -2928,7 +3028,7 @@ export async function continueRun(
     if (stored && (stored.status === 'paused' || stored.status === 'awaiting_review') && !live.get(runId)?.running) {
       // Refused before it is recorded, exactly as the unparked path refuses it.
       const q = stored.question
-      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && needsJustification(stored.blastRadius) && !note?.trim()) {
+      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && q.reason !== 'quota' && needsJustification(stored.blastRadius) && !note?.trim()) {
         throw new ApprovalNeedsReason(`This run is classified \`${stored.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
       }
       const parked = await parkUnlessSlot(stored, { action: 'continue', note, grantApproval })
@@ -2998,13 +3098,13 @@ export async function continueRun(
     // it cannot be satisfied without having read something. Reject already
     // demanded a reason; approve did not, which had it backwards - saying yes to
     // a money change is the answer that needs the justification.
-    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && needsJustification(run.blastRadius) && !note?.trim()) {
+    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && run.question.reason !== 'quota' && needsJustification(run.blastRadius) && !note?.trim()) {
       l.running = false
       throw new ApprovalNeedsReason(
         `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
     }
     if (run.question.reason === 'budget') extendBudget(run)
-    else if (run.question.reason === 'auth') { /* the step is already pending and armed */ }
+    else if (run.question.reason === 'auth' || run.question.reason === 'quota') { /* the step is already pending and armed */ }
     // Withholding the approval is what lets a review that approved nothing take
     // effect. l.approved waives runWhen (see resolveConditions), so granting it
     // here would run the step over an artifact the operator just emptied - the
