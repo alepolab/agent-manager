@@ -10,7 +10,7 @@
  *   node scripts/test-decision-waits-for-slot.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -129,6 +129,20 @@ const occupy = async (who) => {
   assert.equal(restarted.parked.action, 'restart')
   release()
   assert.equal((await finishesWithoutReverting(f.id, 'failed')).status, 'completed')
+}
+
+// ── A question paused by an earlier server ──────────────────────────────────
+{
+  let q = (await runner.startOrQueue({ workflow: asking, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev8' })).run
+  q = await runner.waitForSettled(q.id, TIMEOUT)
+  // As a restart leaves it: the record names a process that is gone.
+  const file = join(process.env.CLAUDE_DIR, 'workflow-runs', `${q.id}.json`)
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf-8')), pid: 999999, bootId: 'an-earlier-server' }))
+  held = new Promise(r => { release = r })
+  const answered = await runner.respondToRun(q.id, 'option a')
+  assert.equal(answered.status, 'running')
+  assert.equal((await store.getRun(q.id)).status, 'running', 'working here, so not read as interrupted')
+  await runner.waitForSettled(q.id, TIMEOUT)
 }
 
 // ── With a slot free, a decision goes ahead at once ─────────────────────────

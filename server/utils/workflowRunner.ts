@@ -3183,6 +3183,12 @@ export async function respondToRun(runId: string, reply: string, opts: { admitte
   // this returns would resolve immediately on that stale status instead of waiting
   // for the reply to actually finish.
   run.status = 'running'
+  // This process owns it now. A record paused by an earlier server keeps that
+  // server's pid and boot id, and a running run under them reads as
+  // interrupted to everyone else - the watcher, the queue, the inbox - while
+  // it is working here.
+  run.pid = process.pid
+  run.bootId = BOOT_ID
   await publish(run)
   void (async () => {
     try {
