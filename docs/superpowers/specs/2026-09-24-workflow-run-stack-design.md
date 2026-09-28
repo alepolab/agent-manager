@@ -265,45 +265,67 @@ The Test tab is Plan 3.
 `stepOverride` is the drawer's current, possibly unsaved, step config. The
 endpoint calls `startTestRun`, a new function in `workflowRunner.ts`, which:
 
-1. **Copies the source run.** It creates a new run record with a new id,
-   `origin: 'test'` and `parentRunId` set to the source. Parameters, prompt and
-   product are copied.
+1. **Copies the source run.** It creates a new run record with a new id and a
+   `testOf: { sourceRunId, stepId, stepOverride?, startPoint, codeNote? }`
+   marker, not `origin: 'test'` and `parentRunId` set to the source. `origin`
+   is copied from the source run instead: it already records where a defect
+   was found and routes the base branch. `parentRunId` is loop-step lineage,
+   unrelated to a test. Parameters, prompt and product are copied.
 2. **Copies the earlier work.** Steps before `stepId` are copied in as
    completed, with their outputs. Their artifacts are copied into the test
-   run's artifacts directory.
+   run's artifacts directory. Steps that are neither before the tested step
+   nor the tested step itself are skipped as "Not part of this test". The
+   tested step's own `produces` files, copied in with the rest of the source
+   run's artifacts, are then deleted, so the output check proves this test
+   wrote them rather than finding the source run's copies already there.
 3. **Cuts its own branch.** It creates branch and worktree
    `test/<sourceRunId>-<stepId>-<n>` from the tested step's
    `RunStep.headAtStart`, if the source run recorded one. Otherwise it cuts from
    the source run's branch head and puts a warning on the result: "Code is the
-   state at the end of run #n, not when this step ran".
+   state at the end of run #n, not when this step ran". When the source run
+   touched more than one repository, this applies to the root repository only;
+   every nested repository always starts from the source run's branch head.
 4. **Runs the one step.** It runs `stepId` with `stepOverride` merged over the
    saved step, and `stopAfter: stepId`: the runner settles the run as completed
-   (or failed) after that step and arms nothing downstream.
+   (or failed) after that step and arms nothing downstream. The tested step
+   always runs, even if its own `runWhen` condition would otherwise skip it.
 5. **Cleans up.** It removes the worktree and deletes the branch when the run
-   settles. The artifacts stay with the test run.
+   settles. Only a branch with the `test/` prefix is removed this way. The
+   artifacts stay with the test run.
 
 **No side effects**
 
-- In a run with `origin: 'test'`, Jira, notify and loop steps are dry runs.
-  They record what they would have done (transition, comment, message, the
-  child-run list) as the step's output and artifact. They call no external
-  service and start no child run.
+- In a test run (one with `testOf` set), Jira, notify and loop steps are dry
+  runs. They record what they would have done (transition, comment, message,
+  the child-run list) as the step's output and artifact. They call no
+  external service and start no child run.
 - `stopAfter` guarantees that no PR, push or Jira update downstream runs.
+- It posts no finished-run Jira comment and sends no channel notification:
+  a test run has no ticket of its own to comment on and tells no one when it
+  settles.
+- A send-back (rework) or widen raised by the tested step is recorded in its
+  output and never restarts anything: earlier steps never re-run.
 
 **Kept apart from real runs:**
 
-- Hidden from `/runs` by default, with a "Tests" filter chip.
+- `GET /api/runs` leaves test runs out unless `?tests=1` is passed.
 - Excluded from watch caps, `dailyDispatchCap` and concurrency group slots.
 - Never produce a notification item. Monitors still run, but a test never pauses
   for a gate: an approval flag on the tested step is ignored.
 - Reported as a separate "tests" line in `costReport.ts`.
 - Stop at the workflow's normal `budget.maxTokens`.
+- Never counts against the one-run-per-workspace check, in either direction: a
+  test run neither blocks a real run in the same workspace nor is blocked by
+  one.
+- Cannot be cloned: a clone is a real run, and would carry a test's config
+  into real side effects. Restarting a test run keeps it a test run.
 
 **New run fields**
 
 - `RunStep.headAtStart?: string` is recorded when a step starts, only in runs
   that have a worktree.
-- `WorkflowRun.origin` gains the value `'test'`.
+- `WorkflowRun.testOf?: TestOf` is the marker described above. `WorkflowRun.origin`
+  is unchanged by a test run and never gains a `'test'` value.
 - `WorkflowRun.stopAfter?: string`.
 
 ### 5. `/runs` and `/runs/:id`
