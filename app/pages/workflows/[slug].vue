@@ -31,7 +31,7 @@ const { can } = useUser()
  */
 const readOnly = computed(() => !can('configure'))
 const workflowRun = useWorkflowRun(slug)
-const { run, runs, logs, attach, refresh: refreshRun, start } = workflowRun
+const { run, runs, logs, attach, show, refresh: refreshRun, start } = workflowRun
 const { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond } = useRunActionToasts(workflowRun)
 // The PAGE fetches, not the drawer: the trigger card's summary carries the count,
 // so it is needed before the drawer mounts.
@@ -44,8 +44,7 @@ const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, 
 function applyQueryIntent() {
   const q = route.query
   if (typeof q.run === 'string') {
-    const found = runs.value.find(r => r.id === q.run)
-    if (found) run.value = found
+    attachRun(q.run)
     mode.value = 'run'
   }
   if (typeof q.clone === 'string') {
@@ -66,30 +65,27 @@ function cloneRun() {
   showRunModal.value = true
 }
 
-// Per-step status is read off the server-owned run. These say what state it is in,
-// which decides whether a new run may start, whether the stack is editable, and
-// whether the page opens on the run.
-const isRunning = computed(() => run.value?.status === 'running')
-/** Running, or joining its children: both go through rehydrate while live, so
- *  a restart rebuilds from the file and a save now would change what it runs. */
-const editLocked = computed(() => run.value?.status === 'running' || run.value?.status === 'joining')
+// Per-run status is read off the server-owned runs. The shown run may be an
+// older one picked in Run mode while another is live, so what may start and
+// what may be edited is asked of EVERY run of this workflow, not the shown one.
+/** This workflow's runs, the shown one as its stream last had it (fresher than the list). */
+const allRuns = computed(() => (run.value ? [run.value, ...runs.value.filter(r => r.id !== run.value!.id)] : runs.value))
+/** A run running, or joining its children: both go through rehydrate while
+ *  live, so a restart rebuilds from the file and a save now would change what
+ *  it runs. Queued is not: launchQueuedRun re-reads the definition, so an edit
+ *  made while it waits is the one that runs. */
+const editLocked = computed(() => allRuns.value.some(r => r.status === 'running' || r.status === 'joining'))
 /** Anything not yet over, queued included: the page opens on such a run. */
 const isLive = computed(() => !!run.value && isLiveStatus(run.value.status))
-const isPaused = computed(() => run.value?.status === 'paused')
-/** Stopped on a person who has entries to decide about. Like paused for every
- *  purpose on this page: no second run may start, and the run controls stay
- *  up. */
-const isReviewing = computed(() => run.value?.status === 'awaiting_review')
-/** Admitted but waiting for a slot in its concurrency group. Distinct from
- *  running: the stack is still editable (launchQueuedRun re-reads the
- *  definition, so an edit made while it waits is the one that runs), but
- *  nothing may start a second run of this workflow. */
-const isQueued = computed(() => run.value?.status === 'queued')
+/** Any run of this workflow not yet over - paused, awaiting review and queued
+ *  included. The server refuses a second run then (findActiveRun). */
+const anyLive = computed(() => allRuns.value.some(r => isLiveStatus(r.status)))
 
-/** Show a run already in `runs` (the newest, when Run mode opens with none) - no stream needed. */
+/** Show a run from `runs` (the newest, when Run mode opens with none). Picking
+ *  one other than the live run stops following the live stream, so the pick
+ *  stays shown; picking the live run follows it again. */
 function attachRun(id: string) {
-  const found = runs.value.find(r => r.id === id)
-  if (found) run.value = found
+  show(id)
 }
 
 /** Run mode shows the current run; with none open yet, the newest one. */
@@ -357,7 +353,7 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false, pa
   }
 }
 
-const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value && !isReviewing.value && !isQueued.value)
+const canRun = computed(() => workflowSteps.value.length > 0 && !anyLive.value)
 
 const parallelHint = computed(() => graph.value.entries.length > 1
   || workflowSteps.value.some(s => (graph.value.succ[s.id] ?? []).length > 1))
