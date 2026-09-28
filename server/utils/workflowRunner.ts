@@ -30,7 +30,7 @@ import { runPreflight as realPreflight, preflightFailure, type PreflightReport, 
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
@@ -46,7 +46,7 @@ import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type Launc
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { childrenSettled, isTestRun } from '../../shared/types/run.ts'
+import { childrenSettled, isLiveStatus, isTestRun } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { recordCheck, recordSendBack } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
@@ -1334,6 +1334,10 @@ async function resolveConditions(l: Live, run: WorkflowRun): Promise<{ failed: b
     // The FULL ready set, not the MAX_CONCURRENCY slice: a step that is about to
     // be skipped must not occupy one of the three slots a real step could use.
     for (const id of readyNodes(l.graph, l.state)) {
+      // A test run runs only its one step. What its settling arms is settled by
+      // the stop-after branch in runWave, not evaluated here, where an
+      // unreadable artifact would fail a test whose step succeeded.
+      if (run.stopAfter && id !== run.stopAfter) continue
       const step = stepOf(l, id)
       const artifact = step?.runWhen?.artifact
       if (!artifact) continue
@@ -1872,6 +1876,22 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // perfectly runnable node was sitting just past the cut - the stall the
   // split below exists to avoid, reappearing at three concurrent gates.
   const ready = readyNodes(l.graph, l.state)
+  // A test run settles with its one step: nothing after it is armed or run,
+  // and the steps that were never going to run are not a stuck run.
+  if (run.stopAfter) {
+    const rec = run.steps.find(s => s.stepId === run.stopAfter)
+    if (rec && ['completed', 'failed', 'skipped'].includes(rec.status)) {
+      for (const s of run.steps) if (s.status === 'pending') { s.status = 'skipped'; s.skipReason ??= 'Not part of this test' }
+      run.status = rec.status === 'failed' ? 'failed' : 'completed'
+      if (rec.status === 'failed') run.error ??= rec.error ?? `"${rec.label}" failed.`
+      run.endedAt = Date.now()
+      run.currentStepIds = []
+      run.nextStepIds = []
+      l.running = false
+      await publish(run)
+      return run
+    }
+  }
   if (!ready.length && l.waiting) {
     // Nothing can run because a step is waiting on the operator: that is a
     // pause with a question, never a stuck run.
@@ -1944,8 +1964,9 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // then capped at MAX_CONCURRENCY. `gated` deliberately keeps every gated
   // node, because it is published verbatim as run.nextStepIds below and
   // truncating it would drop steps from the run page.
+  // A test run never stops for a person: it runs one step nobody is shipping.
   const gatedSet = new Set(ready.filter(id => stepOf(l, id)?.approval && !l.approved.has(id)
-    && oversightFor(run.blastRadius) !== 'auto'))
+    && oversightFor(run.blastRadius) !== 'auto' && !isTestRun(run)))
   const gated = [...gatedSet]
   const runnable = ready.filter(id => !gatedSet.has(id)).slice(0, MAX_CONCURRENCY)
   const gate = runnable.length ? undefined : gated[0]
@@ -2510,7 +2531,7 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   }))
 
   try {
-    const { rest } = await beginRun(toWorkflowLike(wf), {
+    const { rest } = await beginRun(toWorkflowLike({ ...wf, steps: withTestOverride(wf.steps, run) }), {
       product: run.product, projectDir: run.projectDir, ticketKey: run.ticketKey, workspace,
     }, async (baseCommit) => {
       run.baseCommit = baseCommit
@@ -2906,7 +2927,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   if (!workflow) {
     throw new RestartError(409, `Workflow "${run.workflowSlug}" no longer exists, so this run cannot be rebuilt`)
   }
-  const steps = alignStepIds(workflow.steps, run)
+  const steps = withTestOverride(alignStepIds(workflow.steps, run), run)
   const aligned = { ...workflow, steps }
   const graph = buildGraph(steps)
   const state = initRunState(graph)
@@ -3157,6 +3178,112 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.currentStepIds = []
   run.nextStepIds = [stepId, ...readyFailed]
   await publish(run)
+  void driveToSettlement(l, run)
+  return run
+}
+
+/**
+ * A step's saved definition, with a test run's override laid over the tested
+ * step. Applied wherever a running run obtains its step definitions, so the
+ * override holds across a rebuild from disk as well as at the start. `id` and
+ * `next` are never overridden: the graph is the saved workflow's.
+ */
+function withTestOverride<T extends { id: string }>(steps: T[], run: Pick<WorkflowRun, 'testOf'>): T[] {
+  const o = run.testOf?.stepOverride
+  if (!o) return steps
+  const { id: _id, next: _next, ...patch } = o as Record<string, unknown>
+  return steps.map(s => (s.id === run.testOf!.stepId ? { ...s, ...patch } as T : s))
+}
+
+export class TestRunError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+/**
+ * Runs one step of a finished run again, as a new run, against that run's
+ * outputs: every ancestor of the step is seeded from the source, the step
+ * itself runs, and nothing after it does. The source run is not touched.
+ */
+export async function startTestRun(
+  sourceRunId: string,
+  stepId: string,
+  opts: { stepOverride?: Record<string, unknown>, startedBy?: string } = {},
+): Promise<WorkflowRun> {
+  const source = await getRun(sourceRunId)
+  if (!source) throw new TestRunError(404, 'Run not found')
+  if (isLiveStatus(source.status)) throw new TestRunError(409, 'Wait for this run to finish before testing one of its steps.')
+  const tested = source.steps.find(s => s.stepId === stepId)
+  if (!tested) throw new TestRunError(400, `Unknown step "${stepId}" on this run.`)
+
+  const wf = await loadWorkflowSteps(source.workflowSlug)
+  if (!wf) throw new TestRunError(409, `Workflow "${source.workflowSlug}" no longer exists, so a step of this run cannot be tested.`)
+  let steps: any[]
+  try { steps = alignStepIds(wf.steps, source) }
+  catch (err) { throw new TestRunError(409, err instanceof Error ? err.message : String(err)) }
+  const ancestors = new Set(ancestorsOf(buildGraph(steps), stepId))
+  const settled = (s: RunStep) => s.status === 'completed' || (s.status === 'skipped' && !!s.skipReason)
+  // In run order, so the reason names the earliest step that fell short.
+  const unsettled = source.steps.find(s => ancestors.has(s.stepId) && !settled(s))
+  if (unsettled) {
+    throw new TestRunError(409, `This run stopped before "${tested.label}" could run: "${unsettled.label}" did not finish. Pick a run that got that far.`)
+  }
+
+  const run = await createRun({
+    workflowSlug: source.workflowSlug,
+    workflowName: source.workflowName,
+    initialPrompt: source.initialPrompt,
+    parameters: source.parameters,
+    projectDir: source.projectDir,
+    watch: source.watch,
+    startedBy: opts.startedBy ?? source.startedBy,
+    product: source.product,
+    autoRun: true,
+    steps: source.steps.map(s => ({ stepId: s.stepId, label: s.label, agentSlug: s.agentSlug })),
+  })
+  run.testOf = { sourceRunId, stepId, ...(opts.stepOverride ? { stepOverride: opts.stepOverride } : {}), startPoint: '' }
+  run.stopAfter = stepId
+  run.ticketKey = source.ticketKey
+  run.product = source.product
+  run.workType = source.workType
+  run.origin = source.origin
+  run.blastRadius = source.blastRadius
+  run.autoRun = true
+  for (const rec of run.steps) {
+    const from = source.steps.find(s => s.stepId === rec.stepId)!
+    if (ancestors.has(rec.stepId)) {
+      // The cost stays with the source run: the test did not spend it.
+      Object.assign(rec, {
+        status: from.status, input: from.input, output: from.output, skipReason: from.skipReason, usage: null, visits: from.visits,
+      })
+    } else if (rec.stepId !== stepId) {
+      Object.assign(rec, { status: 'skipped', skipReason: 'Not part of this test' })
+    }
+  }
+  await saveRun(run)
+
+  if (existsSync(runArtifactsDir(sourceRunId))) {
+    await cp(runArtifactsDir(sourceRunId), runArtifactsDir(run.id), { recursive: true, force: false })
+  }
+
+  let l: Live
+  try {
+    l = await rehydrate(run)
+  } catch (err) {
+    await failRun(run, err)
+    throw new TestRunError(409, err instanceof Error ? err.message : String(err))
+  }
+  // Armed the way restartRun arms its restart point. Every forward
+  // predecessor is an ancestor, and every ancestor was seeded settled.
+  armNode(l.state, stepId)
+  l.running = true
+  run.status = 'running'
+  run.currentStepIds = []
+  run.nextStepIds = [stepId]
+  await saveRun(run)
   void driveToSettlement(l, run)
   return run
 }

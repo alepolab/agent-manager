@@ -61,5 +61,50 @@ assert.equal(isTestRun({ testOf: { sourceRunId: 'r', stepId: 's', startPoint: 'x
   assert.equal(await queue.inFlightForGroup('default', [{ ...live, testOf: undefined }]), 1, 'a real one does')
 }
 
+// ── 3. a test run: seeded, one step, no gates, override ────────────────────
+{
+  const workflow = { slug: 'tested', name: 'Tested', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: ['c'], approval: true },
+    { id: 'c', agentSlug: 'agent-c', label: 'Charlie', next: [] },
+  ] }
+  save(workflow)
+  const seen = []
+  runner.setAgentCaller(async (slug, input) => { seen.push({ slug, input }); return `output of ${slug}` })
+  const src = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  let source = await runner.waitForSettled(src.id, TIMEOUT)
+  if (source.status === 'paused') { await runner.continueRun(source.id); source = await runner.waitForSettled(src.id, TIMEOUT) }
+  assert.equal(source.status, 'completed', 'the source run finishes (its approval answered)')
+
+  seen.length = 0
+  const t = await runner.startTestRun(source.id, 'b', { stepOverride: { agentSlug: 'agent-b2', id: 'hijack', next: ['a'] } })
+  const test = await runner.waitForSettled(t.id, TIMEOUT)
+  assert.equal(test.status, 'completed', 'the approval did not pause the test')
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b2'], 'only the tested step ran, with the overridden agent')
+  assert.match(seen[0].input, /output of agent-a/, 'it saw the source run\'s earlier output')
+  const byId = Object.fromEntries(test.steps.map(s => [s.stepId, s]))
+  assert.equal(byId.a.status, 'completed'); assert.equal(byId.a.output, 'output of agent-a')
+  assert.equal(byId.b.status, 'completed')
+  assert.equal(byId.c.status, 'skipped'); assert.equal(byId.c.skipReason, 'Not part of this test')
+  assert.equal(test.testOf.sourceRunId, source.id)
+  assert.equal(test.stopAfter, 'b')
+  assert.equal(test.parentRunId, undefined, 'dispatch lineage untouched')
+
+  await assert.rejects(runner.startTestRun(source.id, 'zz'), e => e.status === 400)
+  await assert.rejects(runner.startTestRun('nope', 'b'), e => e.status === 404)
+
+  // A failing tested step fails the test run, and still runs nothing after it.
+  seen.length = 0
+  runner.setAgentCaller(async (slug) => { seen.push({ slug }); if (slug === 'agent-b') throw new Error('boom'); return `output of ${slug}` })
+  const f = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(f.status, 'failed')
+  assert.ok(!seen.some(s => s.slug === 'agent-c'), 'nothing after the tested step')
+
+  // A source run that never reached the step is refused with a reason.
+  runner.setAgentCaller(async (slug) => { if (slug === 'agent-a') throw new Error('stop'); return 'x' })
+  const early = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  await assert.rejects(runner.startTestRun(early.id, 'c'), e => e.status === 409 && /did not finish/.test(e.message))
+}
+
 console.log('testRun: all checks passed')
 process.exit(0)
