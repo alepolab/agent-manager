@@ -3,6 +3,7 @@ import type { EffectScope } from 'vue'
 import type { WorkflowStep } from '~/types'
 import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR, runStatusLabel } from '~/utils/runStatus'
+import { stepUsageLabel, verdictColor } from '~/utils/runStack'
 
 /**
  * The drawer's Test tab: run this one step again against a finished run's
@@ -70,12 +71,7 @@ const testRun = computed(() => result.value?.run.value ?? null)
 const tested = computed(() => testRun.value?.steps.find(s => s.stepId === (testRun.value?.testOf?.stepId ?? props.step.id)))
 const lastCheck = computed(() => tested.value?.checks?.at(-1))
 const tail = computed(() => (result.value?.logs.value[tested.value?.stepId ?? ''] ?? []).slice(-20))
-const tokens = computed(() => {
-  const u = tested.value?.usage
-  return u ? (u.input_tokens + u.output_tokens).toLocaleString() : ''
-})
-const usd = computed(() => (tested.value?.usage?.usd != null ? `$${tested.value.usage.usd.toFixed(2)}` : ''))
-const verdictColor = (v: string) => v === 'CONTINUE' ? RUN_STATUS_COLOR.completed : v === 'ABORT' ? RUN_STATUS_COLOR.failed : 'var(--warning)'
+const usage = computed(() => stepUsageLabel(tested.value?.usage))
 </script>
 
 <template>
@@ -101,7 +97,7 @@ const verdictColor = (v: string) => v === 'CONTINUE' ? RUN_STATUS_COLOR.complete
             <span class="w-2 h-2 rounded-full" :class="{ 'animate-pulse': isLiveStatus(testRun.status) }" :style="{ background: RUN_STATUS_COLOR[testRun.status] }" />
             {{ runStatusLabel(testRun.status) }}
           </span>
-          <span v-if="tokens" class="font-mono text-label tabular-nums">{{ tokens }} tok{{ usd ? ` · ${usd}` : '' }}</span>
+          <span v-if="usage" class="font-mono text-label tabular-nums">{{ usage }}</span>
           <NuxtLink :to="`/runs/${testRun.id}`" class="ml-auto underline focus-ring">Open test run</NuxtLink>
         </div>
         <p v-if="testRun.testOf?.codeNote" style="color: var(--warning);">{{ testRun.testOf.codeNote }}</p>

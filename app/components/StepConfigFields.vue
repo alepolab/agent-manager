@@ -3,6 +3,7 @@ import type { WorkflowStep } from '~/types'
 import type { StepKind } from '~~/shared/utils/workflowStack'
 import { DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
 import { producesError } from '~/utils/produces'
+import { summarise } from '~/utils/summarise'
 
 /**
  * The fields for one step's kind, moved out of the builder's old step-settings
@@ -24,11 +25,6 @@ const props = defineProps<{
 const emit = defineEmits<{ patch: [Partial<WorkflowStep>] }>()
 const patch = (changes: Partial<WorkflowStep>) => emit('patch', changes)
 
-// Agent descriptions run to whole paragraphs here - clip them or the picker is unreadable.
-const summarise = (text?: string) => {
-  const oneLine = (text ?? '').replace(/\s+/g, ' ').trim()
-  return oneLine.length > 90 ? `${oneLine.slice(0, 90)}…` : oneLine
-}
 const monitorOptions = computed(() => [
   { value: undefined, label: 'No monitor', description: 'Run this step unsupervised' },
   ...props.agents.map(a => ({ value: a.slug, label: a.name, description: summarise(a.description) })),

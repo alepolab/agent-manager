@@ -48,7 +48,7 @@ import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type Launc
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { childrenSettled, isLiveStatus, isTestRun } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
-import { recordCheck, recordSendBack } from '../../shared/utils/runHistory.ts'
+import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
@@ -552,15 +552,6 @@ const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'awaiting_review', 
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
-
-/**
- * Automatic send-backs allowed per trigger before the run stops and asks.
- *
- * Per trigger rather than per run: a red check and a proven regression are
- * different problems with different fixes, and one spending the other's
- * allowance means a routine second CI failure lands on a person.
- */
-const REWORK_LIMIT = 2
 
 /**
  * Which allowance a send-back spends, read from the step that raised it.
@@ -3455,6 +3446,8 @@ export async function startTestRun(
   run.origin = source.origin
   run.blastRadius = source.blastRadius
   run.autoRun = true
+  // The tested step as it runs: the saved definition with the override over it.
+  const testedDef = withTestOverride(steps, run).find(s => s.id === stepId)
   for (const rec of run.steps) {
     const from = source.steps.find(s => s.stepId === rec.stepId)!
     if (ancestors.has(rec.stepId)) {
@@ -3466,9 +3459,8 @@ export async function startTestRun(
       Object.assign(rec, { status: 'skipped', skipReason: 'Not part of this test' })
     } else {
       // The record, and the artifact named after it, show what actually runs.
-      const def = withTestOverride(steps, run).find(s => s.id === stepId)
-      if (typeof def?.agentSlug === 'string') rec.agentSlug = def.agentSlug
-      if (typeof def?.label === 'string') rec.label = def.label
+      if (typeof testedDef?.agentSlug === 'string') rec.agentSlug = testedDef.agentSlug
+      if (typeof testedDef?.label === 'string') rec.label = testedDef.label
     }
   }
   await saveRun(run)
@@ -3478,7 +3470,7 @@ export async function startTestRun(
     // The source's own copy of what the tested step writes would satisfy its
     // output check without the step writing anything. Only those files, and
     // only inside this run's directory (resolveRunArtifact refuses anything else).
-    const produces = withTestOverride(steps, run).find(s => s.id === stepId)?.produces
+    const produces = testedDef?.produces
     for (const name of Array.isArray(produces) ? produces : []) {
       const path = typeof name === 'string' ? resolveRunArtifact(run.id, name) : null
       if (path) await rm(path, { force: true }).catch(() => { /* a directory, not a file: left alone */ })

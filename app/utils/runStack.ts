@@ -1,7 +1,8 @@
 import type { InjectionKey, Ref } from 'vue'
-import type { RunStep, WorkflowRun } from '~~/shared/types/run'
+import type { RunStep, StepCheck, WorkflowRun } from '~~/shared/types/run'
 import type { WorkflowStep } from '~/types'
 import type { SendBackArrow, StepKind } from '~~/shared/utils/workflowStack'
+import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 
 /** What every card in one run stack needs, provided once by RunStack. */
 export interface RunStackContext {
@@ -52,3 +53,13 @@ export const STEP_KIND_ICON: Record<StepKind, string> = {
   'notify': 'i-lucide-send',
   'loop': 'i-lucide-repeat',
 }
+
+/** A step's usage as a run card shows it, "12,345 tok · $0.42"; '' when it reported none. */
+export function stepUsageLabel(u: RunStep['usage']): string {
+  if (!u) return ''
+  return `${(u.input_tokens + u.output_tokens).toLocaleString()} tok${u.usd != null ? ` · $${u.usd.toFixed(2)}` : ''}`
+}
+
+/** A monitor verdict's colour: go on, stop, or retry. */
+export const verdictColor = (v: StepCheck['verdict']) =>
+  v === 'CONTINUE' ? RUN_STATUS_COLOR.completed : v === 'ABORT' ? RUN_STATUS_COLOR.failed : 'var(--warning)'

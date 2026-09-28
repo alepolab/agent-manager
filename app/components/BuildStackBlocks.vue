@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { StackBlock } from '~~/shared/utils/workflowStack'
-import type { SeqPath } from '~~/shared/utils/stackEdit'
+import { endsOpen as seqEndsOpen, type SeqPath } from '~~/shared/utils/stackEdit'
+import { REWORK_LIMIT } from '~~/shared/utils/runHistory'
 import { BUILD_STACK_KEY } from '~/utils/buildStack'
 
 /**
@@ -11,7 +12,7 @@ import { BUILD_STACK_KEY } from '~/utils/buildStack'
 const props = defineProps<{ blocks: StackBlock[], seq: SeqPath }>()
 const ctx = inject(BUILD_STACK_KEY)!
 const nested = computed(() => props.seq.length > 0)
-const endsOpen = computed(() => { const l = props.blocks.at(-1); return l?.kind === 'paths' && !l.rejoin })
+const endsOpen = computed(() => seqEndsOpen(props.blocks))
 const firstStepOf = (branch: StackBlock[]) => (branch[0]?.kind === 'step' ? branch[0].stepId : null)
 const seqKey = JSON.stringify(props.seq)
 
@@ -50,8 +51,7 @@ function onRejoin(e: Event, i: number, current: boolean) {
         style="background: var(--surface-raised); border: 1px dashed var(--border-default); color: var(--text-secondary);"
       >
         <UIcon name="i-lucide-hand" class="size-3.5" />
-        <!-- "2" is REWORK_LIMIT in server/utils/workflowRunner.ts (server-only); change both together. -->
-        <span class="flex-1">Approval by {{ ctx.stepOf(b.stepId)?.gateRole ?? 'anyone' }} · can send the work back to any earlier step, up to 2 times</span>
+        <span class="flex-1">Approval by {{ ctx.stepOf(b.stepId)?.gateRole ?? 'anyone' }} · can send the work back to any earlier step, up to {{ REWORK_LIMIT }} times</span>
         <UButton v-if="!ctx.readOnly.value" size="xs" variant="ghost" color="neutral" icon="i-lucide-x" aria-label="Remove this approval" @click="ctx.clearApproval(b.stepId)" />
       </section>
       <BuildStackCard :step-id="b.stepId" />

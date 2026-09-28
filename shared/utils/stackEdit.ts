@@ -39,7 +39,8 @@ function mapSeq(blocks: StackBlock[], seq: SeqPath, fn: (s: StackBlock[]) => Sta
   })
 }
 
-const endsOpen = (s: StackBlock[]) => { const last = s.at(-1); return last?.kind === 'paths' && !last.rejoin }
+/** Whether a sequence ends in paths that each end separately (no rejoin). */
+export const endsOpen = (s: StackBlock[]) => { const last = s.at(-1); return last?.kind === 'paths' && !last.rejoin }
 
 export function findStep(blocks: StackBlock[], stepId: string, seq: SeqPath = []): Slot | null {
   for (let i = 0; i < blocks.length; i++) {

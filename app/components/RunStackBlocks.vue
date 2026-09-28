@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { StackBlock } from '~~/shared/utils/workflowStack'
 import { RUN_STACK_KEY } from '~/utils/runStack'
+import { REWORK_LIMIT } from '~~/shared/utils/runHistory'
 
 /** Renders one level of the stack; paths render their branches with this same component. */
 defineProps<{ blocks: StackBlock[] }>()
@@ -37,7 +38,7 @@ const approvalHere = (id: string) => ctx.gateAt(id) === 'approval'
         >
           <p class="t-small flex items-center gap-1.5" style="color: var(--text-secondary);">
             <UIcon name="i-lucide-hand" class="size-3.5" />
-            Approval by {{ ctx.workflowStepOf(b.stepId)?.gateRole ?? 'anyone' }} · can send the work back to any earlier step, up to 2 times
+            Approval by {{ ctx.workflowStepOf(b.stepId)?.gateRole ?? 'anyone' }} · can send the work back to any earlier step, up to {{ REWORK_LIMIT }} times
           </p>
           <RunGate
             v-if="approvalHere(b.stepId)" :run="run"

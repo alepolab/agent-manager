@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isLiveStatus } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR } from '~/utils/runStatus'
-import { RUN_STACK_KEY, STEP_KIND_ICON, STEP_KIND_LABEL } from '~/utils/runStack'
+import { RUN_STACK_KEY, STEP_KIND_ICON, STEP_KIND_LABEL, stepUsageLabel, verdictColor } from '~/utils/runStack'
 
 /** One step of a run. Collapsed: what it is and how it went. Expanded: what it read, made, was told and said. */
 const props = defineProps<{ stepId: string }>()
@@ -32,11 +32,7 @@ const elapsed = computed(() => {
   const secs = Math.round(((s.completedAt ?? Date.now()) - s.startedAt) / 1000)
   return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
 })
-const tokens = computed(() => {
-  const u = step.value.usage
-  return u ? (u.input_tokens + u.output_tokens).toLocaleString() : ''
-})
-const usd = computed(() => (step.value.usage?.usd != null ? `$${step.value.usage.usd.toFixed(2)}` : ''))
+const usage = computed(() => stepUsageLabel(step.value.usage))
 const logs = computed(() => ctx.logsOf(props.stepId))
 const latest = computed(() => logs.value.at(-1)?.slice(9) ?? '')
 const arrivals = computed(() => ctx.arrivalsOf(props.stepId))
@@ -92,7 +88,7 @@ function replay() {
           <span v-if="step.childRunIds?.length" class="block t-small text-label truncate" data-testid="child-run-count">{{ ctx.childSummary(stepId) }}</span>
         </span>
         <span class="t-small font-mono text-label tabular-nums text-right whitespace-nowrap">
-          {{ elapsed }}<template v-if="tokens"><br>{{ tokens }} tok{{ usd ? ` · ${usd}` : '' }}</template>
+          {{ elapsed }}<template v-if="usage"><br>{{ usage }}</template>
         </span>
       </button>
       <div v-if="step.status === 'running' && latest && !open" class="px-3 pb-2 t-small font-mono truncate text-label" :title="latest">{{ latest }}</div>
@@ -116,7 +112,7 @@ function replay() {
           <details v-for="c in step.checks" :key="c.at" class="t-small rounded p-2" style="background: var(--surface-base);">
             <summary class="cursor-pointer focus-ring">
               Visit {{ c.visit }} ·
-              <span class="font-mono" :style="{ color: c.verdict === 'CONTINUE' ? STATUS_COLOR.completed : c.verdict === 'ABORT' ? STATUS_COLOR.failed : 'var(--warning)' }">{{ c.verdict }}</span>
+              <span class="font-mono" :style="{ color: verdictColor(c.verdict) }">{{ c.verdict }}</span>
             </summary>
             <pre class="whitespace-pre-wrap mt-1 max-h-48 overflow-auto">{{ c.note }}</pre>
           </details>

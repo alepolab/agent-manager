@@ -5,6 +5,7 @@ import { toStack, type StackBlock } from '~~/shared/utils/workflowStack'
 import { canSave } from '~~/shared/utils/stackEdit'
 import { triggerSummary, type Selection } from '~/utils/buildStack'
 import { producesError } from '~/utils/produces'
+import { summarise } from '~/utils/summarise'
 import { isLiveStatus } from '~~/shared/types/run'
 
 const route = useRoute()
@@ -240,11 +241,6 @@ useAutoRefresh(() => Promise.all([refreshRun(), fetchSchedules({ silent: true })
 
 const graph = computed(() => buildGraph(workflowSteps.value))
 
-// Agent descriptions run to whole paragraphs here - clip them or the picker is unreadable.
-const summarise = (text?: string) => {
-  const oneLine = (text ?? '').replace(/\s+/g, ' ').trim()
-  return oneLine.length > 90 ? `${oneLine.slice(0, 90)}…` : oneLine
-}
 const agentChoices = computed(() => agents.value.map(a => ({ slug: a.slug, name: a.frontmatter.name || a.slug, description: summarise(a.frontmatter.description) })))
 /** The inputs a dispatch step may fan out over: declared ones, named. */
 const parameterNames = computed(() => workflowParameters.value.filter(p => p.name.trim()).map(p => p.name))
