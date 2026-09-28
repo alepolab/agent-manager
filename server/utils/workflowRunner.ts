@@ -19,7 +19,7 @@ import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions }
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, checkoutDirFor, ensureRunBranch, findCheckout } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, ensureRunBranch, ensureTestWorktrees, findCheckout, removeTestWorktrees } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 
 /**
@@ -51,7 +51,7 @@ import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter }
 import { recordCheck, recordSendBack } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
-import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
+import type { ProductMatch, WorkflowRun, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
 
 const log = createLogger('runner')
 
@@ -450,6 +450,23 @@ async function publish(run: WorkflowRun) {
         })
         try { await markArtifactsUnusable(run.id) } catch { /* nothing further we can do */ }
       }
+    }
+    // A settled test leaves nothing behind in the clone: its worktrees and its
+    // test/ branch go, once. Best effort: the test's outcome is what it was
+    // whether or not git cooperates. projectDir is kept as recorded, so the
+    // run page still names where it ran.
+    if (run.testOf && !run.testOf.testWorktreeRemoved && TERMINAL_STATUSES.includes(run.status) && run.branch?.startsWith('test/')) {
+      run.testOf.testWorktreeRemoved = true
+      const checkout = runCheckout(run)
+      try {
+        if (checkout) await removeTestWorktrees(checkout, run.branch)
+        log.info('test worktree removed', { runId: run.id, branch: run.branch, checkout })
+      } catch (err) {
+        log.warn('could not remove the test worktree; remove it by hand', {
+          runId: run.id, branch: run.branch, checkout, error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      await saveRun(run)
     }
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
@@ -860,7 +877,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
     let output: string
     try {
-      output = await runJiraStep(run, step.jira)
+      // A test run calls nothing: it says what it would have done and settles
+      // down the same path a real Jira step does.
+      output = isTestRun(run) ? jiraDryRun(run, step.jira) : await runJiraStep(run, step.jira)
     } catch (err) {
       output = `Jira step failed: ${err instanceof Error ? err.message : String(err)}. The ticket was not changed; the run goes on.`
     }
@@ -940,7 +959,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // status stays `completed`: the error is how it says so, not how it fails.
   if (step.notify) {
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const { output, error } = await runNotifyStep(run, step.notify, step.runWhen?.artifact)
+    const { output, error } = isTestRun(run)
+      ? { output: `[Test run] Would post to ${step.notify.channel}: ${step.notify.message ?? '(default message)'}`, error: undefined }
+      : await runNotifyStep(run, step.notify, step.runWhen?.artifact)
     for (const line of output.split('\n')) logLine(l, run, rec, line)
     l.outputs[id] = output
     Object.assign(rec, { status: 'completed', output, ...(error ? { error } : {}), model: null, usage: null, completedAt: Date.now() })
@@ -1505,6 +1526,14 @@ async function startChild(item: DispatchItem): Promise<{ run: WorkflowRun, queue
   })
 }
 
+/** What a Jira step would have done, for a test run, which calls nothing. */
+function jiraDryRun(run: WorkflowRun, cfg: JiraStepConfig): string {
+  if (cfg.action === 'create') return `[Test run] Would create Jira tickets from ${cfg.source}`
+  return `[Test run] Would move ${run.ticketKey ?? 'the ticket'} to "${cfg.transition}"`
+    + (cfg.comment ? ', and post the outcome comment' : '')
+    + (cfg.attach ? ', and attach the evidence files' : '')
+}
+
 /**
  * Runs one `triggerWorkflow` step: reads the artifact it dispatches over,
  * routes each entry to a workflow, and starts a child run per entry up to the
@@ -1553,6 +1582,14 @@ async function runDispatchStep(
     // Nothing to dispatch is a real outcome, not a failure: the step ran, read
     // the source, and there was no work in it.
     return { output: `Dispatched nothing: ${label} ${plan.detail}.`, failed: false }
+  }
+  // A test run plans for real, so the list is the one a real run would act
+  // on, and starts nothing.
+  if (isTestRun(run)) {
+    return {
+      output: `[Test run] Would start ${plan.targets.length} runs:\n${plan.targets.map(t => `${t.key} → ${t.slug}`).join('\n')}`,
+      failed: false,
+    }
   }
 
   // Recursion, checked before anything starts. A workflow that dispatches one
@@ -2214,6 +2251,63 @@ function ensureRunCheckout(run: WorkflowRun): Promise<void> {
   return p
 }
 
+/**
+ * The clone a run's worktree is made beside. A test run starts out holding
+ * its source run's projectDir, which is that run's worktree, so it is read
+ * as a recorded worktree too: the test's own goes beside the clone, never
+ * inside the source's.
+ */
+function runCheckout(run: WorkflowRun): string | undefined {
+  const repoName = run.product?.repos?.[0]?.split('/').pop()
+  const recordedClone = (run.branch || run.testOf) && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
+  return (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
+    : (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir
+      : findCheckout(runWorkspace(run), repoName)
+}
+
+/**
+ * A test run's own worktree, on a throwaway `test/` branch: the root
+ * repository from the commit the tested step started from in the source run,
+ * nested ones from the source run's branch. Removed when the test settles
+ * (see publish). The source run's branch and worktree are never touched.
+ */
+async function ensureTestCheckout(run: WorkflowRun, testOf: TestOf, checkout: string): Promise<void> {
+  const source = await getRun(testOf.sourceRunId)
+  if (!source) throw new Error(`the run this test is testing (${testOf.sourceRunId.slice(0, 8)}) no longer exists`)
+  const nestedStart = source.branch
+  let rootStart = source.steps.find(s => s.stepId === testOf.stepId)?.headAtStart
+  if (!rootStart && nestedStart) {
+    rootStart = nestedStart
+    testOf.codeNote = `Code is the state at the end of run ${testOf.sourceRunId.slice(0, 8)}, not when this step ran.`
+  }
+  // A source run that never had a branch of its own worked in the clone
+  // itself; a test of it has nothing to branch from, and must not work there.
+  if (!rootStart || !nestedStart) {
+    throw new Error(`run ${testOf.sourceRunId.slice(0, 8)} never had a branch of its own, so there is no code to test this step against`)
+  }
+  let branch = run.branch
+  if (!branch) {
+    const stem = `test/${testOf.sourceRunId.slice(0, 8)}-${testOf.stepId.slice(0, 8)}-`
+    let n = 1
+    while (await branchExists(checkout, `${stem}${n}`)) n++
+    branch = `${stem}${n}`
+  }
+  let worktrees: string[]
+  try {
+    worktrees = await ensureTestWorktrees(checkout, branch, rootStart, nestedStart)
+  } catch (err) {
+    throw new Error(`could not create the test worktree for ${branch} beside ${checkout}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  run.branch = branch
+  testOf.startPoint = rootStart
+  run.projectDir = worktrees[0] ?? checkout
+  run.baseBranch = source.baseBranch
+  // The fix facts diff against where the test started: only what it did.
+  run.baseCommit = (await captureBaseline(run.projectDir)) ?? run.baseCommit
+  await saveRun(run)
+  log.info('test worktree ready', { runId: run.id, sourceRunId: testOf.sourceRunId, checkout, worktree: run.projectDir, branch, startPoint: rootStart, repos: worktrees.length })
+}
+
 async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // A run that has its worktree is left alone. One whose worktree is gone (a
   // developer ran `git worktree remove` after the PR merged, then restarted
@@ -2221,12 +2315,9 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // to the Claude config directory as cwd and every step ran in the wrong
   // place while the header still named the deleted path.
   if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
-  const repoName = run.product?.repos?.[0]?.split('/').pop()
-  const recordedClone = run.branch && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
-  const checkout = (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
-    : (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir
-      : findCheckout(runWorkspace(run), repoName)
+  const checkout = runCheckout(run)
   if (!checkout) return
+  if (run.testOf) return ensureTestCheckout(run, run.testOf, checkout)
   // The base branch follows the kind of work, which intake classifies into
   // meta.json. Until it has, no step touches the code, so the branch waits:
   // a branch cut before the classification would start from the clone's

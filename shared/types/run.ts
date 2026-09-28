@@ -186,10 +186,12 @@ export interface TestOf {
   stepId: string
   /** Overrides to the step's config for this test only (e.g. a different prompt). */
   stepOverride?: Record<string, unknown>
-  /** The commit or ref the test's worktree started from — the source step's `headAtStart`, or its run's `baseCommit` when that is absent. */
+  /** The commit or ref the test's worktree started from — the source step's `headAtStart`, or its run's `branch` when that is absent. Empty until the worktree exists. */
   startPoint: string
-  /** A developer's note on why this test was run, or what it's checking. */
+  /** Why the test's code differs from what the step saw, when it does: set when the step has no `headAtStart` and the worktree starts from the end of the source run instead. */
   codeNote?: string
+  /** Set once the test's worktrees and branch have been removed after it settled, so that is done once. */
+  testWorktreeRemoved?: true
 }
 
 export interface RunStep {

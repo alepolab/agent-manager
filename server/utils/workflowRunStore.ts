@@ -261,6 +261,10 @@ export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun |
  *    are pointed at one `projectDir` for the queue to launch into each other.
  *    Two parents dispatching the same ticket key produce the same collision,
  *    since a child's directory is derived from that key.
+ *
+ * Test runs are not counted. Each works in its own `test/` worktree beside
+ * the clone (see ensureTestCheckout in workflowRunner.ts), so it shares no
+ * checkout with a real run: it must neither block one nor be blocked by one.
  */
 export async function findRunInWorkspace(
   workspace: string,
@@ -271,6 +275,7 @@ export async function findRunInWorkspace(
   return runs.find(r =>
     (opts.includeQueued ? isLiveStatus(r.status) : isWorkingStatus(r.status))
     && r.id !== excludeRunId
+    && !isTestRun(r)
     && runWorkspace(r) === workspace,
   ) ?? null
 }

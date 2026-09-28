@@ -321,6 +321,54 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
   return out
 }
 
+/** Does the checkout have this local branch? */
+export async function branchExists(path: string, branch: string): Promise<boolean> {
+  try { await git(path, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]); return true } catch { return false }
+}
+
+/**
+ * A test run's worktrees, beside the clone the way a real run's are, made
+ * the way ensureRunBranch makes them: the root repository from `rootStart`
+ * (the commit the tested step started from), every nested one from
+ * `nestedStart` (the source run's branch). Never fetches: a test replays a
+ * run that happened here, from commits this clone already has. `-B` always,
+ * because the branch name is fresh (see ensureRunCheckoutOnce).
+ */
+export async function ensureTestWorktrees(path: string, branch: string, rootStart: string, nestedStart: string): Promise<string[]> {
+  const root = worktreeDirFor(path, branch)
+  const out: string[] = []
+  for (const r of [path, ...nestedRepos(path)]) {
+    const wt = join(root, relative(path, r))
+    await git(r, ['worktree', 'prune'])
+    await git(r, ['worktree', 'add', '--quiet', '-B', branch, wt, r === path ? rootStart : nestedStart])
+    await excludeFromGit(wt, '.agent/evidence-run/')
+    out.push(wt)
+  }
+  return out
+}
+
+/**
+ * Removes a test run's worktrees and their branch, in the root repository and
+ * every nested one: the opposite of ensureTestWorktrees. Anything already gone
+ * is fine. Refuses any branch not under `test/`: a run's real branch holds
+ * work someone may still push, and is never removed here.
+ */
+export async function removeTestWorktrees(path: string, branch: string): Promise<void> {
+  if (!branch.startsWith('test/')) throw new Error(`refusing to remove ${branch}: only a test/ branch is removed`)
+  const root = worktreeDirFor(path, branch)
+  const msg = (err: unknown) => (err instanceof Error ? err.message : String(err))
+  // Nested first: their worktrees sit inside the root's, and removing the
+  // root's first would leave them registered against a deleted directory.
+  for (const r of [...nestedRepos(path), path]) {
+    const wt = join(root, relative(path, r))
+    try { await git(r, ['worktree', 'remove', '--force', wt]) }
+    catch (err) { if (!/not a working tree|does not exist/i.test(msg(err))) throw err }
+    try { await git(r, ['branch', '-D', branch]) }
+    catch (err) { if (!/not found/i.test(msg(err))) throw err }
+    await git(r, ['worktree', 'prune'])
+  }
+}
+
 /** Git repositories one level under the checkout or under its modules/ directory. */
 export function nestedRepos(path: string): string[] {
   const out: string[] = []
