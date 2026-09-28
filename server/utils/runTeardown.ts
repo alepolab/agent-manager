@@ -27,6 +27,9 @@ import { promisify } from 'node:util'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
+/** A run in one of these no longer uses anything. Same list as the runner's. */
+const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
+
 const log = createLogger('runner')
 const execFileP = promisify(execFile)
 
@@ -45,19 +48,56 @@ export function runProjectNames(runId: string): string[] {
   return [...new Set([`sdlc-${id}`, `sdlc-${id.slice(0, 8)}`])]
 }
 
+/** The compose project a run's stack steps use: the one it claimed, else its own. */
+export const stackProjectOf = (run: Pick<WorkflowRun, 'id' | 'stackProject'>): string => run.stackProject ?? `sdlc-${run.id.toLowerCase()}`
+
+type StackRun = Pick<WorkflowRun, 'id' | 'status' | 'stackProject' | 'product'>
+
+/** The live runs that use `project`: the run it was stood up for, and every run that claimed it. */
+export function stackUsers(project: string, runs: StackRun[], except?: string): StackRun[] {
+  return runs.filter(r => r.id !== except && !TERMINAL_STATUSES.includes(r.status)
+    && (stackProjectOf(r) === project || runProjectNames(r.id).includes(project)))
+}
+
+/**
+ * An up stack of this run's product that it can take over rather than stand
+ * up its own: one whose runs are all stopped on a person, or finished. Each
+ * Runbook A run kept ~1 GiB of stack up at its gates, and a new run on the
+ * same product stood up another beside them.
+ *
+ * Never one a run is working in right now: two runs deploying different
+ * builds into one stack at the same time would each test the other's code.
+ */
+export async function claimableStack(run: Pick<WorkflowRun, 'id' | 'product'>, runs: StackRun[], exec: Exec = realExec): Promise<{ project: string, from: string } | null> {
+  const product = run.product?.name
+  if (!product) return null
+  let listed: { Name?: string, Status?: string }[] = []
+  try { listed = JSON.parse(await exec('docker', ['compose', 'ls', '--format', 'json']) || '[]') } catch { return null }
+  for (const { Name: name, Status: status } of listed) {
+    if (!name || !/^sdlc-[0-9a-f-]+$/.test(name) || name.endsWith('-verify') || !/running/i.test(status ?? '')) continue
+    const owner = runs.find(r => runProjectNames(r.id).includes(name))
+    if (!owner || owner.id === run.id || owner.product?.name !== product) continue
+    if (stackUsers(name, runs, run.id).some(u => u.status === 'running')) continue
+    return { project: name, from: owner.id }
+  }
+  return null
+}
+
 /** Steps that can leave a compose stack running. A run with none of them has
  *  no stack to look for, which keeps docker out of every other run's ending. */
 const STACK_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-ui$)/
 
 export async function teardownRun(
-  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps'>,
+  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'>,
   exec: Exec = realExec,
+  /** Every run, to see who else uses a stack. Read from the store when not given. */
+  runs?: StackRun[],
 ): Promise<TeardownReport> {
   const report: TeardownReport = { stacks: [] }
   if (process.env.RUN_TEARDOWN_DISABLED === '1') return report
 
   // ── stacks ──
-  const mine = new Set(runProjectNames(run.id))
+  const mine = new Set([...runProjectNames(run.id), ...(run.stackProject ? [run.stackProject] : [])])
   let projects: string[] = []
   if (run.steps.some(s => STACK_AGENTS.test(s.agentSlug))) try {
     const listed = JSON.parse(await exec('docker', ['compose', 'ls', '-a', '--format', 'json']) || '[]') as { Name?: string }[]
@@ -69,7 +109,16 @@ export async function teardownRun(
   } catch {
     // No docker, or no daemon: nothing this run can have stood up either.
   }
+  // A stack another live run uses - the one that claimed it, or the run it was
+  // claimed from - stays up: this run only lets go of it. The last user down
+  // takes it down.
+  const everyone: StackRun[] = projects.length ? (runs ?? await import('./workflowRunStore.ts').then(m => m.listRuns())) ?? [] : []
   for (const project of projects) {
+    const users = stackUsers(project, everyone, run.id)
+    if (users.length) {
+      report.stacks.push({ project, removed: false, error: `kept: in use by run ${users.map(u => u.id.slice(0, 8)).join(', ')}` })
+      continue
+    }
     try {
       await exec('docker', ['compose', '-p', project, 'down', '--remove-orphans'])
       report.stacks.push({ project, removed: true })

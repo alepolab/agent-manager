@@ -554,7 +554,7 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
 
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }, parameters?: Record<string, string>): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }, parameters?: Record<string, string>, stack?: { project: string, claimedFrom?: string }): string {
   // The app serves this directory, so an agent can point a reviewer at it
   // instead of copying files into a product repository to make them reachable.
   const appUrl = (process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/+$/, '')
@@ -569,7 +569,11 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
           // Stated, not left to be read out of a URL: the runner removes this
           // run's stacks by exactly this name when it ends, and a stack under
           // any other name stays running for ever. See runTeardown.ts.
-          `Compose project for any stack this run stands up: sdlc-${runId.toLowerCase()} (the verifier's own: sdlc-${runId.toLowerCase()}-verify).`,
+          ...(stack && stack.project !== `sdlc-${runId.toLowerCase()}`
+            ? [
+                `Compose project for this run's stack: ${stack.project} - already up, taken over from run ${stack.claimedFrom ?? 'another run'} for the same product rather than standing up another. Check it is healthy and reuse it; do not bring it down or stand up a second one. It may be running a different build: deploy this run's own build into it before you test against it. (The verifier's own: sdlc-${runId.toLowerCase()}-verify.)`,
+              ]
+            : [`Compose project for any stack this run stands up: sdlc-${runId.toLowerCase()} (the verifier's own: sdlc-${runId.toLowerCase()}-verify).`]),
           '',
           `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
           `and shown on the run page at ${appUrl}/runs/${runId}. Link that in a pull`,
