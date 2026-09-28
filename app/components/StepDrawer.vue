@@ -72,6 +72,6 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
 
     <StepConfigFields v-else-if="tab === 'configure'" :step="step" :kind="kind" :agents="agents" :channels="channels" :parameter-names="parameterNames" :read-only="readOnly" @patch="(p) => { emit('patch', p) }" />
     <!-- Kept mounted across tabs, so a test's result survives a trip to Setup to adjust the step. -->
-    <StepTestPanel v-if="testOpened" v-show="tab === 'test'" :workflow-slug="workflowSlug" :step="step" />
+    <StepTestPanel v-if="testOpened" v-show="tab === 'test'" :workflow-slug="workflowSlug" :step="step" :active="tab === 'test'" />
   </div>
 </template>

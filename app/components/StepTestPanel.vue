@@ -7,10 +7,15 @@ import { stepUsageLabel, verdictColor } from '~/utils/runStack'
 
 /**
  * The drawer's Test tab: run this one step again against a finished run's
- * outputs, on a throwaway branch, with the drawer's current (possibly unsaved)
+ * outputs (on a throwaway branch when the run has code), with the drawer's current (possibly unsaved)
  * config. The server does the isolating; this picks the run and shows the result.
  */
-const props = defineProps<{ workflowSlug: string, step: WorkflowStep }>()
+const props = defineProps<{
+  workflowSlug: string
+  step: WorkflowStep
+  /** The Test tab is showing. The panel stays mounted across tabs, so this is when its run list is read again. */
+  active: boolean
+}>()
 const { can } = useUser()
 const toast = useToast()
 const mayTest = computed(() => can('runEngine'))
@@ -18,17 +23,19 @@ const mayTest = computed(() => can('runEngine'))
 const sources = ref<WorkflowRun[]>([])
 const loaded = ref(false)
 const selected = ref('')
-onMounted(async () => {
+/** Keeps the picked run while it is still offered; otherwise picks the newest. */
+async function loadSources() {
   try {
     const all = await $fetch<WorkflowRun[]>('/api/runs')
     sources.value = all
       .filter(r => r.workflowSlug === props.workflowSlug && !isLiveStatus(r.status) && r.steps.some(s => s.stepId === props.step.id))
       .sort((a, b) => b.startedAt - a.startedAt)
-    selected.value = sources.value[0]?.id ?? ''
+    if (!sources.value.some(r => r.id === selected.value)) selected.value = sources.value[0]?.id ?? ''
   } catch (e: any) {
     toast.add({ title: 'Could not load runs', description: e.data?.message || e.message, color: 'error' })
   } finally { loaded.value = true }
-})
+}
+onMounted(loadSources)
 
 function ago(ts: number): string {
   const m = Math.max(0, Math.round((Date.now() - ts) / 60_000))
@@ -67,8 +74,22 @@ async function runTest() {
   } finally { testing.value = false }
 }
 
+// Back on the tab: a run that finished meanwhile is one to test against. Not
+// while a test is starting, which is reading the list's selection.
+watch(() => props.active, (active, was) => { if (active && !was && !testing.value) void loadSources() })
+
 const testRun = computed(() => result.value?.run.value ?? null)
 const tested = computed(() => testRun.value?.steps.find(s => s.stepId === (testRun.value?.testOf?.stepId ?? props.step.id)))
+/** Where the agent works. Known once a test run exists: a source run with no
+ *  code folder gets no test/ branch, and its test works in the Claude config
+ *  directory as the source did. */
+const isolation = computed(() => {
+  const t = testRun.value
+  if (t?.branch?.startsWith('test/')) return `on its own throwaway branch (${t.branch})`
+  // A live test may not have made its worktree yet: say nothing it could contradict.
+  if (!t || isLiveStatus(t.status)) return 'on its own throwaway branch when the run has code'
+  return 'in ~/.claude, as the run it tests did, since that run had no code folder'
+})
 const lastCheck = computed(() => tested.value?.checks?.at(-1))
 const tail = computed(() => (result.value?.logs.value[tested.value?.stepId ?? ''] ?? []).slice(-20))
 const usage = computed(() => stepUsageLabel(tested.value?.usage))
@@ -78,7 +99,7 @@ const usage = computed(() => stepUsageLabel(tested.value?.usage))
   <div class="space-y-3 t-small" data-testid="step-test-panel">
     <p v-if="!mayTest" class="text-label">Testing a step needs permission to run the pipeline.</p>
     <template v-else>
-      <p class="text-label">Runs this step again, as configured here, against a finished run's outputs. A Jira, channel or loop step only records what it would do. An agent step runs as it would in a real run, on its own throwaway branch, and is told it is a test.</p>
+      <p class="text-label">Runs this step again, as configured here, against a finished run's outputs. A Jira, channel or loop step only records what it would do. An agent step runs as it would in a real run, {{ isolation }}, and is told it is a test.</p>
       <p v-if="!loaded" class="text-label" aria-busy="true">Loading runs…</p>
       <p v-else-if="!sources.length" class="text-label">Run this workflow once, then test its steps here.</p>
       <template v-else>
