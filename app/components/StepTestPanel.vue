@@ -88,7 +88,8 @@ const isolation = computed(() => {
   if (t?.branch?.startsWith('test/')) return `on its own throwaway branch (${t.branch})`
   // A live test may not have made its worktree yet: say nothing it could contradict.
   if (!t || isLiveStatus(t.status)) return 'on its own throwaway branch when the run has code'
-  return 'in ~/.claude, as the run it tests did, since that run had no code folder'
+  if (!t.projectDir) return 'in ~/.claude, as the run it tests did, since that run had no code folder'
+  return 'on its own throwaway branch when the run has code'
 })
 const lastCheck = computed(() => tested.value?.checks?.at(-1))
 const tail = computed(() => (result.value?.logs.value[tested.value?.stepId ?? ''] ?? []).slice(-20))

@@ -55,7 +55,10 @@ export function useWorkflowRun(slug: string) {
   function show(runId: string) {
     const found = runs.value.find(r => r.id === runId)
     if (!found) return
-    if (source && streaming !== runId) { source.close(); source = null }
+    // Already following it: the streamed record is fresher than the list's copy.
+    if (source && streaming === runId) return
+    // Its logs belong to the run being left; steps share ids across runs.
+    if (source) { source.close(); source = null; logs.value = {} }
     run.value = found
     if (!source && isLiveStatus(found.status)) listen(found.id)
   }

@@ -2801,9 +2801,20 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
     if (testCleanupDue(run) && !live.get(run.id)?.running) {
       // Logs its own failure and still sets the marker: a worktree git will
       // not remove is not retried on every boot.
-      await removeTestWorktreesOnce(run)
-      await saveRun(run).catch(err => log.warn('could not record the test worktree sweep', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
-      out.swept.push(run.id)
+      // Through the run's publish chain, on a fresh read: a restart or publish
+      // that landed since listRuns() must not be saved over.
+      let swept = false
+      const prior = publishChains.get(run.id) ?? Promise.resolve()
+      const next = prior.catch(() => {}).then(async () => {
+        const saved = await getRun(run.id)
+        if (!saved || !testCleanupDue(saved) || live.get(run.id)?.running) return
+        await removeTestWorktreesOnce(saved)
+        await saveRun(saved).catch(err => log.warn('could not record the test worktree sweep', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+        swept = true
+      })
+      publishChains.set(run.id, next)
+      await next.catch(() => {})
+      if (swept) out.swept.push(run.id)
       continue
     }
     if (run.status !== 'interrupted') continue

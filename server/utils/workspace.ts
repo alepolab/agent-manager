@@ -368,7 +368,7 @@ export async function ensureTestWorktrees(path: string, branch: string, rootStar
     // with no worktree. Ours unless git refused because the branch was already
     // there; and never while a worktree has it checked out.
     const msg = err instanceof Error ? err.message : String(err)
-    if (opts.fresh && !/a branch named .* already exists/i.test(msg)
+    if (opts.fresh && !/(a branch named .*|reference) already exists/i.test(msg)
       && await branchExists(adding, branch) && !(await branchHasWorktree(adding, branch))) {
       await git(adding, ['branch', '-D', branch]).catch(() => { /* already gone */ })
     }
@@ -379,7 +379,9 @@ export async function ensureTestWorktrees(path: string, branch: string, rootStar
 
 /** Is this branch checked out in any worktree of the repository? */
 async function branchHasWorktree(path: string, branch: string): Promise<boolean> {
-  const list = await git(path, ['worktree', 'list', '--porcelain']).catch(() => '')
+  // Unknown counts as in use: this answer decides whether a branch is deleted.
+  const list = await git(path, ['worktree', 'list', '--porcelain']).catch(() => null)
+  if (list === null) return true
   return list.split('\n').some(l => l.trim() === `branch refs/heads/${branch}`)
 }
 
