@@ -823,6 +823,8 @@ const NO_QUESTION = /^(?:n\/?a|none|nothing(?:\s+to\s+ask)?|not\s+applicable|no\
 
 /** Steps sent back for a missing decision brief on their current question, by run and step; cleared when it pauses. */
 const briefRequested = new Set<string>()
+/** Steps asked once more to name a send-back target they got wrong, by run and step. */
+const reworkNameAsked = new Set<string>()
 
 /**
  * The agent could not reach the model at all: no login, a refused key, an
@@ -1258,6 +1260,28 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       const named = exact.length ? exact : others.filter(s =>
         want.includes(s.agentSlug.toLowerCase()) || want.includes(s.label.toLowerCase()))
       const target = named.length === 1 ? named[0] : undefined
+      // Asked once more, with the names it can use, before the run fails on a
+      // name: ASECRM-304's fix step wrote "sdlc-oracle-author" for the step it
+      // plainly meant (sdlc-test-author, "Failing Test") and a run with every
+      // earlier step green failed on the spelling. Its session holds the
+      // reasoning, so the retry only has to name the step.
+      const attempt = `${run.id}:${id}`
+      if (!target && !reworkNameAsked.has(attempt) && canRevisit(l.graph, l.state, id)) {
+        reworkNameAsked.add(attempt)
+        const known = others.map(s => `${s.label} (${s.agentSlug})`).join(', ')
+        const why = `PIPELINE-REWORK named "${rework.target}", which ${named.length > 1 ? `matches more than one step (${named.map(s => s.label).join(', ')})` : 'is not a step of this run'}.`
+        logLine(l, run, rec, why)
+        log.warn('step sent the run back to a step it could not name; asking again', { runId: run.id, stepId: id, target: rework.target })
+        Object.assign(rec, { output, model, usage, error: why })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+        const session = resumableSession(rec)
+        if (session) l.resumeFrom[id] = session
+        l.retryFeedback[id] = `${why} Repeat your last line with the target written as one of these step labels, exactly: ${known}. Change nothing else.`
+        l.state.status[id] = 'completed'
+        armNode(l.state, id)
+        return true
+      }
+      reworkNameAsked.delete(attempt)
       if (!target) {
         markFailed(l.state, id)
         // Both label AND slug, because the rejected string is usually a slug

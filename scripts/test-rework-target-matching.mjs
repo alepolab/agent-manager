@@ -58,14 +58,17 @@ assert.deepEqual(
   'the parser hands the decorated target through untouched; resolution is the runner\'s job',
 )
 
-/** Runs the workflow with Charlie emitting one rework at `target`, then succeeding. */
-async function runWithRework(target) {
-  let reworked = false
+/**
+ * Runs the workflow with Charlie emitting one rework per entry of `targets` -
+ * the first its answer, the rest its answers when asked to name the step again -
+ * then succeeding.
+ */
+async function runWithRework(...targets) {
+  let said = 0
   runner.setAgentCaller(async (agentSlug) => {
     if (agentSlug !== 'agent-c') return `output of ${agentSlug}`
-    if (reworked) return 'output of agent-c, second time'
-    reworked = true
-    return `did the work\nPIPELINE-REWORK: ${target} — try that again`
+    if (said >= targets.length) return 'output of agent-c, second time'
+    return `did the work\nPIPELINE-REWORK: ${targets[said++]} — try that again`
   })
   const started = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
   return runner.waitForSettled(started.id, TIMEOUT)
@@ -86,8 +89,15 @@ assert.equal(run.status, 'completed',
 assert.ok(run.steps.find(s => s.stepId === 'a').visits >= 2,
   'the decorated target sent the run back to Alpha specifically')
 
-// ── 3. A target naming nothing still fails, and says what to name ─────────
-run = await runWithRework('some-agent-that-does-not-exist')
+// ── 3. A wrong name is asked for once more, with the names to use ─────────
+// ASECRM-304's fix step named "sdlc-oracle-author" for sdlc-test-author, and a
+// run with every earlier step green failed on the spelling.
+run = await runWithRework('sdlc-oracle-author', 'Alpha')
+assert.equal(run.status, 'completed', 'corrected on the second answer, the send-back goes ahead')
+assert.ok(run.steps.find(s => s.stepId === 'a').visits >= 2, 'and goes to the step it then named')
+
+// ── 3b. A target that still names nothing fails, and says what to name ────
+run = await runWithRework('some-agent-that-does-not-exist', 'still-not-a-step')
 assert.equal(run.status, 'failed', 'an unresolvable target fails the run rather than guessing')
 const emitter = run.steps.find(s => s.stepId === 'c')
 assert.match(emitter.error, /is not a step of this run/)
@@ -99,8 +109,8 @@ assert.match(emitter.error, /agent-a/,
 // 'alpha bravo' contains the labels of two steps that are both candidates.
 // Routing to whichever the filter happened to see first would be a silent
 // wrong answer — worse than stopping.
-run = await runWithRework('alpha bravo')
+run = await runWithRework('alpha bravo', 'alpha bravo')
 assert.equal(run.status, 'failed', 'an ambiguous target must fail loudly, never resolve arbitrarily')
 assert.match(run.steps.find(s => s.stepId === 'c').error, /matches more than one step/)
 
-console.log('OK  rework target matching: exact, decorated, unknown, ambiguous')
+console.log('OK  rework target matching: exact, decorated, corrected once, unknown, ambiguous')
