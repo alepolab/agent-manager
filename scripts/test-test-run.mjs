@@ -264,5 +264,63 @@ assert.equal(isTestRun({ testOf: { sourceRunId: 'r', stepId: 's', startPoint: 'x
   live.status = 'stopped'; await store.saveRun(live)
 }
 
+// ── 9. cleanup robustness: a stop while the agent unwinds, a squatted directory, a partial create ──
+{
+  const workflow = { slug: 'wt2', name: 'Wt2', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  runner.setAgentCaller(async (slug, _i, dir) => {
+    writeFileSync(join(dir, `${slug}.txt`), slug); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', slug)
+    return `output of ${slug}`
+  })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })).id, TIMEOUT)
+  assert.equal(source.status, 'completed')
+  const stem = `test/${source.id.slice(0, 8)}-b-`
+  const wtDir = n => `${projectDir}@${`${stem}${n}`.replace(/[^A-Za-z0-9_.-]+/g, '-')}`
+
+  // A directory already where test/…-1 would go: the test takes -2.
+  mkdirSync(wtDir(1))
+
+  // Stopped while its agent is still running: the worktree stays until the agent returns.
+  let release, started
+  const agentStarted = new Promise(r => { started = r })
+  const agentReleased = new Promise(r => { release = r })
+  let testDir = null
+  runner.setAgentCaller(async (_slug, _i, dir) => { testDir = dir; started(); await agentReleased; return 'late' })
+  const t = await runner.startTestRun(source.id, 'b')
+  await agentStarted
+  await runner.stopRun(t.id)
+  await new Promise(r => setTimeout(r, 300))
+  assert.ok(existsSync(testDir), 'not removed from under an agent that is still unwinding')
+  release()
+  for (let i = 0; i < 100 && existsSync(testDir); i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(existsSync(testDir), false, 'removed once the agent returned')
+  // The directory goes before the record saying so is written.
+  let stopped = await store.getRun(t.id)
+  for (let i = 0; i < 50 && !stopped.testOf.testWorktreeRemoved; i++) { await new Promise(r => setTimeout(r, 100)); stopped = await store.getRun(t.id) }
+  assert.equal(stopped.status, 'stopped', 'the cleanup did not change the outcome')
+  assert.equal(stopped.branch, `${stem}2`, 'a squatted worktree directory is skipped like a taken branch')
+  assert.equal(stopped.testOf.testWorktreeRemoved, true, 'the saved record carries the marker')
+  assert.equal(git(projectDir, 'branch', '--list', `${stem}*`), '', 'no test branch left behind')
+
+  // A nested repository whose start cannot be made fails the create, and the
+  // root worktree already made for it is removed rather than left behind.
+  const nested = join(projectDir, 'mod')
+  mkdirSync(nested)
+  git(nested, 'init', '-q', '-b', 'develop')
+  git(nested, 'config', 'user.email', 't@example.com'); git(nested, 'config', 'user.name', 't')
+  writeFileSync(join(nested, 'x'), 'x'); git(nested, 'add', '.'); git(nested, 'commit', '-q', '-m', 'x')
+  runner.setAgentCaller(async () => 'never')
+  const p = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(p.status, 'failed')
+  assert.match(`${p.error ?? ''} ${p.steps.find(s => s.stepId === 'b').error ?? ''}`, /could not create the test worktree/)
+  assert.equal(git(projectDir, 'branch', '--list', `${stem}*`), '', 'the root\'s test branch was removed')
+  assert.equal(existsSync(wtDir(1)), true, 'the squatted directory is not ours to remove')
+  assert.equal(existsSync(wtDir(2)), false, 'nothing left where the worktree was made')
+}
+
 console.log('testRun: all checks passed')
 process.exit(0)

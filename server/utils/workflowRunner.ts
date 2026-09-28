@@ -19,7 +19,7 @@ import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions }
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, branchExists, checkoutDirFor, ensureRunBranch, ensureTestWorktrees, findCheckout, removeTestWorktrees } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, ensureRunBranch, ensureTestWorktrees, findCheckout, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 
 /**
@@ -362,6 +362,52 @@ function budgetExceeded(run: WorkflowRun): string | null {
   return null
 }
 
+/** Test runs whose worktrees this process has removed. The marker on testOf
+ *  is the persisted record of it, but stopRun and the wave each publish their
+ *  own copy of the run, and only one of them carries the marker. */
+const testWorktreesRemoved = new Set<string>()
+
+function testCleanupDue(run: WorkflowRun): boolean {
+  return !!run.testOf && !run.testOf.testWorktreeRemoved && !testWorktreesRemoved.has(run.id)
+    && TERMINAL_STATUSES.includes(run.status) && !!run.branch?.startsWith('test/')
+}
+
+/** Removes a settled test's worktrees and test/ branch. Best effort: the
+ *  test's outcome is what it was whether or not git cooperates, and
+ *  projectDir is kept as recorded so the run page still names where it ran.
+ *  The caller saves the run. */
+async function removeTestWorktreesOnce(run: WorkflowRun): Promise<void> {
+  testWorktreesRemoved.add(run.id)
+  run.testOf!.testWorktreeRemoved = true
+  const checkout = runCheckout(run)
+  try {
+    if (checkout) await removeTestWorktrees(checkout, run.branch!)
+    log.info('test worktree removed', { runId: run.id, branch: run.branch, checkout })
+  } catch (err) {
+    log.warn('could not remove the test worktree; remove it by hand', {
+      runId: run.id, branch: run.branch, checkout, error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+/** A stopped test's cleanup, once its agent has returned, for the case where
+ *  the wave publishes nothing more (a stop between waves). Reads the record
+ *  back from disk and saves it in the run's publish order, so it can never
+ *  write over a newer copy. */
+async function afterUnwound(runId: string): Promise<void> {
+  const deadline = Date.now() + 30 * 60_000
+  while (live.get(runId)?.running && Date.now() < deadline) await new Promise(r => setTimeout(r, 250))
+  const prior = publishChains.get(runId) ?? Promise.resolve()
+  const next = prior.catch(() => {}).then(async () => {
+    const saved = await getRun(runId)
+    if (!saved || !testCleanupDue(saved)) return
+    await removeTestWorktreesOnce(saved)
+    await saveRun(saved)
+  })
+  publishChains.set(runId, next)
+  await next.catch(() => {})
+}
+
 async function publish(run: WorkflowRun) {
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -452,21 +498,14 @@ async function publish(run: WorkflowRun) {
       }
     }
     // A settled test leaves nothing behind in the clone: its worktrees and its
-    // test/ branch go, once. Best effort: the test's outcome is what it was
-    // whether or not git cooperates. projectDir is kept as recorded, so the
-    // run page still names where it ran.
-    if (run.testOf && !run.testOf.testWorktreeRemoved && TERMINAL_STATUSES.includes(run.status) && run.branch?.startsWith('test/')) {
-      run.testOf.testWorktreeRemoved = true
-      const checkout = runCheckout(run)
-      try {
-        if (checkout) await removeTestWorktrees(checkout, run.branch)
-        log.info('test worktree removed', { runId: run.id, branch: run.branch, checkout })
-      } catch (err) {
-        log.warn('could not remove the test worktree; remove it by hand', {
-          runId: run.id, branch: run.branch, checkout, error: err instanceof Error ? err.message : String(err),
-        })
-      }
-      await saveRun(run)
+    // test/ branch go, once. Not while a stopped test's agent is still
+    // unwinding in the worktree: stopRun publishes its own copy of the record
+    // the moment it aborts, and the wave publishes again once the agent has
+    // returned; that later publish does it (or afterUnwound, if the stop
+    // landed between waves and the wave never publishes).
+    if (testCleanupDue(run)) {
+      if (run.status === 'stopped' && live.get(run.id)?.running) void afterUnwound(run.id)
+      else { await removeTestWorktreesOnce(run); await saveRun(run) }
     }
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
@@ -2289,15 +2328,24 @@ async function ensureTestCheckout(run: WorkflowRun, testOf: TestOf, checkout: st
   if (!branch) {
     const stem = `test/${testOf.sourceRunId.slice(0, 8)}-${testOf.stepId.slice(0, 8)}-`
     let n = 1
-    while (await branchExists(checkout, `${stem}${n}`)) n++
+    // A directory left where the worktree would go blocks `worktree add` as surely as a branch does.
+    while (await branchExists(checkout, `${stem}${n}`) || existsSync(worktreeDirFor(checkout, `${stem}${n}`))) n++
     branch = `${stem}${n}`
   }
   let worktrees: string[]
   try {
     worktrees = await ensureTestWorktrees(checkout, branch, rootStart, nestedStart)
   } catch (err) {
+    // A nested repository that failed after the root's was made would leave
+    // the root's worktree and branch behind, recorded nowhere.
+    await removeTestWorktrees(checkout, branch).catch(e => log.warn('could not remove a partly created test worktree; remove it by hand', {
+      runId: run.id, branch, checkout, error: e instanceof Error ? e.message : String(e),
+    }))
     throw new Error(`could not create the test worktree for ${branch} beside ${checkout}: ${err instanceof Error ? err.message : String(err)}`)
   }
+  // Made again (a restart after the test settled): the next settle removes them again.
+  delete testOf.testWorktreeRemoved
+  testWorktreesRemoved.delete(run.id)
   run.branch = branch
   testOf.startPoint = rootStart
   run.projectDir = worktrees[0] ?? checkout
