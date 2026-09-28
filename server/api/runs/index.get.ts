@@ -1,4 +1,4 @@
-import { isTestRun } from '../../../shared/types/run'
+import { isTestRun } from '../../../shared/types/run.ts'
 import { listRuns } from '../../utils/workflowRunStore'
 
 /**

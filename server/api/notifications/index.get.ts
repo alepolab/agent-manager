@@ -1,5 +1,5 @@
 import { can } from '../../../shared/types/role'
-import { isTestRun } from '../../../shared/types/run'
+import { isTestRun } from '../../../shared/types/run.ts'
 import { buildNotifications } from '../../../shared/utils/notifications'
 import { listPendingPermissions } from '../../utils/providers/claudeProvider'
 import { detectSdkSession } from '../../utils/sdkSessionStorage'
