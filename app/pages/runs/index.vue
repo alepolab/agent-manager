@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { isLiveStatus, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, isTestRun, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR, runElapsedLabel, runStatusLabel } from '~/utils/runStatus'
 import { gateIsMine } from '~~/shared/utils/notifications'
 import { shortDuration } from '~/utils/runActivity'
@@ -45,7 +45,9 @@ const loadFor = (r: WorkflowRun) => groups.value.find(g => g.id === (r.group?.tr
 
 async function refresh() {
   try {
-    runs.value = await $fetch<WorkflowRun[]>('/api/runs')
+    // Test runs are only fetched for the Tests view: everywhere else they would
+    // sit beside the real runs they test, and be counted with them.
+    runs.value = await $fetch<WorkflowRun[]>(view.value === 'tests' ? '/api/runs?tests=1' : '/api/runs')
     // Best-effort: a queued row without its group's numbers still says it is
     // waiting, which is the load-bearing half.
     groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => groups.value)
@@ -76,6 +78,8 @@ onUnmounted(() => {
 })
 // The 5s poll stops once nothing is live; this picks up runs a watch, schedule or another tab starts.
 useAutoRefresh(refresh)
+// Switching to or from Tests swaps the list, so the open run would be one it no longer shows.
+watch(view, () => { openId.value = ''; refresh() })
 
 // Runs that can still change, newest first: the "what is happening now" list.
 // Deliberately NOT filtered by the table's filters — those exist to search
@@ -96,12 +100,17 @@ const VIEWS = [
   { value: 'waiting', label: 'Waiting on me' },
   { value: 'running', label: 'Running' },
   { value: 'failed', label: 'Failed' },
+  { value: 'tests', label: 'Tests' },
 ] as const
 // One predicate for both the per-row filter and the chip counts, so a count
 // next to "Failed" always means "failed among what q/mine/parent already show" -
 // never the whole unfiltered list.
+// A test run matches only Tests, and Tests only test runs: the list holds both
+// while that view is open, and neither may be counted as the other.
 const matchesView = (r: WorkflowRun, v: string) =>
-  v === 'waiting' ? waitingOnMe(r)
+  v === 'tests' ? isTestRun(r)
+  : isTestRun(r) ? false
+  : v === 'waiting' ? waitingOnMe(r)
   : v === 'running' ? isLiveStatus(r.status)
   : v === 'failed' ? r.status === 'failed'
   : true
@@ -128,7 +137,8 @@ watch(shown, (list) => {
 
 const title = (r: WorkflowRun) => {
   const first = (r.initialPrompt.split('\n')[0] ?? '').slice(0, 80)
-  return r.ticketKey && !first.startsWith(r.ticketKey) ? `${r.ticketKey} · ${first}` : first || r.workflowName
+  const t = r.ticketKey && !first.startsWith(r.ticketKey) ? `${r.ticketKey} · ${first}` : first || r.workflowName
+  return r.testOf ? `Test of #${r.testOf.sourceRunId.slice(0, 6)} · ${t}` : t
 }
 /** What a live row is doing right now: the running step, its last tool, how long ago. */
 function liveLine(r: WorkflowRun): string {
@@ -221,7 +231,7 @@ async function deleteFailed() {
           class="t-small rounded-full px-3 py-1 focus-ring"
           :style="view === v.value ? 'background: var(--accent-muted); color: var(--text-accent); font-weight: 600;' : 'background: var(--surface-inset); color: var(--text-secondary);'"
           :aria-pressed="view === v.value" @click="view = v.value"
-        >{{ v.label }} <span class="tabular-nums">{{ countOf(v.value) }}</span></button>
+        >{{ v.label }} <span v-if="v.value !== 'tests' || view === 'tests'" class="tabular-nums">{{ countOf(v.value) }}</span></button>
         <input v-model="filter" placeholder="Filter by ticket, workflow, product or person..." class="field-search max-w-xs" aria-label="Filter runs" />
         <label class="t-small text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox"> Started by me</label>
         <UButton v-if="parent" size="xs" variant="soft" icon="i-lucide-x" :label="`Children of ${parent.slice(0, 8)}`" @click="() => { router.replace({ query: { ...route.query, parent: undefined } }) }" />

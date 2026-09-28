@@ -563,6 +563,7 @@ const parallelHint = computed(() => graph.value.entries.length > 1
           :channels="channels"
           :parameter-names="parameterNames"
           :read-only="!editable"
+          :workflow-slug="slug"
           @patch="patchSelected"
         />
         <p v-else class="t-small text-label">Select the trigger or a step to change it.</p>
@@ -618,6 +619,7 @@ const parallelHint = computed(() => graph.value.entries.length > 1
           :channels="channels"
           :parameter-names="parameterNames"
           :read-only="!editable"
+          :workflow-slug="slug"
           @patch="patchSelected"
         />
         <p v-else class="t-small text-label">Select the trigger or a step to change it.</p>

@@ -6,7 +6,8 @@ import { ROLES, type Role } from '~~/shared/types/role'
 
 /**
  * One step's settings, in two tabs: Setup (what the step is, which agent, its
- * approval) and Configure (the fields for its kind). A step's kind is fixed
+ * approval), Configure (the fields for its kind) and Test (run it again
+ * against a finished run, with the config as it stands here). A step's kind is fixed
  * once added: to change it, add the other kind and delete this one.
  */
 const props = defineProps<{
@@ -16,9 +17,10 @@ const props = defineProps<{
   channels: { name: string, kind: string, host?: string }[]
   parameterNames: string[]
   readOnly: boolean
+  workflowSlug: string
 }>()
 const emit = defineEmits<{ patch: [Partial<WorkflowStep>] }>()
-const tab = ref<'setup' | 'configure'>('setup')
+const tab = ref<'setup' | 'configure' | 'test'>('setup')
 watch(() => props.step.id, () => { tab.value = 'setup' })
 const kind = computed(() => stepKind(props.step))
 const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, label: a.name })))
@@ -34,8 +36,8 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
       >
     </div>
     <div class="flex gap-4 border-b" style="border-color: var(--border-subtle);" role="tablist">
-      <button v-for="t in (['setup', 'configure'] as const)" :key="t" role="tab" :aria-selected="tab === t" class="t-small py-1.5 -mb-px focus-ring" :style="tab === t ? 'border-bottom: 2px solid var(--accent); color: var(--text-primary);' : 'color: var(--text-tertiary);'" @click="tab = t">
-        {{ t === 'setup' ? 'Setup' : 'Configure' }}
+      <button v-for="t in (['setup', 'configure', 'test'] as const)" :key="t" role="tab" :aria-selected="tab === t" class="t-small py-1.5 -mb-px focus-ring" :style="tab === t ? 'border-bottom: 2px solid var(--accent); color: var(--text-primary);' : 'color: var(--text-tertiary);'" @click="tab = t">
+        {{ t === 'setup' ? 'Setup' : t === 'configure' ? 'Configure' : 'Test' }}
       </button>
     </div>
 
@@ -65,6 +67,7 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
       </div>
     </div>
 
+    <StepTestPanel v-else-if="tab === 'test'" :workflow-slug="workflowSlug" :step="step" />
     <StepConfigFields v-else :step="step" :kind="kind" :agents="agents" :channels="channels" :parameter-names="parameterNames" :read-only="readOnly" @patch="(p) => { emit('patch', p) }" />
   </div>
 </template>
