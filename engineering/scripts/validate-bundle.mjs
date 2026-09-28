@@ -5,7 +5,9 @@
  * Enforces schemas/evidence-bundle.v0.1.schema.json against a bundle, then
  * layers semantic rules the schema's JSON-Schema subset cannot express:
  *
- *   - the pre-fix oracle must have FAILED (a PASS means nothing was reproduced)
+ *   - the pre-fix oracle must have FAILED (a PASS means nothing was reproduced),
+ *     unless the ticket asked only for a test and every deliberate break of the
+ *     behaviour it covers turned it red (`oracle.mutation_proof`)
  *   - the post-fix oracle must have PASSED (otherwise the fix is unproven)
  *   - a multi-repo fix must declare merge_order (the schema only documents
  *     this requirement in a property description, it does not encode it)
@@ -134,8 +136,18 @@ export function validateBundle(bundle) {
   // The oracle that ran BEFORE the fix must have failed. A PASS here means
   // the bug was never reproduced, so nothing downstream — the fix, the
   // regression run, the trace — proves anything about it.
-  if (bundle?.oracle && typeof bundle.oracle === 'object' && bundle.oracle.verdict !== undefined
-    && bundle.oracle.verdict !== 'FAIL') {
+  //
+  // The exception is a ticket that asked only for a test, where the code was
+  // already right and an honest oracle passes. Developers ruled on ASECRM-222,
+  // 289 and 290 alike: the passing test is accepted. What proves it tests
+  // anything is that each deliberate break of the behaviour turned it red.
+  const proof = bundle?.oracle?.mutation_proof
+  const provenByBreaks = bundle?.oracle?.verdict === 'PASS' && proof && typeof proof === 'object'
+    && Number.isInteger(proof.mutants) && proof.mutants >= 3 && proof.killed === proof.mutants
+  if (bundle?.oracle?.verdict === 'PASS' && proof && typeof proof === 'object' && !provenByBreaks) {
+    problems.push(`bundle.oracle.mutation_proof: a passing pre-fix oracle needs every one of at least 3 deliberate breaks caught (got ${proof.killed} of ${proof.mutants})`)
+  } else if (bundle?.oracle && typeof bundle.oracle === 'object' && bundle.oracle.verdict !== undefined
+    && bundle.oracle.verdict !== 'FAIL' && !provenByBreaks) {
     problems.push(`bundle.oracle.verdict: pre-fix oracle must be FAIL (got "${bundle.oracle.verdict}") — a passing pre-fix oracle means nothing was reproduced`)
   }
 

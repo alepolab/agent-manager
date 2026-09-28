@@ -266,6 +266,8 @@ function buildOracleRun(metaOracle, xunitText, xunitFilename, label, problems) {
   setIfDefined(run, 'path', metaOracle.path)
   setIfDefined(run, 'runs', metaOracle.runs)
   setIfDefined(run, 'rows', metaOracle.rows ?? null)
+  // A test-only ticket's passing oracle carries the breaks that stand in for its red run.
+  setIfDefined(run, 'mutation_proof', metaOracle.mutation_proof)
   const parsed = xunitText === undefined ? null : parseXunit(xunitText)
   if (parsed) {
     if (ranNothing(parsed)) {

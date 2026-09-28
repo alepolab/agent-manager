@@ -181,6 +181,26 @@ your own method and say so in one line - never halt, and never ask. That is the
 opposite of the skill your step is *told* to follow, where a missing file is a
 halt.`
 
+/**
+ * What the person approving a change at a gate reads. The approval card showed
+ * commits, files and a classification, and ASECRM-288's reviewer still could
+ * not tell what approving would gain or risk: that lived in a 200-line plan
+ * written for the next agent. Same shape as a question's decision.json, so the
+ * inbox lays it out the same way.
+ */
+const CHANGE_BRIEF = `## The reviewer's brief
+
+A person may have to approve this change at a gate before it goes further, and they have not read the ticket, the code or your report. Write \`change-brief.json\` into the run artifacts directory, in plain words, every term explained:
+
+- \`question\` - "Approve <ticket>: <the change in one line>?"
+- \`situation\` - two or three sentences: what the ticket asked, what was actually wrong (or that nothing was), and what you changed.
+- \`criteria\` - \`{ ref, text }\` with the full text of every acceptance criterion you mention.
+- \`findings\` - one fact per entry: the test results before and after with counts, what else was run, who calls the changed code and whether any of them now behaves differently, and anything you could not verify.
+- \`options\` - at least approve and send back, each \`{ key, label, next, delivers, leaves, risk }\`: \`next\` is what the pipeline does if it is chosen, \`delivers\` the advantages (what the ticket and the product gain), \`leaves\` the disadvantages (what stays open or could go wrong), \`risk\` the worst plausible outcome, if there is one worth naming.
+- \`recommendation\` - \`{ option, why }\`.
+
+Rewrite it if a later attempt changes the change. It is for the reviewer, not a question: do not end with \`PIPELINE-ASK:\` because of it.`
+
 const SDLC_LANGUAGE_SKILLS = `## Language-matched skills
 
 The stack this run touches is named in the context packet and the product
@@ -963,6 +983,16 @@ A single-row test lets a fix pass by special-casing the reported input. That is 
 
 Read \`work_type\` from \`meta.json\` before choosing what the oracle proves. For \`bug\`, the test reproduces the reported failure and goes red on current code. For \`feature\` or \`change_request\` there is no failure to reproduce: the test states the behaviour the ticket asks for and goes red because that behaviour is absent, one row per acceptance criterion the ticket names. Say which framing you used in \`plan.md\`; a feature oracle written as if it were a bug reproduction proves nothing.
 
+## A ticket that asks only for a test
+
+Some tickets report no wrong behaviour: a scanner's test-gap finding, or "X has no test". The code may already be right, and then an honest oracle passes on it. That is the expected result, not a failed reproduction, and it is **not a question for a person** - developers have already ruled on it: the passing test is accepted and the run moves on. Do not end with \`PIPELINE-ASK:\` over it.
+
+What stands in for the red run is proof that the test has teeth. Break the behaviour it covers on purpose, in at least three different ways that each matter to a row (drop a branch, swap a constant, return the default early), run the oracle against each, confirm it goes red, and restore the code exactly - \`git diff\` on production files must be empty afterwards. Write each break and its result to \`mutation-proof.md\` in the run artifacts directory. A break the test does not catch means the test is too weak: strengthen it and try again. Only if you cannot make it catch them is there something to report, and then as a failed step, not a question.
+
+If the test goes red on current code, the ticket found a real defect after all: it is an ordinary oracle, and everything below applies as written.
+
+Record the proof on the oracle in \`meta.json\` (see Artifacts): \`"mutation_proof": { "mutants": <breaks tried>, "killed": <breaks the test caught>, "report": "mutation-proof.md" }\`. The bundle validator accepts a passing pre-fix oracle only with this, and only when every break was caught.
+
 ## Write the plan first — the gate depends on it
 
 You are the first step that writes into the target repository, so **the plan gate (B2) stops you before your test lands** unless \`.agent/plan.md\` exists there. Do not treat that as an obstacle to route around: by this point you know all five things it asks for, and the plan travels into the evidence bundle so a reviewer sees what was intended as well as what was done.
@@ -985,9 +1015,9 @@ Find the project's existing test framework and follow it exactly — its directo
 
 ## Prove it fails
 
-Run the test against the current, unfixed code and capture the output **verbatim**. That FAIL output is evidence in the final bundle, not a formality — quote it, do not summarise it. If the test passes on unfixed code, you have not reproduced the bug: say so plainly and stop, rather than weakening the test until it goes red.
+Run the test against the current, unfixed code and capture the output **verbatim**. That FAIL output is evidence in the final bundle, not a formality — quote it, do not summarise it. If the test passes on unfixed code, you have not reproduced the bug: say so plainly and stop, rather than weakening the test until it goes red. The one exception is a ticket that asks only for a test (above), which goes on with its mutation proof.
 
-A single run is not evidence. **Run the oracle three times** and record all three — the bundle is rejected at \`oracle.runs\` if you do not, because one run cannot distinguish a real reproduction from a flake. And this oracle must **FAIL**: the assembler derives \`oracle.verdict\` from the xunit file itself, and the bundle validator hard-rejects anything but \`oracle.verdict: FAIL\` here — a pre-fix oracle that passes means you reproduced nothing, not that the bug is mild.
+A single run is not evidence. **Run the oracle three times** and record all three — the bundle is rejected at \`oracle.runs\` if you do not, because one run cannot distinguish a real reproduction from a flake. And this oracle must **FAIL**, test-only tickets aside: the assembler derives \`oracle.verdict\` from the xunit file itself, and the bundle validator hard-rejects anything but \`oracle.verdict: FAIL\` here — a pre-fix oracle that passes means you reproduced nothing, not that the bug is mild.
 
 ## Report
 
@@ -997,7 +1027,7 @@ State: the test file path (later steps must not edit it), the exact run command,
 
 Write the pre-fix run to \`oracle-before.xml\` in the run artifacts directory named at the top of your input, in JUnit xunit format (\`<testsuite tests="" failures="" errors="" skipped="">\`) — the assembler reads exactly this filename and parses it as xunit to derive the FAIL verdict itself; a summary in prose does not substitute for it.
 
-Then merge an \`oracle\` key into \`meta.json\` in that same directory with \`kind\`, \`path\`, \`runs\` (3, from the three runs above) and \`rows\` (how many parameterised cases). Do not set \`verdict\` yourself — the assembler derives it from \`oracle-before.xml\`. \`kind\` is a closed enum; use exactly one of: \`parameterised_test\`, \`acceptance_tests\`, \`verification_check\`, \`doc_build\`, \`reproduction\` (this is almost always \`parameterised_test\`, given the table-driven test this step produces). \`meta.json\` already exists — read it, merge \`oracle\` into the object, and write the whole object back. Never overwrite it.
+Then merge an \`oracle\` key into \`meta.json\` in that same directory with \`kind\`, \`path\`, \`runs\` (3, from the three runs above) and \`rows\` (how many parameterised cases). Do not set \`verdict\` yourself — the assembler derives it from \`oracle-before.xml\`. \`kind\` is a closed enum; use exactly one of: \`parameterised_test\`, \`acceptance_tests\`, \`verification_check\`, \`doc_build\`, \`reproduction\` (this is almost always \`parameterised_test\`, given the table-driven test this step produces). A test-only ticket whose oracle passes adds \`mutation_proof\` to it as described above. \`meta.json\` already exists — read it, merge \`oracle\` into the object, and write the whole object back. Never overwrite it.
 
 ## Zero is not a pass
 
@@ -1046,6 +1076,10 @@ not happen.`,
 ## Feature and change tickets
 
 When \`meta.json\` says \`work_type\` is \`feature\` or \`change_request\`, the "cause" is the absence of the behaviour, and the change is the smallest implementation that makes the oracle's rows pass without touching what they do not cover. The same rules apply: no refactor, no tidy-up, no scope beyond the rows.
+
+## When the oracle passed before any fix
+
+A ticket that asked only for a test can arrive with a passing oracle and a \`mutation_proof\` on it in \`meta.json\`: the test is the deliverable and the code was already right. Change no production code. Confirm the oracle still passes, and record \`fix\` for the commit(s) that added the test, counted the same way.
 
 ## Method
 
@@ -1122,7 +1156,9 @@ PIPELINE-HALT: <one line saying what stopped you>
 
 That line stops the run. Nothing after your step will execute, which is the
 correct outcome: every later step's work would be built on something that did
-not happen.`,
+not happen.
+
+${CHANGE_BRIEF}`,
   },
   {
     id: 'sdlc-verifier',
@@ -2214,7 +2250,9 @@ then the listing of the artifacts directory. There is no partial: work the plan 
 ${SDLC_LANGUAGE_SKILLS}
 ${SDLC_STANDING_RULES}
 
-${SDLC_STOPPING}`,
+${SDLC_STOPPING}
+
+${CHANGE_BRIEF}`,
   },
   {
     id: 'sdlc-ce-review',
@@ -3007,7 +3045,9 @@ If you cannot complete this step — the design is unimplementable, the test fra
 
 PIPELINE-HALT: <one line saying what stopped you>
 
-That line stops the run. Nothing after your step will execute, which is the correct outcome.`,
+That line stops the run. Nothing after your step will execute, which is the correct outcome.
+
+${CHANGE_BRIEF}`,
   },
   {
     id: 'sdlc-scanner-security',
