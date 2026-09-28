@@ -3832,6 +3832,18 @@ Multiple findings from the same root cause get ONE ticket, not one each. Group b
 - A failing test AND the bug it exposes → one ticket for the bug, noting the test failure as evidence
 - A dependency vulnerability AND code that uses the vulnerable API → one ticket
 
+## Combine small findings into one ticket
+
+Root cause is the first reason to group; size is the second. Every ticket filed becomes a Jira issue someone reads and a Runbook A run with its own branch, stack, gates and pull request - scans filed one ticket per actionable finding (21 findings, 21 tickets), many of them a single missing test or a one-line fix. So after grouping by root cause, **combine** actionable findings that one developer would naturally fix in one sitting and one pull request:
+
+- **Same component** - the same module, package or service - and **the same \`work_type\`**. The dispatch step routes a ticket on its \`work_type\`, so a mixed ticket cannot be routed.
+- **The same \`blast_radius\`.** It decides whether a person must approve the change before it merges, so a trivial fix combined with a \`money\` change would wait at that gate for no reason. Owner-gated findings (\`money\`, \`protocol\`, \`schema\`) are combined only with each other within one component.
+- **Small enough for one reviewable pull request:** at most 6 findings, and a fix you expect to touch roughly 10 files or fewer. Past that, make two tickets split along a line a developer would recognise (by sub-package, by endpoint), not at random.
+
+Keep a finding on its own ticket when it is \`critical\`, when it is a security vulnerability that can be exploited, or when it needs a decision the others do not (an ambiguous expected behaviour). Those should not wait for, or be diluted by, the rest.
+
+A combined group takes the **highest** \`priority\` of its members. Give every actionable finding a \`triage.group_id\`: its own ID when it stands alone, and the ID of the group's first finding when it is combined. Findings that share a \`group_id\` become one ticket.
+
 ## Classification
 
 For each actionable finding (or group), assign:
@@ -3852,14 +3864,14 @@ When the file is absent, say so plainly and mark the dedup-against-Jira column a
 
 End with a triage summary:
 - Total findings from scanner
-- Actionable (will become tickets)
+- Actionable findings, and the tickets they combine into
 - Duplicates (grouped into actionable)
 - Existing (already tracked)
 - Noise (filtered out)
 
 ## Artifacts
 
-Write \`triage-report.json\` into the run artifacts directory — the same array as the scanner, but each finding now has an additional \`triage\` object with \`verdict\` (actionable/duplicate/existing/noise), \`group_id\` (for duplicates — the actionable ID they belong to), \`reason\` (one sentence), and the classification fields above for actionable findings.
+Write \`triage-report.json\` into the run artifacts directory — the same array as the scanner, but each finding now has an additional \`triage\` object with \`verdict\` (actionable/duplicate/existing/noise), \`group_id\` (every actionable finding and every duplicate: the ID of the group's first finding, which is the finding's own ID when it stands alone), \`reason\` (one sentence), and the classification fields above for actionable findings.
 
 Write \`triage-summary.md\` — the human-readable triage table.
 
@@ -3904,7 +3916,9 @@ PIPELINE-HALT: <one line saying what stopped you>`,
 
 ## Read the triage report
 
-The run artifacts directory contains \`triage-report.json\`. Read it. Work only with findings whose \`triage.verdict\` is \`actionable\`. Group them by \`triage.group_id\` — each unique group becomes one ticket.
+The run artifacts directory contains \`triage-report.json\`. Read it. Work only with findings whose \`triage.verdict\` is \`actionable\`. Group them by \`triage.group_id\` — each unique group becomes one ticket. Triage combines small related findings (same component, \`work_type\` and \`blast_radius\`) so a scan files a few tickets of useful size rather than one per missing test.
+
+A combined ticket is still one piece of work: title it by what the findings share ("[billing] Missing tests for the quota and rate-plan converters"), give each finding its own subsection under **What was found** and **Evidence**, and write at least one acceptance criterion per finding so none is dropped when the ticket is worked. \`finding_ids\` lists every finding the ticket covers.
 
 ## Ticket format
 
