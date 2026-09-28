@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { isLiveStatus, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
+import { isLiveStatus, isTestRun, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 
 /**
@@ -225,7 +225,8 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
         size="xs" :variant="confirmingStop ? 'solid' : 'ghost'" :color="confirmingStop ? 'error' : 'neutral'"
         :label="confirmingStop ? 'Confirm stop' : 'Stop'" @click="handleStop"
       />
-      <UButton v-if="mayDrive && settledRun" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
+      <!-- Not for a test run: a clone is a REAL run, and would carry a test's config into real side effects. -->
+      <UButton v-if="mayDrive && settledRun && !isTestRun(run)" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />
     </div>
   </div>
 </template>

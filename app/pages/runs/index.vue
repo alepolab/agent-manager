@@ -44,15 +44,20 @@ const groups = ref<{ id: string, name: string, inFlight: number, maxConcurrent: 
 const loadFor = (r: WorkflowRun) => groups.value.find(g => g.id === (r.group?.trim() || 'default'))
 
 async function refresh() {
+  // A response for a view the page has since left would overwrite the new view's list.
+  const forView = view.value
   try {
     // Test runs are only fetched for the Tests view: everywhere else they would
     // sit beside the real runs they test, and be counted with them.
-    runs.value = await $fetch<WorkflowRun[]>(view.value === 'tests' ? '/api/runs?tests=1' : '/api/runs')
+    const list = await $fetch<WorkflowRun[]>(forView === 'tests' ? '/api/runs?tests=1' : '/api/runs')
+    if (view.value !== forView) return
+    runs.value = list
     // Best-effort: a queued row without its group's numbers still says it is
     // waiting, which is the load-bearing half.
     groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => groups.value)
     loadError.value = null
   } catch (e: any) {
+    if (view.value !== forView) return
     loadError.value = e.data?.message || e.message || 'Failed to load runs'
   } finally {
     loaded.value = true
@@ -125,6 +130,8 @@ const baseShown = computed(() => runs.value.filter(r =>
 const countOf = (v: string) => baseShown.value.filter(r => matchesView(r, v)).length
 
 const shown = computed(() => baseShown.value.filter(r => inView(r)))
+/** Like the chips: test runs count only while Tests is the view. */
+const headerCount = computed(() => runs.value.filter(r => view.value === 'tests' ? isTestRun(r) : !isTestRun(r)).length)
 
 /** Wide screens open the run beside the list; narrow ones go to its page. */
 function select(r: WorkflowRun) {
@@ -216,7 +223,7 @@ async function deleteFailed() {
   <div>
     <PageHeader title="Runs">
       <template #trailing>
-        <span class="t-small text-meta">{{ runs.length }}</span>
+        <span class="t-small text-meta">{{ headerCount }}</span>
       </template>
     </PageHeader>
 

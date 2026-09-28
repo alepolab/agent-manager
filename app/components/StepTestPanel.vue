@@ -43,7 +43,9 @@ const testing = ref(false)
 const testRunId = ref('')
 const result = shallowRef<ReturnType<typeof useRun> | null>(null)
 let scope: EffectScope | null = null
-onScopeDispose(() => scope?.stop())
+// A POST still in flight when the panel goes away must not open a stream nobody will close.
+let disposed = false
+onScopeDispose(() => { disposed = true; scope?.stop() })
 
 async function runTest() {
   if (!selected.value) return
@@ -51,6 +53,7 @@ async function runTest() {
   try {
     const { id: _id, next: _next, position: _position, ...stepOverride } = props.step
     const run = await $fetch<WorkflowRun>(`/api/runs/${selected.value}/test`, { method: 'POST', body: { stepId: props.step.id, stepOverride } })
+    if (disposed) return
     scope?.stop()
     scope = effectScope()
     const r = scope.run(() => useRun(run.id))!

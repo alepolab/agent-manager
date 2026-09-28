@@ -22,6 +22,9 @@ const props = defineProps<{
 const emit = defineEmits<{ patch: [Partial<WorkflowStep>] }>()
 const tab = ref<'setup' | 'configure' | 'test'>('setup')
 watch(() => props.step.id, () => { tab.value = 'setup' })
+/** Mounted on first visit, then kept: selecting a step should not fetch every run to test it against. */
+const testOpened = ref(false)
+watch(tab, (t) => { if (t === 'test') testOpened.value = true })
 const kind = computed(() => stepKind(props.step))
 const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, label: a.name })))
 </script>
@@ -67,7 +70,8 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
       </div>
     </div>
 
-    <StepTestPanel v-else-if="tab === 'test'" :workflow-slug="workflowSlug" :step="step" />
-    <StepConfigFields v-else :step="step" :kind="kind" :agents="agents" :channels="channels" :parameter-names="parameterNames" :read-only="readOnly" @patch="(p) => { emit('patch', p) }" />
+    <StepConfigFields v-else-if="tab === 'configure'" :step="step" :kind="kind" :agents="agents" :channels="channels" :parameter-names="parameterNames" :read-only="readOnly" @patch="(p) => { emit('patch', p) }" />
+    <!-- Kept mounted across tabs, so a test's result survives a trip to Setup to adjust the step. -->
+    <StepTestPanel v-if="testOpened" v-show="tab === 'test'" :workflow-slug="workflowSlug" :step="step" />
   </div>
 </template>
