@@ -86,6 +86,7 @@ assert.equal(isTestRun({ testOf: { sourceRunId: 'r', stepId: 's', startPoint: 'x
   assert.equal(byId.a.status, 'completed'); assert.equal(byId.a.output, 'output of agent-a')
   assert.equal(byId.b.status, 'completed')
   assert.equal(byId.c.status, 'skipped'); assert.equal(byId.c.skipReason, 'Not part of this test')
+  assert.equal(byId.b.agentSlug, 'agent-b2', 'the tested record names the agent that ran')
   assert.equal(test.testOf.sourceRunId, source.id)
   assert.equal(test.stopAfter, 'b')
   assert.equal(test.parentRunId, undefined, 'dispatch lineage untouched')
@@ -104,6 +105,67 @@ assert.equal(isTestRun({ testOf: { sourceRunId: 'r', stepId: 's', startPoint: 'x
   runner.setAgentCaller(async (slug) => { if (slug === 'agent-a') throw new Error('stop'); return 'x' })
   const early = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
   await assert.rejects(runner.startTestRun(early.id, 'c'), e => e.status === 409 && /did not finish/.test(e.message))
+}
+
+// ── 4. a test run's rework or widen is its outcome, never a restart ───────
+{
+  const workflow = { slug: 'reworked', name: 'Reworked', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b', 's'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: ['c'] },
+    { id: 's', agentSlug: 'agent-s', label: 'Sierra', next: [] },
+    { id: 'c', agentSlug: 'agent-c', label: 'Charlie', next: [] },
+  ] }
+  save(workflow)
+  runner.setAgentCaller(async (slug) => `output of ${slug}`)
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  assert.equal(source.status, 'completed')
+
+  for (const line of ['PIPELINE-REWORK: Alpha — redo it', 'PIPELINE-WIDEN: someorg/other-repo — the fault is there']) {
+    const seen = []
+    runner.setAgentCaller(async (slug) => { seen.push(slug); return slug === 'agent-b' ? `looked\n${line}` : `fresh ${slug}` })
+    const test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+    assert.deepEqual(seen, ['agent-b'], `${line}: only the tested step ran`)
+    assert.equal(test.status, 'completed', `${line}: the test settles`)
+    const byId = Object.fromEntries(test.steps.map(s => [s.stepId, s]))
+    assert.equal(byId.a.output, 'output of agent-a', `${line}: the seeded ancestor keeps its output`)
+    assert.equal(byId.s.status, 'skipped'); assert.equal(byId.s.skipReason, 'Not part of this test')
+    assert.ok(byId.b.output.includes(line), `${line}: the instruction stays visible in the step's output`)
+    assert.equal(test.product, source.product, `${line}: the run's scope is not widened`)
+  }
+}
+
+// ── 5. a stale produces file does not pass the test; runWhen does not skip it ──
+{
+  const workflow = { slug: 'producing', name: 'Producing', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [], produces: ['b-report.md'], maxVisits: 1 },
+  ] }
+  save(workflow)
+  runner.setAgentCaller(async (slug, input) => {
+    if (slug === 'agent-b') writeFileSync(join(input.match(/Write every artifact you produce into: (\S+)/)[1], 'b-report.md'), 'the report\n')
+    return `output of ${slug}`
+  })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  assert.equal(source.status, 'completed', 'the source step wrote its file')
+  runner.setAgentCaller(async (slug) => `output of ${slug}`)
+  const test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(test.status, 'failed', 'the source\'s copy of the file does not satisfy the tested step')
+  assert.match(test.error, /Output check/)
+}
+{
+  const workflow = { slug: 'conditional', name: 'Conditional', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [], runWhen: { artifact: 'missing.md' } },
+  ] }
+  save(workflow)
+  const seen = []
+  runner.setAgentCaller(async (slug) => { seen.push(slug); return `output of ${slug}` })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  assert.equal(source.status, 'completed'); assert.deepEqual(seen, ['agent-a'], 'the source skipped b on its condition')
+  seen.length = 0
+  const test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.deepEqual(seen, ['agent-b'], 'a test always runs its step')
+  assert.equal(test.status, 'completed')
 }
 
 console.log('testRun: all checks passed')

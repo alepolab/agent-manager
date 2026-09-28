@@ -30,7 +30,7 @@ import { runPreflight as realPreflight, preflightFailure, type PreflightReport, 
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
@@ -1008,7 +1008,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     if (widen) {
       let added: string[]
       try {
-        added = await widenProduct(run, widen.target)
+        // A test run records the widen as its step's outcome; it never acts on
+        // it, so the run's scope is not the step's to change.
+        added = isTestRun(run) ? [] : await widenProduct(run, widen.target)
       } catch (err) {
         markFailed(l.state, id)
         Object.assign(rec, { status: 'failed', output, model, usage, error: `Step asked to widen the run and could not: ${err instanceof Error ? err.message : String(err)}`, completedAt: Date.now() })
@@ -2040,6 +2042,18 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return failRunAfterWave(l, run, runnable)
   }
 
+  // In a test run a widen or a rework is the tested step's recorded outcome,
+  // never a restart: acting on it would re-run the seeded ancestors and the
+  // steps that are not part of the test, and overwrite what was seeded. The
+  // instruction stays in the step's output, where the step wrote it.
+  if (isTestRun(run) && (l.widen || l.rework)) {
+    for (const w of [l.widen, l.rework]) {
+      if (w) logLine(l, run, recOf(run, w.from), 'recorded, not acted on: this is a test run')
+    }
+    l.widen = undefined
+    l.rework = undefined
+  }
+
   // A step is waiting on the operator: nothing else starts until they answer.
   if (l.widen) {
     // Re-provision with the wider scope and continue from there: the same reset
@@ -2927,7 +2941,9 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   if (!workflow) {
     throw new RestartError(409, `Workflow "${run.workflowSlug}" no longer exists, so this run cannot be rebuilt`)
   }
-  const steps = withTestOverride(alignStepIds(workflow.steps, run), run)
+  // Overridden before alignment too: a test run's record carries the tested
+  // step's overridden agent, and must align with the list it was built from.
+  const steps = withTestOverride(alignStepIds(withTestOverride(workflow.steps, run), run), run)
   const aligned = { ...workflow, steps }
   const graph = buildGraph(steps)
   const state = initRunState(graph)
@@ -3261,12 +3277,25 @@ export async function startTestRun(
       })
     } else if (rec.stepId !== stepId) {
       Object.assign(rec, { status: 'skipped', skipReason: 'Not part of this test' })
+    } else {
+      // The record, and the artifact named after it, show what actually runs.
+      const def = withTestOverride(steps, run).find(s => s.id === stepId)
+      if (typeof def?.agentSlug === 'string') rec.agentSlug = def.agentSlug
+      if (typeof def?.label === 'string') rec.label = def.label
     }
   }
   await saveRun(run)
 
   if (existsSync(runArtifactsDir(sourceRunId))) {
     await cp(runArtifactsDir(sourceRunId), runArtifactsDir(run.id), { recursive: true, force: false })
+    // The source's own copy of what the tested step writes would satisfy its
+    // output check without the step writing anything. Only those files, and
+    // only inside this run's directory (resolveRunArtifact refuses anything else).
+    const produces = withTestOverride(steps, run).find(s => s.id === stepId)?.produces
+    for (const name of Array.isArray(produces) ? produces : []) {
+      const path = typeof name === 'string' ? resolveRunArtifact(run.id, name) : null
+      if (path) await rm(path, { force: true }).catch(() => { /* a directory, not a file: left alone */ })
+    }
   }
 
   let l: Live
@@ -3279,6 +3308,9 @@ export async function startTestRun(
   // Armed the way restartRun arms its restart point. Every forward
   // predecessor is an ancestor, and every ancestor was seeded settled.
   armNode(l.state, stepId)
+  // A test always runs its step: as with a restart, naming the step waives
+  // its `runWhen`, which would otherwise skip it and report a test of nothing.
+  l.conditionOverride = new Set([stepId])
   l.running = true
   run.status = 'running'
   run.currentStepIds = []
