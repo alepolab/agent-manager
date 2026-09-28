@@ -175,6 +175,23 @@ export interface SendBack {
   at: number
 }
 
+/**
+ * What a test run is testing: one step of another (real) run, on its own
+ * branch, with no side effects on the source run or its accounting.
+ */
+export interface TestOf {
+  /** The run this test is testing a step of. */
+  sourceRunId: string
+  /** The step, within that run, being tested. */
+  stepId: string
+  /** Overrides to the step's config for this test only (e.g. a different prompt). */
+  stepOverride?: Record<string, unknown>
+  /** The commit or ref the test's worktree started from — the source step's `headAtStart`, or its run's `baseCommit` when that is absent. */
+  startPoint: string
+  /** A developer's note on why this test was run, or what it's checking. */
+  codeNote?: string
+}
+
 export interface RunStep {
   stepId: string
   label: string
@@ -247,6 +264,8 @@ export interface RunStep {
    *  The step does not wait for them, so this is the only link back: without
    *  it a dispatched child is an orphan run nobody can trace to its cause. */
   childRunIds?: string[]
+  /** The commit (`git rev-parse HEAD` in the run's worktree) this step started from. Lets a test of this step start from the same code. Absent on runs from before it was recorded. */
+  headAtStart?: string
 }
 
 /** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
@@ -551,6 +570,19 @@ export interface WorkflowRun {
   /** Random id of the server process that owns this run. In a container every
    *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
   bootId?: string
+  /** Set on a run that tests one step of another run. Never set on a real run. See TestOf. */
+  testOf?: TestOf
+  /** The runner arms nothing after this step and settles the run when it settles. Set on test runs. */
+  stopAfter?: string
+}
+
+/**
+ * A run that tests one step of another run, rather than doing real work: it
+ * has no ticket to comment on, holds no concurrency-group slot, and must
+ * never be counted alongside the real runs it is testing.
+ */
+export function isTestRun(run: Pick<WorkflowRun, 'testOf'>): boolean {
+  return !!run.testOf
 }
 
 /**
@@ -632,6 +664,10 @@ export interface CostAggregate {
   totals: RunCostSummary['totals']
   runs: RunCostSummary[]
   note: string
+  /** The same aggregate, but over test runs only (see TestOf) — kept apart
+   *  from the real-run totals above, never folded into them. Optional so
+   *  every existing consumer of this shape needs no change. */
+  tests?: CostAggregate
 }
 
 export interface NewRunInput {

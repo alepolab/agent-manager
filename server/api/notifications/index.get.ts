@@ -1,4 +1,5 @@
 import { can } from '../../../shared/types/role'
+import { isTestRun } from '../../../shared/types/run'
 import { buildNotifications } from '../../../shared/utils/notifications'
 import { listPendingPermissions } from '../../utils/providers/claudeProvider'
 import { detectSdkSession } from '../../utils/sdkSessionStorage'
@@ -20,5 +21,5 @@ export default defineEventHandler(async (event) => {
     ...p,
     projectName: (await detectSdkSession(p.sessionId).catch(() => null)) ?? undefined,
   })))
-  return { items: buildNotifications(await listRuns(), permissions, role) }
+  return { items: buildNotifications((await listRuns()).filter(r => !isTestRun(r)), permissions, role) }
 })

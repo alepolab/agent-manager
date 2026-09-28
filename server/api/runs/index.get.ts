@@ -1,3 +1,4 @@
+import { isTestRun } from '../../../shared/types/run'
 import { listRuns } from '../../utils/workflowRunStore'
 
 /**
@@ -8,5 +9,11 @@ import { listRuns } from '../../utils/workflowRunStore'
  * which workflow produced it — and a run started headlessly (scripts/run-ticket.mjs)
  * had no obvious home in the UI at all. `listRuns()` has always accepted an
  * optional slug; this simply exposes the unfiltered call.
+ *
+ * Test runs (see TestOf) are hidden by default — they are not real work and
+ * would otherwise clutter run history — unless `?tests=1` asks for them.
  */
-export default defineEventHandler(async () => listRuns())
+export default defineEventHandler(async (event) => {
+  const runs = await listRuns()
+  return getQuery(event).tests === '1' ? runs : runs.filter(r => !isTestRun(r))
+})

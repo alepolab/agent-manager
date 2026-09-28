@@ -11,7 +11,7 @@ import { runArtifactsDir } from './runArtifacts.ts'
 // runtime, and the plain-node test scripts that import this module directly
 // resolve no aliases. The type-only imports below may keep the alias because
 // they are erased.
-import { isLiveStatus, isWorkingStatus } from '../../shared/types/run.ts'
+import { isLiveStatus, isTestRun, isWorkingStatus } from '../../shared/types/run.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
 
@@ -237,7 +237,9 @@ export async function listRuns(workflowSlug?: string): Promise<WorkflowRun[]> {
  *  queue on its next cycle, which is the dedupe this function exists for. */
 export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun | null> {
   const runs = await listRuns(workflowSlug)
-  return runs.find(r => isLiveStatus(r.status)) ?? null
+  // A test run is not the real thing this dedupe protects: it must never be
+  // mistaken for "this workflow is already running" and block a real one.
+  return runs.find(r => isLiveStatus(r.status) && !isTestRun(r)) ?? null
 }
 
 /**

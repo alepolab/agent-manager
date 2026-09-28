@@ -46,7 +46,7 @@ import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type Launc
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { childrenSettled } from '../../shared/types/run.ts'
+import { childrenSettled, isTestRun } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { recordCheck, recordSendBack } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
@@ -410,7 +410,8 @@ async function publish(run: WorkflowRun) {
         // is done either way, and a run reported as failed because Jira was
         // unreachable would be a lie about the code.
         // Unless a Jira step of the workflow already posted it.
-        if (run.ticketKey && !run.ticketCommented) {
+        // A test run tells no one: it has no ticket of its own to comment on.
+        if (!isTestRun(run) && run.ticketKey && !run.ticketCommented) {
           try {
             const result = await notifyTicketOutcome(
               { id: run.watch, name: run.workflowName },
@@ -453,7 +454,8 @@ async function publish(run: WorkflowRun) {
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
-    onRunTransition(run)
+    // A test run tells no one: no Slack message, no channel notification.
+    if (!isTestRun(run)) onRunTransition(run)
     // A settled run has given its slot back, so whatever is waiting in its
     // group can start. Here rather than in notify.ts, which cannot reach
     // startRun without an import cycle. Not awaited: the drain starts runs of
@@ -826,6 +828,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   }
   markRunning(l.state, id)
   l.firstStartedAt[id] ??= Date.now()
+  // The commit this visit started from, so a later test of this one step can
+  // start from the same code. Absent when there is no checkout to read.
+  const headAtStart = run.projectDir ? (await captureBaseline(run.projectDir)) ?? undefined : undefined
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
@@ -836,6 +841,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // Progress telemetry is per-visit, not cumulative across retries — a
     // fresh visit's turn count must not start from a previous attempt's.
     assistantMessages: undefined, lastTool: undefined, lastActivityAt: undefined,
+    headAtStart,
   })
   log.debug('step starting', () => ({
     runId: run.id, stepId: id, agentSlug: step.agentSlug, visits: rec.visits,
