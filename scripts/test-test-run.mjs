@@ -322,5 +322,92 @@ assert.equal(isTestRun({ testOf: { sourceRunId: 'r', stepId: 's', startPoint: 'x
   assert.equal(existsSync(wtDir(2)), false, 'nothing left where the worktree was made')
 }
 
+// ── 10. a settled test run re-runs only its tested step, into a fresh worktree ──
+{
+  const workflow = { slug: 'replayed', name: 'Replayed', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b', 'c'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+    { id: 'c', agentSlug: 'agent-c', label: 'Charlie', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  const seen = []
+  runner.setAgentCaller(async (slug, input, dir) => {
+    seen.push({ slug, input })
+    writeFileSync(join(dir, `${slug}.txt`), slug); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', slug)
+    return `output of ${slug}`
+  })
+  const src = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })).id, TIMEOUT)
+  assert.equal(src.status, 'completed')
+  assert.ok(seen.every(s => !/This is a test run of one step/.test(s.input)), 'a real run\'s agents are not told it is a test')
+  // The product expects a checkout, the way a routed run's does.
+  const source = await store.getRun(src.id)
+  source.product = { name: 'p', repos: ['someorg/replayed'], branches: { bug: 'develop' }, tests: {} }
+  await store.saveRun(source)
+
+  seen.length = 0
+  const dirs = []
+  runner.setAgentCaller(async (slug, input, dir) => { seen.push({ slug, input }); dirs.push({ dir, there: existsSync(dir) }); return `tested ${slug}` })
+  let test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(test.status, 'completed', `${test.error} | ${test.steps.map(s => s.error).join(' ')}`)
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b'])
+  assert.match(seen[0].input, /This is a test run of one step\. Do not push, open pull requests, post messages or change tickets; describe what you would do instead\./, 'the tested agent is told it is a test')
+  for (let i = 0; i < 50 && existsSync(dirs[0].dir); i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(existsSync(dirs[0].dir), false, 'the worktree went when the test settled')
+  test = await store.getRun(test.id)
+  for (let i = 0; i < 50 && !test.testOf.testWorktreeRemoved; i++) { await new Promise(r => setTimeout(r, 100)); test = await store.getRun(test.id) }
+  assert.equal(test.testOf.testWorktreeRemoved, true)
+
+  // Replaying from anywhere but the tested step would run what the test is not.
+  for (const other of ['a', 'c']) {
+    await assert.rejects(runner.restartRun(test.id, other), e => e.statusCode === 409 && /only re-runs the step it tests/.test(e.message), `restart from ${other} is refused`)
+  }
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b'], 'nothing ran for the refused restarts')
+
+  // The tested step itself: only it runs, in a worktree made again, removed again after.
+  seen.length = 0; dirs.length = 0
+  await runner.restartRun(test.id, 'b')
+  const again = await runner.waitForSettled(test.id, TIMEOUT)
+  assert.equal(again.status, 'completed', 'a test of a product workflow restarts although its worktree was removed')
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b'], 'only the tested step re-ran')
+  assert.equal(dirs[0].there, true, 'the worktree was made again for it')
+  const byId = Object.fromEntries(again.steps.map(s => [s.stepId, s]))
+  assert.equal(byId.a.output, 'output of agent-a'); assert.equal(byId.c.status, 'skipped')
+  for (let i = 0; i < 50 && existsSync(dirs[0].dir); i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(existsSync(dirs[0].dir), false, 'and removed again when it settled')
+  assert.equal(git(projectDir, 'branch', '--list', 'test/*'), '', 'no test branch left behind')
+
+  // A test run is not something to test against.
+  await assert.rejects(runner.startTestRun(test.id, 'b'), e => e.status === 409 && /Pick a real run to test against, not a test run\./.test(e.message))
+}
+
+// ── 11. two tests of the same step at once each get their own worktree ─────
+{
+  const workflow = { slug: 'racing', name: 'Racing', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  runner.setAgentCaller(async (slug, _i, dir) => {
+    writeFileSync(join(dir, `${slug}.txt`), slug); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', slug)
+    return `output of ${slug}`
+  })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })).id, TIMEOUT)
+  assert.equal(source.status, 'completed')
+  const seenDirs = []
+  runner.setAgentCaller(async (_slug, _i, dir) => {
+    await new Promise(r => setTimeout(r, 500))
+    seenDirs.push({ dir, there: existsSync(join(dir, '.git')) })
+    return 'tested'
+  })
+  const [t1, t2] = await Promise.all([runner.startTestRun(source.id, 'b'), runner.startTestRun(source.id, 'b')])
+  const [r1, r2] = await Promise.all([runner.waitForSettled(t1.id, TIMEOUT), runner.waitForSettled(t2.id, TIMEOUT)])
+  assert.deepEqual([r1.status, r2.status], ['completed', 'completed'], `both tests ran: ${r1.error ?? ''} ${r2.error ?? ''}`)
+  assert.notEqual(r1.branch, r2.branch, 'each on its own branch')
+  assert.equal(seenDirs.length, 2)
+  assert.ok(seenDirs.every(d => d.there), 'neither worktree was removed from under its agent')
+}
+
 console.log('testRun: all checks passed')
 process.exit(0)

@@ -835,6 +835,8 @@ export function parseAsk(output: string): string | null {
   return m ? m[1]!.trim() : null
 }
 
+const TEST_RUN_NOTE = 'This is a test run of one step. Do not push, open pull requests, post messages or change tickets; describe what you would do instead.'
+
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
   const step = stepOf(l, id)
   const rec = recOf(run, id)
@@ -854,6 +856,11 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     body += `\n\n---\nOperator note from ${run.startedBy ?? 'the operator'}, sent while the run was in flight: ${note}`
     delete l.notes[id]
     if (l.nextNote === note) l.nextNote = undefined
+  }
+  // A test run's agent works for real on its own throwaway branch; what it must
+  // not do is reach outside it. The runner's own steps already dry-run.
+  if (isTestRun(run) && !step.jira && !step.notify && !step.triggerWorkflow && !body.includes(TEST_RUN_NOTE)) {
+    body += `\n\n---\n${TEST_RUN_NOTE}`
   }
   l.lastInputs[id] = body
   // The provisioner may have cloned since the last step: the branch is made
@@ -1080,7 +1087,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       l.outputs[id] = output
       Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
       l.widen = { from: id, target: widen.target, reason: widen.reason, added }
-      logLine(l, run, rec, `widened the run to ${widen.target}: ${added.length ? added.join(', ') + ' added' : 'already in scope'}`)
+      logLine(l, run, rec, isTestRun(run)
+        ? `asked to widen the run to ${widen.target}: recorded, not acted on, because this is a test run`
+        : `widened the run to ${widen.target}: ${added.length ? added.join(', ') + ' added' : 'already in scope'}`)
       log.info('step widened the run', () => ({ runId: run.id, stepId: id, target: widen.target, added, reason: preview(widen.reason) }))
       markCompleted(l.graph, l.state, id)
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
@@ -2324,24 +2333,29 @@ async function ensureTestCheckout(run: WorkflowRun, testOf: TestOf, checkout: st
   if (!rootStart || !nestedStart) {
     throw new Error(`run ${testOf.sourceRunId.slice(0, 8)} never had a branch of its own, so there is no code to test this step against`)
   }
-  let branch = run.branch
-  if (!branch) {
-    const stem = `test/${testOf.sourceRunId.slice(0, 8)}-${testOf.stepId.slice(0, 8)}-`
-    let n = 1
-    // A directory left where the worktree would go blocks `worktree add` as surely as a branch does.
-    while (await branchExists(checkout, `${stem}${n}`) || existsSync(worktreeDirFor(checkout, `${stem}${n}`))) n++
-    branch = `${stem}${n}`
-  }
-  let worktrees: string[]
-  try {
-    worktrees = await ensureTestWorktrees(checkout, branch, rootStart, nestedStart)
-  } catch (err) {
-    // A nested repository that failed after the root's was made would leave
-    // the root's worktree and branch behind, recorded nowhere.
-    await removeTestWorktrees(checkout, branch).catch(e => log.warn('could not remove a partly created test worktree; remove it by hand', {
-      runId: run.id, branch, checkout, error: e instanceof Error ? e.message : String(e),
-    }))
-    throw new Error(`could not create the test worktree for ${branch} beside ${checkout}: ${err instanceof Error ? err.message : String(err)}`)
+  // A fresh name is claimed by making it: two tests of the same step started
+  // together can both see test/…-n free, and the one whose create fails moves
+  // on to the next n rather than failing (a bounded number of times).
+  const fresh = !run.branch
+  const stem = `test/${testOf.sourceRunId.slice(0, 8)}-${testOf.stepId.slice(0, 8)}-`
+  let n = 1
+  let branch = run.branch ?? ''
+  let worktrees: string[] | undefined
+  for (let attempt = 0; !worktrees; attempt++) {
+    if (fresh) {
+      // A directory left where the worktree would go blocks `worktree add` as surely as a branch does.
+      while (await branchExists(checkout, `${stem}${n}`) || existsSync(worktreeDirFor(checkout, `${stem}${n}`))) n++
+      branch = `${stem}${n}`
+    }
+    try {
+      // On a failure ensureTestWorktrees removes what it made, and only that.
+      worktrees = await ensureTestWorktrees(checkout, branch, rootStart, nestedStart, { fresh })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const taken = fresh && (await branchExists(checkout, branch) || existsSync(worktreeDirFor(checkout, branch)) || /already exists|already checked out|already used by worktree/i.test(msg))
+      if (!taken || attempt >= 4) throw new Error(`could not create the test worktree for ${branch} beside ${checkout}: ${msg}`)
+      n++
+    }
   }
   // Made again (a restart after the test settled): the next settle removes them again.
   delete testOf.testWorktreeRemoved
@@ -2364,6 +2378,11 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // place while the header still named the deleted path.
   if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
   const checkout = runCheckout(run)
+  // A test run with a directory but no clone to make its worktree beside
+  // would otherwise work in the source run's directory: refuse instead.
+  if (!checkout && run.testOf && run.projectDir) {
+    throw new Error(`no git checkout found for ${run.projectDir}, so there is nowhere to make this test's own worktree; the test will not work in the source run's directory`)
+  }
   if (!checkout) return
   if (run.testOf) return ensureTestCheckout(run, run.testOf, checkout)
   // The base branch follows the kind of work, which intake classifies into
@@ -3177,8 +3196,14 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
         : 'wait for it to settle'
     throw new RestartError(409, `A ${run.status} run cannot be restarted; ${instead}`)
   }
+  // A test run is one step: its ancestors are the source run's outputs, and
+  // everything else is not part of the test. Restarting anywhere but the tested
+  // step would run steps the test exists not to run.
+  if (run.testOf && stepId !== run.testOf.stepId) throw new RestartError(409, 'A test run only re-runs the step it tests.')
   // Same scope as starting a run: what conflicts is a shared working directory.
-  const active = await findRunInWorkspace(runWorkspace(run), run.id)
+  // A test run never counts against that lock (it works on its own worktree),
+  // so it is not refused by it either.
+  const active = run.testOf ? null : await findRunInWorkspace(runWorkspace(run), run.id)
   if (active) {
     throw new RestartError(
       409,
@@ -3218,7 +3243,9 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // Scoped to runs that actually route to repositories. A workflow with no
   // product resolved has no checkout to be missing, and blocking those would
   // turn a real guard into a nuisance that gets deleted.
-  const expectsCheckout = (run.product?.repos?.length ?? 0) > 0
+  // A test run is exempt: its worktree was removed when it settled, and
+  // ensureTestCheckout makes it again before the tested step runs.
+  const expectsCheckout = !run.testOf && (run.product?.repos?.length ?? 0) > 0
   if (expectsCheckout && !hasCheckout(runWorkspace(run)) && ancestorsOf(l.graph, stepId).length > 0) {
     throw new RestartError(
       409,
@@ -3232,11 +3259,15 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // to the environment should say so in seconds, and a restart into an
   // environment still missing its compose file or its Jira status should not
   // spend a step's budget rediscovering that.
-  run.preflight = await preflight(run, l.workflow.steps)
-  const blocked = preflightFailure(run.preflight)
-  if (blocked) {
-    await saveRun(run)
-    throw new RestartError(409, `Preflight: ${blocked}`)
+  // Not for a test run, which never ran one: its checkout is its own
+  // throwaway worktree, made again before the tested step runs.
+  if (!run.testOf) {
+    run.preflight = await preflight(run, l.workflow.steps)
+    const blocked = preflightFailure(run.preflight)
+    if (blocked) {
+      await saveRun(run)
+      throw new RestartError(409, `Preflight: ${blocked}`)
+    }
   }
 
   const previousOutput = recOf(run, stepId).output
@@ -3370,6 +3401,7 @@ export async function startTestRun(
 ): Promise<WorkflowRun> {
   const source = await getRun(sourceRunId)
   if (!source) throw new TestRunError(404, 'Run not found')
+  if (isTestRun(source)) throw new TestRunError(409, 'Pick a real run to test against, not a test run.')
   if (isLiveStatus(source.status)) throw new TestRunError(409, 'Wait for this run to finish before testing one of its steps.')
   const tested = source.steps.find(s => s.stepId === stepId)
   if (!tested) throw new TestRunError(400, `Unknown step "${stepId}" on this run.`)

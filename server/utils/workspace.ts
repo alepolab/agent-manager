@@ -334,15 +334,32 @@ export async function branchExists(path: string, branch: string): Promise<boolea
  * run that happened here, from commits this clone already has. `-B` always,
  * because the branch name is fresh (see ensureRunCheckoutOnce).
  */
-export async function ensureTestWorktrees(path: string, branch: string, rootStart: string, nestedStart: string): Promise<string[]> {
+export async function ensureTestWorktrees(path: string, branch: string, rootStart: string, nestedStart: string, opts: { fresh?: boolean } = {}): Promise<string[]> {
+  if (!branch.startsWith('test/')) throw new Error(`refusing to make ${branch}: a test worktree is only made on a test/ branch`)
   const root = worktreeDirFor(path, branch)
   const out: string[] = []
-  for (const r of [path, ...nestedRepos(path)]) {
-    const wt = join(root, relative(path, r))
-    await git(r, ['worktree', 'prune'])
-    await git(r, ['worktree', 'add', '--quiet', '-B', branch, wt, r === path ? rootStart : nestedStart])
-    await excludeFromGit(wt, '.agent/evidence-run/')
-    out.push(wt)
+  // Only what this call made is undone on a failure: a branch or directory
+  // that was already there belongs to someone else (a concurrent test that
+  // picked the same name), and removing it would pull its worktree from
+  // under its agent.
+  const made: { repo: string, wt: string }[] = []
+  try {
+    for (const r of [path, ...nestedRepos(path)]) {
+      const wt = join(root, relative(path, r))
+      await git(r, ['worktree', 'prune'])
+      // A fresh name is claimed with -b, which fails rather than taking over a
+      // branch another test just made; a restart re-makes its own with -B.
+      await git(r, ['worktree', 'add', '--quiet', opts.fresh ? '-b' : '-B', branch, wt, r === path ? rootStart : nestedStart])
+      made.push({ repo: r, wt })
+      await excludeFromGit(wt, '.agent/evidence-run/')
+      out.push(wt)
+    }
+  } catch (err) {
+    for (const { repo, wt } of made.reverse()) {
+      await git(repo, ['worktree', 'remove', '--force', wt]).catch(() => { /* already gone */ })
+      await git(repo, ['branch', '-D', branch]).catch(() => { /* already gone */ })
+    }
+    throw err
   }
   return out
 }

@@ -15,6 +15,8 @@ const kind = computed(() => ctx.kindOf(props.stepId))
 const open = computed(() => ctx.isOpen(props.stepId))
 const run = ctx.run
 const settledRun = computed(() => !isLiveStatus(run.value.status))
+// A test run re-runs only the step it tests; its seeded ancestors and skipped steps are not replayable.
+const replayable = computed(() => !run.value.testOf || props.stepId === run.value.testOf.stepId)
 const settled = computed(() => ['completed', 'failed', 'skipped'].includes(step.value.status))
 /** This card hosts any open decision RunStack routed here (ctx.gateAt) —
  *  an ordinary question, or a runner-raised approval (budget, rework limit,
@@ -132,7 +134,7 @@ function replay() {
         <p v-else class="t-small text-label">No output yet.</p>
 
         <div class="flex flex-wrap gap-2">
-          <UButton v-if="mayDrive && settledRun && settled && !replaying" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Replay from here" @click="() => { replaying = true }" />
+          <UButton v-if="mayDrive && settledRun && settled && !replaying && replayable" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Replay from here" @click="() => { replaying = true }" />
           <UButton v-if="mayDrive && step.sessionId && step.sessionProject" size="xs" variant="soft" icon="i-lucide-message-circle" label="Ask this agent" :to="`/cli/project/${step.sessionProject}/session/${step.sessionId}`" />
           <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-folder-open" label="Evidence" @click="ctx.openEvidence()" />
         </div>

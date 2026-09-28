@@ -82,7 +82,7 @@ const verdictColor = (v: string) => v === 'CONTINUE' ? RUN_STATUS_COLOR.complete
   <div class="space-y-3 t-small" data-testid="step-test-panel">
     <p v-if="!mayTest" class="text-label">Testing a step needs permission to run the pipeline.</p>
     <template v-else>
-      <p class="text-label">Runs this step again, as configured here, against a finished run's outputs, on its own throwaway branch. Nothing is posted, pushed or ticketed.</p>
+      <p class="text-label">Runs this step again, as configured here, against a finished run's outputs. A Jira, channel or loop step only records what it would do. An agent step runs as it would in a real run, on its own throwaway branch, and is told it is a test.</p>
       <p v-if="!loaded" class="text-label" aria-busy="true">Loading runs…</p>
       <p v-else-if="!sources.length" class="text-label">Run this workflow once, then test its steps here.</p>
       <template v-else>
