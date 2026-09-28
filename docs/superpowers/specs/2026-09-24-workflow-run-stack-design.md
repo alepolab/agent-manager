@@ -305,10 +305,15 @@ endpoint calls `startTestRun`, a new function in `workflowRunner.ts`, which:
   settles.
 - A send-back (rework) or widen raised by the tested step is recorded in its
   output and never restarts anything: earlier steps never re-run.
+- An agent step runs as it would in a real run, on the test's own throwaway
+  branch. The tested agent is told it is a test: its input ends with a note
+  not to push, open pull requests, post messages or change tickets, and to
+  describe what it would do instead.
 
 **Kept apart from real runs:**
 
-- `GET /api/runs` leaves test runs out unless `?tests=1` is passed.
+- `GET /api/runs` and `GET /api/workflows/[slug]/runs` leave test runs out
+  unless `?tests=1` is passed. `/runs` shows them only under the Tests chip (§5).
 - Excluded from watch caps, `dailyDispatchCap` and concurrency group slots.
 - Never produce a notification item. Monitors still run, but a test never pauses
   for a gate: an approval flag on the tested step is ignored.
@@ -319,11 +324,17 @@ endpoint calls `startTestRun`, a new function in `workflowRunner.ts`, which:
   one.
 - Cannot be cloned: a clone is a real run, and would carry a test's config
   into real side effects. Restarting a test run keeps it a test run.
+- A test run re-runs only its tested step: "Replay from here" is offered on
+  that step alone, and a restart from any other step is refused (409). The
+  restart makes the test worktree again, and skips the missing-checkout check
+  and preflight a real restart runs, since the worktree it would look at was
+  removed when the test settled.
+- A test run cannot be the source of another test.
 
 **New run fields**
 
-- `RunStep.headAtStart?: string` is recorded when a step starts, only in runs
-  that have a worktree.
+- `RunStep.headAtStart?: string` is recorded when a step starts, whenever the
+  run's `projectDir` is a git checkout.
 - `WorkflowRun.testOf?: TestOf` is the marker described above. `WorkflowRun.origin`
   is unchanged by a test run and never gains a `'test'` value.
 - `WorkflowRun.stopAfter?: string`.
@@ -380,7 +391,8 @@ endpoint calls `startTestRun`, a new function in `workflowRunner.ts`, which:
 **Runner:**
 
 - A step's rework appends an agent `RunDecision`.
-- `headAtStart` is recorded on step start in a run with a worktree.
+- `headAtStart` is recorded on step start whenever the run's `projectDir` is
+  a git checkout.
 
 **UI, checked in the running app with agent-browser:**
 
