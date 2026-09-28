@@ -409,5 +409,33 @@ assert.equal(isTestRun({ testOf: { sourceRunId: 'r', stepId: 's', startPoint: 'x
   assert.ok(seenDirs.every(d => d.there), 'neither worktree was removed from under its agent')
 }
 
+// ── 12. a crash between settle and cleanup: the boot sweep removes what was left ──
+{
+  const projectDir = repo()
+  const ws = await import('../server/utils/workspace.ts')
+  const leftover = async (branch, testOf) => {
+    const [wt] = await ws.ensureTestWorktrees(projectDir, branch, 'HEAD', 'HEAD', { fresh: true })
+    const r = await store.createRun({ workflowSlug: 'swept', workflowName: 'Swept', initialPrompt: 'go', watch: 'direct-invocation', projectDir: wt,
+      steps: [{ stepId: 'b', label: 'Bravo', agentSlug: 'agent-b' }] })
+    r.status = 'completed'; r.branch = branch
+    if (testOf) r.testOf = testOf
+    await store.saveRun(r)
+    return { id: r.id, wt }
+  }
+  const settled = await leftover('test/crashed-b-1', { sourceRunId: 'crashed', stepId: 'b', startPoint: 'HEAD' })
+  // Not a test run, whatever its branch is called: never swept.
+  const real = await leftover('test/not-a-test-1')
+  const out = await runner.resumeInterruptedRuns()
+  assert.ok(out.swept.includes(settled.id), `the settled test was swept: ${JSON.stringify(out)}`)
+  assert.equal(existsSync(settled.wt), false, 'its leftover worktree is removed at boot')
+  assert.equal(git(projectDir, 'branch', '--list', 'test/crashed-b-1'), '', 'and its branch')
+  assert.equal((await store.getRun(settled.id)).testOf.testWorktreeRemoved, true, 'the marker is saved')
+  assert.equal((await store.getRun(settled.id)).status, 'completed', 'the outcome is unchanged')
+  assert.ok(!out.swept.includes(real.id))
+  assert.equal(existsSync(real.wt), true, 'a real run\'s worktree is never touched')
+  assert.notEqual(git(projectDir, 'branch', '--list', 'test/not-a-test-1'), '')
+  assert.deepEqual((await runner.resumeInterruptedRuns()).swept, [], 'once only')
+}
+
 console.log('testRun: all checks passed')
 process.exit(0)

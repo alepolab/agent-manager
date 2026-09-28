@@ -2353,7 +2353,10 @@ async function ensureTestCheckout(run: WorkflowRun, testOf: TestOf, checkout: st
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const taken = fresh && (await branchExists(checkout, branch) || existsSync(worktreeDirFor(checkout, branch)) || /already exists|already checked out|already used by worktree/i.test(msg))
-      if (!taken || attempt >= 4) throw new Error(`could not create the test worktree for ${branch} beside ${checkout}: ${msg}`)
+      // Another test's prune/add in .git/worktrees at the same moment: worth another go.
+      // ensureTestWorktrees has removed the branch its -b made, so nothing is left behind.
+      const raced = fresh && /\.git\/worktrees\//.test(msg)
+      if (!(taken || raced) || attempt >= 4) throw new Error(`could not create the test worktree for ${branch} beside ${checkout}: ${msg}`)
       n++
     }
   }
@@ -2795,10 +2798,23 @@ const MAX_INTERRUPTIONS = 3
  * interruption, it is a question nobody answered — and pauses rather than
  * resuming a run that keeps being interrupted, which would otherwise be a loop
  * that spends money on every boot.
+ *
+ * Also sweeps the worktrees of settled test runs the previous process never
+ * got to remove (their cleanup is deferred in memory, so a crash loses it):
+ * the same once-only removal publish does, best effort, test runs only.
  */
-export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paused: string[], skipped: string[] }> {
-  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[] }
+export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paused: string[], skipped: string[], swept: string[] }> {
+  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], swept: [] as string[] }
   for (const run of await listRuns()) {
+    // Not one this process is still unwinding: publish/afterUnwound own that.
+    if (testCleanupDue(run) && !live.get(run.id)?.running) {
+      // Logs its own failure and still sets the marker: a worktree git will
+      // not remove is not retried on every boot.
+      await removeTestWorktreesOnce(run)
+      await saveRun(run).catch(err => log.warn('could not record the test worktree sweep', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+      out.swept.push(run.id)
+      continue
+    }
     if (run.status !== 'interrupted') continue
     const frozen = run.steps.find(s => s.status === 'running')
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }

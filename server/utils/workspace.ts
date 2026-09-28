@@ -331,8 +331,10 @@ export async function branchExists(path: string, branch: string): Promise<boolea
  * the way ensureRunBranch makes them: the root repository from `rootStart`
  * (the commit the tested step started from), every nested one from
  * `nestedStart` (the source run's branch). Never fetches: a test replays a
- * run that happened here, from commits this clone already has. `-B` always,
- * because the branch name is fresh (see ensureRunCheckoutOnce).
+ * run that happened here, from commits this clone already has. A fresh name
+ * (`opts.fresh`) is claimed with `-b`, so a name another test took fails
+ * rather than being taken over; a restart re-makes its own with `-B` (see
+ * ensureTestCheckout).
  */
 export async function ensureTestWorktrees(path: string, branch: string, rootStart: string, nestedStart: string, opts: { fresh?: boolean } = {}): Promise<string[]> {
   if (!branch.startsWith('test/')) throw new Error(`refusing to make ${branch}: a test worktree is only made on a test/ branch`)
@@ -343,8 +345,10 @@ export async function ensureTestWorktrees(path: string, branch: string, rootStar
   // picked the same name), and removing it would pull its worktree from
   // under its agent.
   const made: { repo: string, wt: string }[] = []
+  let adding = path
   try {
     for (const r of [path, ...nestedRepos(path)]) {
+      adding = r
       const wt = join(root, relative(path, r))
       await git(r, ['worktree', 'prune'])
       // A fresh name is claimed with -b, which fails rather than taking over a
@@ -359,9 +363,24 @@ export async function ensureTestWorktrees(path: string, branch: string, rootStar
       await git(repo, ['worktree', 'remove', '--force', wt]).catch(() => { /* already gone */ })
       await git(repo, ['branch', '-D', branch]).catch(() => { /* already gone */ })
     }
+    // `-b` makes the branch before the worktree, so an add that failed after
+    // that (a concurrent prune/add in .git/worktrees) leaves the branch behind
+    // with no worktree. Ours unless git refused because the branch was already
+    // there; and never while a worktree has it checked out.
+    const msg = err instanceof Error ? err.message : String(err)
+    if (opts.fresh && !/a branch named .* already exists/i.test(msg)
+      && await branchExists(adding, branch) && !(await branchHasWorktree(adding, branch))) {
+      await git(adding, ['branch', '-D', branch]).catch(() => { /* already gone */ })
+    }
     throw err
   }
   return out
+}
+
+/** Is this branch checked out in any worktree of the repository? */
+async function branchHasWorktree(path: string, branch: string): Promise<boolean> {
+  const list = await git(path, ['worktree', 'list', '--porcelain']).catch(() => '')
+  return list.split('\n').some(l => l.trim() === `branch refs/heads/${branch}`)
 }
 
 /**
