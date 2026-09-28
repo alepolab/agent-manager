@@ -21,7 +21,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, checkoutDirFor, cloneRepo, ensureRunBranch, findCheckout, remoteBranchExists } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
-import { claimableStack, teardownRun } from './runTeardown.ts'
+import { claimableStack, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -37,7 +37,7 @@ import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
 import { DECISION_FILE, briefFeedback, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
 import {
-  runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
+  runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
@@ -854,16 +854,24 @@ export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 
  * runTeardown.claimableStack), before the provisioner would stand up another.
  * One claim at a time, and saved before the next is decided: two runs that
  * both saw the same stack free would otherwise both work in it.
+ *
+ * Also before a later step that works in the stack, when the one the run had
+ * is no longer up: paused runs' stacks are taken down so only the one the next
+ * runs need stays up, and a run coming back takes that one over. 'gone' when
+ * the run's stack is down and none was free: the step must stand it up.
  */
 let claiming: Promise<unknown> = Promise.resolve()
-function claimStack(run: WorkflowRun): Promise<void> {
+function claimStack(run: WorkflowRun, provisioning: boolean): Promise<'up' | 'claimed' | 'gone'> {
   const next = claiming.then(async () => {
+    if (!provisioning && await stackIsUp(stackProjectOf(run))) return 'up'
     const found = await claimableStack(run, await listRuns()).catch(() => null)
-    if (!found) return
+    if (!found) return provisioning ? 'up' : 'gone'
+    const from = run.stackProject
     run.stackProject = found.project
     run.stackClaimedFrom = found.from
     await saveRun(run)
-    log.info('run claimed an existing stack', { runId: run.id, project: found.project, from: found.from })
+    log.info('run claimed an existing stack', { runId: run.id, project: found.project, from: found.from, ...(from ? { replacing: from } : {}) })
+    return 'claimed'
   })
   claiming = next.catch(() => {})
   return next
@@ -938,13 +946,17 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
-  if (step.agentSlug === 'sdlc-stack-provisioner' && !run.stackProject) await claimStack(run)
+  const stack = step.agentSlug === 'sdlc-stack-provisioner' && !run.stackProject ? await claimStack(run, true)
+    : STACK_USING_AGENTS.test(step.agentSlug) && run.product ? await claimStack(run, false).catch(() => 'up' as const)
+    : 'up'
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
-  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+  // A resumed session was told its stack once; if that stack went while the
+  // run waited, it is told again.
+  const input = resume ? (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined, run.parameters, run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
+  } : undefined, run.parameters, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's

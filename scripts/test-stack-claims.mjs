@@ -85,4 +85,20 @@ function docker(up) {
   assert.match(own, new RegExp(`Compose project for any stack this run stands up: sdlc-${B.id}`), 'an unclaimed run keeps its own name')
 }
 
+// ── A run coming back to a stack that was taken down ────────────────────────
+{
+  const { stackIsUp, STACK_USING_AGENTS } = await import('../server/utils/runTeardown.ts')
+  const { stackNote } = await import('../server/utils/runArtifacts.ts')
+  assert.equal(await stackIsUp(projA, docker([projA]).exec), true)
+  assert.equal(await stackIsUp(projA, docker([]).exec), false, 'taken down while its run waited')
+  assert.equal(await stackIsUp(projA, async () => { throw new Error('no daemon') }), false)
+  for (const slug of ['sdlc-stack-update', 'sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-trace-capture']) assert.ok(STACK_USING_AGENTS.test(slug), slug)
+  for (const slug of ['sdlc-stack-provisioner', 'sdlc-verifier', 'sdlc-ce-work']) assert.ok(!STACK_USING_AGENTS.test(slug), slug)
+  // A paused run whose stack went takes over the one still up; B was its owner and is paused too.
+  const back = { ...A, id: 'eeeeeeee-5555-4000-8000-000000000005', status: 'running' }
+  assert.deepEqual(await claimableStack(back, [A, back], docker([projA]).exec), { project: projA, from: A.id })
+  // None free: it is told to stand its own up again, by name.
+  assert.match(stackNote(back.id, { project: `sdlc-${back.id}`, gone: true }), new RegExp(`sdlc-${back.id} - not up now.*Stand it up again under that name`))
+}
+
 console.log('ok - runs take over free stacks of their product, and the last user takes a stack down')

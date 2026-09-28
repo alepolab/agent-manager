@@ -83,6 +83,17 @@ export async function claimableStack(run: Pick<WorkflowRun, 'id' | 'product'>, r
   return null
 }
 
+/** Whether a compose project has anything running. False when docker cannot be asked. */
+export async function stackIsUp(project: string, exec: Exec = realExec): Promise<boolean> {
+  try {
+    const listed = JSON.parse(await exec('docker', ['compose', 'ls', '--format', 'json']) || '[]') as { Name?: string, Status?: string }[]
+    return listed.some(p => p.Name === project && /running/i.test(p.Status ?? ''))
+  } catch { return false }
+}
+
+/** Steps that work in the run's stack after the provisioner stood it up. */
+export const STACK_USING_AGENTS = /^sdlc-(stack-update|qa-|trace-capture$)/
+
 /** Steps that can leave a compose stack running. A run with none of them has
  *  no stack to look for, which keeps docker out of every other run's ending. */
 const STACK_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-ui$)/
