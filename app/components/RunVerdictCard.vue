@@ -2,6 +2,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { oversightReason, needsJustification } from '~~/shared/utils/oversight'
 import { parseJunit, junitLabel, junitPassed } from '~/utils/junit'
+import { parseDecisionBrief, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 
 /**
  * What a reviewer is actually approving.
@@ -42,6 +43,8 @@ const metaMissing = ref(false)
 const files = ref<string[]>([])
 const tests = ref<{ label: string, passed: boolean, from: string } | null>(null)
 /** Which files and commits, measured from git - see server/utils/gitFacts.ts computeChangeSummary. */
+/** The implementer's brief for whoever approves the change: what it gains and what it risks. */
+const brief = ref<DecisionBrief | null>(null)
 const changes = ref<{ commits: { sha: string, subject: string }[], files: { path: string, added: number | null, removed: number | null }[] } | null>(null)
 const loading = ref(true)
 
@@ -70,6 +73,13 @@ async function load() {
     files.value = (await $fetch<{ name: string }[]>(`/api/runs/${id}/artifacts`)).map(f => f.name)
   } catch {
     files.value = []
+  }
+  brief.value = null
+  if (files.value.includes('change-brief.json')) {
+    try {
+      const parsed = parseDecisionBrief(await $fetch<string>(`/api/runs/${id}/artifacts/change-brief.json`, { responseType: 'text' }))
+      if ('brief' in parsed) brief.value = parsed.brief
+    } catch { /* the measured facts below still stand */ }
   }
   // The test report the reviewer should be judging: the run AFTER the fix.
   // oracle-before proves the bug reproduced, which is a different question.
@@ -202,6 +212,10 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
             <span class="truncate" :title="f.path">{{ f.path }}</span>
           </div>
         </details>
+
+        <!-- 2d. What approving gains and risks, in the implementer's words. -->
+        <RunDecisionBrief v-if="brief" :brief="brief" :can-answer="false" approval />
+        <p v-else class="m-0 t-small text-label">The step that made this change wrote no brief of its advantages and disadvantages.</p>
 
         <!-- 3. Did it reproduce, and does it pass now. -->
         <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">

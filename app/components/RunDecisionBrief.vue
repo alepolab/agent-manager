@@ -10,7 +10,12 @@ import type { DecisionBrief } from '~~/shared/utils/decisionBrief'
  * "criteria 2-3", a "trouble-ticket ratchet breach" and three lettered options,
  * and the developer reading it had no way to know what any of those were.
  */
-const props = defineProps<{ brief: DecisionBrief, canAnswer: boolean }>()
+const props = defineProps<{
+  brief: DecisionBrief
+  canAnswer: boolean
+  /** The brief for a change awaiting approval: its options are weighed as advantages and disadvantages. */
+  approval?: boolean
+}>()
 const emit = defineEmits<{ choose: [text: string] }>()
 
 const recommended = computed(() => props.brief.recommendation?.option.replace(/[()]/g, '').trim().toLowerCase())
@@ -36,7 +41,7 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
       </section>
 
       <section v-if="brief.findings?.length">
-        <h4 class="t-label mb-1" style="color: var(--text-secondary);">What the step found</h4>
+        <h4 class="t-label mb-1" style="color: var(--text-secondary);">{{ approval ? 'The evidence' : 'What the step found' }}</h4>
         <ul class="m-0 pl-4 list-disc space-y-1" style="color: var(--text-primary);">
           <li v-for="(f, i) in brief.findings" :key="i" class="whitespace-pre-wrap">{{ f }}</li>
         </ul>
@@ -57,8 +62,8 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
             </div>
             <dl class="m-0 grid gap-x-2 gap-y-0.5" style="grid-template-columns: max-content 1fr;">
               <dt class="text-label">Next</dt><dd class="m-0">{{ o.next }}</dd>
-              <dt class="text-label">Ticket gets</dt><dd class="m-0">{{ o.delivers }}</dd>
-              <dt class="text-label">Left undone</dt><dd class="m-0">{{ o.leaves }}</dd>
+              <dt class="text-label">{{ approval ? 'Advantages' : 'Ticket gets' }}</dt><dd class="m-0">{{ o.delivers }}</dd>
+              <dt class="text-label">{{ approval ? 'Disadvantages' : 'Left undone' }}</dt><dd class="m-0">{{ o.leaves }}</dd>
               <template v-if="o.risk"><dt class="text-label">Risk</dt><dd class="m-0">{{ o.risk }}</dd></template>
             </dl>
             <UButton
