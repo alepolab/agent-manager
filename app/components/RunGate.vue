@@ -115,12 +115,21 @@ const askingLabel = computed(() => `${props.run.steps.find(s => s.stepId === pro
     <!-- A decision taken while the group was full: recorded, and carried out
          by the queue when a slot frees - it is not lost and not re-asked. -->
     <div v-if="run.status === 'queued' && run.parked" class="rounded-lg p-3 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" role="status">
+      <template v-if="run.parked.gaveWayTo">
+        <p class="t-head m-0" style="color: var(--text-primary);">Stepped aside while {{ run.parked.gaveWayTo }} runs are working</p>
+        <p class="m-0 text-label">
+          Its group gives way to {{ run.parked.gaveWayTo }} so they get the machine to themselves. The step it had
+          finished stays finished; it goes ahead of newer runs and carries on from the next step when they are done.
+        </p>
+      </template>
+      <template v-else>
       <p class="t-head m-0" style="color: var(--text-primary);">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
       <p class="m-0 text-label">
         Its group is running as many runs as it allows. This run goes ahead of newer ones in the queue and
         {{ run.parked.action === 'restart' ? 'restarts' : 'continues' }} the moment a slot frees.
         <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
       </p>
+      </template>
     </div>
     <div v-if="run.question && !run.parked" class="rounded-lg p-3 t-small space-y-1" style="background: var(--accent-muted); border: 1px solid var(--accent);" role="alert">
       <!-- The eyebrow is the label; the question is the thing to read. These were

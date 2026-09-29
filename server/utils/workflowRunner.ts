@@ -44,7 +44,7 @@ import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import { runNotifyStep, type NotifyStepConfig } from './notifySteps.ts'
-import { admit, blockForQuota, releaseQuota, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
+import { admit, blockForQuota, releaseQuota, drainRunQueue, givingWayTo, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
 import { capFor } from './workflowGroups.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
@@ -2262,6 +2262,10 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // reports "No step can run" instead of completing. BEFORE the approval gate,
   // which is the point of the feature: nobody is asked to approve a step whose
   // input is empty.
+  // Between steps, never inside one: a step cut off mid-way loses its work,
+  // and one of Runbook A's runs for up to an hour. See WorkflowGroup.yieldsTo.
+  if (!isTestRun(run) && await stepAsideFor(l, run)) return run
+
   const conditions = await resolveConditions(l, run)
   if (conditions.failed) return failRunAfterWave(l, run, run.currentStepIds)
 
@@ -3101,6 +3105,28 @@ async function parkUnlessSlot(run: WorkflowRun, decision: Omit<NonNullable<Workf
   return out
 }
 
+/**
+ * A working run whose group gives way to another that has started (see
+ * WorkflowGroup.yieldsTo) steps aside at this step boundary: back to the head
+ * of its queue, recorded as a continue, so the queue carries on from here the
+ * moment the other group is idle - or at once, if it already is by then. The
+ * step it finished stays finished. True when it stepped aside.
+ */
+async function stepAsideFor(l: Live, run: WorkflowRun): Promise<boolean> {
+  const to = await givingWayTo(groupOf(run))
+  if (!to) return false
+  run.parked = { action: 'continue', from: 'running', gaveWayTo: to, at: Date.now() }
+  run.queuedAt = run.startedAt
+  run.status = 'queued'
+  run.currentStepIds = []
+  l.running = false
+  noteQueued()
+  await publish(run)
+  log.info('run stepped aside for another group', { runId: run.id, group: groupOf(run), for: to })
+  void drainRunQueue(launchQueuedRun).catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+  return true
+}
+
 /** Carries out a decision parkUnlessSlot recorded, now that the run has its slot. */
 async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
   const p = run.parked!
@@ -3120,7 +3146,9 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
     // something they can act on, and the run must not read as lost.
     const back = await getRun(run.id)
     if (back) {
-      if (back.status === 'queued') back.status = p.from
+      // One that stepped aside was working, not waiting on anybody: interrupted
+      // is what the resume brings back, where `running` would be a lie.
+      if (back.status === 'queued') back.status = p.gaveWayTo ? 'interrupted' : p.from
       back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
       await publish(back)
     }
@@ -3319,7 +3347,7 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
     // Only the runs actually working: every interrupted one counts toward the
     // cap for the queue (runQueue.resumable), including this one.
     if (!inFlight.has(group)) inFlight.set(group, all.filter(r => holdsGroupSlot(r.status) && groupOf(r) === group).length)
-    if (inFlight.get(group)! >= await capFor(group)) { out.waiting.push(run.id); awaitingSlot.add(run.id); continue }
+    if (inFlight.get(group)! >= await capFor(group) || await givingWayTo(group, all)) { out.waiting.push(run.id); awaitingSlot.add(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
     if (frozen && run.interruptions > MAX_INTERRUPTIONS) {
       frozen.status = 'pending'

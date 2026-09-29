@@ -24,6 +24,16 @@ export interface WorkflowGroup {
    * symptom would be work silently not happening.
    */
   maxConcurrent: number
+  /**
+   * Another group this one gives way to. While any run of that group holds a
+   * slot, nothing in this one starts, and a run of this one that is working
+   * steps aside at its next step boundary, back to the head of its queue.
+   *
+   * For a machine too small for both at once: four Runbook A runs and two
+   * scans together is the load at which it swaps and slows every one of them,
+   * and the nightly scans are the work with a deadline.
+   */
+  yieldsTo?: string
 }
 
 export const WORKFLOW_GROUPS_FILE_NAME = 'workflow-groups.json'

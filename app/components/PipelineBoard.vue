@@ -88,7 +88,7 @@ function whereItIs(r: WorkflowRun): string {
   const label = (id?: string) => r.steps.find(s => s.stepId === id)?.label
   if (r.status === 'failed') return r.error || `Failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`
   // Before the question: a decision already taken waits for a slot, and the question it answered is history.
-  if (r.status === 'queued') return r.parked ? `Decided; waiting for a slot to ${r.parked.action}` : 'Waiting for a slot'
+  if (r.status === 'queued') return r.parked?.gaveWayTo ? `Stepped aside while ${r.parked.gaveWayTo} runs` : r.parked ? `Decided; waiting for a slot to ${r.parked.action}` : 'Waiting for a slot'
   if (r.question) return `${label(r.question.stepId) ?? 'A step'}: ${r.question.text.split('\n')[0]}`
   const at = label(r.currentStepIds[0]) ?? r.steps.find(s => s.status === 'running')?.label
   if (at) return `At ${at}`

@@ -21,7 +21,7 @@
  */
 
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { capFor } from './workflowGroups.ts'
+import { capFor, yieldsToFor } from './workflowGroups.ts'
 import { listRuns } from './workflowRunStore.ts'
 import { createLogger } from './log.ts'
 import { holdsGroupSlot, isTestRun } from '../../shared/types/run.ts'
@@ -147,6 +147,18 @@ export async function groupLoad(group: string): Promise<{ group: string, inFligh
 }
 
 /**
+ * The group `group` is giving way to right now: the one it yields to (see
+ * WorkflowGroup.yieldsTo), while any run of that one is working. Undefined
+ * when it has none, or that group is idle. Checked each time, from the runs
+ * themselves - nothing is scheduled or remembered.
+ */
+export async function givingWayTo(group: string, runs?: WorkflowRun[]): Promise<string | undefined> {
+  const to = await yieldsToFor(group)
+  if (!to) return undefined
+  return await inFlightForGroup(to, runs) > 0 ? to : undefined
+}
+
+/**
  * The admission gate: start it now if the group has room, else queue it.
  *
  * Anything already waiting in the group goes first, even when a slot is free —
@@ -194,7 +206,7 @@ export async function admit<T extends WorkflowRun>(opts: {
     const free = cap - await inFlightForGroup(opts.group, runs)
     const ahead = (await waiting(opts.group, runs)).length
 
-    if (free > 0 && ahead === 0 && !quotaBlocked()) {
+    if (free > 0 && ahead === 0 && !quotaBlocked() && !await givingWayTo(opts.group, runs)) {
       const started = await opts.start()
       const staged = typeof (started as { rest?: unknown }).rest === 'function'
         ? started as { run: T, rest: () => Promise<unknown> }
@@ -262,6 +274,7 @@ export function drainRunQueue(launch: Launcher): Promise<number> {
 
     let started = 0
     for (const group of [...new Set(queued.map(groupOf))]) {
+      if (await givingWayTo(group, runs)) continue
       let free = await capFor(group) - await inFlightForGroup(group, runs)
       const candidates = await waiting(group, runs)
 

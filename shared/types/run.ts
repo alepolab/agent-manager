@@ -573,6 +573,8 @@ export interface WorkflowRun {
     stepId?: string
     startedBy?: string
     grantApproval?: boolean
+    /** Nobody decided anything: the run stepped aside for this group (WorkflowGroup.yieldsTo). */
+    gaveWayTo?: string
     at: number
   }
   steps: RunStep[]

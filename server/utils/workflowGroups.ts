@@ -57,6 +57,13 @@ export async function capFor(groupId?: string): Promise<number> {
   return found ? found.maxConcurrent : defaultMaxConcurrent()
 }
 
+/** The group `groupId` gives way to, if it names one. */
+export async function yieldsToFor(groupId?: string): Promise<string | undefined> {
+  const id = groupId?.trim() || DEFAULT_GROUP_ID
+  const to = (await listGroups()).find(g => g.id === id)?.yieldsTo?.trim()
+  return to && to !== id ? to : undefined
+}
+
 /** The cap for anything the registry does not name. Two is what the dispatcher
  *  agent this whole mechanism replaces claimed to enforce, and a sane default
  *  for one machine. */
@@ -74,6 +81,7 @@ export function validateGroup(group: Partial<WorkflowGroup>): string | null {
   if (!Number.isInteger(group.maxConcurrent) || (group.maxConcurrent as number) < 1) {
     return `group "${group.id}" needs a whole number of concurrent runs, at least 1`
   }
+  if (group.yieldsTo !== undefined && group.yieldsTo.trim() === group.id.trim()) return `group "${group.id}" cannot give way to itself`
   return null
 }
 
@@ -93,7 +101,14 @@ export async function replaceGroups(groups: WorkflowGroup[]): Promise<WorkflowGr
     if (seen.has(g.id)) throw new Error(`group "${g.id}" is listed twice`)
     seen.add(g.id)
   }
-  const clean = groups.map(g => ({ id: g.id.trim(), name: g.name.trim(), maxConcurrent: g.maxConcurrent }))
+  // A row that does not mention yieldsTo keeps the one it has: the Groups
+  // editor saves id, name and cap only, and saving a cap from it must not
+  // quietly stop runbooks giving way to scans. An empty string clears it.
+  const before = new Map((await listGroups()).map(g => [g.id, g.yieldsTo]))
+  const clean = groups.map((g) => {
+    const yieldsTo = (g.yieldsTo === undefined ? before.get(g.id.trim()) : g.yieldsTo)?.trim()
+    return { id: g.id.trim(), name: g.name.trim(), maxConcurrent: g.maxConcurrent, ...(yieldsTo ? { yieldsTo } : {}) }
+  })
   await ensureDir()
   await writeFile(groupsPath(), JSON.stringify(clean, null, 2), 'utf-8')
   return clean
