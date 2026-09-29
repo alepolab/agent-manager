@@ -1103,7 +1103,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
          run starts, instead of hoping it was buried in the prompt. -->
     <UModal :open="showParameters" @update:open="showParameters = $event">
       <template #content>
-        <div class="p-6 space-y-4 bg-overlay">
+        <div class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
           <h3 class="text-page-title">Workflow inputs</h3>
           <p class="t-small text-label">
             Named values collected when a run starts and stated to every step. Declare what this

@@ -448,7 +448,7 @@ function relativeTime(ms: number): string {
     <!-- Create modal -->
     <UModal v-model:open="showCreateModal">
       <template #content>
-        <div class="p-6 space-y-4 bg-overlay">
+        <div class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
           <h3 class="text-page-title">{{ isEditing ? `Edit ${editing?.name || 'watch'}` : 'New Watch' }}</h3>
           <p v-if="!isEditing" class="t-small text-label">
             New watches always start disabled — enable it explicitly once you've watched it behave against a real cycle.

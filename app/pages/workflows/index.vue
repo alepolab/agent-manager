@@ -288,7 +288,7 @@ async function saveGroups() {
     <!-- Concurrency groups -->
     <UModal v-model:open="showGroups">
       <template #content>
-        <div class="p-6 space-y-4 bg-overlay">
+        <div class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
           <div>
             <h3 class="text-page-title">Concurrency groups</h3>
             <p class="t-small text-label mt-1 leading-relaxed">
