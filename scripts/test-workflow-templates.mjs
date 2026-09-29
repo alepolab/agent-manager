@@ -725,6 +725,23 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.deepEqual(gated('runbook-a-jira-to-diff'), ['Jira: Dev Done', 'Evidence Bundle + PR', 'Jira: QA Done'],
     'the bug path stops at the diff, and again before each claim the ticket makes about the work')
 
+  // Every scan: an escalated draft waits for a person before its ticket is
+  // filed and a runbook dispatched on it. A PR once dropped `approval` from
+  // this step in all seven templates, and every test passed, because each
+  // one built its own fixture with `approval: true` rather than reading these.
+  for (const id of ['scan-security-to-dispatch', 'scan-functional-to-dispatch', 'scan-tech-debt-to-dispatch',
+    'scan-test-gaps-to-dispatch', 'scan-e2e-to-dispatch', 'scan-ui-to-dispatch', 'scan-performance-to-dispatch']) {
+    assert.deepEqual(gated(id), ['Create Jira (Escalated — After Review)'],
+      `${id}: an escalated draft must still wait for a person before its ticket is filed`)
+    const escalated = WORKFLOW_TEMPLATES.find(t => t.id === id).steps.find(s => s.id === 'create-jira-escalated-after-review')
+    assert.equal(escalated.gateRole, 'developer', `${id}: and it is the developer's decision`)
+  }
+  // The rule that sends those drafts to that gate, in the decision gate's own
+  // brief: money, protocol and schema findings always go to a person.
+  const gateBrief = AGENT_TEMPLATES.find(t => t.id === 'sdlc-decision-gate').body
+  assert.match(gateBrief, /Blast radius is `money`, `protocol`, or `schema`\*\* — changes to these areas need human sign-off regardless of clarity/,
+    'the decision gate escalates every money, protocol and schema draft')
+  assert.match(gateBrief, /When in doubt, escalate/)
   assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Jira: Dev Done', 'Update Stack', 'Push + PR', 'Jira: QA Done'],
     'the feature path stops at the plan, the diff, verification before ship, and before each claim the ticket makes about the work')
 
