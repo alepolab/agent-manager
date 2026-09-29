@@ -138,7 +138,7 @@ defineExpose({ focus, resetHeight });
       :style="{
         background: 'var(--surface-raised)',
         border: isStreaming
-          ? '1px solid rgba(229, 169, 62, 0.15)'
+          ? '1px solid rgba(var(--accent-rgb), 0.15)'
           : '1px solid var(--border-subtle)',
         boxShadow: isStreaming
           ? '0 0 20px var(--accent-glow), 0 2px 8px var(--card-shadow)'

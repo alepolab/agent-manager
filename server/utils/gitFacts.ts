@@ -185,6 +185,49 @@ export async function computeFixFacts(
   return { repo, commits, files_changed: files.length, lines_changed: linesChanged }
 }
 
+/** What a run changed, file by file and commit by commit, for a reviewer to read. */
+export interface ChangeSummary {
+  commits: { sha: string, subject: string }[]
+  /** `added`/`removed` are null for a binary file, which git reports as `-`. */
+  files: { path: string, added: number | null, removed: number | null }[]
+}
+
+/**
+ * The same measurement as `computeFixFacts`, kept at the grain a reviewer
+ * needs: which files and which commits, not just how many. An approval gate
+ * that said "4 files, 64 lines" left the reviewer to find out which four from
+ * a file tree, and the commit subjects - the one place the change is described
+ * in the author's own words, and measured rather than reported - were shown
+ * nowhere.
+ *
+ * Same baseline rules and the same null: no baseline, a baseline that no
+ * longer resolves or is not an ancestor of HEAD, or no commits since it.
+ */
+export async function computeChangeSummary(
+  projectDir: string | undefined,
+  baseCommit: string | undefined,
+): Promise<ChangeSummary | null> {
+  if (!projectDir || !baseCommit) return null
+  try {
+    await git(projectDir, ['merge-base', '--is-ancestor', baseCommit, 'HEAD'])
+    const log = await git(projectDir, ['log', '--reverse', '--abbrev=12', '--format=%h%x09%s', `${baseCommit}..HEAD`])
+    const commits = log.split('\n').filter(Boolean).map((line) => {
+      const [sha, ...subject] = line.split('\t')
+      return { sha: sha!, subject: subject.join('\t') }
+    })
+    if (commits.length === 0) return null
+    const numstat = await git(projectDir, ['diff', '--numstat', `${baseCommit}..HEAD`])
+    const files = numstat.split('\n').filter(Boolean).map((line) => {
+      const [added, removed, ...path] = line.split('\t')
+      const n = (v?: string) => (v === undefined || v === '-' ? null : Number(v))
+      return { path: path.join('\t'), added: n(added), removed: n(removed) }
+    })
+    return { commits, files }
+  } catch {
+    return null // not a repo, baseline gone or not an ancestor: say nothing rather than guess
+  }
+}
+
 /**
  * The paths already modified, staged, or untracked in `projectDir` at the
  * instant a run starts — i.e. work that exists BEFORE this run and must not

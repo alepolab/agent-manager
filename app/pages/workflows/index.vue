@@ -229,7 +229,7 @@ async function saveGroups() {
           <div class="flex justify-center">
             <div
               class="size-12 rounded-xl flex items-center justify-center"
-              style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.15);"
+              style="background: var(--accent-muted); border: 1px solid rgba(var(--accent-rgb), 0.15);"
             >
               <UIcon name="i-lucide-git-branch" class="size-6" style="color: var(--accent);" />
             </div>
@@ -288,7 +288,7 @@ async function saveGroups() {
     <!-- Concurrency groups -->
     <UModal v-model:open="showGroups">
       <template #content>
-        <div class="p-6 space-y-4 bg-overlay">
+        <div class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
           <div>
             <h3 class="text-page-title">Concurrency groups</h3>
             <p class="t-small text-label mt-1 leading-relaxed">

@@ -137,7 +137,7 @@
     },
     "oracle": {
       "$ref": "#/$defs/oracle_run",
-      "description": "The oracle BEFORE the fix. Its verdict must be FAIL \u2014 an oracle that passed on unfixed code did not reproduce the problem."
+      "description": "The oracle BEFORE the fix. Its verdict must be FAIL \u2014 an oracle that passed on unfixed code did not reproduce the problem \u2014 unless the ticket asked only for a test and `mutation_proof` shows every deliberate break turned it red."
     },
     "fix": {
       "type": "object",
@@ -520,6 +520,31 @@
             "string",
             "null"
           ]
+        },
+        "mutation_proof": {
+          "type": "object",
+          "required": [
+            "mutants",
+            "killed"
+          ],
+          "additionalProperties": false,
+          "description": "For a ticket that asks only for a test, whose oracle passes on unchanged code: the deliberate breaks of the covered behaviour that the oracle was run against. It stands in for a red pre-fix run only when every break was caught.",
+          "properties": {
+            "mutants": {
+              "type": "integer",
+              "minimum": 3
+            },
+            "killed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "report": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
         }
       }
     }

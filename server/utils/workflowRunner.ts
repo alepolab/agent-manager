@@ -11,16 +11,17 @@ import { runElapsedMinutes, startRunClock, settleRunClock, reconcileRunClock } f
 import type { Role } from '../../shared/types/role.ts'
 import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps, toWorkflowLike, findActiveRun, findRunInWorkspace, BOOT_ID } from './workflowRunStore.ts'
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
-import { resolveProduct, productByKey, registeredProductKeys } from './registry.ts'
+import { resolveProduct, productByKey, productByRepo, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
 import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
-import { callAgent, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
+import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, branchExists, checkoutDirFor, ensureRunBranch, ensureTestWorktrees, findCheckout, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+import { claimableStack, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -30,23 +31,25 @@ import { runPreflight as realPreflight, preflightFailure, type PreflightReport, 
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
 import {
-  runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader,
+  runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
 } from './runArtifacts.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
 import { runNotifyStep, type NotifyStepConfig } from './notifySteps.ts'
-import { admit, drainRunQueue, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
+import { admit, blockForQuota, releaseQuota, drainRunQueue, givingWayTo, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
+import { capFor } from './workflowGroups.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { childrenSettled, isLiveStatus, isTestRun } from '../../shared/types/run.ts'
+import { childrenSettled, holdsGroupSlot, isLiveStatus, isTestRun, isWaitingOnAPerson } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
@@ -175,6 +178,10 @@ interface Live {
   running: boolean
   /** A step found the fault outside the run's scope; runWave re-provisions and continues from there. */
   widen?: { from: string, target: string, reason: string, added: string[] }
+  /** A step could not reach the model with this process's credentials; the run pauses rather than fails. */
+  authFailure?: { stepId: string, message: string }
+  /** A step hit the model's quota; the run pauses until `until`. */
+  quotaFailure?: { stepId: string, message: string, until: number }
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
   /** Steps whose `runWhen` condition is waived for one evaluation, because an
@@ -525,9 +532,27 @@ async function publish(run: WorkflowRun) {
     // still `running`, so at a cap of 1 its children are all queued behind it,
     // and the moment it stops holding the slot is this publish. Without the
     // drain here they would wait for a run that is waiting for them.
-    if ((TERMINAL_STATUSES.includes(run.status) || run.status === 'joining') && mightHaveWaiting()) {
-      void drainRunQueue(launchQueuedRun).catch(err =>
-        log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    // A run stopping on a person gives its slot back the same way.
+    // An interrupted run waiting for a slot goes before the queue: it has
+    // work done that a queued run does not.
+    if (TERMINAL_STATUSES.includes(run.status) || run.status === 'joining' || isWaitingOnAPerson(run.status)) {
+      void resumeAwaitingSlot()
+        .catch(err => log.warn('resuming interrupted runs failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+        .then(() => mightHaveWaiting() ? drainRunQueue(launchQueuedRun) : 0)
+        .catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    }
+    // A run with an outcome gives back the stacks it stood up and its worktree.
+    // Here, where every ending passes - completed, failed and stopped alike -
+    // rather than as a last workflow step, which a failed run never reaches.
+    // Not awaited: `docker compose down` takes seconds and publish must not.
+    // A test run's worktree is not this code's: removeTestWorktreesOnce takes
+    // it once the tested step's agent has returned, and taking it here, the
+    // moment the run is stopped, pulled it from under an agent still writing.
+    if (TERMINAL_STATUSES.includes(run.status) && !isTestRun(run)) {
+      const ended = run
+      void teardownRun(ended)
+        .then(report => (report.stacks.length || report.worktree) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
+        .catch(err => log.warn('tearing a run down failed', { runId: ended.id, error: err instanceof Error ? err.message : String(err) }))
     }
     // A child of a joining parent has reached its outcome, so the parent may
     // now be able to go on. Here rather than in the child's own wave loop
@@ -740,12 +765,34 @@ function computeInput(l: Live, run: WorkflowRun, id: string, initialPrompt: stri
     ? ancestorsOf(l.graph, id).reverse()
     : (l.graph.forwardPreds[id] ?? [])
   if (!preds.length) return initialPrompt
-  const parts = preds.map(p => ({ label: recOf(run, p).label, text: l.outputs[p] ?? '' }))
+  const parts = preds.map(p => ({ label: recOf(run, p).label, text: passedOn(l, run, p, initialPrompt) }))
   // The budget is 'ancestors'-only: that mode is the one whose fan-in is
   // unbounded by the graph. The default path has always passed upstream
   // output through whole, and a step legitimately emitting a large diff or
   // log dump must keep doing so.
   return useAncestors ? joinBudgeted(parts) : joinInputs(parts)
+}
+
+/**
+ * What a step hands the step after it. A Jira or notify step is the runner's
+ * own bookkeeping: its output is one status line, and passing only that on cut
+ * the work off from everything upstream. Runbook A's intake follows "Jira: In
+ * Progress", so for every run its whole input was 'Moved ASECRM-223 to "In
+ * Progress"' - the ticket never reached it. ASECRM-221's intake noticed and dug
+ * the ticket out of the Jira step's recorded input; ASECRM-223's asked a person
+ * what the ticket was about. The verifier, trace and security review, which
+ * follow "Jira: QA In Progress", likewise received a status line in place of
+ * the fix's report. Such a step now passes on what it was given, with its line
+ * after it.
+ */
+function passedOn(l: Live, run: WorkflowRun, p: string, initialPrompt: string): string {
+  const out = l.outputs[p] ?? ''
+  const step = stepOf(l, p)
+  if (!step?.jira && !step?.notify) return out
+  // What the step was given: remembered when it ran in this process, otherwise
+  // rebuilt the same way, which is what a run resumed after a restart needs.
+  const given = l.lastInputs[p] ?? computeInput(l, run, p, initialPrompt)
+  return given ? `${given}\n\n---\n\n${out}` : out
 }
 
 /** The one place that tells apart a plain-string test stub's result from
@@ -820,10 +867,184 @@ async function unlockTests(run: WorkflowRun, label: string): Promise<void> {
   }
 }
 
+/**
+ * An ASK line that says there is nothing to ask. A decision gate once ended
+ * with `PIPELINE-ASK: n/a — no ambiguity requiring a person`, and the run sat
+ * paused on a question nobody could answer, holding one of its group's slots
+ * while the rest of the nightly scans queued behind it. "None of these three
+ * callers…" is still a question: the placeholder must be the whole opening.
+ */
+const NO_QUESTION = /^(?:n\/?a|none|nothing(?:\s+to\s+ask)?|not\s+applicable|no\s+questions?)\b\s*(?:$|[—–\-:;.,(])/i
+
+/** Steps sent back for a missing decision brief on their current question, by run and step; cleared when it pauses. */
+const briefRequested = new Set<string>()
+/** Steps asked once more to name a send-back target they got wrong, by run and step. */
+const reworkNameAsked = new Set<string>()
+
+/**
+ * The agent could not reach the model at all: no login, a refused key, an
+ * expired token. That is this server's environment, not the step's work, and
+ * every step after it would fail the same way in seconds. A server started
+ * without the Anthropic settings failed nine runs in a row like this - each
+ * failure freed a slot, and the next resumed run failed into the same error.
+ */
+const AUTH_FAILURE = /not logged in|please run \/login|invalid (x-)?api[ -]?key|authentication_error|oauth token (has )?expired|\b401\b.*(unauthori[sz]ed|authentication)|credit balance is too low/i
+export function isAuthFailure(message: string): boolean {
+  return AUTH_FAILURE.test(message)
+}
+
+/**
+ * The model's quota or rate limit is spent, and when it resets. The provider
+ * says so in the error: "Request rejected (429) · … Quota resets in 3551s".
+ * Retrying before then fails the same way, so the reset time is the retry
+ * time. With no time stated, `fallbackMs` stands in and the run says so.
+ */
+export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
+  if (!/\b429\b|rate[ -]?limit|quota|usage limit/i.test(message) || isAuthFailure(message)) return null
+  const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
+  // A minute's margin: a request exactly at the reset time is often still refused.
+  return s ? now + Number(s[1]) * 1000 + 60_000 : now + fallbackMs
+}
+
+/** The steps that make a run's change, and so know what approving it gains and risks. */
+const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work)$/
+
+/**
+ * Asks the step that made the change for its reviewer's brief, when a gate
+ * holds that change and the brief is missing: ASECRM-288's approval showed
+ * commits and files, and whoever approved it still had to read a 200-line
+ * plan to learn what approving gained or risked. The implementers write the
+ * brief themselves now; this covers a run whose change was made before they
+ * did, or a step that skipped it.
+ *
+ * After the pause, never before it: the run holds no slot while it waits, and
+ * the person can decide without the brief if they choose to. The card shows
+ * it is being written from CHANGE_BRIEF_PENDING. Continues the implementer's
+ * session when its transcript is still there, which is the cheap and the
+ * well-informed way; otherwise the same agent starts cold from the artifacts.
+ */
+const briefsWriting = new Set<string>()
+export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | 'written' | 'none' | 'failed'> {
+  const maker = [...run.steps].reverse().find(s => CHANGE_MAKERS.test(s.agentSlug) && s.status === 'completed')
+  if (!maker || run.question?.kind !== 'approval' || run.question.reason || run.question.artifact) return 'none'
+  const file = resolveRunArtifact(run.id, CHANGE_BRIEF_FILE)
+  const pending = resolveRunArtifact(run.id, CHANGE_BRIEF_PENDING)
+  if (!file || !pending) return 'none'
+  if ('brief' in parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))) return 'present'
+  if (briefsWriting.has(run.id)) return 'none'
+  briefsWriting.add(run.id)
+  await writeFile(pending, new Date().toISOString()).catch(() => {})
+  try {
+    const env = await envResolver(run.startedBy).catch(() => ({}))
+    let feedback = ''
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const resume = resumableSession(maker)
+      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.
+
+That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
+      await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
+      const parsed = parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))
+      if ('brief' in parsed) {
+        log.info('change brief written for a gate', { runId: run.id, by: maker.agentSlug, resumed: !!resume })
+        return 'written'
+      }
+      feedback = `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+      log.warn('change brief unusable', { runId: run.id, attempt, error: parsed.error })
+    }
+    return 'failed'
+  } catch (err) {
+    log.warn('could not write a change brief', { runId: run.id, error: err instanceof Error ? err.message : String(err) })
+    return 'failed'
+  } finally {
+    briefsWriting.delete(run.id)
+    await rm(pending, { force: true }).catch(() => {})
+  }
+}
+
+/** Every change waiting at an approval gate without a brief gets one, one at a time. At boot. */
+export async function backfillChangeBriefs(): Promise<string[]> {
+  const written: string[] = []
+  const runs = await listRuns()
+  // A marker left by a process that stopped mid-write: no one is writing it now,
+  // and the card would say it was being written for ever.
+  for (const r of runs) {
+    const pending = resolveRunArtifact(r.id, CHANGE_BRIEF_PENDING)
+    if (pending) await rm(pending, { force: true }).catch(() => {})
+  }
+  for (const r of runs) {
+    if (r.status !== 'paused') continue
+    if (await ensureChangeBrief(r) === 'written') written.push(r.id)
+  }
+  return written
+}
+
+/**
+ * Takes over an up stack of this run's product when one is free to take (see
+ * runTeardown.claimableStack), before the provisioner would stand up another.
+ * One claim at a time, and saved before the next is decided: two runs that
+ * both saw the same stack free would otherwise both work in it.
+ *
+ * Also before a later step that works in the stack, when the one the run had
+ * is no longer up: paused runs' stacks are taken down so only the one the next
+ * runs need stays up, and a run coming back takes that one over. 'gone' when
+ * the run's stack is down and none was free: the step must stand it up.
+ */
+let claiming: Promise<unknown> = Promise.resolve()
+function claimStack(run: WorkflowRun, provisioning: boolean): Promise<'up' | 'claimed' | 'gone'> {
+  const next = claiming.then(async () => {
+    if (!provisioning && await stackIsUp(stackProjectOf(run))) return 'up'
+    const found = await claimableStack(run, await listRuns()).catch(() => null)
+    if (!found) return provisioning ? 'up' : 'gone'
+    const from = run.stackProject
+    run.stackProject = found.project
+    run.stackClaimedFrom = found.from
+    await saveRun(run)
+    log.info('run claimed an existing stack', { runId: run.id, project: found.project, from: found.from, ...(from ? { replacing: from } : {}) })
+    return 'claimed'
+  })
+  claiming = next.catch(() => {})
+  return next
+}
+
+/** Runs paused on the quota come back at its reset time, on their own. One timer per reset time. */
+const quotaTimers = new Map<number, ReturnType<typeof setTimeout>>()
+export function scheduleQuotaResume(at: number): void {
+  blockForQuota(at)
+  if (quotaTimers.has(at)) return
+  const t = setTimeout(() => {
+    quotaTimers.delete(at)
+    void resumeQuotaPaused().catch(err => log.warn('resuming runs after the quota reset failed', { error: err instanceof Error ? err.message : String(err) }))
+  }, Math.max(1000, at - Date.now()))
+  t.unref?.()
+  quotaTimers.set(at, t)
+}
+
+/**
+ * Continues every run paused on the quota whose reset time has passed, oldest
+ * first, then lets the queue fill what is left. Each continue goes through the
+ * group cap like any decision, so a burst of them waits its turn. Also called
+ * at boot, which is what keeps a restart from stranding them.
+ */
+export async function resumeQuotaPaused(now = Date.now()): Promise<string[]> {
+  releaseQuota(now)
+  const resumed: string[] = []
+  const paused = (await listRuns()).filter(r => r.status === 'paused' && r.question?.reason === 'quota')
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+  for (const r of paused) {
+    const at = r.question?.resumeAt ?? 0
+    if (at > now) { scheduleQuotaResume(at); continue }
+    await continueRun(r.id).catch(err => log.warn('could not resume a run after the quota reset', { runId: r.id, error: err instanceof Error ? err.message : String(err) }))
+    resumed.push(r.id)
+  }
+  if (mightHaveWaiting()) await drainRunQueue(launchQueuedRun)
+  return resumed
+}
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
-  return m ? m[1]!.trim() : null
+  const ask = m?.[1]!.trim()
+  return ask && !NO_QUESTION.test(ask) ? ask : null
 }
 
 const TEST_RUN_NOTE = 'This is a test run of one step. Do not push, open pull requests, post messages or change tickets; describe what you would do instead.'
@@ -861,12 +1082,17 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   if (step.testsUnlocked && run.projectDir) await unlockTests(run, step.label)
   // A visit that continues the previous session needs no header: that session
   // already has it, and re-sending it invites the model to start over.
+  const stack = step.agentSlug === 'sdlc-stack-provisioner' && !run.stackProject ? await claimStack(run, true)
+    : STACK_USING_AGENTS.test(step.agentSlug) && run.product ? await claimStack(run, false).catch(() => 'up' as const)
+    : 'up'
   const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
   delete l.resumeFrom[id]
-  const input = resume ? body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+  // A resumed session was told its stack once; if that stack went while the
+  // run waited, it is told again.
+  const input = resume ? (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined, run.parameters) + body
+  } : undefined, run.parameters, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -1108,6 +1334,28 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       const named = exact.length ? exact : others.filter(s =>
         want.includes(s.agentSlug.toLowerCase()) || want.includes(s.label.toLowerCase()))
       const target = named.length === 1 ? named[0] : undefined
+      // Asked once more, with the names it can use, before the run fails on a
+      // name: ASECRM-304's fix step wrote "sdlc-oracle-author" for the step it
+      // plainly meant (sdlc-test-author, "Failing Test") and a run with every
+      // earlier step green failed on the spelling. Its session holds the
+      // reasoning, so the retry only has to name the step.
+      const attempt = `${run.id}:${id}`
+      if (!target && !reworkNameAsked.has(attempt) && canRevisit(l.graph, l.state, id)) {
+        reworkNameAsked.add(attempt)
+        const known = others.map(s => `${s.label} (${s.agentSlug})`).join(', ')
+        const why = `PIPELINE-REWORK named "${rework.target}", which ${named.length > 1 ? `matches more than one step (${named.map(s => s.label).join(', ')})` : 'is not a step of this run'}.`
+        logLine(l, run, rec, why)
+        log.warn('step sent the run back to a step it could not name; asking again', { runId: run.id, stepId: id, target: rework.target })
+        Object.assign(rec, { output, model, usage, error: why })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+        const session = resumableSession(rec)
+        if (session) l.resumeFrom[id] = session
+        l.retryFeedback[id] = `${why} Repeat your last line with the target written as one of these step labels, exactly: ${known}. Change nothing else.`
+        l.state.status[id] = 'completed'
+        armNode(l.state, id)
+        return true
+      }
+      reworkNameAsked.delete(attempt)
       if (!target) {
         markFailed(l.state, id)
         // Both label AND slug, because the rejected string is usually a slug
@@ -1148,9 +1396,36 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
     const ask = parseAsk(output)
     if (ask) {
+      // The question reaches a person with its brief, or not at all on the
+      // first try: a step that asked without one is sent back, once, in the
+      // same session, to write it from the work it has already done. A second
+      // miss still pauses - a question with no brief beats a run that cannot
+      // ask - and the pane falls back to the step's report.
+      const briefPath = resolveRunArtifact(run.id, DECISION_FILE)
+      const parsed = parseDecisionBrief(briefPath ? await readFile(briefPath, 'utf8').catch(() => null) : null)
+      const attempt = `${run.id}:${id}`
+      if ('error' in parsed && !briefRequested.has(attempt) && canRevisit(l.graph, l.state, id)) {
+        briefRequested.add(attempt)
+        const why = `Decision brief: ${parsed.error}.`
+        logLine(l, run, rec, why)
+        log.warn('step asked without a usable decision brief', { runId: run.id, stepId: id, error: parsed.error })
+        Object.assign(rec, { output, model, usage, error: why })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `retry-${rec.visits}`) } catch { /* best effort */ }
+        const session = resumableSession(rec)
+        if (session) l.resumeFrom[id] = session
+        l.retryFeedback[id] = briefFeedback(parsed.error)
+        l.state.status[id] = 'completed'
+        armNode(l.state, id)
+        return true
+      }
+      briefRequested.delete(attempt)
       l.outputs[id] = output
-      Object.assign(rec, { status: 'waiting', output, model, usage })
-      run.question = { stepId: id, text: ask, kind: 'question', askedAt: Date.now() }
+      Object.assign(rec, { status: 'waiting', output, model, usage, error: undefined })
+      const askedAt = Date.now()
+      run.question = { stepId: id, text: ask, kind: 'question', askedAt, ...('brief' in parsed ? { brief: parsed.brief } : {}) }
+      // Filed under the question it answered, so the next question cannot
+      // arrive wearing this one's brief.
+      if (briefPath && 'brief' in parsed) await rename(briefPath, `${briefPath.replace(/\.json$/, '')}-${askedAt}.json`).catch(() => {})
       l.waiting = id
       log.info('step asked the operator', () => ({ runId: run.id, stepId: id, agentSlug: step.agentSlug, question: preview(ask) }))
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
@@ -1272,6 +1547,32 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
+    // Credentials, not work: the step goes back to pending with its visit
+    // returned, and the run pauses once the wave settles (see runWave).
+    const message = err instanceof Error ? err.message : String(err)
+    if (!l.stopped && isAuthFailure(message)) {
+      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.status[id] = 'pending'
+      armNode(l.state, id)
+      Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+      l.authFailure ??= { stepId: id, message }
+      logLine(l, run, rec, `could not reach the model: ${message}`)
+      log.error('step could not reach the model; the run will pause', { runId: run.id, stepId: id, error: message })
+      return true
+    }
+    // The quota, not the work: the same, and the run waits for the reset time.
+    const until = l.stopped ? null : quotaResetAt(message)
+    if (until) {
+      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.status[id] = 'pending'
+      armNode(l.state, id)
+      Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+      if (!l.quotaFailure || until > l.quotaFailure.until) l.quotaFailure = { stepId: l.quotaFailure?.stepId ?? id, message, until }
+      scheduleQuotaResume(until)
+      logLine(l, run, rec, `the model's quota is spent until ${new Date(until).toLocaleTimeString()}: ${message}`)
+      log.warn('step hit the model quota; the run will wait for the reset', { runId: run.id, stepId: id, until: new Date(until).toISOString() })
+      return true
+    }
     // Whatever the agent left running outlives the agent: `docker run` is a
     // client, so aborting the CLI mid-build leaves the build going. Reaped
     // before the retry below, because the retry re-runs the same command and a
@@ -1726,7 +2027,24 @@ async function runDispatchStep(
   const children: { id: string, run: string, slug: string }[] = []
   let queuedCount = 0
   const stuck: string[] = []
+  // A ticket this run already dispatched, to a child that is still going or
+  // finished, is not dispatched again. Restarting a create step re-runs the
+  // dispatch after it, and a scan whose Jira step was restarted to file the
+  // ten tickets it had failed on would otherwise have started a second fix
+  // pipeline for each of the two it had filed the first time. A stopped or
+  // failed child does not count: dispatching again is how that one is redone.
+  const live = new Map<string, WorkflowRun>()
+  for (const r of await listRuns()) {
+    if (r.parentRunId === run.id && r.ticketKey && !['stopped', 'failed'].includes(r.status)) live.set(r.ticketKey, r)
+  }
   for (const item of items) {
+    const existing = item.ticketKey ? live.get(item.ticketKey) : undefined
+    if (existing) {
+      childRunIds.push(existing.id)
+      children.push({ id: item.key, run: existing.id, slug: existing.workflowSlug })
+      lines.push(`${item.ticketKey} already has run ${existing.id} (${existing.status}); not dispatched again.`)
+      continue
+    }
     try {
       const { run: child, queued } = await startChild(item)
       // Both started and queued children are recorded. A queued child used to
@@ -1944,6 +2262,10 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // reports "No step can run" instead of completing. BEFORE the approval gate,
   // which is the point of the feature: nobody is asked to approve a step whose
   // input is empty.
+  // Between steps, never inside one: a step cut off mid-way loses its work,
+  // and one of Runbook A's runs for up to an hour. See WorkflowGroup.yieldsTo.
+  if (!isTestRun(run) && await stepAsideFor(l, run)) return run
+
   const conditions = await resolveConditions(l, run)
   if (conditions.failed) return failRunAfterWave(l, run, run.currentStepIds)
 
@@ -2064,11 +2386,16 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // (approval + a file to consume) is the whole condition, exactly as
     // resolveConditions gates on the file rather than on an announcement.
     artifact = step?.runWhen?.artifact
+    // Why intake put the change in this class. "Classified `protocol`, which
+    // stops for a person" asked a reviewer to approve without saying which code
+    // made it protocol - ASECRM-215 was `deployment` at the scan gate and
+    // `protocol` here, and nothing on the gate said why.
+    const why = artifact ? undefined : (await readClassification(run))?.blast_radius_reason
     run.question = {
       stepId: gate, kind: 'approval', askedAt: Date.now(),
       text: artifact
         ? `Decide which entries of ${artifact} to act on before "${label}" runs`
-        : `Approve "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}`,
+        : `${run.ticketKey ? `${run.ticketKey}: approve` : 'Approve'} "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}${typeof why === 'string' && why.trim() ? ` Why \`${run.blastRadius}\`: ${why.trim()}` : ''}`,
       ...(gateRole ? { role: gateRole } : {}),
       ...(artifact ? { artifact } : {}),
     }
@@ -2080,6 +2407,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     l.running = false
     log.info('run waits for a person', { runId: run.id, stepId: gate, artifact })
     await publish(run)
+    if (!artifact) void ensureChangeBrief(run)
     return run
   }
 
@@ -2116,6 +2444,39 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
 
   if (results.some(ok => !ok)) {
     return failRunAfterWave(l, run, runnable)
+  }
+
+  if (l.quotaFailure) {
+    const { stepId, message, until } = l.quotaFailure
+    l.quotaFailure = undefined
+    const stated = /resets? in \d+\s*s\b|retry[- ]after/i.test(message)
+    run.status = 'paused'
+    run.question = {
+      stepId, kind: 'approval', reason: 'quota', resumeAt: until, askedAt: Date.now(),
+      text: `"${stepOf(l, stepId)?.label ?? stepId}" hit the model's quota: ${message}. The run resumes on its own at ${new Date(until).toLocaleString()}${stated ? ', when the provider said it resets' : ' - the provider gave no reset time, so it tries again in 15 minutes'}. Nothing new starts before then. Nothing was lost.`,
+    }
+    run.currentStepIds = []
+    run.nextStepIds = [stepId]
+    l.running = false
+    log.warn('run paused until the quota resets', { runId: run.id, stepId, until: new Date(until).toISOString() })
+    await publish(run)
+    return run
+  }
+
+  if (l.authFailure) {
+    const { stepId, message } = l.authFailure
+    l.authFailure = undefined
+    run.status = 'paused'
+    run.question = {
+      stepId, kind: 'approval', reason: 'auth', askedAt: Date.now(),
+      text: `"${stepOf(l, stepId)?.label ?? stepId}" could not reach the model: ${message}. This is the server's own credentials, not the run's work - check how the server was started (its environment needs the Anthropic settings), then Continue to run the step again. Nothing was lost.`,
+    }
+    run.currentStepIds = []
+    run.nextStepIds = [stepId]
+    l.running = false
+    log.warn('run paused: the model could not be reached', { runId: run.id, stepId })
+    await publish(run)
+    return run
   }
 
   // In a test run a widen or a rework is the tested step's recorded outcome,
@@ -2260,7 +2621,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * have pushed it. Idempotent: a run that already has its branch is left alone.
  */
 /** Intake's classification from meta.json, once it has written one. */
-async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string } | null> {
+async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string, blast_radius_reason?: string } | null> {
   try {
     const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))
     // `blast_radius` is read here because it is written here: intake merges all
@@ -2273,7 +2634,7 @@ async function readClassification(run: WorkflowRun): Promise<{ work_type?: strin
     // literal, and no test caught it: test-oversight.mjs exercises oversightFor()
     // in isolation and never asks whether anything populates its input.
     return meta && typeof meta === 'object'
-      ? { work_type: meta.work_type, origin: meta.origin, blast_radius: meta.blast_radius }
+      ? { work_type: meta.work_type, origin: meta.origin, blast_radius: meta.blast_radius, blast_radius_reason: meta.blast_radius_reason }
       : null
   } catch { return null }
 }
@@ -2288,6 +2649,38 @@ function ensureRunCheckout(run: WorkflowRun): Promise<void> {
   const p = ensureRunCheckoutOnce(run).finally(() => checkoutInFlight.delete(run.id))
   checkoutInFlight.set(run.id, p)
   return p
+}
+
+/**
+ * A run that names the branch it reads (a scan, via its `branch` parameter)
+ * gets its own worktree of that branch beside the product clone, cloning the
+ * product first if this host has never had it.
+ *
+ * Before this a scan read the shared clone on whatever branch it was left on -
+ * ase-crm's main, four months behind develop - and its own directory stayed
+ * empty, which is also what made every restart of it refuse.
+ */
+async function ensureBranchWorktree(run: WorkflowRun, base: string): Promise<void> {
+  const repo = run.product?.repos?.[0]
+  if (!repo) return
+  const clone = checkoutDirFor(repo, run.startedBy)
+  if (!existsSync(join(clone, '.git'))) await cloneRepo(repo, clone, await agentEnvFor(run.startedBy))
+  if (!await remoteBranchExists(clone, base)) {
+    throw new Error(`${repo} has no branch "${base}" on origin; set the run's branch parameter to one it has.`)
+  }
+  const branch = `scan/${run.id.slice(0, 8)}`
+  let worktrees: string[]
+  try {
+    worktrees = await ensureRunBranch(clone, branch, base)
+  } catch (err) {
+    throw new Error(`could not create the ${base} worktree for ${branch} beside ${clone}: ${err instanceof Error ? err.message : String(err)}. Resolve it (git worktree list / git worktree remove) and restart the run from its first step.`)
+  }
+  run.branch = branch
+  run.baseBranch = base
+  run.projectDir = worktrees[0] ?? clone
+  run.baseCommit = (await captureBaseline(run.projectDir)) ?? run.baseCommit
+  await saveRun(run)
+  log.info('run worktree ready', { runId: run.id, checkout: clone, worktree: run.projectDir, branch, base, reason: 'the run names its branch' })
 }
 
 /**
@@ -2371,6 +2764,7 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // to the Claude config directory as cwd and every step ran in the wrong
   // place while the header still named the deleted path.
   if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
+  if (run.parameters?.branch?.trim() && !run.branch && !run.testOf) return ensureBranchWorktree(run, run.parameters.branch.trim())
   const checkout = runCheckout(run)
   // A test run with a directory but no clone to make its worktree beside
   // would otherwise work in the source run's directory: refuse instead.
@@ -2448,6 +2842,7 @@ interface ResolvedStart {
   projectDir?: string
   ticketKey?: string
   workspace: string
+  parameters?: Record<string, string>
 }
 
 async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
@@ -2458,10 +2853,14 @@ async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
   // Resolved once, before any agent runs, and carried on the run: agents are
   // handed registry facts rather than asked to guess which product this is.
   // Named by the caller (a smoke sweep knows which product it is testing), else
-  // resolved from the prompt's ticket key, labels and component words.
+  // by the repository a scan was pointed at, else resolved from the prompt's
+  // ticket key, labels and component words. The repo comes before the words
+  // because it is exact: "alepolab/ase-crm" word-matches the `crm` product.
+  const repo = opts.parameters?.repo?.trim()
   const product = opts.productKey
     ? await productByKey(opts.productKey)
-    : await resolveProduct(opts.initialPrompt).catch(() => undefined)
+    : (repo && await productByRepo(repo).catch(() => undefined))
+      || await resolveProduct(opts.initialPrompt).catch(() => undefined)
   if (opts.productKey && !product) throw new Error(`Unknown product "${opts.productKey}"; registered: ${(await registeredProductKeys()).join(', ')}`)
   // The checkout a product-routed run works in, when it is already on this
   // instance: then the baseline, the dirty-tree facts and the run branch all
@@ -2476,7 +2875,20 @@ async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
   // nobody dispatched still reads its own prompt: a person who typed a key
   // meant it.
   const ticketKey = opts.ticketKey ?? (opts.parentRunId ? undefined : opts.initialPrompt.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1])
-  return { product, projectDir, ticketKey, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }) }
+  // A workflow that declares `branch` reads a branch of the product, and left
+  // blank that is the product's development branch from the registry - not
+  // whatever the shared clone happens to be on. The scans read ase-crm's main
+  // for a day that way: four months stale, while the work lands on develop.
+  // Filled in here, where the product is known, so the header, the worktree
+  // and the run record all state the same branch.
+  let parameters = opts.parameters
+  if (product && !parameters?.branch?.trim()) {
+    const declared = (await loadWorkflowSteps(opts.workflow.slug).catch(() => null))?.parameters
+    if (declared?.some(p => p.name === 'branch')) {
+      parameters = { ...parameters, branch: baseBranchFor(undefined, undefined, product.branches).base }
+    }
+  }
+  return { product, projectDir, ticketKey, parameters, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }) }
 }
 
 /** The run record's fields, shared by the start-now and queue-it paths so the
@@ -2496,7 +2908,7 @@ function newRunInput(opts: StartRunOpts, resolved: ResolvedStart) {
     watch: opts.watch,
     ticketKey: resolved.ticketKey,
     projectDir: resolved.projectDir,
-    parameters: opts.parameters,
+    parameters: resolved.parameters ?? opts.parameters,
     parentRunId: opts.parentRunId,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   }
@@ -2662,6 +3074,89 @@ export async function enqueueRun(opts: StartRunOpts): Promise<WorkflowRun> {
  * admission: what a run was GIVEN must not change under it, even when what it
  * will DO can.
  */
+/**
+ * Lets a person's decision go ahead when its group has a slot, or records it
+ * on the run and queues the run - ahead of newer runs, since it has work done
+ * - for launchQueuedRun to carry out. Returns the queued run, or null to go
+ * ahead now.
+ */
+async function parkUnlessSlot(run: WorkflowRun, decision: Omit<NonNullable<WorkflowRun['parked']>, 'from' | 'at'>): Promise<WorkflowRun | null> {
+  const { run: out, queued } = await admit({
+    group: groupOf(run),
+    start: async () => run,
+    enqueue: async () => {
+      run.parked = { ...decision, from: run.status, at: Date.now() }
+      // A run the answer came to never waited in the queue before, so its own
+      // start stands for its age: older than anything queued since.
+      run.queuedAt = run.startedAt
+      // The question stays: the decision still has to be carried out against
+      // it. `queued` is what takes it out of the inbox.
+      run.status = 'queued'
+      // currentStepIds stays: it names the step an answer goes to.
+      noteQueued()
+      await publish(run)
+      log.info('decision recorded; the run waits for a slot', { runId: run.id, action: decision.action, group: groupOf(run) })
+      return run
+    },
+  })
+  if (!queued) return null
+  // The slot may free before the next settle; a drain now starts it if so.
+  void drainRunQueue(launchQueuedRun).catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+  return out
+}
+
+/**
+ * A working run whose group gives way to another that has started (see
+ * WorkflowGroup.yieldsTo) steps aside at this step boundary: back to the head
+ * of its queue, recorded as a continue, so the queue carries on from here the
+ * moment the other group is idle - or at once, if it already is by then. The
+ * step it finished stays finished. True when it stepped aside.
+ */
+async function stepAsideFor(l: Live, run: WorkflowRun): Promise<boolean> {
+  const to = await givingWayTo(groupOf(run))
+  if (!to) return false
+  run.parked = { action: 'continue', from: 'running', gaveWayTo: to, at: Date.now() }
+  run.queuedAt = run.startedAt
+  run.status = 'queued'
+  run.currentStepIds = []
+  l.running = false
+  noteQueued()
+  await publish(run)
+  log.info('run stepped aside for another group', { runId: run.id, group: groupOf(run), for: to })
+  void drainRunQueue(launchQueuedRun).catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+  return true
+}
+
+/** Carries out a decision parkUnlessSlot recorded, now that the run has its slot. */
+async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
+  const p = run.parked!
+  // Still `queued` on disk until the decision takes effect. Writing the old
+  // status back first made the run read as `paused` - settled, and asking -
+  // for the moment in between, to the inbox and to anyone waiting on it.
+  run.parked = undefined
+  run.queuedAt = undefined
+  await saveRun(run)
+  try {
+    if (p.action === 'continue') await continueRun(run.id, p.note, { grantApproval: p.grantApproval, admitted: true })
+    else if (p.action === 'respond') await respondToRun(run.id, p.reply ?? '', { admitted: true })
+    else await restartRun(run.id, p.stepId!, p.note, p.startedBy, { admitted: true })
+    return 'launched'
+  } catch (err) {
+    // Back where the person left it, with the reason: a refused restart is
+    // something they can act on, and the run must not read as lost.
+    const back = await getRun(run.id)
+    if (back) {
+      // One that stepped aside was working, not waiting on anybody: interrupted
+      // is what the resume brings back, where `running` would be a lie.
+      if (back.status === 'queued') back.status = p.gaveWayTo ? 'interrupted' : p.from
+      back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
+      await publish(back)
+    }
+    log.warn('a parked decision could not be carried out', { runId: run.id, action: p.action, error: err instanceof Error ? err.message : String(err) })
+    return 'failed'
+  }
+}
+
 export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcome> {
   const fail = async (run: WorkflowRun, why: string): Promise<LaunchOutcome> => {
     run.status = 'failed'
@@ -2679,6 +3174,7 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   const run = await getRun(queued.id)
   if (!run) return 'failed'
   if (run.status !== 'queued') return 'deferred'
+  if (run.parked) return launchParked(run)
 
   const wf = await loadWorkflowSteps(run.workflowSlug)
   if (!wf) return fail(run, `the workflow "${run.workflowSlug}" was deleted while this run waited for a slot`)
@@ -2794,9 +3290,22 @@ const MAX_INTERRUPTIONS = 3
  * got to remove (their cleanup is deferred in memory, so a crash loses it):
  * the same once-only removal publish does, best effort, test runs only.
  */
-export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paused: string[], skipped: string[], swept: string[] }> {
-  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], swept: [] as string[] }
-  for (const run of await listRuns()) {
+/** Interrupted runs a resume left for want of a slot; resumed as runs settle. */
+const awaitingSlot = new Set<string>()
+let resumingWaiting: Promise<unknown> | null = null
+
+/** Resumes what `resumeInterruptedRuns` left waiting, one pass at a time. */
+function resumeAwaitingSlot(): Promise<unknown> {
+  if (!awaitingSlot.size) return Promise.resolve()
+  resumingWaiting ??= resumeInterruptedRuns(new Set(awaitingSlot)).finally(() => { resumingWaiting = null })
+  return resumingWaiting
+}
+
+export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resumed: string[], paused: string[], skipped: string[], waiting: string[], swept: string[] }> {
+  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], waiting: [] as string[], swept: [] as string[] }
+  const all = await listRuns()
+  // The full boot pass only; a pass for runs waiting on a slot has none to sweep.
+  if (!only) for (const run of all) {
     // Not one this process is still unwinding: publish/afterUnwound own that.
     if (testCleanupDue(run) && !live.get(run.id)?.running) {
       // Logs its own failure and still sets the marker: a worktree git will
@@ -2817,12 +3326,30 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
       if (swept) out.swept.push(run.id)
       continue
     }
-    if (run.status !== 'interrupted') continue
+  }
+  // Within its group's cap, oldest first. Every interrupted run used to resume
+  // at once whatever its group allowed: after a burst of reloads nine Runbook A
+  // runs came back together against a cap of 2, each standing up a ~2 GiB
+  // stack, and the machine ran out of memory and took the server down with it.
+  // One that finds its group full stays interrupted - it is not counted as
+  // another interruption - and is resumed when a run settles and frees a slot.
+  const inFlight = new Map<string, number>()
+  const interrupted = all.filter(r => r.status === 'interrupted').sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+  for (const run of interrupted) {
+    if (only && !only.has(run.id)) continue
+    awaitingSlot.delete(run.id)
     const frozen = run.steps.find(s => s.status === 'running')
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
-    if (!frozen) { out.skipped.push(run.id); continue }
+    // One that died between steps has nothing frozen and nothing to reset: it
+    // is resumed as it is. Left alone it stayed interrupted for good, and now
+    // that an interrupted run holds its group slot, it would hold it forever.
+    const group = groupOf(run)
+    // Only the runs actually working: every interrupted one counts toward the
+    // cap for the queue (runQueue.resumable), including this one.
+    if (!inFlight.has(group)) inFlight.set(group, all.filter(r => holdsGroupSlot(r.status) && groupOf(r) === group).length)
+    if (inFlight.get(group)! >= await capFor(group) || await givingWayTo(group, all)) { out.waiting.push(run.id); awaitingSlot.add(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
-    if (run.interruptions > MAX_INTERRUPTIONS) {
+    if (frozen && run.interruptions > MAX_INTERRUPTIONS) {
       frozen.status = 'pending'
       run.status = 'paused'
       run.question = {
@@ -2839,9 +3366,10 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
     }
     await saveRun(run)
     try {
-      await continueRun(run.id)
+      await continueRun(run.id, undefined, { admitted: true })
+      inFlight.set(group, inFlight.get(group)! + 1)
       out.resumed.push(run.id)
-      log.info('resumed a run the previous process left mid-step', { runId: run.id, stepId: frozen.stepId, interruptions: run.interruptions })
+      log.info('resumed a run the previous process left behind', { runId: run.id, stepId: frozen?.stepId ?? '(between steps)', interruptions: run.interruptions })
     } catch (err) {
       out.skipped.push(run.id)
       log.warn('could not resume an interrupted run', { runId: run.id, error: err instanceof Error ? err.message : String(err) })
@@ -2855,11 +3383,23 @@ export async function resumeInterruptedRuns(): Promise<{ resumed: string[], paus
 export class ApprovalNeedsReason extends Error {}
 
 export async function continueRun(
-  runId: string, note?: string, opts: { grantApproval?: boolean } = {},
+  runId: string, note?: string, opts: { grantApproval?: boolean, /** The run already has its slot: the queue, or a resume that checked the cap. */ admitted?: boolean } = {},
 ): Promise<WorkflowRun | null> {
   // Default true: every existing caller means "yes, run it". Only the decision
   // endpoint passes false, and only when the operator approved no entry at all.
   const grantApproval = opts.grantApproval ?? true
+  if (!opts.admitted) {
+    const stored = await getRun(runId)
+    if (stored && (stored.status === 'paused' || stored.status === 'awaiting_review') && !live.get(runId)?.running) {
+      // Refused before it is recorded, exactly as the unparked path refuses it.
+      const q = stored.question
+      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && q.reason !== 'quota' && needsJustification(stored.blastRadius) && !note?.trim()) {
+        throw new ApprovalNeedsReason(`This run is classified \`${stored.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
+      }
+      const parked = await parkUnlessSlot(stored, { action: 'continue', note, grantApproval })
+      if (parked) return parked
+    }
+  }
   let l = live.get(runId)
   // A run whose owning process died has no live record. Its currentStepIds
   // name what was executing; restarting from those is the honest resume.
@@ -2869,12 +3409,13 @@ export async function continueRun(
       const from = stored.currentStepIds[0]
         ?? stored.steps.find(s => s.status === 'running' || s.status === 'pending')?.stepId
       if (!from) return stored
-      return restartRun(runId, from)
+      // An interrupted run already counts against its group (runQueue.resumable).
+      return restartRun(runId, from, undefined, undefined, { admitted: true })
     }
     // Paused with nothing in memory: the process that paused it is gone (a
     // container restart leaves pid 1 in place, so only the record tells).
     // Rebuild the scheduling state from disk and take ownership.
-    if (stored?.status !== 'paused' && stored?.status !== 'awaiting_review') return stored
+    if (stored?.status !== 'paused' && stored?.status !== 'awaiting_review' && !(opts.admitted && stored?.status === 'queued')) return stored
     l = await rehydrate(stored)
     stored.pid = process.pid
     stored.bootId = BOOT_ID
@@ -2887,7 +3428,7 @@ export async function continueRun(
   if (l.running) return getRun(runId)
   l.running = true
   const run = await getRun(runId)
-  if (!run || (run.status !== 'paused' && run.status !== 'awaiting_review')) {
+  if (!run || (run.status !== 'paused' && run.status !== 'awaiting_review' && !(opts.admitted && run.status === 'queued'))) {
     l.running = false
     return run
   }
@@ -2922,12 +3463,13 @@ export async function continueRun(
     // it cannot be satisfied without having read something. Reject already
     // demanded a reason; approve did not, which had it backwards - saying yes to
     // a money change is the answer that needs the justification.
-    if (run.question.reason !== 'budget' && needsJustification(run.blastRadius) && !note?.trim()) {
+    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && run.question.reason !== 'quota' && needsJustification(run.blastRadius) && !note?.trim()) {
       l.running = false
       throw new ApprovalNeedsReason(
         `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
     }
     if (run.question.reason === 'budget') extendBudget(run)
+    else if (run.question.reason === 'auth' || run.question.reason === 'quota') { /* the step is already pending and armed */ }
     // Withholding the approval is what lets a review that approved nothing take
     // effect. l.approved waives runWhen (see resolveConditions), so granting it
     // here would run the step over an artifact the operator just emptied - the
@@ -2964,10 +3506,18 @@ export async function continueRun(
  * awaiting the run's creation — not the reply itself, just the durable record that
  * one is in flight.
  */
-export async function respondToRun(runId: string, reply: string): Promise<WorkflowRun | null> {
+export async function respondToRun(runId: string, reply: string, opts: { admitted?: boolean } = {}): Promise<WorkflowRun | null> {
+  const stored = await getRun(runId)
+  if (!opts.admitted && stored?.status === 'paused') {
+    const parked = await parkUnlessSlot(stored, { action: 'respond', reply })
+    if (parked) return parked
+  }
+  // After a restart the process holding the question is gone; the record is enough to answer it.
+  const answerable = (status?: WorkflowRun['status']) => status === 'paused' || (opts.admitted && status === 'queued')
+  if (answerable(stored?.status) && !live.get(runId)) await rehydrate(stored!).catch(() => undefined)
   const run = await getRun(runId)
   const l = live.get(runId)
-  if (!run || !l || run.status !== 'paused') return run
+  if (!run || !l || !answerable(run.status)) return run
   const id = run.currentStepIds[0]
   if (!id) return run
   // Continue the session that asked the question: it already holds the brief
@@ -2986,6 +3536,12 @@ export async function respondToRun(runId: string, reply: string): Promise<Workfl
   // this returns would resolve immediately on that stale status instead of waiting
   // for the reply to actually finish.
   run.status = 'running'
+  // This process owns it now. A record paused by an earlier server keeps that
+  // server's pid and boot id, and a running run under them reads as
+  // interrupted to everyone else - the watcher, the queue, the inbox - while
+  // it is working here.
+  run.pid = process.pid
+  run.bootId = BOOT_ID
   await publish(run)
   void (async () => {
     try {
@@ -3202,11 +3758,11 @@ const RESTARTABLE: WorkflowRun['status'][] = ['failed', 'stopped', 'interrupted'
  * step's output, under the same run id and artifacts directory. The previous
  * attempt of each reset step is snapshotted the way monitor retries are.
  */
-export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string, opts: { /** The runner itself hands a running run over (a widened run); the settled-status gate is the operator's, not its. */ fromRunner?: boolean } = {}): Promise<WorkflowRun> {
+export async function restartRun(runId: string, stepId: string, note?: string, startedBy?: string, opts: { /** The runner itself hands a running run over (a widened run); the settled-status gate is the operator's, not its. */ fromRunner?: boolean, /** The run already has its slot: the queue, or a resume that checked the cap. */ admitted?: boolean } = {}): Promise<WorkflowRun> {
   const run = await getRun(runId)
   if (!run) throw new RestartError(404, 'Run not found')
   if (!run.steps.some(s => s.stepId === stepId)) throw new RestartError(400, `Unknown step "${stepId}"`)
-  if (!opts.fromRunner && !RESTARTABLE.includes(run.status)) {
+  if (!opts.fromRunner && !RESTARTABLE.includes(run.status) && !(opts.admitted && run.status === 'queued')) {
     const instead = run.status === 'paused'
       ? 'continue it instead'
       : run.status === 'awaiting_review'
@@ -3218,6 +3774,13 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // everything else is not part of the test. Restarting anywhere but the tested
   // step would run steps the test exists not to run.
   if (run.testOf && stepId !== run.testOf.stepId) throw new RestartError(409, 'A test run only re-runs the step it tests.')
+  // A person's restart waits for a slot like any start. The runner's own
+  // hand-overs (widen, rework) keep the slot the run already holds, and an
+  // interrupted run is counted against its group already.
+  if (!opts.fromRunner && !opts.admitted && run.status !== 'interrupted' && !run.testOf) {
+    const parked = await parkUnlessSlot(run, { action: 'restart', stepId, note, startedBy })
+    if (parked) return parked
+  }
   // Same scope as starting a run: what conflicts is a shared working directory.
   // A test run never counts against that lock (it works on its own worktree),
   // so it is not refused by it either.
@@ -3261,10 +3824,18 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // Scoped to runs that actually route to repositories. A workflow with no
   // product resolved has no checkout to be missing, and blocking those would
   // turn a real guard into a nuisance that gets deleted.
+  //
+  // The product's own checkout counts too. The run header sends every agent to
+  // <workspace root>/<repo name>, so a run with nothing of its own - a scan,
+  // which only reads - works there from its first step. Refusing to restart it
+  // threw away a finished scan, triage and drafting every time the dev server
+  // reloaded, because its derived directory had never been meant to hold code.
+  const repos = run.product?.repos ?? []
   // A test run is exempt: its worktree was removed when it settled, and
   // ensureTestCheckout makes it again before the tested step runs.
-  const expectsCheckout = !run.testOf && (run.product?.repos?.length ?? 0) > 0
-  if (expectsCheckout && !hasCheckout(runWorkspace(run)) && ancestorsOf(l.graph, stepId).length > 0) {
+  const expectsCheckout = !run.testOf && repos.length > 0
+  const sharedCheckout = repos.some(r => hasCheckout(checkoutDirFor(r, run.startedBy)))
+  if (expectsCheckout && !hasCheckout(runWorkspace(run)) && !sharedCheckout && ancestorsOf(l.graph, stepId).length > 0) {
     throw new RestartError(
       409,
       `This run targets ${run.product?.repos?.join(', ')}, but there is no checkout in ${runWorkspace(run)} — `

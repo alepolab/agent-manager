@@ -146,6 +146,21 @@ check('oracle.verdict: PASS on the pre-fix oracle is rejected', () => {
     `expected a message naming the pre-fix FAIL requirement, got:\n${problems.join('\n')}`)
 })
 
+// A ticket that asked only for a test: the code was right, the oracle passes,
+// and deliberate breaks of the behaviour are what prove the test has teeth.
+check('oracle.verdict: PASS is accepted when every one of 3+ deliberate breaks was caught', () => {
+  const problems = validateBundle(broken(b => { b.oracle.verdict = 'PASS'; b.oracle.mutation_proof = { mutants: 5, killed: 5, report: 'mutation-proof.md' } }))
+  assert.deepEqual(problems, [])
+})
+check('oracle.verdict: PASS with a break the test missed is rejected', () => {
+  const problems = validateBundle(broken(b => { b.oracle.verdict = 'PASS'; b.oracle.mutation_proof = { mutants: 5, killed: 4 } }))
+  assert.ok(problems.some(p => /mutation_proof/.test(p) && /4 of 5/.test(p)), problems.join('\n'))
+})
+check('oracle.verdict: PASS with fewer than 3 breaks is rejected', () => {
+  const problems = validateBundle(broken(b => { b.oracle.verdict = 'PASS'; b.oracle.mutation_proof = { mutants: 2, killed: 2 } }))
+  assert.ok(problems.length, 'two breaks are not enough')
+})
+
 // ── 4. Post-fix oracle that FAILED ──────────────────────────────────────────
 // A fix whose own oracle still fails afterward is not a fix; also semantic.
 check('oracle_after.verdict: FAIL is rejected', () => {

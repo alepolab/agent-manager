@@ -78,7 +78,7 @@ async function handleSend() {
     <div class="shrink-0 px-4 py-2.5 flex items-center justify-between border-b" style="border-color: var(--border-subtle);">
       <div class="flex items-center gap-2">
         <span class="t-small font-medium" style="color: var(--text-primary);">Test</span>
-        <span v-if="isDraft" class="t-small font-mono px-1.5 py-px rounded-full" style="background: rgba(229, 169, 62, 0.1); color: var(--accent);">Draft</span>
+        <span v-if="isDraft" class="t-small font-mono px-1.5 py-px rounded-full" style="background: rgba(var(--accent-rgb), 0.1); color: var(--accent);">Draft</span>
         <span class="t-small font-mono tracking-widest uppercase px-1.5 py-px rounded-full transition-all" :style="{ background: isStreaming ? 'var(--accent-muted)' : 'var(--badge-subtle-bg)', color: isStreaming ? 'var(--accent)' : 'var(--text-disabled)' }">{{ statusText }}</span>
       </div>
       <button v-if="messages.length" class="p-1 rounded-md hover-bg transition-all" style="color: var(--text-disabled);" title="Clear conversation" @click="clearChat">

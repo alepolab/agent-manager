@@ -158,7 +158,7 @@ function handleSubmit() {
 }
 .field-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(229, 169, 62, 0.1);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.1);
 }
 .field-input:disabled {
   opacity: 0.5;

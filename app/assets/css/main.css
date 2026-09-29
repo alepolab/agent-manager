@@ -5,10 +5,24 @@
   --font-display: "Clash Display", "Geist Sans", system-ui, sans-serif;
   --font-sans: "Geist Sans", "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", "SF Mono", ui-monospace, monospace;
+
+  /* Alepo violet, built around the logo's #4f3be9. Nuxt UI's `primary` is
+     pointed at this scale in app.config.ts. */
+  --color-alepo-50: #f3f1fe;
+  --color-alepo-100: #e7e4fd;
+  --color-alepo-200: #d2ccfb;
+  --color-alepo-300: #b3a8f8;
+  --color-alepo-400: #8f80f4;
+  --color-alepo-500: #6d5aef;
+  --color-alepo-600: #4f3be9;
+  --color-alepo-700: #412dd0;
+  --color-alepo-800: #3624a8;
+  --color-alepo-900: #2d1d8f;
+  --color-alepo-950: #1b1159;
 }
 
 /* ============================================
-   Color System — Precision Instrument
+   Color System — Alepo
    ============================================ */
 
 :root {
@@ -18,11 +32,11 @@
   color-scheme: light;
 
   /* Surfaces */
-  --surface-base: #f5f6f8;
+  --surface-base: #f4f2f9;
   --surface-raised: #ffffff;
   --surface-overlay: #ffffff;
-  --surface-hover: #edeef2;
-  --surface-inset: #ecedf1;
+  --surface-hover: #ebe8f3;
+  --surface-inset: #e9e6f1;
 
   /* Borders */
   --border-subtle: rgba(0, 0, 0, 0.06);
@@ -30,23 +44,25 @@
   --border-emphasis: rgba(0, 0, 0, 0.18);
 
   /* Text */
-  --text-primary: #111118;
-  --text-secondary: #53535f;
-  --text-tertiary: #6b6b78;
-  --text-disabled: #ababb5;
-  --text-accent: #b45309;
-  --text-indigo: #6366f1;
+  --text-primary: #1d1729;
+  --text-secondary: #504a5e;
+  --text-tertiary: #686277;
+  --text-disabled: #aaa5b8;
+  --text-accent: #4f3be9;
+  --text-indigo: #0e7c93;
 
-  /* Accent — warm amber */
-  --accent: #b45309;
-  --accent-hover: #d97706;
-  --accent-glow: rgba(180, 83, 9, 0.12);
-  --accent-muted: rgba(180, 83, 9, 0.08);
-  --accent-gradient: linear-gradient(135deg, #b45309 0%, #92400e 100%);
+  /* Accent — Alepo violet. --accent-rgb is the same colour as channels, for
+     the translucent tints written as rgba(var(--accent-rgb), a). */
+  --accent: #4f3be9;
+  --accent-rgb: 79, 59, 233;
+  --accent-hover: #2d1d8f;
+  --accent-glow: rgba(79, 59, 233, 0.14);
+  --accent-muted: rgba(79, 59, 233, 0.08);
+  --accent-gradient: linear-gradient(135deg, #5b47f0 0%, #2d1d8f 100%);
 
-  /* Secondary accent — indigo */
-  --accent-secondary: #6366f1;
-  --accent-secondary-muted: rgba(99, 102, 241, 0.08);
+  /* Secondary accent — Alepo cyan (#20a7c3, darkened to clear AA on white) */
+  --accent-secondary: #0e7c93;
+  --accent-secondary-muted: rgba(32, 167, 195, 0.1);
 
   /* Radius system */
   --radius-sm: 8px;
@@ -83,7 +99,7 @@
   --skeleton-to: rgba(0, 0, 0, 0.06);
   --graph-node-bg: rgba(255, 255, 255, 0.94);
   --graph-tooltip-bg: rgba(255, 255, 255, 0.95);
-  --sidebar-bg: linear-gradient(180deg, #edeef2 0%, #f5f6f8 100%);
+  --sidebar-bg: linear-gradient(180deg, #ebe8f3 0%, #f4f2f9 100%);
 
   /* Editor (recessed, dark even in light mode) */
   --editor-bg: #1e1e2e;
@@ -101,12 +117,12 @@
 
   color-scheme: dark;
 
-  /* Surfaces — deeper with warm tinting */
-  --surface-base: #09090b;
-  --surface-raised: #131316;
-  --surface-overlay: #1a1a1f;
-  --surface-hover: #222228;
-  --surface-inset: #0e0e11;
+  /* Surfaces — deep, tinted toward Alepo ink (#1d1729) */
+  --surface-base: #0b0a12;
+  --surface-raised: #14121c;
+  --surface-overlay: #1b1826;
+  --surface-hover: #242031;
+  --surface-inset: #0f0d17;
 
   /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.05);
@@ -114,21 +130,24 @@
   --border-emphasis: rgba(255, 255, 255, 0.16);
 
   /* Text */
-  --text-primary: #f0f0f5;
-  --text-secondary: #9d9daa;
-  --text-tertiary: #8a8a97;
-  --text-disabled: #4a4a55;
+  --text-primary: #f4f2f9;
+  --text-secondary: #a29dae;
+  --text-tertiary: #8e889c;
+  --text-disabled: #4d4859;
+  --text-accent: #9d90fa;
+  --text-indigo: #3cc3de;
 
   /* Accent */
-  --accent: #e5a93e;
-  --accent-hover: #f0be5c;
-  --accent-glow: rgba(229, 169, 62, 0.15);
-  --accent-muted: rgba(229, 169, 62, 0.08);
-  --accent-gradient: linear-gradient(135deg, #e5a93e 0%, #d4845a 100%);
+  --accent: #8f80f4;
+  --accent-rgb: 143, 128, 244;
+  --accent-hover: #b3a8f8;
+  --accent-glow: rgba(143, 128, 244, 0.16);
+  --accent-muted: rgba(143, 128, 244, 0.1);
+  --accent-gradient: linear-gradient(135deg, #8f80f4 0%, #4f3be9 100%);
 
   /* Secondary accent */
-  --accent-secondary: #818cf8;
-  --accent-secondary-muted: rgba(129, 140, 248, 0.08);
+  --accent-secondary: #3cc3de;
+  --accent-secondary-muted: rgba(60, 195, 222, 0.1);
 
   /* Model tiers */
   --model-opus: #c084fc;
@@ -153,9 +172,9 @@
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.12);
   --skeleton-from: rgba(255, 255, 255, 0.03);
   --skeleton-to: rgba(255, 255, 255, 0.06);
-  --graph-node-bg: rgba(19, 19, 22, 0.94);
-  --graph-tooltip-bg: rgba(9, 9, 11, 0.95);
-  --sidebar-bg: linear-gradient(180deg, #0c0c10 0%, #09090b 100%);
+  --graph-node-bg: rgba(20, 18, 28, 0.94);
+  --graph-tooltip-bg: rgba(11, 10, 18, 0.95);
+  --sidebar-bg: linear-gradient(180deg, #100e19 0%, #0b0a12 100%);
 
   /* Editor */
   --editor-bg: #0c0c10;
@@ -175,7 +194,7 @@ body {
 }
 
 ::selection {
-  background: rgba(229, 169, 62, 0.2);
+  background: rgba(var(--accent-rgb), 0.2);
   color: inherit;
 }
 
@@ -413,7 +432,7 @@ body {
 .graph-canvas {
   background-color: var(--surface-base);
   background-image: radial-gradient(circle,
-      rgba(229, 169, 62, 0.04) 1px,
+      rgba(var(--accent-rgb), 0.04) 1px,
       transparent 1px);
   background-size: 28px 28px;
 }
@@ -441,7 +460,7 @@ body {
 }
 
 .graph-node--agent:hover {
-  box-shadow: 0 0 28px var(--node-glow, rgba(229, 169, 62, 0.12));
+  box-shadow: 0 0 28px var(--node-glow, rgba(var(--accent-rgb), 0.12));
 }
 
 .graph-node--command {

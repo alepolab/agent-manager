@@ -72,6 +72,31 @@ const outcomes = computed(() => {
 })
 
 /**
+ * The runs behind one outcome count, listed under it. In the URL, so a
+ * filtered dashboard can be sent to someone or survive a reload.
+ */
+const route = useRoute()
+const router = useRouter()
+const outcome = computed({
+  get: () => (typeof route.query.outcome === 'string' ? route.query.outcome : ''),
+  set: v => router.replace({ query: { ...route.query, outcome: v || undefined } }),
+})
+const OUTCOME_LIMIT = 50
+const outcomeRuns = computed(() => runs.value.filter(r => r.status === outcome.value).sort((a, b) => b.startedAt - a.startedAt))
+/** One line on where a run stands: why it failed, what it waits on, or the step it is at. */
+function whereItIs(r: WorkflowRun): string {
+  const label = (id?: string) => r.steps.find(s => s.stepId === id)?.label
+  if (r.status === 'failed') return r.error || `Failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`
+  // Before the question: a decision already taken waits for a slot, and the question it answered is history.
+  if (r.status === 'queued') return r.parked?.gaveWayTo ? `Stepped aside while ${r.parked.gaveWayTo} runs` : r.parked ? `Decided; waiting for a slot to ${r.parked.action}` : 'Waiting for a slot'
+  if (r.question) return `${label(r.question.stepId) ?? 'A step'}: ${r.question.text.split('\n')[0]}`
+  const at = label(r.currentStepIds[0]) ?? r.steps.find(s => s.status === 'running')?.label
+  if (at) return `At ${at}`
+  const done = r.steps.filter(s => s.status === 'completed').length
+  return `${done} of ${r.steps.length} steps done`
+}
+
+/**
  * Decisions only exist from the moment they started being recorded. Runs that
  * settled before that carry none, so every figure derived from them describes
  * the runs that have them and no others — said on the page rather than left for
@@ -157,13 +182,36 @@ const withDecisions = computed(() => runs.value.filter(r => (r.decisions?.length
     <section>
       <h2 class="text-section-label mb-2">Outcomes</h2>
       <div class="flex flex-wrap gap-3 t-small">
-        <span v-for="[status, n] in outcomes" :key="status" class="rounded-lg px-3 py-1.5" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+        <button
+          v-for="[status, n] in outcomes" :key="status" type="button"
+          class="rounded-lg px-3 py-1.5 focus-ring cursor-pointer"
+          :style="{ background: 'var(--surface-raised)', border: `1px solid ${outcome === status ? RUN_STATUS_COLOR[status] : 'var(--border-subtle)'}` }"
+          :aria-pressed="outcome === status" :title="outcome === status ? 'Hide these runs' : `Show the ${n} ${status} run(s)`"
+          @click="outcome = outcome === status ? '' : status"
+        >
           <span class="font-mono uppercase t-small" :style="{ color: RUN_STATUS_COLOR[status] }">{{ status }}</span>
           <span class="ml-2 tabular-nums">{{ n }}</span>
-        </span>
+        </button>
         <span v-if="!runs.length" class="text-label">No runs yet.</span>
       </div>
       <p v-if="settled.length" class="t-small text-label mt-2">{{ settled.length }} settled of {{ runs.length }}.</p>
+
+      <div v-if="outcome" class="mt-3 space-y-1">
+        <p v-if="!outcomeRuns.length" class="t-ui text-label">No {{ outcome }} runs now.</p>
+        <NuxtLink
+          v-for="r in outcomeRuns.slice(0, OUTCOME_LIMIT)" :key="r.id" :to="`/runs/${r.id}`"
+          class="grid grid-cols-[8rem_minmax(0,1fr)_minmax(0,1.5fr)_7rem] items-center gap-3 rounded-lg px-3 py-2 t-small focus-ring"
+          style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+        >
+          <span class="truncate font-medium" style="color: var(--text-primary);">{{ r.ticketKey || r.workflowName }}</span>
+          <span class="text-label truncate" :title="r.workflowName">{{ r.workflowName }}</span>
+          <span class="text-label truncate" :title="whereItIs(r)">{{ whereItIs(r) }}</span>
+          <span class="text-label text-right tabular-nums" :title="new Date(r.startedAt).toLocaleString()">{{ new Date(r.startedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) }} {{ new Date(r.startedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) }}</span>
+        </NuxtLink>
+        <NuxtLink :to="`/runs?status=${outcome}`" class="t-small underline text-label inline-block mt-1">
+          {{ outcomeRuns.length > OUTCOME_LIMIT ? `All ${outcomeRuns.length} in Runs` : 'Open in Runs' }}
+        </NuxtLink>
+      </div>
     </section>
   </div>
 </template>

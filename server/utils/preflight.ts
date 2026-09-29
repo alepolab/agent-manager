@@ -25,6 +25,9 @@ import { transitionReachable } from './jiraSteps.ts'
 import { projectCreateSchema } from './jiraCreate.ts'
 import { writeArtifactJson, JIRA_SCHEMA_ARTIFACT } from './runArtifacts.ts'
 import { credentialsFor } from './ticketNotifier.ts'
+import { isJiraPostingEnabled } from './jiraCredentials.ts'
+import { getChannel } from './channels.ts'
+import { fetchExistingTickets, EXISTING_TICKETS_ARTIFACT } from './existingTickets.ts'
 import { agentEnvFor } from './agentCaller.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
@@ -42,6 +45,7 @@ export interface PreflightSteps {
   label: string
   jira?: { transition?: string, action?: string }
   testsUnlocked?: boolean
+  notify?: { channel?: string }
 }
 
 /** The one-line reason a run must not start, or null. */
@@ -196,27 +200,60 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
   // has Read, Write, Grep, Glob and no network, so it cannot ask Jira itself -
   // and a run that drafts three tickets against a project whose priority scheme
   // it guessed wrong has all three refused after the drafting is paid for.
+  //
+  // Every miss here FAILS the run. These used to warn, so that a machine with
+  // no Jira could still scan - and a real scan did exactly that: forty minutes
+  // of paid work, drafts filed against a project it had guessed, a create step
+  // that only logged "would create", and four fix runs dispatched for tickets
+  // that did not exist. A run whose whole output is Jira tickets has nothing
+  // to show without Jira, so it does not start.
   if (!creates) add('jira fields', 'skip', 'no step of this workflow creates tickets')
-  else if (!jiraProject) add('jira fields', 'warn', 'no Jira project is registered for this product, so the drafts name their own project and nothing can be checked in advance')
+  else if (!isJiraPostingEnabled()) add('jira fields', 'fail', 'this workflow creates Jira tickets and posting is off on this instance, so every create would only be logged. Set JIRA_POST_ENABLED=1, or turn Jira posting on in Settings.')
+  else if (!jiraProject) add('jira fields', 'fail', `no Jira project is registered for ${run.product ? `product ${run.product.name}` : 'this run, because no product matched'}, so the drafts would name a project of their own guessing. Add match.projects to the product in the registry, or start the run with the repo parameter set to a registered repository.`)
   else {
     await guard('jira fields', async () => {
-      // A machine with no Jira configured still runs scans - the create step
-      // dry-runs and says so. Failing the run here would turn "Jira is not set
-      // up" into "your workflow is broken".
       let creds
       try {
         creds = await credentialsFor(run)
       } catch (err) {
-        return { name: 'jira fields', level: 'warn', detail: `${jiraProject}'s required fields could not be checked: ${err instanceof Error ? err.message : String(err)}. Creation will dry-run or report what Jira refuses.` }
+        return { name: 'jira fields', level: 'fail', detail: `${jiraProject}'s tickets cannot be created: ${err instanceof Error ? err.message : String(err)}` }
       }
       const schema = await projectCreateSchema(creds, jiraProject, fetchImpl)
       if (!schema) {
-        return { name: 'jira fields', level: 'warn', detail: `${jiraProject}'s create metadata could not be read; drafting proceeds without it and a refusal will name whatever is missing.` }
+        return { name: 'jira fields', level: 'fail', detail: `${jiraProject}'s create metadata could not be read with these credentials: the project does not exist, the account cannot create issues in it, or Jira is unreachable.` }
       }
       await writeArtifactJson(run.id, JIRA_SCHEMA_ARTIFACT, { project: jiraProject, issueTypes: schema })
       const shapes = Object.entries(schema)
         .map(([type, s]) => `${type}${s.required.length ? ` (needs ${s.required.map(f => `${f.name}${f.type ? `:${f.type}` : ''}`).join(', ')})` : ''}`)
-      return { name: 'jira fields', level: 'ok', detail: `${jiraProject}: ${shapes.join('; ')} — written to ${JIRA_SCHEMA_ARTIFACT}` }
+      checks.push({ name: 'jira fields', level: 'ok', detail: `${jiraProject}: ${shapes.join('; ')} — written to ${JIRA_SCHEMA_ARTIFACT}` })
+
+      // What is already filed, for the scanner and triage to check against:
+      // neither can reach Jira, and without this a nightly scan that files
+      // without review files the same findings again every night. A failed
+      // search fails the run for that reason - filing blind is the duplicate.
+      try {
+        const tickets = await fetchExistingTickets(creds, jiraProject, fetchImpl)
+        await writeArtifactJson(run.id, EXISTING_TICKETS_ARTIFACT, { project: jiraProject, fetchedAt: new Date().toISOString(), tickets })
+        return { name: 'existing tickets', level: 'ok', detail: `${tickets.length} open or recently resolved ${jiraProject} ticket(s) — written to ${EXISTING_TICKETS_ARTIFACT}` }
+      } catch (err) {
+        return { name: 'existing tickets', level: 'fail', detail: `${jiraProject}'s existing tickets could not be read, so this run's findings could not be checked against them: ${err instanceof Error ? err.message : String(err)}` }
+      }
+    })
+  }
+
+  // ── the channels a notify step will post to ──
+  //
+  // A missing channel used to surface as a completed step whose output said
+  // "no channel named ... is configured", after everything before it had run.
+  const channels = [...new Set(steps.map(s => s.notify?.channel?.trim()).filter((c): c is string => !!c))]
+  if (!channels.length) add('notify channels', 'skip', 'no step of this workflow posts to a channel')
+  else {
+    await guard('notify channels', async () => {
+      const missing: string[] = []
+      for (const name of channels) if (!await getChannel(name)) missing.push(name)
+      return missing.length
+        ? { name: 'notify channels', level: 'fail', detail: `no channel named ${missing.map(c => `"${c}"`).join(', ')} is configured on this instance. Add it in Settings, or change the step's channel.` }
+        : { name: 'notify channels', level: 'ok', detail: channels.map(c => `"${c}"`).join(', ') }
     })
   }
 
@@ -228,9 +265,20 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
       await credentialsFor(run) // throws when the starter has no usable credentials
       return null
     })
+    // Only the next move can be checked from where the ticket is now: "Ready
+    // for QA" is reached from DEV DONE, not from "In Progress", so probing it
+    // before the run warned on every ASECRM run that it was unreachable, and
+    // every one of those warnings was wrong. Statuses the ticket already holds
+    // are passed over, so a restarted run checks the move it will actually make.
+    let checkedNext = false
     for (const target of [...new Set(jiraTargets)]) {
+      if (checkedNext) {
+        add(`jira: ${target}`, 'skip', 'checked when the step runs: it is reached from wherever the earlier Jira steps leave the ticket')
+        continue
+      }
       await guard(`jira: ${target}`, async () => {
         const r = await transitionReachable(run, run.ticketKey!, target, fetchImpl)
+        if (!r.already) checkedNext = true
         // Never fatal. Only the FIRST status is even reachable from where the
         // ticket is now — a later one is reached from wherever the run leaves
         // it, which no check before the run can know — but an unreachable
