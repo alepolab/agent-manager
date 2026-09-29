@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { getAgentColor } from '~/utils/colors'
-import { getModelBadgeClasses } from '~/utils/models'
+import { getModelLabel } from '~/utils/models'
 import { SETTINGS_SEARCH_INDEX } from '~/utils/settingsSearchIndex'
 import { NAV_PRIMARY, NAV_LIBRARY, SETTINGS_TABS } from '~/utils/navigation'
 
@@ -33,7 +32,7 @@ const results = computed(() => {
   const q = query.value.toLowerCase().trim()
   if (!q) return []
 
-  const items: { type: string; label: string; sublabel: string; to: string; icon: string; color?: string; model?: string }[] = []
+  const items: { type: string; label: string; sublabel: string; to: string; icon: string; model?: string }[] = []
 
   // Pages first: the sidebar lists nine, and this is how the rest are found.
   for (const page of pages.value) {
@@ -48,7 +47,6 @@ const results = computed(() => {
         sublabel: agent.frontmatter.description || '',
         to: `/agents/${agent.slug}`,
         icon: 'i-lucide-cpu',
-        color: getAgentColor(agent.frontmatter.color),
         model: agent.frontmatter.model,
       })
     }
@@ -158,7 +156,7 @@ if (import.meta.client) {
             autofocus
             @keydown="onKeydown"
           />
-          <kbd class="t-small font-mono px-1.5 py-0.5 rounded badge badge-subtle">ESC</kbd>
+          <kbd class="t-small px-1.5 py-0.5 rounded badge badge-subtle">ESC</kbd>
         </div>
 
         <!-- Results -->
@@ -181,30 +179,21 @@ if (import.meta.client) {
             @mouseenter="selectedIndex = idx"
             @click="navigate(result.to)"
           >
-            <div
-              v-if="result.color"
-              class="size-2 rounded-full shrink-0"
-              :style="{ background: result.color }"
-            />
-            <UIcon v-else :name="result.icon" class="size-4 shrink-0 text-meta" />
+            <UIcon :name="result.icon" class="size-4 shrink-0 text-meta" />
 
             <span class="t-ui font-medium w-40 shrink-0 truncate" :class="{ 'font-mono': result.type === 'Command' }">
               {{ result.label }}
             </span>
 
-            <span
-              v-if="result.model"
-              class="t-small font-mono font-medium px-1 py-px rounded-full shrink-0"
-              :class="[getModelBadgeClasses(result.model).bg, getModelBadgeClasses(result.model).text]"
-            >
-              {{ result.model }}
+            <span v-if="result.model" class="t-small shrink-0 text-meta">
+              {{ getModelLabel(result.model) }}
             </span>
 
             <span class="flex-1 t-small truncate text-label">
               {{ result.sublabel }}
             </span>
 
-            <span class="t-small font-mono shrink-0 text-meta">
+            <span class="t-small shrink-0 text-meta tabular-nums">
               {{ result.type }}
             </span>
           </button>

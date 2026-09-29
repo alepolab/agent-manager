@@ -91,7 +91,7 @@ function handleOpenFile(filePath: string) {
               :key="msg.id"
               class="group relative px-3 md:px-4 py-2 md:py-2.5 min-w-0"
               :class="idx === 0 ? 'rounded-2xl rounded-tr-md' : 'rounded-2xl rounded-r-md'"
-              style="background: var(--accent); color: white;"
+              style="background: var(--accent); color: var(--on-accent);"
             >
               <div v-if="msg.images && msg.images.length > 0" class="flex flex-wrap gap-2 mb-2">
                 <img v-for="(img, i) in msg.images" :key="i" :src="img" class="max-w-[160px] md:max-w-[200px] max-h-[160px] md:max-h-[200px] rounded-lg object-contain bg-white/10" />
@@ -123,7 +123,7 @@ function handleOpenFile(filePath: string) {
           <!-- User Avatar -->
           <div
             class="size-7 md:size-8 rounded-full shrink-0 flex items-center justify-center t-small md:t-small font-semibold"
-            style="background: var(--accent); color: white;"
+            style="background: var(--accent); color: var(--on-accent);"
           >
             U
           </div>

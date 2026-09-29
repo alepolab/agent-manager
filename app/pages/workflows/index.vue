@@ -288,7 +288,7 @@ async function saveGroups() {
           </div>
 
           <div class="space-y-2">
-            <div v-if="groupRows.length" class="flex items-center gap-2 t-label font-mono uppercase tracking-wider text-meta">
+            <div v-if="groupRows.length" class="flex items-center gap-2 t-label text-meta">
               <span style="flex: 1 1 0%; min-width: 0;">Group</span>
               <span style="flex: 0 0 5rem;">At once</span>
               <span style="flex: 0 0 7rem;">Now</span>

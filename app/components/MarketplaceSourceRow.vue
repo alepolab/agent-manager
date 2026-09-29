@@ -51,11 +51,11 @@ function cancelRemove() {
       >
         {{ source.name }}
       </button>
-      <span class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle">
+      <span class="t-small px-1.5 py-px rounded-full shrink-0 badge badge-subtle tabular-nums">
         {{ source.sourceType }}
       </span>
       <span class="t-small text-meta truncate flex-1">{{ source.sourceUrl }}</span>
-      <span class="font-mono t-small text-meta shrink-0">{{ formatDate(source.lastUpdated) }}</span>
+      <span class="t-small text-meta shrink-0 tabular-nums">{{ formatDate(source.lastUpdated) }}</span>
     </div>
     <div class="flex items-center gap-2 ml-3">
       <template v-if="showConfirm">
@@ -65,7 +65,7 @@ function cancelRemove() {
             @click="onRemove"
           >
             <UIcon name="i-lucide-alert-circle" class="size-3.5" />
-            <span class="t-small font-bold uppercase tracking-wider">Confirm?</span>
+            <span class="t-small font-semibold">Confirm?</span>
           </button>
           <button
             class="p-1 rounded hover:bg-surface-raised text-meta hover:text-label transition-colors focus-ring"

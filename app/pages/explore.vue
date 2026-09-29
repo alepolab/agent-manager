@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { agentTemplates } from "~/utils/templates";
 import { commandTemplates } from "~/utils/commandTemplates";
-import { getAgentColor } from "~/utils/colors";
 import { getFriendlyModelName } from "~/utils/terminology";
 
 const { create: createAgent, fetchAll: fetchAgents, agents } = useAgents();
@@ -625,33 +624,16 @@ function scrollToMarketplace(name: string) {
                 <div class="flex items-center gap-2.5">
                   <div
                     class="size-8 rounded-lg flex items-center justify-center shrink-0"
-                    :style="{
-                      background:
-                        getAgentColor(template.frontmatter.color) + '15',
-                      border:
-                        '1px solid ' +
-                        getAgentColor(template.frontmatter.color) +
-                        '25',
-                    }"
+                    style="background: var(--surface-raised);"
                   >
-                    <UIcon
-                      :name="template.icon"
-                      class="size-4"
-                      :style="{
-                        color: getAgentColor(template.frontmatter.color),
-                      }"
-                    />
+                    <UIcon :name="template.icon" class="size-4 text-label" />
                   </div>
                   <div class="flex-1 min-w-0">
                     <div class="t-ui font-medium truncate">
                       {{ template.frontmatter.name }}
                     </div>
                     <span
-                      class="t-small px-1.5 py-px rounded-full"
-                      style="
-                        background: var(--badge-subtle-bg);
-                        color: var(--text-disabled);
-                      "
+                      class="t-small text-meta"
                     >
                       {{ getFriendlyModelName(template.frontmatter.model) }}
                     </span>
@@ -913,7 +895,7 @@ function scrollToMarketplace(name: string) {
                     </div>
                     <div class="flex-1 min-w-0">
                       <div class="t-ui font-medium truncate">{{ plugin.name }}</div>
-                      <span class="t-small px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
+                      <span class="t-small text-meta">
                         v{{ plugin.version }}
                       </span>
                     </div>
@@ -930,10 +912,10 @@ function scrollToMarketplace(name: string) {
                   </div>
                   <p class="t-small text-label leading-relaxed">{{ plugin.description }}</p>
                   <div class="flex items-center gap-3">
-                    <span v-if="plugin.skills.length" class="font-mono t-small text-meta">
+                    <span v-if="plugin.skills.length" class="t-small text-meta tabular-nums">
                       {{ plugin.skills.length }} skill{{ plugin.skills.length === 1 ? '' : 's' }}
                     </span>
-                    <span class="font-mono t-small text-meta">{{ formatDate(plugin.installedAt) }}</span>
+                    <span class="t-small text-meta tabular-nums">{{ formatDate(plugin.installedAt) }}</span>
                   </div>
                 </div>
                 <div class="px-4 py-3 flex items-center justify-between" style="border-top: 1px solid var(--border-subtle);">
@@ -973,7 +955,7 @@ function scrollToMarketplace(name: string) {
             <div class="flex items-center gap-2">
               <UIcon name="i-lucide-store" class="size-3.5 text-meta" />
               <span class="font-mono t-small font-medium text-body">{{ marketplace }}</span>
-              <span class="font-mono t-small text-meta">{{ group.length }}</span>
+              <span class="t-small text-meta tabular-nums">{{ group.length }}</span>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div
@@ -995,10 +977,10 @@ function scrollToMarketplace(name: string) {
                   </div>
                   <p class="t-small text-label leading-relaxed">{{ plugin.description || 'No description' }}</p>
                   <div class="flex items-center gap-3">
-                    <span v-if="plugin.skillCount" class="font-mono t-small text-meta">
+                    <span v-if="plugin.skillCount" class="t-small text-meta tabular-nums">
                       {{ plugin.skillCount }} skill{{ plugin.skillCount === 1 ? '' : 's' }}
                     </span>
-                    <span v-if="plugin.commandCount" class="font-mono t-small text-meta">
+                    <span v-if="plugin.commandCount" class="t-small text-meta tabular-nums">
                       {{ plugin.commandCount }} cmd{{ plugin.commandCount === 1 ? '' : 's' }}
                     </span>
                   </div>

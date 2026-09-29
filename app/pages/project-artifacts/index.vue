@@ -68,36 +68,27 @@ useHead({
       </template>
       <template #right>
         <div class="flex items-center gap-3">
-          <button
-            class="px-4 py-2 rounded-xl t-ui font-semibold transition-all flex items-center gap-2"
-            style="background: var(--accent); color: white;"
-            @click="openAddModal"
-          >
-            <UIcon name="i-lucide-folder-plus" class="size-4" />
-            Add Project
-          </button>
+          <UButton label="Add Project" icon="i-lucide-folder-plus" size="sm" @click="openAddModal" />
         </div>
       </template>
     </PageHeader>
 
     <div class="flex-1 overflow-y-auto custom-scrollbar p-6">
-      <div v-if="isLoadingProjects && projects.length === 0" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        <div v-for="i in 8" :key="i" class="h-[140px] rounded-xl animate-pulse" style="background: var(--surface-raised);" />
-      </div>
+      <ul v-if="isLoadingProjects && projects.length === 0" class="inset-list max-w-5xl">
+        <li v-for="i in 8" :key="i" class="inset-row"><span class="h-4 w-full rounded animate-pulse" style="background: var(--surface-hover);" /></li>
+      </ul>
 
-      <div v-else-if="projects.length > 0" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <ul v-else-if="projects.length > 0" class="inset-list max-w-5xl">
         <ProjectCard
           v-for="project in projects"
           :key="project.name"
           :project="project"
         />
-      </div>
+      </ul>
 
       <div v-else class="flex flex-col items-center justify-center py-20 text-center">
-        <div class="size-20 rounded-3xl flex items-center justify-center mb-6" style="background: var(--surface-raised);">
-          <UIcon name="i-lucide-folder-x" class="size-10 text-meta" />
-        </div>
-        <h2 class="t-head font-semibold mb-2" style="color: var(--text-primary);">
+        <UIcon name="i-lucide-folder-x" class="size-8 text-meta mb-4" />
+        <h2 class="t-body font-semibold mb-1" style="color: var(--text-primary);">
           No Claude projects found
         </h2>
         <p class="t-body text-meta max-w-sm mx-auto mb-8">
@@ -120,7 +111,7 @@ useHead({
 
           <div class="flex flex-col gap-4">
             <div class="space-y-1">
-              <label class="t-small font-medium" style="color: var(--text-tertiary);">Directory Path <span style="color: var(--error);">*</span></label>
+              <label class="field-label">Directory path</label>
               <div class="flex gap-2">
                 <input
                   v-model="newPath"
@@ -144,7 +135,7 @@ useHead({
             </div>
 
             <div class="space-y-1">
-              <label class="t-small font-medium" style="color: var(--text-tertiary);">Display Name <span style="color: var(--text-tertiary); font-weight: normal;">(optional)</span></label>
+              <label class="field-label">Display name <span class="text-meta font-normal">(optional)</span></label>
               <input
                 v-model="newDisplayName"
                 placeholder="My Project"
@@ -155,23 +146,8 @@ useHead({
           </div>
 
           <div class="flex items-center justify-end gap-3">
-            <button
-              class="px-4 py-2 rounded-xl t-ui font-medium transition-all hover-bg"
-              style="color: var(--text-secondary);"
-              @click="showAddModal = false"
-            >
-              Cancel
-            </button>
-            <button
-              class="px-4 py-2 rounded-xl t-ui font-semibold transition-all flex items-center gap-2 disabled:opacity-50"
-              style="background: var(--accent); color: white;"
-              :disabled="!newPath.trim() || adding"
-              @click="addProject"
-            >
-              <UIcon v-if="adding" name="i-lucide-loader-2" class="size-4 animate-spin" />
-              <UIcon v-else name="i-lucide-folder-plus" class="size-4" />
-              Add Project
-            </button>
+            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showAddModal = false }" />
+            <UButton label="Add Project" size="sm" :loading="adding" :disabled="!newPath.trim()" @click="addProject" />
           </div>
         </div>
       </div>

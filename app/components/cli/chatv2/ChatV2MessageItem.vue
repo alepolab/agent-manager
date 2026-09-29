@@ -1294,7 +1294,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <div v-else class="flex flex-wrap items-center gap-2">
           <button
             class="px-2.5 py-1.5 md:px-3 md:py-1.5 rounded-lg t-small md:t-small font-medium transition-all hover:opacity-90"
-            style="background: var(--accent); color: white;"
+            style="background: var(--accent); color: var(--on-accent);"
             @click="handlePermissionAllow(false)"
           >
             Submit
@@ -1654,7 +1654,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
   right: 0.75rem;
   font-size: 0.65rem;
   font-family: var(--font-mono, ui-monospace, monospace);
-  color: rgba(205, 214, 244, 0.4);
+  color: rgba(205, 214, 244, 0.7);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   pointer-events: none;

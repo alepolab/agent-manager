@@ -13,8 +13,8 @@ const isExpanded = ref(false)
   <div class="border-t transition-all" style="border-color: var(--border-subtle); background: var(--surface-base);">
     <button class="w-full flex items-center gap-2 px-4 py-2 text-left hover-bg transition-all" @click="isExpanded = !isExpanded">
       <UIcon :name="isExpanded ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-3" style="color: var(--text-disabled);" />
-      <span class="t-small font-mono" style="color: var(--text-tertiary);">Execution Inspector</span>
-      <span v-if="toolCalls.length" class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
+      <span class="t-small" style="color: var(--text-tertiary);">Execution Inspector</span>
+      <span v-if="toolCalls.length" class="t-small px-1.5 py-px rounded-full tabular-nums" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
         {{ toolCalls.length }} tool{{ toolCalls.length !== 1 ? 's' : '' }}
       </span>
       <div v-if="isStreaming" class="ml-auto size-1.5 rounded-full bg-amber-400 animate-pulse" />

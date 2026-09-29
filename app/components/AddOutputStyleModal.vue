@@ -137,14 +137,6 @@ function handleSubmit() {
 .border-subtle { border-color: var(--border-subtle); }
 .text-primary { color: var(--text-primary); }
 .text-secondary { color: var(--text-secondary); }
-.field-label {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-}
 .field-input {
   width: 100%;
   padding: 0.5rem 0.75rem;

@@ -29,7 +29,7 @@ useHead({
           <NuxtLink
             :to="`/cli/project/${encodeURIComponent(projectName)}`"
             class="px-4 py-2 rounded-xl t-ui font-semibold transition-all flex items-center gap-2"
-            style="background: var(--accent); color: white;"
+            style="background: var(--accent); color: var(--on-accent);"
           >
             <UIcon name="i-lucide-terminal-square" class="size-4" />
             Open in CLI
@@ -54,7 +54,7 @@ useHead({
 
       <div v-else-if="data" class="space-y-12 max-w-6xl mx-auto">
         <div class="rounded-xl p-4 flex flex-col gap-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-          <span class="t-small font-mono uppercase tracking-wider" style="color: var(--text-tertiary);">Project Path</span>
+          <span class="t-small" style="color: var(--text-tertiary);">Project Path</span>
           <code class="t-ui" style="color: var(--text-primary);">{{ data.project.path }}</code>
         </div>
 

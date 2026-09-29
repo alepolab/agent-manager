@@ -266,7 +266,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
       <template #right>
         <UButton label="Back" icon="i-lucide-arrow-left" size="sm" variant="ghost" color="neutral" to="/registry" />
         <ReadOnlyBadge v-if="!can('configure')" reason="editing a product" />
-        <UButton v-if="!isNew && can('configure')" label="Remove" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" @click="() => { showDelete = true }" />
+        <UButton v-if="!isNew && can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="neutral" aria-label="Remove product" title="Remove product" @click="() => { showDelete = true }" />
         <UButton v-if="can('configure')" label="Save" icon="i-lucide-save" size="sm" :loading="saving" :disabled="!canSave" :title="unstated.length ? `Needs ${unstated.join(', ')}` : undefined" @click="save" />
       </template>
     </PageHeader>
@@ -298,7 +298,7 @@ const problems = computed(() => byKey(key.value)?.problems ?? [])
         </div>
         <div class="field-group">
           <label class="field-label">Why this entry looks like this</label>
-          <textarea v-model="form.comment" rows="3" class="field-input editor-textarea editor-textarea--standalone" placeholder="develop is where work lands; main is four months stale." />
+          <textarea v-model="form.comment" rows="3" class="field-input" placeholder="develop is where work lands; main is four months stale." />
           <span class="field-hint">
             Written above the entry as a comment. This is the only place reasoning like "a component word here
             would be invented rather than read" survives, and a save never discards what is already there unless

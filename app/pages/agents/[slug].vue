@@ -25,7 +25,9 @@ const lastModified = ref<number | null>(null)
 const filePath = ref('')
 const skills = ref<AgentSkill[]>([])
 const loadingSkills = ref(false)
+// Open beside the editor only where there is room for both.
 const isTestPanelOpen = ref(true)
+onMounted(() => { if (window.innerWidth < 1024) isTestPanelOpen.value = false })
 
 const { hasDraft, draftAge, loadDraft, clearDraft, scheduleSave } = useDraftRecovery(`agent:${slug}`)
 

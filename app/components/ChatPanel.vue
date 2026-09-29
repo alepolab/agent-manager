@@ -114,7 +114,7 @@ function handleQuickAction(prompt: string) {
     <div
       v-if="open"
       class="fixed inset-0 z-40"
-      style="background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px);"
+      style="background: rgba(0, 0, 0, 0.3);"
       @click="emit('update:open', false)"
     />
   </Transition>
@@ -144,13 +144,13 @@ function handleQuickAction(prompt: string) {
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
               <span class="t-body font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">Claude</span>
-              <span class="t-small font-mono tracking-widest uppercase px-1.5 py-px rounded-full transition-all duration-300" :style="{ background: isStreaming ? 'var(--accent-muted)' : 'var(--badge-subtle-bg)', color: isStreaming ? 'var(--accent)' : 'var(--text-disabled)' }">{{ statusText }}</span>
+              <span class="t-small px-1.5 py-px rounded-full transition-all duration-300 capitalize" :style="{ background: isStreaming ? 'var(--accent-muted)' : 'var(--badge-subtle-bg)', color: isStreaming ? 'var(--accent)' : 'var(--text-disabled)' }">{{ statusText }}</span>
             </div>
             <div class="flex items-center gap-3 min-w-0">
             <!-- Style Selector -->
             <div class="relative">
               <button 
-                class="flex items-center gap-1 t-small font-mono hover:text-accent transition-colors"
+                class="flex items-center gap-1 t-small hover:text-accent transition-colors"
                 style="color: var(--text-disabled);"
                 @click="showStyleDropdown = !showStyleDropdown"
               >
@@ -164,7 +164,7 @@ function handleQuickAction(prompt: string) {
                 class="absolute left-0 top-full mt-1 z-50 w-48 rounded-lg shadow-xl py-1 border border-subtle overflow-hidden"
                 style="background: var(--surface-overlay);"
               >
-                <div class="px-2 py-1.5 t-small font-bold uppercase tracking-wider text-meta border-b border-subtle mb-1">
+                <div class="px-2 py-1.5 t-small font-semibold text-meta border-b border-subtle mb-1">
                   Output Mode
                 </div>
                 <div class="max-h-60 overflow-y-auto custom-scrollbar">
@@ -222,7 +222,7 @@ function handleQuickAction(prompt: string) {
             <p class="t-small max-w-[280px] leading-relaxed" style="color: var(--text-tertiary);">Describe what you need in plain English. I'll create the right agents, commands, or skills for you.</p>
           </div>
           <QuickActions :actions="quickActions" @select="handleQuickAction" />
-          <p class="t-small font-mono leading-relaxed" style="color: var(--text-disabled);">Has read/write access to your .claude directory</p>
+          <p class="t-small leading-relaxed" style="color: var(--text-tertiary);">Has read/write access to your .claude directory</p>
         </div>
 
         <template v-for="(msg, idx) in messages" :key="msg.id">

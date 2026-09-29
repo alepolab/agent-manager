@@ -405,7 +405,7 @@ function relativeTime(ms: number): string {
               No tickets seen yet for this watch.
             </div>
             <div v-for="group in groupedTickets(watch.id)" :key="group.disposition" class="space-y-1.5">
-              <p class="t-small font-mono uppercase tracking-wide" :style="{ color: DISPOSITION_COLOR[group.disposition] }">
+              <p class="t-small capitalize" :style="{ color: DISPOSITION_COLOR[group.disposition] }">
                 {{ group.disposition }} ({{ group.tickets.length }})
               </p>
               <div

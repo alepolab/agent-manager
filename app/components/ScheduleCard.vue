@@ -70,13 +70,13 @@ const directory = computed(() =>
         <span v-if="workflowName" class="t-small text-meta">{{ workflowName }}</span>
         <span
           v-if="workflowMissing"
-          class="t-small font-mono px-1.5 py-0.5 rounded"
+          class="t-small px-1.5 py-0.5 rounded"
           style="background: rgba(245, 158, 11, 0.1); color: var(--warning);"
           title="The workflow this points at is not on this instance any more. Every fire will fail until it comes back or this schedule is deleted."
         >workflow missing</span>
         <span
           v-if="schedule.enabled && !schedule.nextFireAt"
-          class="t-small font-mono px-1.5 py-0.5 rounded"
+          class="t-small px-1.5 py-0.5 rounded"
           style="background: rgba(239, 68, 68, 0.1); color: var(--error);"
         >expression unusable</span>
       </div>
@@ -105,7 +105,7 @@ const directory = computed(() =>
         <NuxtLink
           v-if="schedule.state.lastRunId"
           :to="`/runs/${schedule.state.lastRunId}`"
-          class="ml-2 hover:underline"
+          class="ml-2 underline underline-offset-2"
           style="color: var(--accent);"
         >Open run</NuxtLink>
         <span v-if="schedule.state.lastDetail" class="text-meta ml-1.5">— {{ schedule.state.lastDetail }}</span>

@@ -70,18 +70,18 @@ function testServer(name: string) {
               <div class="flex items-center gap-2 mb-1">
                 <h3 class="t-body font-semibold text-primary font-display truncate" :class="{ 'opacity-50': server.disabled }">{{ server.name }}</h3>
                 <span
-                  class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase"
+                  class="t-small px-1.5 py-0.5 rounded font-medium capitalize"
                   :class="server.scope === 'global' ? 'bg-accent-subtle text-accent border border-accent-subtle' : 'bg-surface-raised text-secondary border border-subtle'"
                 >
                   {{ server.scope }}
                 </span>
-                <span v-if="server.transport" class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-surface-raised text-meta border border-subtle">
+                <span v-if="server.transport" class="t-small px-1.5 py-0.5 rounded font-medium bg-surface-raised text-meta border border-subtle capitalize">
                   {{ server.transport }}
                 </span>
-                <span v-if="server.transport === 'sse'" class="t-small font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">
+                <span v-if="server.transport === 'sse'" class="t-small px-1 py-0.5 rounded bg-error/10 text-error leading-none border border-error/20">
                   Deprecated
                 </span>
-                <span v-if="server.disabled" class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-error/10 text-error border border-error/20">
+                <span v-if="server.disabled" class="t-small px-1.5 py-0.5 rounded font-medium bg-error/10 text-error border border-error/20">
                   Disabled
                 </span>
               </div>

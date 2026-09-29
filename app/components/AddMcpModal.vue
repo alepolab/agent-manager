@@ -82,7 +82,7 @@ function submit() {
             <input v-model="transport" type="radio" value="sse" class="accent-accent" />
             <div class="flex items-center gap-1.5">
               <span class="t-ui text-body group-hover:text-primary transition-colors">sse (Classic)</span>
-              <span class="t-small font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">Deprecated</span>
+              <span class="t-small px-1 py-0.5 rounded bg-error/10 text-error leading-none border border-error/20">Deprecated</span>
             </div>
           </label>
         </div>

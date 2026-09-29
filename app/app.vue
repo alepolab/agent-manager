@@ -358,6 +358,7 @@ const initials = computed(() => (me.value?.name || me.value?.login || '?')
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
+.router-link-active > .sidebar-count { color: var(--text-secondary); }
 
 .sidebar-pill {
   min-width: 20px;
@@ -370,9 +371,8 @@ const initials = computed(() => (me.value?.name || me.value?.login || '?')
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
-:global(.dark) .sidebar-pill { color: #1c1c1e; }
 
 .sidebar-dot {
   position: absolute;
@@ -407,7 +407,8 @@ const initials = computed(() => (me.value?.name || me.value?.login || '?')
   font-size: 10px;
   font-weight: 600;
   color: #fff;
-  background: #8e8e93;
+  /* #8e8e93 put the white initials at 3.3:1. */
+  background: #636366;
 }
 
 .sidebar-search {

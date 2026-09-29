@@ -101,6 +101,7 @@ async function testJira() {
           <label class="field-toggle">
             <input
               type="checkbox"
+              aria-label="Labs features"
               :checked="me?.profile.labs === true"
               :disabled="savingLabs"
               @change="setLabs(($event.target as HTMLInputElement).checked)"

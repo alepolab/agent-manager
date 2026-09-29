@@ -40,7 +40,7 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
   <div class="flex flex-col">
     <PageHeader title="Output Styles">
       <template #trailing>
-        <span class="font-mono t-small text-meta mr-4">{{ styles.length }}</span>
+        <span class="t-small text-meta mr-4 tabular-nums">{{ styles.length }}</span>
       </template>
       <template #right>
         <UButton label="New Output Style" icon="i-lucide-plus" size="sm" @click="onNewStyle" />
@@ -69,22 +69,21 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
         <div
           v-for="style in styles"
           :key="style.id"
-          class="bg-card group relative p-4 rounded-xl flex flex-col gap-3 hover-lift border border-subtle"
+          class="group-card group relative flex flex-col gap-3"
         >
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 mb-1">
-                <h3 class="t-body font-semibold text-primary font-display truncate">{{ style.name }}</h3>
+                <h3 class="t-body font-semibold text-primary truncate">{{ style.name }}</h3>
                 <span
                   v-if="!style.path"
-                  class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase bg-accent/10 text-accent border border-accent/20"
+                  class="t-small text-meta"
                 >
                   Built-in
                 </span>
                 <span
                   v-else
-                  class="t-small px-1.5 py-0.5 rounded font-medium tracking-wide uppercase"
-                  :class="style.scope === 'global' ? 'bg-accent-subtle text-accent border border-accent-subtle' : 'bg-surface-raised text-secondary border border-subtle'"
+                  class="t-small text-meta capitalize"
                 >
                   {{ style.scope }}
                 </span>
@@ -94,19 +93,21 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
               </p>
             </div>
             
-            <div v-if="style.path" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div v-if="style.path" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
               <UButton
                 icon="i-lucide-edit-2"
                 variant="ghost"
                 color="neutral"
                 size="xs"
+                aria-label="Edit output style"
                 @click="onEditStyle(style)"
               />
               <UButton
                 icon="i-lucide-trash-2"
                 variant="ghost"
-                color="error"
+                color="neutral"
                 size="xs"
+                aria-label="Delete output style"
                 @click="onDeleteStyle(style.id, style.scope)"
               />
             </div>
@@ -115,9 +116,9 @@ async function onDeleteStyle(id: string, scope: 'global' | 'project') {
           <div class="mt-auto pt-3 border-t border-subtle flex items-center justify-between">
             <div class="flex items-center gap-2">
               <UIcon :name="!style.path ? 'i-lucide-shield' : 'i-lucide-file-text'" class="size-3 text-meta" />
-              <span class="t-small text-meta font-mono">{{ !style.path ? 'System' : style.id + '.md' }}</span>
+              <span class="t-small text-meta" :class="{ 'font-mono': style.path }">{{ !style.path ? 'System' : style.id + '.md' }}</span>
             </div>
-            <div v-if="style.keepCodingInstructions" class="flex items-center gap-1 t-small text-accent font-medium uppercase tracking-wider">
+            <div v-if="style.keepCodingInstructions" class="flex items-center gap-1 t-small text-label">
               <UIcon name="i-lucide-shield-check" class="size-3" />
               <span>Coding rules active</span>
             </div>

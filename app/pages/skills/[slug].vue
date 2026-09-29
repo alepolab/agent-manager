@@ -352,7 +352,7 @@ useUnsavedChanges(isDirty)
 
         <!-- MCP Server Info -->
         <div v-if="skill.mcpServer" class="space-y-3">
-          <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Associated MCP Server</label>
+          <label class="t-small font-semibold" style="color: var(--text-tertiary);">Associated MCP Server</label>
           
           <NuxtLink 
             :to="`/mcp/${encodeURIComponent(skill.mcpServer.name)}?scope=${skill.mcpServer.scope}`"
@@ -379,7 +379,7 @@ useUnsavedChanges(isDirty)
 
         <!-- Agents using this skill -->
         <div v-if="skill.agents?.length" class="space-y-3">
-          <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Agents Preloading This Skill</label>
+          <label class="t-small font-semibold" style="color: var(--text-tertiary);">Agents Preloading This Skill</label>
           
           <div class="space-y-2">
             <NuxtLink 

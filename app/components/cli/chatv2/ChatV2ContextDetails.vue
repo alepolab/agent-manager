@@ -27,8 +27,8 @@ const getStatusColor = () => {
     <!-- Summary Section -->
     <div class="space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h4 class="t-small font-bold uppercase tracking-wider text-tertiary" style="color: var(--text-tertiary);">Current Usage</h4>
-        <span class="t-small font-mono" :style="{ color: getStatusColor() }">{{ contextPercentage }}%</span>
+        <h4 class="t-small font-semibold text-tertiary" style="color: var(--text-tertiary);">Current Usage</h4>
+        <span class="t-small tabular-nums" :style="{ color: getStatusColor() }">{{ contextPercentage }}%</span>
       </div>
       
       <!-- Big Progress Bar -->
@@ -51,7 +51,7 @@ const getStatusColor = () => {
     <!-- Breakdown Section -->
     <div class="space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h4 class="t-small font-bold uppercase tracking-wider" style="color: var(--text-tertiary);">Token Breakdown</h4>
+        <h4 class="t-small font-semibold" style="color: var(--text-tertiary);">Token Breakdown</h4>
         <UTooltip text="Input + Cache Write + Cache Read = Context Used" :popper="{ placement: 'left' }">
           <UIcon name="i-lucide-help-circle" class="size-3.5" style="color: var(--text-disabled);" />
         </UTooltip>
@@ -64,7 +64,7 @@ const getStatusColor = () => {
             <div class="size-2 rounded-full shrink-0" style="background: #3b82f6;" />
             <span class="t-small break-words" style="color: var(--text-primary);">Input</span>
           </div>
-          <span class="t-small font-mono" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.input) }}</span>
+          <span class="t-small tabular-nums" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.input) }}</span>
         </div>
 
         <!-- Cache Write (Creation) -->
@@ -73,7 +73,7 @@ const getStatusColor = () => {
             <div class="size-2 rounded-full shrink-0" style="background: #f59e0b;" />
             <span class="t-small break-words" style="color: var(--text-primary);">Cache Write</span>
           </div>
-          <span class="t-small font-mono" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.cacheCreation || 0) }}</span>
+          <span class="t-small tabular-nums" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.cacheCreation || 0) }}</span>
         </div>
 
         <!-- Cache Read (Cached) -->
@@ -82,7 +82,7 @@ const getStatusColor = () => {
             <div class="size-2 rounded-full shrink-0" style="background: #8b5cf6;" />
             <span class="t-small break-words" style="color: var(--text-primary);">Cache Read</span>
           </div>
-          <span class="t-small font-mono" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.cached || 0) }}</span>
+          <span class="t-small tabular-nums" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.cached || 0) }}</span>
         </div>
 
         <!-- Output Tokens -->
@@ -91,7 +91,7 @@ const getStatusColor = () => {
             <div class="size-2 rounded-full shrink-0" style="background: #22c55e;" />
             <span class="t-small break-words" style="color: var(--text-primary);">Output (Next turn)</span>
           </div>
-          <span class="t-small font-mono" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.output) }}</span>
+          <span class="t-small tabular-nums" style="color: var(--text-secondary);">{{ formatNumber(metrics.tokens.output) }}</span>
         </div>
       </div>
     </div>

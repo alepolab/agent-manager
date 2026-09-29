@@ -7,7 +7,6 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import type { Workflow, WorkflowStep, WorkflowParameter } from '~/types'
-import { getAgentColor } from '~/utils/colors'
 import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
 import { isValidParameterName, RESERVED_PARAM_PROJECT_DIR } from '~~/shared/utils/workflowParameters'
 
@@ -292,7 +291,6 @@ const nodes = computed(() => {
       position: { x: avgX, y: maxY + 200 },
       data: {
         label: agentBySlug(monitorSlug)?.frontmatter.name ?? monitorSlug,
-        color: getAgentColor(agentBySlug(monitorSlug)?.frontmatter.color),
         watching: watched.length,
       },
     }
@@ -762,7 +760,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
   <div class="flex flex-col h-full">
     <!-- Top bar -->
     <div
-      class="h-14 flex items-center gap-3 px-4 shrink-0 sticky top-0 z-10"
+      class="min-h-14 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 shrink-0 sticky top-0 z-10"
       style="border-bottom: 1px solid var(--border-subtle); background: var(--surface-base);"
     >
       <NuxtLink to="/workflows" class="p-1.5 rounded-lg hover-bg focus-ring" aria-label="Back to workflows">
@@ -780,7 +778,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         />
         <button
           v-else
-          class="t-body font-medium truncate text-left"
+          class="block max-w-full t-body font-medium truncate text-left"
           style="color: var(--text-primary);"
           @click="editingName = true"
         >
@@ -837,7 +835,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <select
         v-if="can('configure')"
         v-model="group"
-        class="field-input t-small max-w-[11rem]"
+        class="field-input t-small max-w-[11rem] hidden md:block"
         aria-label="Concurrency group"
         :title="groupHint"
       >
@@ -851,7 +849,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       <select
         v-if="can('configure')"
         v-model="notifyChannel"
-        class="field-input t-small max-w-[11rem]"
+        class="field-input t-small max-w-[11rem] hidden md:block"
         aria-label="Notification channel"
         title="Where this workflow's runs announce that they paused, finished or failed"
       >
@@ -952,10 +950,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             @dragstart="(e: DragEvent) => { e.dataTransfer?.setData('agentSlug', agent.slug) }"
             @click="addStep(agent.slug)"
           >
-            <div
-              class="size-2 rounded-full shrink-0"
-              :style="{ background: getAgentColor(agent.frontmatter.color) }"
-            />
+            <UIcon name="i-lucide-cpu" class="size-3.5 shrink-0 text-meta" />
             <span class="t-small truncate" style="color: var(--text-secondary);">
               {{ agent.frontmatter.name }}
             </span>
@@ -1015,7 +1010,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
                 style="width: 170px; background: var(--surface-raised); border: 1px dashed var(--border-subtle);"
               >
                 <Handle id="out" type="source" :position="Position.Top" />
-                <UIcon name="i-lucide-shield" class="size-3.5 shrink-0" :style="{ color: nodeProps.data.color }" />
+                <UIcon name="i-lucide-shield" class="size-3.5 shrink-0 text-meta" />
                 <div class="min-w-0">
                   <div class="t-small font-medium truncate" style="color: var(--text-primary);">
                     {{ nodeProps.data.label }}
@@ -1028,7 +1023,8 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
             </template>
 
             <Controls position="bottom-right" />
-            <MiniMap v-if="workflowSteps.length >= 5" position="top-right" />
+            <!-- Bottom right beside the controls: at top right it sat over the first steps. -->
+            <MiniMap v-if="workflowSteps.length >= 5" position="bottom-right" :style="{ marginRight: '56px' }" />
           </VueFlow>
 
           <!-- Empty canvas state -->
@@ -1376,10 +1372,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
               class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover-bg text-left"
               @click="addStep(agent.slug)"
             >
-              <div
-                class="size-2 rounded-full shrink-0"
-                :style="{ background: getAgentColor(agent.frontmatter.color) }"
-              />
+              <UIcon name="i-lucide-cpu" class="size-3.5 shrink-0 text-meta" />
               <span class="t-small" style="color: var(--text-secondary);">
                 {{ agent.frontmatter.name }}
               </span>

@@ -214,7 +214,8 @@ useAutoRefresh(() => Promise.all([
 
         <div v-if="channelsError" class="t-small" style="color: var(--error);">{{ channelsError }}</div>
 
-        <table v-if="channels.length" class="w-full t-small">
+        <div v-if="channels.length" class="overflow-x-auto">
+        <table class="w-full t-small">
           <thead>
             <tr class="text-meta text-left">
               <th class="pb-2 font-medium">Name</th>
@@ -241,17 +242,18 @@ useAutoRefresh(() => Promise.all([
             </tr>
           </tbody>
         </table>
+        </div>
         <p v-else-if="!channelsError" class="t-small text-meta">No channels configured yet.</p>
 
         <template v-if="can('configure')">
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div class="field-group">
-              <label class="field-label">Name</label>
-              <input v-model="newChannelName" class="field-input" placeholder="reviewers" >
+              <label class="field-label" for="new-channel-name">Name</label>
+              <input id="new-channel-name" v-model="newChannelName" class="field-input" placeholder="reviewers" >
             </div>
             <div class="field-group">
-              <label class="field-label">Kind</label>
-              <select v-model="newChannelKind" class="field-input">
+              <label class="field-label" for="new-channel-kind">Kind</label>
+              <select id="new-channel-kind" v-model="newChannelKind" class="field-input">
                 <option value="teams">Teams</option>
                 <option value="slack">Slack</option>
                 <option value="email">Email</option>
@@ -266,8 +268,8 @@ useAutoRefresh(() => Promise.all([
               </span>
             </div>
             <div v-else class="field-group">
-              <label class="field-label">Webhook URL</label>
-              <input v-model="newChannelUrl" type="password" class="field-input" placeholder="https://…" >
+              <label class="field-label" for="new-channel-url">Webhook URL</label>
+              <input id="new-channel-url" v-model="newChannelUrl" type="password" class="field-input" placeholder="https://…" >
               <span class="field-hint">
                 Write-only once saved. Editing an existing channel and leaving this blank keeps the stored URL.
               </span>
@@ -351,7 +353,7 @@ useAutoRefresh(() => Promise.all([
             <div class="flex-1 min-w-0 flex items-center gap-2">
               <span class="font-mono t-small text-body">{{ entry.owner }}/{{ entry.repo }}</span>
               <span
-                class="t-small font-mono px-1.5 py-px rounded-full uppercase"
+                class="t-small px-1.5 py-px rounded-full capitalize"
                 style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);"
               >
                 {{ entry.type }}

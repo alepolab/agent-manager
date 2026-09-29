@@ -451,7 +451,7 @@ function confirmDelete() {
         <div v-if="!isChoosingFolder" class="flex items-center gap-1.5">
           <button
             class="flex-1 px-3 py-2 rounded-lg t-small font-medium hover-bg transition-all flex items-center justify-center gap-2"
-            style="background: var(--accent); color: white;"
+            style="background: var(--accent); color: var(--on-accent);"
             @click="handleNewChat"
           >
             <UIcon name="i-lucide-plus" class="size-3.5" />
@@ -488,7 +488,7 @@ function confirmDelete() {
           <div class="flex items-center gap-2">
             <button
               class="flex-1 py-1 rounded t-small font-medium transition-all"
-              style="background: var(--accent); color: white;"
+              style="background: var(--accent); color: var(--on-accent);"
               @click="confirmFolder"
             >
               Start
@@ -515,13 +515,11 @@ function confirmDelete() {
         <div
           v-for="(project, index) in projects"
           :key="project.name"
-          class="stagger-item px-3 py-2.5 rounded-lg cursor-pointer transition-all hover-bg group min-w-0"
-          style="background: var(--surface-raised);"
-          :style="{ animationDelay: `${index * 40}ms` }"
+          class="px-3 py-2 rounded-lg cursor-pointer transition-colors hover-bg group min-w-0"
           @click="handleProjectClick(project)"
         >
           <div class="flex items-center gap-2 mb-0.5 min-w-0">
-            <UIcon name="i-lucide-folder" class="size-3.5 shrink-0" style="color: var(--accent);" />
+            <UIcon name="i-lucide-folder" class="size-3.5 shrink-0" style="color: var(--text-tertiary);" />
             
             <!-- Inline project edit mode -->
             <template v-if="editingProjectName === project.name">
@@ -591,7 +589,7 @@ function confirmDelete() {
             {{ project.path }}
           </div>
           <div class="flex items-center gap-2 t-small pl-5.5" style="color: var(--text-tertiary);">
-            <span>{{ project.sessionCount }} sessions</span>
+            <span>{{ project.sessionCount }} {{ project.sessionCount === 1 ? 'session' : 'sessions' }}</span>
             <span v-if="project.lastActivity">{{ formatRelativeTime(project.lastActivity) }}</span>
           </div>
         </div>
@@ -622,16 +620,12 @@ function confirmDelete() {
           <div
             v-for="(session, index) in sessions"
             :key="session.id"
-            class="stagger-item px-3 py-2.5 rounded-lg transition-all group/session min-w-0"
+            class="px-3 py-2 rounded-lg transition-colors group/session min-w-0"
             :class="isLoadingMessages ? 'cursor-not-allowed' : 'cursor-pointer hover-bg'"
             :style="{
               background: selectedSession?.id === session.id || currentSessionId === session.id
                 ? 'var(--accent-light)'
-                : 'var(--surface-raised)',
-              borderLeft: selectedSession?.id === session.id || currentSessionId === session.id
-                ? '3px solid var(--accent)'
-                : '3px solid transparent',
-              animationDelay: `${index * 40}ms`
+                : undefined,
             }"
             @click="handleSessionClick(session)"
           >
@@ -740,7 +734,7 @@ function confirmDelete() {
         <div v-else class="p-3 space-y-1">
           <div class="stagger-item flex items-center gap-2 px-2 mb-3" :style="{ animationDelay: '0ms' }">
             <UIcon name="i-lucide-settings-2" class="size-4" style="color: var(--accent);" />
-            <h4 class="t-small font-bold uppercase tracking-wider" style="color: var(--text-primary);">Project Settings</h4>
+            <h4 class="t-small font-semibold" style="color: var(--text-primary);">Project Settings</h4>
           </div>
 
           <button

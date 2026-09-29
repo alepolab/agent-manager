@@ -222,7 +222,7 @@ function reset() {
           <!-- Category Header -->
           <div class="px-3 py-1.5 sticky top-0 z-10 flex items-center gap-2" style="background: var(--surface-base);">
             <div class="h-px flex-1" style="background: var(--border-subtle);"></div>
-            <span class="t-small font-mono uppercase tracking-wider text-meta">{{ category }}</span>
+            <span class="t-small text-meta capitalize">{{ category }}</span>
             <div class="h-px flex-1" style="background: var(--border-subtle);"></div>
           </div>
 

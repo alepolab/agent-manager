@@ -170,8 +170,8 @@ defineExpose({ focus, resetHeight });
         class="absolute bottom-2.5 left-3 right-3 flex items-center justify-between"
       >
         <span
-          class="t-small font-mono flex items-center gap-1.5"
-          style="color: var(--text-disabled)"
+          class="t-small flex items-center gap-1.5"
+          style="color: var(--text-tertiary)"
         >
           <template v-if="projectDisplayPath">
             <UIcon

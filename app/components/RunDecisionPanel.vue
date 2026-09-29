@@ -153,7 +153,7 @@ async function submit() {
 
     <div v-for="(item, n) in items" :key="item.index" class="group-card px-3! py-2! space-y-1.5">
       <div class="flex items-center gap-2 flex-wrap">
-        <span class="font-mono t-label text-meta">[{{ n + 1 }}/{{ items.length }}]</span>
+        <span class="t-label text-meta tabular-nums">[{{ n + 1 }}/{{ items.length }}]</span>
         <span class="t-small font-medium text-label">{{ [item.key, ...facets(item.fields, item.entry)].join(' | ') }}</span>
         <span
           v-if="decisions[item.index]"

@@ -139,12 +139,12 @@ function onPluginInstalled() {
                 <div class="flex items-center gap-3 shrink-0">
                   <span
                     v-if="plugin.skills.length"
-                    class="font-mono t-small text-meta"
+                    class="t-small text-meta tabular-nums"
                     :title="plugin.skills.join(', ')"
                   >
                     {{ plugin.skills.length }} skill{{ plugin.skills.length === 1 ? '' : 's' }}
                   </span>
-                  <span class="font-mono t-small text-meta">
+                  <span class="t-small text-meta tabular-nums">
                     {{ formatDate(plugin.installedAt) }}
                   </span>
                   <UIcon

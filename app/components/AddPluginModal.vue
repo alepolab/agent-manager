@@ -136,7 +136,7 @@ async function onManualInstall() {
 
     <div class="space-y-4 flex-1 flex flex-col min-h-0">
       <div class="flex items-center justify-between">
-        <h4 class="t-small font-mono uppercase tracking-wider text-meta">Browse Marketplaces</h4>
+        <h4 class="t-small text-meta">Browse Marketplaces</h4>
         <div class="relative w-48">
           <input
             v-model="searchQuery"
@@ -172,10 +172,10 @@ async function onManualInstall() {
                 {{ plugin.description || 'No description available.' }}
               </p>
               <div class="flex items-center gap-3 pt-1">
-                <span v-if="plugin.skillCount" class="font-mono t-small text-meta">
+                <span v-if="plugin.skillCount" class="t-small text-meta tabular-nums">
                   {{ plugin.skillCount }} skill{{ plugin.skillCount === 1 ? '' : 's' }}
                 </span>
-                <span v-if="plugin.commandCount" class="font-mono t-small text-meta">
+                <span v-if="plugin.commandCount" class="t-small text-meta tabular-nums">
                   {{ plugin.commandCount }} cmd{{ plugin.commandCount === 1 ? '' : 's' }}
                 </span>
               </div>
