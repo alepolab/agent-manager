@@ -29,28 +29,17 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
   <div>
     <PageHeader title="Skills">
       <template #trailing>
-        <span class="font-mono t-small text-meta">{{ skills.length }}</span>
+        <span class="t-small text-meta font-normal">{{ skills.length }}</span>
       </template>
       <template #right>
+        <input v-model="searchQuery" placeholder="Filter skills" class="field-input t-small w-52" aria-label="Filter skills" />
         <ReadOnlyBadge v-if="!can('configure')" reason="adding a skill" />
-        <UButton v-if="can('configure')" label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
+        <UButton v-if="can('configure')" label="Import…" size="sm" variant="ghost" color="neutral" @click="() => { showImportModal = true }" />
         <UButton v-if="can('configure')" label="New Skill" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4">
-      <p class="t-ui mb-4 leading-relaxed text-label">
-        Specific capabilities that can be added to agents and invoked as slash commands.
-      </p>
-
-      <!-- Search -->
-      <div class="mb-4">
-        <input
-          v-model="searchQuery"
-          placeholder="Search skills..."
-          class="field-search max-w-xs"
-        />
-      </div>
+    <div class="page">
 
       <div
         v-if="error"
@@ -66,12 +55,12 @@ useAutoRefresh(() => fetchSkills({ workingDir: workingDir.value }, { silent: tru
       </div>
 
       <!-- Skill list -->
-      <div v-else-if="filteredSkills.length" class="space-y-1">
+      <div v-else-if="filteredSkills.length" class="inset-list inset-list--flush">
         <NuxtLink
           v-for="skill in filteredSkills"
           :key="skill.slug"
           :to="`/skills/${skill.slug}`"
-          class="flex items-center gap-3 px-3 py-2.5 rounded-lg group focus-ring hover-row"
+          class="inset-row inset-row--link group focus-ring"
         >
           <!-- Icon -->
           <UIcon name="i-lucide-sparkles" class="size-3.5 shrink-0" style="color: var(--accent);" />

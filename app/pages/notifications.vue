@@ -41,7 +41,9 @@ watch([items, loaded], () => {
     if (vanished.value !== selectedId.value) vanished.value = selectedId.value
     return
   }
-  if (!selectedId.value && mine.value[0]) select(mine.value[0].id)
+  // Only where the decision can sit beside the list: on a phone, opening one
+  // unasked would hide the list the person came to read.
+  if (!selectedId.value && mine.value[0] && import.meta.client && window.matchMedia('(min-width: 1024px)').matches) select(mine.value[0].id)
 }, { immediate: true })
 
 /** After a decision: refresh, then move to the next one that is mine. */
@@ -97,7 +99,7 @@ const waitTier = (n: NotificationItem) => {
          used to sit in a padded column of bordered cards, each repeating its
          ticket key twice above a three-line ask. -->
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[23rem_minmax(0,1fr)]">
-      <div class="min-h-0 overflow-y-auto inbox-pane">
+      <div class="min-h-0 overflow-y-auto inbox-pane" :class="{ 'hidden lg:block': selectedId }">
         <!-- A failed poll keeps the list it had: an empty inbox that is empty
              because the API is down must not read as an all-clear. -->
         <div v-if="error" class="inbox-row">
@@ -150,8 +152,9 @@ const waitTier = (n: NotificationItem) => {
         </template>
       </div>
 
-      <!-- The decision -->
-      <div class="min-h-0 overflow-y-auto px-6 py-5">
+      <!-- The decision. Below `lg` it replaces the list rather than stacking under it. -->
+      <div class="min-h-0 overflow-y-auto px-4 sm:px-6 py-5" :class="{ 'hidden lg:block': !selectedId }">
+        <UButton class="lg:hidden mb-3" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Notifications" @click="select(null)" />
         <div class="max-w-4xl">
           <NotificationRunDetail v-if="selected?.kind === 'gate'" :key="selected.id" :item="selected" @decided="decided" />
           <NotificationPermissionDetail v-else-if="selected?.kind === 'permission'" :key="selected.id" :item="selected" @decided="decided" />

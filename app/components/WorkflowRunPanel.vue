@@ -212,7 +212,7 @@ watch([() => props.run?.id, () => progress.value.done], async ([id]) => {
 
 <template>
   <div v-if="run" class="space-y-4">
-    <div class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
       <!-- Without this there is no way back to the history: the list below is
            v-else of this block, so opening a run hid every other run with no
            affordance to return. -->

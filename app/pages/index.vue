@@ -379,7 +379,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
             </span>
             <span
               v-if="r.blastRadius && riskOf(r) !== 'auto'"
-              class="t-small shrink-0" :style="{ color: riskOf(r) === 'justify' ? 'var(--warning)' : 'var(--text-tertiary)' }"
+              class="t-small shrink-0 hidden sm:inline" :style="{ color: riskOf(r) === 'justify' ? 'var(--warning)' : 'var(--text-tertiary)' }"
               :title="riskOf(r) === 'justify' ? 'Owner-gated: approving needs a written reason' : 'Stops for a person'"
             >{{ riskOf(r) === 'justify' ? 'Owner-gated' : r.blastRadius }}</span>
             <span

@@ -169,28 +169,16 @@ async function saveGroups() {
   <div>
     <PageHeader title="Workflows">
       <template #trailing>
-        <span class="t-small text-meta">{{ workflows.length }}</span>
+        <span class="t-small text-meta font-normal">{{ workflows.length }}</span>
       </template>
       <template #right>
+        <input v-if="workflows.length" v-model="searchQuery" placeholder="Filter workflows" class="field-input t-small w-52" aria-label="Filter workflows" />
         <UButton v-if="can('configure')" label="Groups" icon="i-lucide-layers" size="sm" variant="ghost" color="neutral" @click="() => { showGroups = true }" />
         <UButton v-if="can('configure')" label="New Workflow" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4">
-      <p class="t-ui mb-4 leading-relaxed text-label">
-        Chain agents together into multi-step pipelines that pass work from one agent to the next.
-      </p>
-
-      <!-- Search -->
-      <div v-if="workflows.length" class="mb-5">
-        <input
-          v-model="searchQuery"
-          placeholder="Search workflows..."
-          aria-label="Search workflows"
-          class="field-search max-w-xs"
-        />
-      </div>
+    <div class="page">
 
       <!-- Error state -->
       <div

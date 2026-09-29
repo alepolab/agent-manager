@@ -265,7 +265,10 @@ body {
   min-height: 52px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
+  /* Wraps rather than squeezing: at phone width the title was truncated to
+     four letters and the filter box to two. */
+  flex-wrap: wrap;
   padding: 8px 20px 8px 24px;
   flex-shrink: 0;
   border-bottom: 0.5px solid var(--border-default);

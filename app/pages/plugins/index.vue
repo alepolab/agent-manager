@@ -55,34 +55,22 @@ function onPluginInstalled() {
   <div>
     <PageHeader title="Plugins">
       <template #trailing>
-        <span class="font-mono t-small text-meta">{{ plugins.length }}</span>
+        <span class="t-small text-meta font-normal">{{ plugins.length }}</span>
       </template>
       <template #right>
+        <input v-model="searchQuery" placeholder="Filter plugins" class="field-input t-small w-52" aria-label="Filter plugins" />
         <ReadOnlyBadge v-if="!can('configure')" reason="adding a plugin" />
         <UButton
           v-if="can('configure')"
           label="Add Plugin"
           icon="i-lucide-plus"
           size="sm"
-          variant="soft"
           @click="() => { showAddPluginModal = true }"
         />
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4">
-      <p class="t-ui mb-4 leading-relaxed text-label">
-        Pre-built extensions that add new features and capabilities.
-      </p>
-
-      <!-- Search -->
-      <div class="mb-4">
-        <input
-          v-model="searchQuery"
-          placeholder="Search plugins..."
-          class="field-search max-w-xs"
-        />
-      </div>
+    <div class="page">
 
       <div
         v-if="error"
@@ -102,16 +90,16 @@ function onPluginInstalled() {
           <!-- Marketplace header -->
           <div class="flex items-center gap-2 py-2 px-2 -mx-2">
             <UIcon name="i-lucide-store" class="size-3.5 text-meta" />
-            <span class="font-mono t-ui font-medium text-body">{{ marketplace }}</span>
-            <span class="font-mono t-small text-meta">{{ group.length }}</span>
+            <span class="t-ui font-semibold">{{ marketplace }}</span>
+            <span class="t-small text-meta">{{ group.length }}</span>
           </div>
 
           <!-- Plugin list -->
-          <div class="space-y-1">
+          <div class="inset-list inset-list--flush">
             <div
               v-for="plugin in group"
               :key="plugin.id"
-              class="flex items-center gap-3 px-3 py-2.5 rounded-lg group hover-row"
+              class="inset-row inset-row--link group"
             >
               <!-- Toggle -->
               <label v-if="can('configure')" class="field-toggle shrink-0" @click.stop>

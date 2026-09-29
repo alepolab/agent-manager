@@ -12,7 +12,7 @@ useHead({ title: computed(() => `${props.title} | Agent Manager`) })
        subtitle and pushed the first row of content 90-130px down the page. -->
   <div class="page-toolbar">
     <slot name="leading" />
-    <div class="min-w-0 flex items-baseline gap-2">
+    <div class="shrink-0 max-w-full flex items-baseline gap-2">
       <h1 class="text-toolbar-title flex items-center gap-2 truncate">
         {{ title }}
         <slot name="trailing" />

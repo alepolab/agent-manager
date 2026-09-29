@@ -31,19 +31,16 @@ function testServer(name: string) {
   <div class="flex flex-col">
     <PageHeader title="MCP Servers">
       <template #trailing>
-        <span class="font-mono t-small text-meta mr-4">{{ servers.length }}</span>
+        <span class="t-small text-meta font-normal">{{ servers.length }}</span>
       </template>
       <template #right>
         <ReadOnlyBadge v-if="!can('configure')" reason="adding an MCP server" />
-        <UButton v-if="can('configure')" label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
+        <UButton v-if="can('configure')" label="Import…" size="sm" variant="ghost" color="neutral" @click="() => { showImportModal = true }" />
         <UButton v-if="can('configure')" label="New MCP Server" icon="i-lucide-plus" size="sm" @click="() => { isAddModalOpen = true }" />
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4 flex-1">
-      <p class="t-ui mb-6 leading-relaxed text-label max-w-2xl">
-        Manage Model Context Protocol (MCP) servers. Global servers are available across all your projects, while project servers are scoped to your current working directory.
-      </p>
+    <div class="page flex-1 w-full">
 
       <div v-if="error" class="rounded-xl px-4 py-3 mb-6 flex items-start gap-3 border-error bg-error-subtle">
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5 text-error" />
@@ -55,9 +52,11 @@ function testServer(name: string) {
           <SkeletonRow />
         </div>
       </div>
-      <div v-else-if="servers.length === 0" class="flex flex-col items-center justify-center py-12 border border-dashed rounded-xl border-subtle">
-        <UIcon name="i-lucide-server" class="size-8 text-meta mb-3" />
-        <p class="t-ui text-secondary">No MCP servers configured.</p>
+      <div v-else-if="servers.length === 0" class="flex flex-col items-center justify-center py-16 gap-2 text-center">
+        <UIcon name="i-lucide-server" class="size-8 text-meta mb-1" />
+        <p class="t-ui" style="color: var(--text-primary);">No MCP servers yet</p>
+        <!-- The explanation that used to sit above every page of this list, where it is only needed once. -->
+        <p class="t-small text-label max-w-md">Global servers are available across all your projects; project servers are scoped to the current working directory.</p>
       </div>
       <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <NuxtLink

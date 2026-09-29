@@ -246,7 +246,9 @@ async function useTemplate(templateId: string) {
   background: var(--surface-raised);
   border-bottom: 0.5px solid var(--border-default);
 }
-.agent-table thead th:first-child { width: 30%; }
+.agent-table thead th:first-child { width: 60%; }
+/* Description shows from md up, and takes the width the name gives back. */
+@media (min-width: 768px) { .agent-table thead th:first-child { width: 30%; } }
 .agent-table thead th button { font: inherit; color: inherit; }
 .agent-table td { padding: 0 14px; height: 36px; color: var(--text-primary); border-bottom: 0.5px solid var(--border-default); }
 .agent-table tbody tr:not(.agent-table__group) { cursor: default; }
