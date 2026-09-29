@@ -21,7 +21,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
-import { claimableStack, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
+import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -1051,9 +1051,21 @@ export async function backfillChangeBriefs(): Promise<string[]> {
 let claiming: Promise<unknown> = Promise.resolve()
 function claimStack(run: WorkflowRun, provisioning: boolean): Promise<'up' | 'claimed' | 'gone'> {
   const next = claiming.then(async () => {
-    if (!provisioning && await stackIsUp(stackProjectOf(run))) return 'up'
-    const found = await claimableStack(run, await listRuns()).catch(() => null)
-    if (!found) return provisioning ? 'up' : 'gone'
+    const runs = await listRuns()
+    const busy = !provisioning && !!run.stackProject && stackBusyElsewhere(run.stackProject, runs, run.id)
+    if (!provisioning && !busy && await stackIsUp(stackProjectOf(run))) return 'up'
+    const found = await claimableStack(run, runs).catch(() => null)
+    if (!found) {
+      // Another run works in the stack this one had: it stands up its own,
+      // under its own name, and never shares that one.
+      if (busy) {
+        log.info('run\'s stack is in use by another run; it will stand up its own', { runId: run.id, project: run.stackProject })
+        run.stackProject = undefined
+        run.stackClaimedFrom = undefined
+        await saveRun(run)
+      }
+      return provisioning ? 'up' : 'gone'
+    }
     const from = run.stackProject
     run.stackProject = found.project
     run.stackClaimedFrom = found.from
