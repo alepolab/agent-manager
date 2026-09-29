@@ -2,6 +2,7 @@
 import { getAgentColor } from '~/utils/colors'
 import { getModelBadgeClasses } from '~/utils/models'
 import { SETTINGS_SEARCH_INDEX } from '~/utils/settingsSearchIndex'
+import { NAV_PRIMARY, NAV_LIBRARY, SETTINGS_TABS } from '~/utils/navigation'
 
 const router = useRouter()
 const { agents } = useAgents()
@@ -9,15 +10,35 @@ const { commands } = useCommands()
 const { plugins } = usePlugins()
 const { skills } = useSkills()
 
-const open = ref(false)
+// Shared with the sidebar's Search field, which opened nothing while this was a local ref.
+const open = useState('global-search-open', () => false)
 const query = ref('')
 const selectedIndex = ref(0)
+
+const { me, can } = useUser()
+const pages = computed(() => {
+  const labs = me.value?.profile?.labs === true
+  const out: { label: string; sublabel: string; to: string; icon: string }[] = []
+  for (const item of [...NAV_PRIMARY, ...NAV_LIBRARY]) {
+    const tabs = (item.tabs ?? [{ label: item.label, to: item.to }]).filter(t => labs || !('labs' in t && t.labs))
+    for (const t of tabs) out.push({ label: t.label, sublabel: item.tabs ? item.label : '', to: t.to, icon: item.icon })
+  }
+  for (const t of SETTINGS_TABS.filter(t => labs || !t.labs)) out.push({ label: t.label, sublabel: 'Settings', to: t.to, icon: 'i-lucide-settings' })
+  out.push({ label: 'Profile', sublabel: 'Your Jira credentials and preferences', to: '/profile', icon: 'i-lucide-user' })
+  if (can('configure')) out.push({ label: 'CLI', sublabel: 'Chat with Claude Code in the working directory', to: '/cli', icon: 'i-lucide-terminal-square' })
+  return out
+})
 
 const results = computed(() => {
   const q = query.value.toLowerCase().trim()
   if (!q) return []
 
   const items: { type: string; label: string; sublabel: string; to: string; icon: string; color?: string; model?: string }[] = []
+
+  // Pages first: the sidebar lists nine, and this is how the rest are found.
+  for (const page of pages.value) {
+    if (page.label.toLowerCase().includes(q)) items.push({ type: 'Page', ...page })
+  }
 
   for (const agent of agents.value) {
     if (agent.frontmatter.name.toLowerCase().includes(q) || agent.frontmatter.description?.toLowerCase().includes(q)) {
@@ -167,7 +188,7 @@ if (import.meta.client) {
             />
             <UIcon v-else :name="result.icon" class="size-4 shrink-0 text-meta" />
 
-            <span class="font-mono t-ui font-medium w-40 shrink-0 truncate">
+            <span class="t-ui font-medium w-40 shrink-0 truncate" :class="{ 'font-mono': result.type === 'Command' }">
               {{ result.label }}
             </span>
 

@@ -218,7 +218,6 @@ useAutoRefresh(() => (saving.value || rawJsonEdited() || statusLineEdited() ? nu
         <UButton v-if="viewMode === 'raw' && can('configure')" label="Save" icon="i-lucide-save" size="sm" :loading="saving" @click="saveRaw" />
       </template>
     </PageHeader>
-    <SettingsNav />
 
     <div v-if="loading && !settings" class="flex justify-center py-16">
       <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-meta" />

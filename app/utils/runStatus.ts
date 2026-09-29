@@ -45,6 +45,40 @@ export function runStatusColor(status: string): string {
   return RUN_STATUS_COLOR[status] ?? 'var(--text-disabled, #9ca3af)'
 }
 
+/**
+ * Which of five visual kinds a status is. Colour, glyph and the pipeline
+ * track all key off this, so "waiting on a person" looks the same wherever
+ * it appears.
+ */
+export type StatusKind = 'now' | 'wait' | 'fail' | 'done' | 'idle'
+export function statusKind(status: string): StatusKind {
+  if (status === 'running' || status === 'joining') return 'now'
+  if (status === 'paused' || status === 'awaiting_review' || status === 'waiting') return 'wait'
+  if (status === 'failed' || status === 'interrupted') return 'fail'
+  if (status === 'completed') return 'done'
+  return 'idle'
+}
+
+/** The runner's vocabulary is not a person's: `interrupted` is what the
+ *  codebase calls a process that died, and nobody outside it says that. */
+const STATUS_WORD: Record<string, string> = {
+  paused: 'Waiting',
+  awaiting_review: 'Deciding',
+  failed: 'Failed',
+  interrupted: 'Stopped',
+  running: 'Running',
+  queued: 'Queued',
+  joining: 'Joining',
+  completed: 'Done',
+  stopped: 'Stopped',
+  pending: 'Not started',
+  skipped: 'Skipped',
+  waiting: 'Waiting',
+}
+export function statusWord(status: string): string {
+  return STATUS_WORD[status] ?? runStatusLabel(status)
+}
+
 /** How a status reads to a person. The statuses are rendered uppercase all over
  *  this app, and a raw multi-word one arrives as AWAITING_REVIEW — an
  *  identifier, not a phrase. One transformation rather than a label table:

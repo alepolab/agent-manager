@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
+import { runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
+import { currentStep, isQuiet } from '~/utils/runActivity'
+import { runLastActivityAt } from '~~/shared/utils/runClock'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,18 +33,12 @@ const status = computed({
   set: v => router.replace({ query: { ...route.query, status: v || undefined } }),
 })
 
-/** Group occupancy, so a queued row can say what it is waiting behind rather
- *  than only that it is waiting. Fetched alongside the runs, and only used by
- *  the in-flight section. */
-const groups = ref<{ id: string, name: string, inFlight: number, maxConcurrent: number }[]>([])
-const loadFor = (r: WorkflowRun) => groups.value.find(g => g.id === (r.group?.trim() || 'default'))
 
 async function refresh() {
   try {
     runs.value = await $fetch<WorkflowRun[]>('/api/runs')
     // Best-effort: a queued row without its group's numbers still says it is
     // waiting, which is the load-bearing half.
-    groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => groups.value)
     loadError.value = null
   } catch (e: any) {
     loadError.value = e.data?.message || e.message || 'Failed to load runs'
@@ -84,11 +80,61 @@ const live = computed(() => runs.value.filter(r => isLiveStatus(r.status)))
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | null = null
 
-const STATUSES = ['queued', 'running', 'paused', 'awaiting_review', 'completed', 'failed', 'stopped', 'interrupted']
+/**
+ * Five views instead of a status dropdown, a Mine checkbox and a filter box
+ * side by side. `?status=` still narrows to one exact status for old links.
+ */
+const VIEWS = [
+  { key: '', label: 'All' },
+  { key: 'waiting', label: 'Waiting' },
+  { key: 'running', label: 'Active' },
+  { key: 'failed', label: 'Failed' },
+] as const
+const view = computed({
+  get: () => (typeof route.query.view === 'string' ? route.query.view : ''),
+  set: v => router.replace({ query: { ...route.query, view: v || undefined } }),
+})
+const inView = (r: WorkflowRun) =>
+  view.value === 'waiting' ? r.status === 'paused' || r.status === 'awaiting_review'
+  : view.value === 'running' ? isLiveStatus(r.status) && r.status !== 'paused' && r.status !== 'awaiting_review'
+  : view.value === 'failed' ? r.status === 'failed' || r.status === 'interrupted'
+  : true
+
+/** The selected run lives in the URL, so a run in the split view can be linked to. */
+const selectedId = computed(() => (typeof route.query.run === 'string' ? route.query.run : null))
+function select(id: string | null) { router.replace({ query: { ...route.query, run: id ?? undefined } }) }
+
+const headline = (r: WorkflowRun) => {
+  const first = r.initialPrompt.split('\n')[0] ?? ''
+  return r.ticketKey && first.startsWith(r.ticketKey) ? first.slice(r.ticketKey.length).replace(/^[:\s·-]+/, '') : first
+}
+const ago = (ms: number) => { const m = Math.round((now.value - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago` }
+/** The row's second line: where the run is, and whether it has gone quiet. */
+const whereNow = (r: WorkflowRun) => {
+  const step = currentStep(r)
+  // "Runbook A — Ticket to Evidence-Backed PR" on every row pushed the step
+  // and the time off the end; the name before the dash is enough to tell runbooks apart.
+  const bits = [r.workflowName.split(' — ')[0] ?? r.workflowName]
+  if (step && isLiveStatus(r.status)) bits.push(isQuiet(r, step, now.value) ? `${step.label}, quiet` : step.label)
+  bits.push(ago(runLastActivityAt(r)))
+  return bits.join(' · ')
+}
+
 const shown = computed(() => runs.value.filter(r =>
+  inView(r) &&
   (!filter.value || [r.workflowName, r.initialPrompt.split('\n')[0] ?? '', r.startedBy ?? '', r.product?.name ?? ''].some(v => v.toLowerCase().includes(filter.value.toLowerCase())))
   && (!status.value || r.status === status.value)
-  && (!mine.value || r.startedBy === me.value?.login)))
+  && (!mine.value || r.startedBy === me.value?.login))
+  // Working runs lead: "what is happening right now" is the question this
+  // page is opened with. Otherwise newest first, as the API returns them.
+  .sort((a, b) => Number(isLiveStatus(b.status)) - Number(isLiveStatus(a.status))))
+
+const selected = computed(() => runs.value.find(r => r.id === selectedId.value) ?? null)
+// Open the first run when none is chosen, on a screen wide enough for both panes.
+watch(shown, (list) => {
+  if (selectedId.value || !list[0] || !import.meta.client) return
+  if (window.matchMedia('(min-width: 1024px)').matches) select(list[0].id)
+}, { immediate: true })
 
 // Execution time from the run clock, and it re-renders because `now` ticks:
 // this column read `endedAt - startedAt`, so a run restarted an hour after it
@@ -194,124 +240,120 @@ async function deleteFailed() {
 </script>
 
 <template>
-  <div>
+  <div class="h-full flex flex-col">
     <PageHeader title="Runs">
       <template #trailing>
-        <span class="t-small text-meta">{{ runs.length }}</span>
+        <span class="t-small text-meta font-normal">{{ runs.length }}</span>
       </template>
-    </PageHeader>
-
-    <div class="page space-y-4">
-      <p class="t-ui leading-relaxed text-label">
-        Every workflow run, newest first. Open a run in its builder, restart a failed one from the step that failed, or clone its inputs into a new run.
-      </p>
-
-      <!-- Live runs first and in full: the question this page is opened with is
-           almost always "what is happening right now", and answering it should
-           not require opening a run to find out. -->
-      <section v-if="live.length" class="rounded-xl overflow-hidden" style="border: 1px solid var(--border-subtle);">
-        <header class="px-4 py-2 flex items-center gap-2" style="background: var(--surface-raised);">
-          <span class="inline-block size-1.5 rounded-full" :style="{ background: RUN_STATUS_COLOR.running }" />
-          <h2 class="t-small font-mono uppercase tracking-wider text-label">In flight</h2>
-          <span class="t-small text-meta">{{ live.length }}</span>
-        </header>
-        <RunLiveCard v-for="r in live" :key="`live-${r.id}`" :run="r" :now="now" :load="loadFor(r)" />
-      </section>
-
-      <div class="flex flex-wrap gap-2 items-center">
-        <input v-model="filter" placeholder="Filter by ticket, workflow, product or person..." class="field-search max-w-xs" aria-label="Filter runs" />
-        <label class="t-small text-label flex items-center gap-1.5"><input v-model="mine" type="checkbox" /> Mine</label>
-        <select v-model="status" class="field-input w-40" aria-label="Filter by status">
-          <option value="">All statuses</option>
-          <option v-for="s in STATUSES" :key="s" :value="s">{{ runStatusLabel(s) }}</option>
-        </select>
+      <template #right>
         <UButton
           v-if="failedShown.length"
-          size="xs" class="ml-auto" :variant="confirmingBulk ? 'solid' : 'soft'" :color="confirmingBulk ? 'error' : 'neutral'"
+          size="xs" :variant="confirmingBulk ? 'solid' : 'ghost'" :color="confirmingBulk ? 'error' : 'neutral'"
           icon="i-lucide-trash-2" :loading="bulkDeleting"
           :label="confirmingBulk ? `Delete ${failedShown.length} failed — confirm` : `Delete ${failedShown.length} failed`"
           @click="deleteFailed"
         />
+      </template>
+    </PageHeader>
+
+    <!-- A list for scanning and the selected run beside it. This was a live-run
+         card stack over an eight-column table whose Actions column took a
+         quarter of the width on every row. -->
+    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[24rem_minmax(0,1fr)]">
+      <div class="min-h-0 flex flex-col runs-pane" :class="{ 'hidden lg:flex': selectedId }">
+        <div class="shrink-0 p-3 space-y-2" style="border-bottom: 0.5px solid var(--border-default);">
+          <div class="flex items-center gap-2">
+            <nav class="segmented" aria-label="Show">
+              <button
+                v-for="v in VIEWS" :key="v.key"
+                class="segmented__item focus-ring" :class="{ 'segmented__item--on': view === v.key }"
+                :aria-pressed="view === v.key" @click="view = v.key"
+              >{{ v.label }}</button>
+            </nav>
+            <label class="t-small text-label flex items-center gap-1.5 ml-auto"><input v-model="mine" type="checkbox" /> Mine</label>
+          </div>
+          <input v-model="filter" placeholder="Filter by ticket, workflow, product or person" class="field-input t-small" aria-label="Filter runs" />
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-y-auto" aria-live="polite">
+          <div v-if="loadError" class="run-row">
+            <span class="t-small flex-1" style="color: var(--error);">{{ loadError }}</span>
+            <UButton size="xs" variant="soft" label="Retry" @click="refresh" />
+          </div>
+          <div v-else-if="!loaded" class="p-3 space-y-2" aria-busy="true"><SkeletonCard v-for="i in 3" :key="i" /></div>
+          <p v-else-if="!runs.length" class="p-4 t-ui text-label">
+            No runs yet. Start one from <NuxtLink to="/" class="underline">Home</NuxtLink> or a <NuxtLink to="/workflows" class="underline">workflow</NuxtLink>.
+          </p>
+          <p v-else-if="!shown.length" class="p-4 t-ui text-label">No runs match these filters.</p>
+          <button
+            v-for="r in shown" v-else :key="r.id"
+            class="run-row focus-ring" :class="{ 'run-row--on': r.id === selectedId }"
+            :aria-current="r.id === selectedId ? 'true' : undefined"
+            :title="r.error || undefined"
+            @click="select(r.id)"
+          >
+            <span class="flex items-baseline gap-2 min-w-0">
+              <span class="truncate font-medium flex-1 min-w-0"><span v-if="r.ticketKey" class="font-mono mr-1.5">{{ r.ticketKey }}</span><span class="font-normal">{{ headline(r) }}</span></span>
+              <StatusLabel :status="r.status" class="shrink-0" />
+            </span>
+            <span class="t-small text-label truncate block">
+              {{ whereNow(r) }}
+              <template v-if="r.ci"> · <span :style="{ color: r.ci.status === 'failing' ? 'var(--error)' : r.ci.status === 'passing' ? 'var(--success)' : undefined }">CI {{ r.ci.status }}</span></template>
+            </span>
+            <RunProgressBar :steps="r.steps" class="mt-1.5" />
+          </button>
+        </div>
       </div>
 
-      <div
-        v-if="loadError"
-        class="rounded-xl px-4 py-3 flex items-center gap-3"
-        style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
-      >
-        <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
-        <span class="t-small" style="color: var(--error);">{{ loadError }}</span>
-        <UButton size="xs" variant="soft" label="Retry" class="ml-auto" @click="refresh" />
-      </div>
-
-      <div v-else-if="!loaded" class="space-y-2" aria-busy="true">
-        <SkeletonCard v-for="i in 3" :key="i" />
-      </div>
-
-      <p v-else-if="!runs.length" class="t-ui text-label">
-        No runs yet. Start one with the Run button on a <NuxtLink to="/workflows" class="underline">workflow card</NuxtLink>.
-      </p>
-
-      <p v-else-if="!shown.length" class="t-ui text-label">No runs match these filters.</p>
-
-      <div v-else class="overflow-x-auto rounded-xl" style="border: 1px solid var(--border-subtle);">
-        <table class="w-full table-fixed t-small">
-          <thead>
-            <tr class="text-left text-label" style="background: var(--surface-raised);">
-              <th class="px-3 py-2 font-medium">Workflow</th>
-              <th class="px-3 py-2 font-medium hidden md:table-cell">By</th>
-              <th class="px-3 py-2 font-medium">Status</th>
-              <th class="px-3 py-2 font-medium hidden 2xl:table-cell">Started</th>
-              <th class="px-3 py-2 font-medium hidden sm:table-cell" :title="RUN_DURATION_HINT">Duration</th>
-              <th class="px-3 py-2 font-medium w-24 hidden md:table-cell">Steps</th>
-              <th class="px-3 py-2 font-medium hidden 2xl:table-cell">Prompt</th>
-              <th class="px-3 py-2 font-medium text-right w-[26%]">Actions</th>
-            </tr>
-          </thead>
-          <tbody aria-live="polite">
-            <tr v-for="r in shown" :key="r.id" style="border-top: 1px solid var(--border-subtle);">
-              <td class="px-3 py-2 font-medium"><div class="truncate" :title="r.workflowName">{{ r.workflowName }}</div></td>
-              <td class="px-3 py-2 text-label hidden md:table-cell"><div class="truncate" :title="r.startedBy || ''">{{ r.startedBy || '' }}</div></td>
-              <!-- Six of thirteen real runs carried a precise, actionable failure
-                   reason on the record and this table showed none of it. One
-                   hover is not a fix, but it beats opening the run to find out
-                   why it is red. -->
-              <td class="px-3 py-2 font-mono t-label" :style="{ color: RUN_STATUS_COLOR[r.status] }" :title="r.error || r.status">
-                {{ runStatusLabel(r.status) }}
-                <a v-if="r.ci" :href="r.ci.pr" target="_blank" rel="noopener" class="ml-1 normal-case font-sans t-small underline" :title="r.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || r.ci.error || ''" :style="{ color: r.ci.status === 'failing' ? RUN_STATUS_COLOR.failed : r.ci.status === 'passing' ? RUN_STATUS_COLOR.completed : 'inherit' }">CI {{ r.ci.status }}</a>
-              </td>
-              <td class="px-3 py-2 text-label hidden 2xl:table-cell"><div class="truncate">{{ new Date(r.startedAt).toLocaleString() }}</div></td>
-              <td class="px-3 py-2 text-label hidden sm:table-cell" :title="RUN_DURATION_HINT"><div class="truncate">{{ duration(r) }}</div></td>
-              <td class="px-3 py-2 hidden md:table-cell"><RunProgressBar :steps="r.steps" /></td>
-              <td class="px-3 py-2 text-label hidden 2xl:table-cell"><div class="truncate" :title="r.initialPrompt">{{ r.initialPrompt }}</div></td>
-              <td class="px-3 py-2 overflow-hidden">
-                <div class="flex gap-1 justify-end">
-                  <UButton size="xs" variant="ghost" label="Open" :to="`/runs/${r.id}`" />
-                  <UButton v-if="canRestart(r)" class="hidden xl:inline-flex" size="xs" variant="soft" icon="i-lucide-rotate-ccw" label="Restart" :loading="busy === r.id" @click="act(r, 'restart', { stepId: restartPoint(r) })" />
-                  <!-- Clone lands in the workflow builder, which has no role
-                       gating of its own: for a manager that meant Run, Save and
-                       Delete workflow, reached from a read-only page. -->
-                  <UButton v-if="can('startRun')" class="hidden xl:inline-flex" size="xs" variant="ghost" icon="i-lucide-copy" aria-label="Clone run" title="Clone run" :to="`/workflows/${r.workflowSlug}?clone=${r.id}`" />
-                  <UButton
-                    v-if="canStop(r)"
-                    size="xs" :variant="confirmingStop === r.id ? 'solid' : 'ghost'" :color="confirmingStop === r.id ? 'error' : 'neutral'"
-                    :label="confirmingStop === r.id ? 'Confirm stop' : 'Stop'" :loading="busy === r.id" @click="stop(r)"
-                  />
-                  <UButton
-                    v-if="canDelete(r)"
-                    class="hidden xl:inline-flex"
-                    size="xs" variant="ghost" :color="confirmingDelete === r.id ? 'error' : 'neutral'"
-                    :icon="confirmingDelete === r.id ? undefined : 'i-lucide-trash-2'"
-                    :label="confirmingDelete === r.id ? 'Confirm delete' : ''" :title="`Delete run and its evidence`"
-                    :aria-label="`Delete run ${r.ticketKey || r.workflowName} started ${new Date(r.startedAt).toLocaleString()}, and its evidence`"
-                    :loading="busy === r.id" @click="del(r)"
-                  />
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="min-h-0 flex flex-col" :class="{ 'hidden lg:flex': !selectedId }">
+        <template v-if="selected">
+          <!-- The toolbar owns the run's actions; they were five buttons on every row. -->
+          <div class="shrink-0 flex items-center gap-1 px-4 py-2" style="border-bottom: 0.5px solid var(--border-default);">
+            <UButton class="lg:hidden" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Runs" @click="select(null)" />
+            <span class="t-small text-label ml-1" :title="RUN_DURATION_HINT">{{ duration(selected) }} run time · started {{ new Date(selected.startedAt).toLocaleString() }}</span>
+            <span class="flex-1" />
+            <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-folder-open" label="Evidence" :to="`/runs/${selected.id}`" />
+            <UButton v-if="canRestart(selected)" size="xs" variant="ghost" color="neutral" icon="i-lucide-rotate-ccw" label="Restart" :loading="busy === selected.id" @click="act(selected, 'restart', { stepId: restartPoint(selected) })" />
+            <!-- Clone lands in the workflow builder, which has no role gating of its own. -->
+            <UButton v-if="can('startRun')" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :to="`/workflows/${selected.workflowSlug}?clone=${selected.id}`" />
+            <UButton
+              v-if="canStop(selected)"
+              size="xs" :variant="confirmingStop === selected.id ? 'solid' : 'ghost'" color="error" icon="i-lucide-square"
+              :label="confirmingStop === selected.id ? 'Confirm stop' : 'Stop'" :loading="busy === selected.id" @click="stop(selected)"
+            />
+            <UButton
+              v-if="canDelete(selected)"
+              size="xs" :variant="confirmingDelete === selected.id ? 'solid' : 'ghost'" :color="confirmingDelete === selected.id ? 'error' : 'neutral'"
+              icon="i-lucide-trash-2" :label="confirmingDelete === selected.id ? 'Confirm delete' : undefined"
+              :title="'Delete run and its evidence'"
+              :aria-label="`Delete run ${selected.ticketKey || selected.workflowName} started ${new Date(selected.startedAt).toLocaleString()}, and its evidence`"
+              :loading="busy === selected.id" @click="del(selected)"
+            />
+          </div>
+          <div class="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+            <div class="max-w-4xl"><RunDetail :id="selected.id" :key="selected.id" compact /></div>
+          </div>
+        </template>
+        <p v-else-if="loaded && shown.length" class="p-6 t-ui text-label">Choose a run on the left.</p>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.runs-pane {
+  border-right: 0.5px solid var(--border-default);
+  background: var(--surface-raised);
+}
+.run-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-primary);
+  border-bottom: 0.5px solid var(--border-default);
+}
+.run-row:hover { background: var(--surface-hover); }
+.run-row--on, .run-row--on:hover { background: var(--accent-muted); }
+</style>

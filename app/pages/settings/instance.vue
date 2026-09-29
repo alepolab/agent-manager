@@ -14,7 +14,6 @@ onMounted(load)
 <template>
   <div>
     <PageHeader title="Settings" />
-    <SettingsNav />
 
     <div class="px-6 py-4 space-y-6">
       <div v-if="!instance" class="flex justify-center py-16">

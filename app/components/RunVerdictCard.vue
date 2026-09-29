@@ -115,16 +115,16 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 </script>
 
 <template>
-  <div class="rounded-lg t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-    <div class="px-3 py-2 flex items-center gap-2" style="border-bottom: 1px solid var(--border-subtle);">
-      <span class="t-small font-mono uppercase tracking-wider text-label">What you are approving</span>
+  <div class="inset-list t-small">
+    <div class="px-3 py-2 flex items-center gap-2" style="border-bottom: 0.5px solid var(--border-default);">
+      <span class="font-semibold" style="color: var(--text-primary);">What you are approving</span>
       <span
         v-if="run.blastRadius"
-        class="ml-auto t-small font-mono uppercase px-1.5 py-0.5 rounded"
+        class="ml-auto t-small px-1.5 py-0.5 rounded"
         :style="{ background: 'var(--accent-muted)', color: 'var(--accent)' }"
         :title="oversightReason(run.blastRadius)"
       >{{ run.blastRadius }}</span>
-      <span v-else class="ml-auto t-small font-mono uppercase text-label">unclassified</span>
+      <span v-else class="ml-auto t-small text-label">Unclassified</span>
     </div>
 
     <div class="px-3 py-2 space-y-2">

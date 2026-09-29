@@ -7,22 +7,22 @@ useHead({ title: computed(() => `${props.title} | Agent Manager`) })
 </script>
 
 <template>
-  <div
-    class="min-h-16 flex items-center gap-3 px-6 py-3 shrink-0 sticky top-0 z-100"
-    style="border-bottom: 1px solid var(--border-subtle); background: var(--surface-base); backdrop-filter: blur(12px);"
-  >
+  <!-- A toolbar, not a masthead: title, the section's tabs, then actions, in
+       one 52px row. The old header stacked a 26px display title over a mono
+       subtitle and pushed the first row of content 90-130px down the page. -->
+  <div class="page-toolbar">
     <slot name="leading" />
-    <div class="flex-1 min-w-0">
-      <h1 class="text-page-title flex items-center gap-2.5">
+    <div class="min-w-0 flex items-baseline gap-2">
+      <h1 class="text-toolbar-title flex items-center gap-2 truncate">
         {{ title }}
         <slot name="trailing" />
       </h1>
-      <div v-if="subtitle || $slots.subtitle" class="mt-0.5">
-        <slot name="subtitle">
-          <p class="t-small font-mono text-meta truncate">{{ subtitle }}</p>
-        </slot>
-      </div>
+      <slot name="subtitle">
+        <p v-if="subtitle" class="t-small text-meta truncate hidden lg:block">{{ subtitle }}</p>
+      </slot>
     </div>
+    <SectionTabs class="shrink-0" />
+    <div class="flex-1" />
     <div class="flex items-center gap-2">
       <slot name="right" />
     </div>

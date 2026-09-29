@@ -199,7 +199,6 @@ useAutoRefresh(() => Promise.all([
         <ReadOnlyBadge v-if="!can('configure')" reason="changing these settings" />
       </template>
     </PageHeader>
-    <SettingsNav />
 
     <div class="px-6 py-4 space-y-6">
       <!-- Notification channels -->

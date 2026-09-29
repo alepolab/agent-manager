@@ -1,8 +1,8 @@
 export default defineNuxtConfig({
   modules: ['@nuxt/ui'],
 
-  // The app declares its fonts with explicit <link> stylesheets (fontshare, the
-  // fontsource CDN) in app.head below, so @nuxt/fonts — bundled by @nuxt/ui —
+  // Text is set in the system font. The one web font, Geist Mono, is declared
+  // with an explicit <link> in app.head below, so @nuxt/fonts — bundled by @nuxt/ui —
   // has nothing to resolve. Its build-time provider fetch (Google, Bunny) only
   // failed the docker image build on runners with no network to those hosts, so
   // every provider is disabled: no font request leaves the build.
@@ -39,23 +39,19 @@ export default defineNuxtConfig({
 
   app: {
     head: {
-      title: 'Claude Code Agent Manager',
+      title: 'Alepo Agent Manager',
       htmlAttrs: { lang: 'en' },
       meta: [
         { name: 'description', content: 'Visual manager for Claude Code agents, commands, skills, and plugins. Configure AI assistants without touching the terminal.' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-        { name: 'theme-color', content: '#F7F8FA' },
-        { property: 'og:title', content: 'Agent Manager — Claude Code' },
+        { name: 'theme-color', content: '#F5F5F7' },
+        { property: 'og:title', content: 'Alepo Agent Manager — Claude Code' },
         { property: 'og:description', content: 'Visual manager for Claude Code agents, commands, skills, and plugins. Configure AI assistants without touching the terminal.' },
         { property: 'og:type', content: 'website' },
         { name: 'twitter:card', content: 'summary' },
       ],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
-        { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-        { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
-        { rel: 'stylesheet', href: 'https://api.fontshare.com/v2/css?f[]=clash-display@400,500,600,700&display=swap' },
-        { rel: 'stylesheet', href: 'https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5.0.3/index.css' },
         { rel: 'stylesheet', href: 'https://cdn.jsdelivr.net/npm/@fontsource/geist-mono@5.0.3/index.css' },
       ],
     },
@@ -69,8 +65,10 @@ export default defineNuxtConfig({
     { path: '~/components' },
   ],
 
+  // Appearance follows the OS: an app-specific light/dark switch is a setting
+  // the system already owns.
   colorMode: {
-    preference: 'light',
+    preference: 'system',
   },
 
   routeRules: {

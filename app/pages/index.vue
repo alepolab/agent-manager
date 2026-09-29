@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { isLiveStatus, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR } from '~/utils/runStatus'
+import { statusKind, statusWord } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
+import { currentStep } from '~/utils/runActivity'
 import { oversightFor } from '~~/shared/utils/oversight'
 import { gateAsk } from '~~/shared/utils/notifications'
 
@@ -196,13 +197,6 @@ const ask = (r: WorkflowRun): string => {
   return ''
 }
 
-/** The runner's vocabulary is not a person's: `interrupted` is what the codebase
- *  calls a process that died, and nobody outside it says that. */
-const STATUS_WORD: Record<string, string> = {
-  paused: 'Waiting', awaiting_review: 'Deciding', failed: 'Failed', interrupted: 'Stopped',
-  running: 'Running', queued: 'Queued', joining: 'Joining', completed: 'Done', stopped: 'Stopped',
-}
-const statusWord = (s: string) => STATUS_WORD[s] ?? s
 
 /** Hue cannot separate "a person is blocking this" from "the machine broke it",
  *  and those two want opposite actions from the reader. */
@@ -272,7 +266,49 @@ const queueEmpty = computed(() => ({
   manager: 'Nothing open.',
   operator: 'No open gates, and nothing failing.',
 }[role.value ?? 'operator'] ?? 'Nothing waiting on you.'))
-const pageTitle = computed(() => (role.value === 'qa' ? 'Verification queue' : boardOnly.value ? 'Pipeline' : 'Your runs'))
+// The sidebar calls this page Home, and the toolbar title agrees with it for
+// the two roles whose page it is. QA and a manager get their page's job instead.
+const pageTitle = computed(() => (role.value === 'qa' ? 'Verification queue' : boardOnly.value ? 'Pipeline' : 'Home'))
+
+/** Runs doing work right now, most recently active first. */
+const live = computed(() => runs.value
+  .filter(r => r.status === 'running' || r.status === 'joining')
+  .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a)))
+
+/** The step a run is on, for the row under its title. */
+const stepLabel = (r: WorkflowRun) => currentStep(r)?.label ?? ''
+
+/**
+ * The page opens with one sentence: what is working, and what is waiting on
+ * you. It replaces a 26px title and four boxed numbers, and answers the only
+ * question a person arrives with before they have read anything else.
+ */
+const yourGates = computed(() => attention.value.filter(r => isWaitingOnAPerson(r.status) && mineToAnswer(r)))
+const oldestGate = computed(() => yourGates.value.reduce((m, r) => Math.max(m, waitedMs(r)), 0))
+/**
+ * The queue on Home is the head of the queue, not all of it: at 101 rows it
+ * pushed everything else on the page off the bottom. Notifications is where
+ * the whole list lives.
+ */
+const QUEUE_HEAD = 6
+const queueExpanded = ref(false)
+const queueLimit = computed(() => (queueExpanded.value ? Infinity : QUEUE_HEAD))
+const shownAttention = computed(() => attention.value.slice(0, queueLimit.value))
+const shownEscalated = computed(() => escalated.value.slice(0, Math.max(0, queueLimit.value - attention.value.length)))
+
+/** The first sentence of the ask, without the ticket key the row already leads with. */
+const askLine = (r: WorkflowRun) => {
+  let a = ask(r)
+  if (r.ticketKey && a.startsWith(`${r.ticketKey}: `)) a = a.slice(r.ticketKey.length + 2)
+  const stop = a.search(/\.\s/)
+  return stop > 0 ? a.slice(0, stop + 1) : a
+}
+
+const longWait = (ms: number) => {
+  const h = Math.floor(ms / 3_600_000)
+  return h >= 48 ? `${Math.floor(h / 24)} days` : h >= 1 ? `${h} hour${h === 1 ? '' : 's'}` : `${Math.max(1, Math.round(ms / 60000))} minutes`
+}
+
 // Not "Your runs" — that is the page's own title, and a section repeating its
 // page's heading says the section has no subject of its own.
 const minedTitle = computed(() => (role.value === 'qa' ? 'Runs you have decided on' : 'Recent'))
@@ -281,24 +317,129 @@ const minedEmpty = computed(() => (role.value === 'qa'
   : 'You have not started a run yet. Paste a ticket above to start one.'))
 </script>
 
+
 <template>
   <div>
-    <!-- "Dashboard" is a furniture name: the same word for four jobs, telling
-         nobody anything. -->
     <PageHeader :title="pageTitle" />
     <!-- Flex with `order`, so the queue leads whenever anything is waiting. A
          five-hour-old money gate below a text box is the page saying the box
          matters more. -->
-    <div class="page flex flex-col gap-6">
+    <div class="page flex flex-col gap-7">
       <WelcomeOnboarding v-if="loaded && !hasContent" @created="(agent) => navigateTo(`/agents/${agent.slug}`)" />
 
-      <!-- No order class: order 0 keeps it above the form and the queue, which
-           swap between order-1 and order-2. A failed load is reported by the
-           queue, so the board stays out rather than showing zeros. -->
-      <PipelineBoard v-if="loaded && !loadError" :runs="runs" :show-gates="boardOnly" />
-      <p v-else-if="loadError && boardOnly" class="t-ui" style="color: var(--error);">Could not load runs: {{ loadError }} <button class="underline focus-ring" @click="refresh">Retry</button></p>
+      <p v-if="loaded && !loadError && !boardOnly" class="lead-sentence">
+        <template v-if="live.length"><em>{{ live.length }} {{ live.length === 1 ? 'run' : 'runs' }}</em> {{ live.length === 1 ? 'is' : 'are' }} working. </template>
+        <template v-if="yourGates.length"><em>{{ yourGates.length }} {{ yourGates.length === 1 ? 'decision' : 'decisions' }}</em> {{ yourGates.length === 1 ? 'is' : 'are' }} waiting on you, the oldest for {{ longWait(oldestGate) }}.</template>
+        <template v-else-if="!live.length">Nothing is running and nothing is waiting on you.</template>
+        <template v-else>Nothing is waiting on you.</template>
+      </p>
 
-      <form v-if="can('startRun')" class="rounded-xl p-4 flex flex-wrap items-end gap-3" :class="attention.length || escalated.length ? 'order-2' : 'order-1'" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" @submit.prevent="startFromTicket">
+      <!-- Needs attention -->
+      <section v-if="!boardOnly" :class="attention.length || escalated.length ? 'order-1' : 'order-3'">
+        <div class="group-head">
+          <!-- "Needs attention" is an alert system's passive voice; this is the
+               first-person form of the same idea. -->
+          <h2>Waiting on you</h2>
+          <span class="group-head__count">{{ attention.length + escalated.length }}</span>
+          <button v-if="dismissable.length" class="t-small text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} finished</button>
+          <NuxtLink to="/notifications" class="group-head__link focus-ring">Notifications</NuxtLink>
+        </div>
+        <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
+
+        <div v-else-if="loadError" class="inset-list">
+          <div class="inset-row">
+            <span class="inset-row__lead"><UIcon name="i-lucide-alert-circle" class="size-4" style="color: var(--error);" /></span>
+            <span class="inset-row__body">
+              <span class="inset-row__title" style="color: var(--error);">Could not load runs, so this queue may be incomplete.</span>
+              <span class="inset-row__sub">{{ loadError }}</span>
+            </span>
+            <UButton size="xs" color="neutral" variant="soft" label="Retry" @click="refresh" />
+          </div>
+        </div>
+        <p v-else-if="!attention.length && !escalated.length" class="t-ui text-label">{{ queueEmpty }}</p>
+        <!-- Each row leads with a glyph for what kind of wait it is — a person
+             owed a decision, a failure, a red PR — so the kind survives without
+             colour. Rows that are someone else's gate are dimmed, not hidden:
+             ownership that `mineToAnswer` used to only filter by, never show. -->
+        <ul v-else class="inset-list">
+          <li
+            v-for="r in shownAttention" :key="r.id"
+            class="inset-row"
+            :style="{ opacity: isWaitingOnAPerson(r.status) && !mineToAnswer(r) ? 0.6 : undefined }"
+          >
+            <span class="inset-row__lead">
+              <UIcon :name="kindIcon(r)" class="size-4" :class="`status-label--${statusKind(r.status === 'completed' ? 'failed' : r.status)}`" />
+            </span>
+            <span class="inset-row__body">
+              <NuxtLink
+                :to="`/runs/${r.id}`" class="inset-row__title focus-ring hover:underline"
+                :aria-label="`${statusWord(r.status)} — ${r.ticketKey || headline(r)}: ${ask(r)}`"
+              ><span v-if="r.ticketKey" class="font-mono">{{ r.ticketKey }}</span><template v-else>{{ headline(r) }}</template></NuxtLink>
+              <span class="inset-row__sub" :title="ask(r)">{{ askLine(r) }}</span>
+            </span>
+            <span
+              v-if="r.blastRadius && riskOf(r) !== 'auto'"
+              class="t-small shrink-0" :style="{ color: riskOf(r) === 'justify' ? 'var(--warning)' : 'var(--text-tertiary)' }"
+              :title="riskOf(r) === 'justify' ? 'Owner-gated: approving needs a written reason' : 'Stops for a person'"
+            >{{ riskOf(r) === 'justify' ? 'Owner-gated' : r.blastRadius }}</span>
+            <span
+              class="inset-row__end"
+              :style="waitTier(r) === 'critical' ? { color: 'var(--warning)', fontWeight: 600 } : undefined"
+              :title="`Waiting ${shortWait(waitedMs(r))}`"
+            >{{ shortWait(waitedMs(r)) }}</span>
+            <span class="w-16 flex justify-end shrink-0">
+              <UButton v-if="isWaitingOnAPerson(r.status) && mineToAnswer(r)" size="xs" :label="r.status === 'awaiting_review' ? 'Decide' : 'Answer'" :to="`/runs/${r.id}`" />
+              <UButton
+                v-else-if="!isWaitingOnAPerson(r.status)" size="xs" color="neutral" variant="ghost" icon="i-lucide-x" :disabled="dismissing"
+                title="Remove this run from your queue"
+                :aria-label="`Remove ${r.ticketKey || headline(r)} from your queue`"
+                @click.stop="dismiss([r.id])"
+              />
+            </span>
+          </li>
+          <!-- Same row shape, so an escalation competes with the runs on wait
+               rather than being appended below them in its own sorted list. The
+               link goes to /watches only for roles whose nav includes it. -->
+          <li v-for="t in shownEscalated" :key="t.watchId + t.key" class="inset-row">
+            <span class="inset-row__lead"><UIcon name="i-lucide-radio-tower" class="size-4" style="color: var(--error);" /></span>
+            <span class="inset-row__body">
+              <NuxtLink :to="can('configure') ? '/watches' : `/runs?q=${encodeURIComponent(t.key)}`" class="inset-row__title font-mono focus-ring hover:underline">{{ t.key }}</NuxtLink>
+              <span class="inset-row__sub" :title="t.lastError || ''">{{ t.lastError || 'Gave up after repeated failures' }}</span>
+            </span>
+            <span class="inset-row__end">{{ shortWait(Date.now() - t.updatedAt) }}</span>
+            <span class="w-16 shrink-0" />
+          </li>
+          <li v-if="attention.length + escalated.length > QUEUE_HEAD" class="inset-row">
+            <button class="t-small focus-ring" style="color: var(--accent);" @click="queueExpanded = !queueExpanded">
+              {{ queueExpanded ? 'Show fewer' : `Show all ${attention.length + escalated.length}` }}
+            </button>
+          </li>
+        </ul>
+      </section>
+
+      <section v-if="!boardOnly && live.length" class="order-2">
+        <div class="group-head">
+          <h2>Running now</h2><span class="group-head__count">{{ live.length }}</span>
+          <NuxtLink to="/runs" class="group-head__link focus-ring">All runs</NuxtLink>
+        </div>
+        <div class="inset-list">
+          <NuxtLink v-for="r in live.slice(0, 6)" :key="r.id" :to="`/runs/${r.id}`" class="inset-row focus-ring">
+            <span class="inset-row__lead"><StatusLabel :status="r.status" icon-only /></span>
+            <span class="inset-row__body">
+              <span class="inset-row__title"><span v-if="r.ticketKey" class="font-mono mr-1.5">{{ r.ticketKey }}</span>{{ r.ticketKey ? '' : headline(r) }}<span v-if="r.ticketKey" class="font-normal">{{ headline(r).replace(r.ticketKey, '').replace(/^[:\s-]+/, '') }}</span></span>
+              <RunProgressBar :steps="r.steps" class="mt-1.5 max-w-80" />
+            </span>
+            <span class="inset-row__end">{{ stepLabel(r) }} · {{ ago(runLastActivityAt(r)) }}</span>
+          </NuxtLink>
+        </div>
+      </section>
+
+      <form
+        v-if="can('startRun')"
+        class="group-card flex flex-wrap items-end gap-3"
+        :class="attention.length || escalated.length ? 'order-3' : 'order-1'"
+        @submit.prevent="startFromTicket"
+      >
         <div class="flex-1 min-w-[16rem]">
           <label class="field-label" for="ticket">Start a run from a ticket</label>
           <input id="ticket" v-model="ticket" class="field-input w-full" placeholder="SCN-402, or paste the ticket text" :disabled="!runbook" />
@@ -328,114 +469,34 @@ const minedEmpty = computed(() => (role.value === 'qa'
         />
       </form>
 
-      <!-- Needs attention -->
-      <section v-if="!boardOnly" :class="attention.length || escalated.length ? 'order-1' : 'order-2'">
-        <div class="flex items-center gap-3 mb-2">
-          <!-- "Needs attention" is an alert system's passive voice. The board
-               already says "Waiting on a person"; this is the first-person form
-               of the same idea. "Settled" is the codebase's word, not a reader's. -->
-          <h2 class="text-section-label">Waiting on you <span class="text-meta font-normal">{{ attention.length + escalated.length }}</span></h2>
-          <button v-if="dismissable.length" class="t-small text-label underline focus-ring" :disabled="dismissing" @click="dismiss(dismissable.map(r => r.id))">Clear {{ dismissable.length }} finished</button>
-        </div>
-        <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
+      <!-- The numbers and the history: below the queue for anyone with a queue,
+           and the whole page for a manager. A failed load is reported by the
+           queue, so the board stays out rather than showing zeros. -->
+      <PipelineBoard v-if="loaded && !loadError" class="order-4" :runs="runs" :show-gates="boardOnly" />
+      <p v-else-if="loadError && boardOnly" class="t-ui" style="color: var(--error);">Could not load runs: {{ loadError }} <button class="underline focus-ring" @click="refresh">Retry</button></p>
 
-        <div v-else-if="loadError" class="rounded-lg px-3 py-2 flex items-center gap-3 t-small" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
-          <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
-          <span style="color: var(--error);">Could not load runs, so this queue may be incomplete.</span>
-          <span class="text-label truncate">{{ loadError }}</span>
-          <button class="ml-auto underline focus-ring shrink-0" style="color: var(--error);" @click="refresh">Retry</button>
-        </div>
-        <p v-else-if="!attention.length && !escalated.length" class="t-ui text-label">{{ queueEmpty }}</p>
-        <!-- Status moved off the text and onto a rail: a coloured word inside a
-             grid cell is not scannable down a stack, and it encoded status twice
-             since the word was already tinted. Solid rail = yours to answer,
-             washed = someone else's — ownership that `mineToAnswer` previously
-             only filtered by, never showed. -->
-        <ul v-else class="attn-list">
-          <li
-            v-for="r in attention" :key="r.id"
-            class="attn-row t-ui"
-            :class="[`attn-row--${waitTier(r)}`, { 'attn-row--mine': isWaitingOnAPerson(r.status) && mineToAnswer(r) }]"
-            :style="{ '--rail': RUN_STATUS_COLOR[r.status] }"
+      <section v-if="!boardOnly" class="order-5">
+        <div class="group-head"><h2>{{ minedTitle }}</h2></div>
+        <!-- Branches on the error, like the queue above it does. -->
+        <p v-if="loadError && !mine.length" class="t-ui" style="color: var(--error);">Could not load your runs.</p>
+        <p v-else-if="loaded && !mine.length" class="t-ui text-label">{{ minedEmpty }}</p>
+        <!-- Grid, not flex: the progress bar used to sit wherever the title
+             ended, so it landed in a different place on every row. -->
+        <div v-else class="inset-list inset-list--flush">
+          <NuxtLink
+            v-for="r in mine" :key="r.id" :to="`/runs/${r.id}`"
+            class="inset-row focus-ring grid! grid-cols-[6.5rem_minmax(0,1fr)_7rem_4.5rem]"
           >
-            <span class="attn-rail" aria-hidden="true" />
-            <UIcon :name="kindIcon(r)" class="size-3.5 shrink-0" :style="{ color: RUN_STATUS_COLOR[r.status] }" />
-            <!-- The status word is gone from the row, so it goes into the
-                 accessible name instead: dropping a channel must not drop it
-                 from the accessibility tree. -->
-            <NuxtLink
-              :to="`/runs/${r.id}`" class="attn-key focus-ring"
-              :aria-label="`${statusWord(r.status)} — ${r.ticketKey || headline(r)}: ${ask(r)}`"
-            >{{ r.ticketKey || headline(r) }}</NuxtLink>
-            <span class="attn-ask" :title="ask(r)">{{ ask(r) }}</span>
-            <span
-              v-if="r.blastRadius && riskOf(r) !== 'auto'"
-              class="attn-risk t-label" :class="{ 'attn-risk--justify': riskOf(r) === 'justify' }"
-              :title="riskOf(r) === 'justify' ? 'Owner-gated: approving needs a written reason' : 'Stops for a person'"
-            >{{ r.blastRadius }}</span>
-            <span v-else />
+            <StatusLabel :status="r.status" />
+            <span class="truncate" :title="headline(r)">{{ headline(r) }}</span>
             <RunProgressBar :steps="r.steps" />
-            <span class="attn-wait tabular" :title="`Waiting ${shortWait(waitedMs(r))}`">{{ shortWait(waitedMs(r)) }}</span>
-            <span class="attn-act">
-              <UButton v-if="isWaitingOnAPerson(r.status) && mineToAnswer(r)" size="xs" variant="soft" :label="r.status === 'awaiting_review' ? 'Decide' : 'Answer'" :to="`/runs/${r.id}`" />
-              <button
-                v-else-if="!isWaitingOnAPerson(r.status)" class="attn-dismiss focus-ring" :disabled="dismissing"
-                title="Remove this run from your queue"
-                :aria-label="`Remove ${r.ticketKey || headline(r)} from your queue`"
-                @click.stop="dismiss([r.id])"
-              ><UIcon name="i-lucide-x" class="size-3.5" /></button>
-            </span>
-          </li>
-          <!-- Same row shape, so an escalation competes with the runs on wait
-               rather than being appended below them in its own sorted list. The
-               link goes to /watches only for roles whose nav includes it: QA and
-               manager were being sent to a page they cannot open. -->
-          <li v-for="t in escalated" :key="t.watchId + t.key" class="attn-row t-ui attn-row--high" style="--rail: var(--error);">
-            <span class="attn-rail" aria-hidden="true" />
-            <UIcon name="i-lucide-radio-tower" class="size-3.5 shrink-0" style="color: var(--error);" />
-            <NuxtLink :to="can('configure') ? '/watches' : `/runs?q=${encodeURIComponent(t.key)}`" class="attn-key focus-ring">{{ t.key }}</NuxtLink>
-            <span class="attn-ask" :title="t.lastError || ''">{{ t.lastError || 'Gave up after repeated failures' }}</span>
-            <span />
-            <span />
-            <span class="attn-wait tabular">{{ shortWait(Date.now() - t.updatedAt) }}</span>
-            <span class="attn-act" />
-          </li>
-        </ul>
+            <span
+              class="text-label text-right whitespace-nowrap t-small"
+              :title="`Started ${new Date(r.startedAt).toLocaleString()}`"
+            >{{ ago(runLastActivityAt(r)) }}</span>
+          </NuxtLink>
+        </div>
       </section>
-
-      <!-- The Setup card that used to sit beside this — four counts of static
-           configuration, linking to four pages already in the sidebar — is gone.
-           Nothing on a triage screen is decided by "31 commands", and it was a
-           third of the page width below the primary action. -->
-      <div v-if="!boardOnly" class="order-3">
-        <section>
-          <h2 class="text-section-label mb-2">{{ minedTitle }}</h2>
-          <!-- Branches on the error, like the queue above it does. This said
-               "No runs started by you yet" when the fetch had failed — the same
-               defect as the queue's, twelve lines away and still live. -->
-          <p v-if="loadError && !mine.length" class="t-ui" style="color: var(--error);">Could not load your runs.</p>
-          <p v-else-if="loaded && !mine.length" class="t-ui text-label">{{ minedEmpty }}</p>
-          <!-- Grid, not flex: the progress bar used to sit wherever the title
-               ended, so it landed in a different place on every row. Fixed
-               columns line the four fields up down the list. -->
-          <div v-else class="space-y-1">
-            <NuxtLink
-              v-for="r in mine" :key="r.id" :to="`/runs/${r.id}`"
-              class="grid grid-cols-[5rem_minmax(0,1fr)_6rem_4.5rem] items-center gap-3 rounded-lg px-3 py-2 t-small focus-ring"
-              style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
-            >
-
-              <span class="font-mono t-label truncate" :style="{ color: RUN_STATUS_COLOR[r.status] }">{{ statusWord(r.status) }}</span>
-              <span class="truncate" style="color: var(--text-primary);" :title="headline(r)">{{ headline(r) }}</span>
-              <RunProgressBar :steps="r.steps" />
-              <span
-                class="text-label text-right whitespace-nowrap"
-                :title="`Started ${new Date(r.startedAt).toLocaleString()}`"
-              >{{ ago(runLastActivityAt(r)) }}</span>
-            </NuxtLink>
-          </div>
-        </section>
-      </div>
     </div>
   </div>
 </template>

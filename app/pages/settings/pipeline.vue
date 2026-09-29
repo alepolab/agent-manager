@@ -95,7 +95,6 @@ useAutoRefresh(() => (saving.value ? null : load({ silent: true })))
         <ReadOnlyBadge v-if="!can('configure')" reason="changing these settings" />
       </template>
     </PageHeader>
-    <SettingsNav />
 
     <div v-if="loading && !settings" class="flex justify-center py-16">
       <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-meta" />

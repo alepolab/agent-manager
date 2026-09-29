@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { getAgentColor } from '~/utils/colors'
-import { getModelBadgeClasses } from '~/utils/models'
+import { getModelLabel, getModelTagline } from '~/utils/models'
 import { agentTemplates } from '~/utils/templates'
 
 const { agents, loading, error, create, fetchAll: fetchAgents } = useAgents()
@@ -46,6 +45,31 @@ const groupedAgents = computed(() => {
   })
 })
 
+/**
+ * A sortable table with an inspector, not a grid of cards. Thirty-six agents
+ * as cards was twelve screens of colour stripes; as rows they fit on one and a
+ * half, and the inspector shows what the card was straining to fit.
+ */
+type SortKey = 'name' | 'model' | 'skills'
+const sortKey = ref<SortKey>('name')
+const sortDir = ref<1 | -1>(1)
+function sortBy(k: SortKey) {
+  if (sortKey.value === k) sortDir.value = sortDir.value === 1 ? -1 : 1
+  else { sortKey.value = k; sortDir.value = 1 }
+}
+const skillsOf = (a: (typeof agents.value)[number]) => a.frontmatter.skills?.length ?? skillCounts.value[a.slug] ?? 0
+const sortedGroups = computed(() => groupedAgents.value.map(([dir, list]) => [dir, [...list].sort((a, b) => {
+  const v = sortKey.value === 'name' ? a.frontmatter.name.localeCompare(b.frontmatter.name)
+    : sortKey.value === 'model' ? (a.frontmatter.model ?? '').localeCompare(b.frontmatter.model ?? '')
+    : skillsOf(a) - skillsOf(b)
+  return v * sortDir.value
+})] as const))
+
+const route = useRoute()
+const selectedSlug = computed(() => (typeof route.query.agent === 'string' ? route.query.agent : null))
+const selected = computed(() => agents.value.find(a => a.slug === selectedSlug.value) ?? null)
+function select(slug: string) { router.replace({ query: { ...route.query, agent: slug } }) }
+
 const hasGroups = computed(() =>
   groupedAgents.value.length > 1 ||
   (groupedAgents.value.length === 1 && groupedAgents.value[0]?.[0] !== '')
@@ -68,177 +92,123 @@ async function useTemplate(templateId: string) {
 </script>
 
 <template>
-  <div>
+  <div class="h-full flex flex-col">
     <PageHeader title="Agents">
       <template #trailing>
-        <span class="t-small text-meta">{{ agents.length }}</span>
+        <span class="t-small text-meta font-normal">{{ agents.length }}</span>
       </template>
       <template #right>
-        <UButton label="Import" icon="i-lucide-upload" size="sm" variant="soft" @click="() => { showImportModal = true }" />
+        <input v-model="searchQuery" placeholder="Filter agents" class="field-input t-small w-52" aria-label="Filter agents" />
+        <UButton label="Import…" size="sm" variant="ghost" color="neutral" @click="() => { showImportModal = true }" />
         <UButton label="New Agent" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4">
-      <p class="t-ui mb-4 leading-relaxed text-label">
-        Specialized AI assistants with custom instructions and behavior.
-      </p>
+    <div v-if="error" class="page">
+      <p class="t-small" style="color: var(--error);">{{ error }}</p>
+    </div>
 
-      <!-- Search -->
-      <div class="mb-5">
-        <input
-          v-model="searchQuery"
-          placeholder="Search agents..."
-          class="field-search max-w-xs"
-        />
-      </div>
+    <div v-if="loading" class="page space-y-2"><SkeletonCard v-for="i in 4" :key="i" /></div>
 
-      <!-- Error state -->
-      <div
-        v-if="error"
-        class="rounded-xl px-4 py-3 mb-4 flex items-start gap-3"
-        style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);"
-      >
-        <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
-        <span class="t-small" style="color: var(--error);">{{ error }}</span>
-      </div>
-
-      <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        <SkeletonCard v-for="i in 6" :key="i" />
-      </div>
-
-      <!-- Agent groups -->
-      <div v-else-if="filteredAgents.length" class="space-y-6">
-        <div v-for="([directory, groupAgents]) in groupedAgents" :key="directory || '__root__'">
-          <!-- Section header — only shown when there are multiple groups -->
-          <div v-if="hasGroups" class="flex items-center gap-2 mb-3">
-            <UIcon name="i-lucide-folder" class="size-3.5 shrink-0" style="color: var(--text-meta);" />
-            <span class="t-small font-semibold uppercase tracking-widest" style="color: var(--text-meta);">
-              {{ directory || 'General' }}
-            </span>
-            <span class="t-small px-1.5 py-0.5 rounded-full" style="background: var(--surface-raised); color: var(--text-disabled);">
-              {{ groupAgents.length }}
-            </span>
-            <div class="flex-1 h-px" style="background: var(--border-subtle);" />
-          </div>
-
-          <!-- Card grid -->
-          <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            <NuxtLink
-              v-for="agent in groupAgents"
-              :key="agent.slug"
-              :to="`/agents/${agent.slug}`"
-              class="rounded-xl p-4 focus-ring hover-lift border border-subtle relative overflow-hidden group bg-card"
+    <div v-else-if="filteredAgents.length" class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div class="min-h-0 overflow-y-auto" style="background: var(--surface-raised);">
+        <table class="agent-table">
+          <thead>
+            <tr>
+              <th scope="col"><button class="focus-ring" @click="sortBy('name')">Name<span v-if="sortKey === 'name'" aria-hidden="true"> {{ sortDir === 1 ? '▾' : '▴' }}</span></button></th>
+              <th scope="col" class="hidden md:table-cell">Description</th>
+              <th scope="col" class="w-24"><button class="focus-ring" @click="sortBy('model')">Model<span v-if="sortKey === 'model'" aria-hidden="true"> {{ sortDir === 1 ? '▾' : '▴' }}</span></button></th>
+              <th scope="col" class="w-16 text-right"><button class="focus-ring" @click="sortBy('skills')">Skills<span v-if="sortKey === 'skills'" aria-hidden="true"> {{ sortDir === 1 ? '▾' : '▴' }}</span></button></th>
+            </tr>
+          </thead>
+          <tbody v-for="([directory, groupAgents]) in sortedGroups" :key="directory || '__root__'">
+            <!-- A folder heading only when the agents actually live in folders. -->
+            <tr v-if="hasGroups" class="agent-table__group"><th colspan="4" scope="colgroup">{{ directory || 'General' }} <span class="font-normal">{{ groupAgents.length }}</span></th></tr>
+            <tr
+              v-for="agent in groupAgents" :key="agent.slug"
+              :class="{ 'agent-table__row--on': agent.slug === selectedSlug }"
+              tabindex="0"
+              :aria-selected="agent.slug === selectedSlug"
+              @click="select(agent.slug)"
+              @keydown.enter="router.push(`/agents/${agent.slug}`)"
+              @keydown.space.prevent="select(agent.slug)"
+              @dblclick="router.push(`/agents/${agent.slug}`)"
             >
-              <!-- Color accent bar -->
-              <div
-                class="absolute inset-x-0 top-0 h-[4px] transition-opacity duration-200"
-                :style="{ background: getAgentColor(agent.frontmatter.color) }"
-              />
-
-              <!-- Hover glow in agent color -->
-              <div
-                class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-                :style="{ background: 'radial-gradient(ellipse at top, ' + getAgentColor(agent.frontmatter.color) + '08 0%, transparent 60%)' }"
-              />
-
-              <!-- Header: icon + name + model -->
-              <div class="flex items-center gap-3 mb-2 relative">
-                <div
-                  class="size-8 rounded-lg flex items-center justify-center shrink-0 transition-transform duration-200 group-hover:scale-105"
-                  :style="{ background: getAgentColor(agent.frontmatter.color) + '18', border: '1px solid ' + getAgentColor(agent.frontmatter.color) + '25' }"
-                >
-                  <UIcon name="i-lucide-cpu" class="size-3.5" :style="{ color: getAgentColor(agent.frontmatter.color) }" />
-                </div>
-                <span class="t-ui font-medium truncate flex-1">
-                  {{ agent.frontmatter.name }}
-                </span>
-                <span
-                  v-if="agent.frontmatter.model"
-                  class="t-small font-mono font-medium px-1.5 py-px rounded-full shrink-0"
-                  :class="[getModelBadgeClasses(agent.frontmatter.model).bg, getModelBadgeClasses(agent.frontmatter.model).text]"
-                >
-                  {{ agent.frontmatter.model }}
-                </span>
-              </div>
-
-              <!-- Description -->
-              <p v-if="agent.frontmatter.description" class="t-small leading-relaxed line-clamp-2 text-label relative">
-                {{ agent.frontmatter.description }}
-              </p>
-
-              <!-- Attached skills, named -->
-              <div v-if="agent.frontmatter.skills?.length" class="mt-3 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
-                <div class="flex flex-wrap items-center gap-1">
-                  <UIcon name="i-lucide-sparkles" class="size-3 shrink-0 mr-0.5" style="color: var(--accent);" />
-                  <span
-                    v-for="skill in agent.frontmatter.skills"
-                    :key="skill"
-                    class="t-small font-mono px-1.5 py-px rounded-full"
-                    style="background: var(--badge-subtle-bg); color: var(--text-secondary);"
-                  >{{ skill }}</span>
-                </div>
-              </div>
-
-              <!-- Fallback: skills that point back at this agent via their own frontmatter -->
-              <div v-else-if="skillCounts[agent.slug]" class="mt-3 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
-                <span class="t-small text-meta flex items-center gap-1.5">
-                  <UIcon name="i-lucide-sparkles" class="size-3" style="color: var(--accent);" />
-                  {{ skillCounts[agent.slug] }} skill{{ skillCounts[agent.slug] === 1 ? '' : 's' }}
-                </span>
-              </div>
-            </NuxtLink>
-          </div>
-        </div>
+              <td class="font-medium"><div class="truncate">{{ agent.frontmatter.name }}</div></td>
+              <td class="hidden md:table-cell text-label"><div class="truncate" :title="agent.frontmatter.description">{{ agent.frontmatter.description }}</div></td>
+              <td :class="{ 'text-label': !agent.frontmatter.model }">{{ agent.frontmatter.model ? getModelLabel(agent.frontmatter.model) : 'Default' }}</td>
+              <td class="text-right tabular-nums text-label">{{ skillsOf(agent) }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
-      <!-- Empty state: search miss -->
-      <div v-else-if="searchQuery" class="flex flex-col items-center justify-center py-16 space-y-3">
-        <p class="t-ui text-label">No agents match your search.</p>
+      <aside class="min-h-0 overflow-y-auto agent-inspector hidden lg:block">
+        <template v-if="selected">
+          <h2 class="t-head" style="color: var(--text-primary);">{{ selected.frontmatter.name }}</h2>
+          <p class="t-small text-label mt-1">{{ selected.frontmatter.description }}</p>
+          <div class="flex gap-2 mt-4">
+            <UButton size="sm" label="Edit" :to="`/agents/${selected.slug}`" />
+          </div>
+          <dl class="agent-inspector__kv">
+            <dt>Model</dt><dd>{{ selected.frontmatter.model ? `${getModelLabel(selected.frontmatter.model)} · ${getModelTagline(selected.frontmatter.model)}` : 'Default' }}</dd>
+            <dt>Tools</dt><dd>{{ selected.frontmatter.tools?.length ? selected.frontmatter.tools.join(', ') : 'All tools' }}</dd>
+            <dt>Memory</dt><dd class="capitalize">{{ selected.frontmatter.memory || 'None' }}</dd>
+            <dt>Skills</dt>
+            <dd>
+              <span v-if="selected.frontmatter.skills?.length" class="flex flex-wrap gap-1">
+                <span v-for="skill in selected.frontmatter.skills" :key="skill" class="t-small px-1.5 py-px rounded" style="background: var(--badge-subtle-bg);">{{ skill }}</span>
+              </span>
+              <template v-else-if="skillCounts[selected.slug]">{{ skillCounts[selected.slug] }} linked from their own files</template>
+              <template v-else>None</template>
+            </dd>
+            <dt>File</dt><dd class="font-mono t-small break-all">{{ selected.filePath }}</dd>
+          </dl>
+        </template>
+        <p v-else class="t-small text-label">Select an agent to see its model, tools and skills. Double-click or press Enter to edit it.</p>
+      </aside>
+    </div>
+
+    <!-- Empty state: search miss -->
+    <div v-else-if="searchQuery" class="flex flex-col items-center justify-center py-16 space-y-3">
+      <p class="t-ui text-label">No agents match your search.</p>
+    </div>
+
+    <!-- Empty state: no agents — show templates -->
+    <div v-else class="page space-y-5">
+      <div class="text-center py-4">
+        <p class="t-ui text-label">No agents yet. Start from a template or create your own.</p>
       </div>
 
-      <!-- Empty state: no agents — show templates -->
-      <div v-else class="space-y-5">
-        <div class="text-center py-4">
-          <p class="t-ui text-label">No agents yet. Start from a template or create your own.</p>
-        </div>
-
-        <ExampleBlock title="What does a good agent look like?" class="max-w-md mx-auto mb-6">
-          <div class="space-y-2 t-small" style="color: var(--text-secondary);">
-            <div class="rounded-lg p-3" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">
-              <p><strong style="color: var(--text-primary);">code-reviewer</strong> <span class="t-small" style="color: var(--text-disabled);">← This name is short and descriptive</span></p>
-              <p class="mt-1">"Reviews pull requests for bugs, style, and security." <span class="t-small" style="color: var(--text-disabled);">← Explains what it does in one sentence</span></p>
-              <p class="mt-1 t-small" style="color: var(--text-tertiary);">"Check for bugs, flag security issues, suggest improvements..." <span style="color: var(--text-disabled);">← Instructions are specific</span></p>
-            </div>
+      <ExampleBlock title="What does a good agent look like?" class="max-w-md mx-auto mb-6">
+        <div class="space-y-2 t-small" style="color: var(--text-secondary);">
+          <div class="group-card">
+            <p><strong style="color: var(--text-primary);">code-reviewer</strong> <span class="t-small text-label">← This name is short and descriptive</span></p>
+            <p class="mt-1">"Reviews pull requests for bugs, style, and security." <span class="t-small text-label">← Explains what it does in one sentence</span></p>
+            <p class="mt-1 t-small text-label">"Check for bugs, flag security issues, suggest improvements..." <span>← Instructions are specific</span></p>
           </div>
-        </ExampleBlock>
-
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          <button
-            v-for="template in agentTemplates"
-            :key="template.id"
-            class="rounded-lg p-4 text-left hover-lift border border-subtle focus-ring relative overflow-hidden group bg-card"
-            :disabled="creatingTemplate !== null"
-            @click="useTemplate(template.id)"
-          >
-            <div class="flex items-center gap-2.5 mb-2">
-              <UIcon :name="template.icon" class="size-4 shrink-0 text-label" />
-              <span class="t-ui font-medium">{{ template.frontmatter.name }}</span>
-              <UIcon
-                v-if="creatingTemplate === template.id"
-                name="i-lucide-loader-2"
-                class="size-3.5 ml-auto animate-spin text-meta"
-              />
-            </div>
-            <p class="t-small text-label leading-relaxed line-clamp-2">
-              {{ template.frontmatter.description }}
-            </p>
-          </button>
         </div>
+      </ExampleBlock>
 
-        <div class="text-center">
-          <UButton label="Or create from scratch" variant="ghost" size="sm" @click="() => { showCreateModal = true }" />
-        </div>
+      <div class="inset-list">
+        <button
+          v-for="template in agentTemplates"
+          :key="template.id"
+          class="inset-row inset-row--link w-full text-left focus-ring"
+          :disabled="creatingTemplate !== null"
+          @click="useTemplate(template.id)"
+        >
+          <span class="inset-row__lead"><UIcon :name="template.icon" class="size-4 text-label" /></span>
+          <span class="inset-row__body">
+            <span class="inset-row__title">{{ template.frontmatter.name }}</span>
+            <span class="inset-row__sub">{{ template.frontmatter.description }}</span>
+          </span>
+          <UIcon v-if="creatingTemplate === template.id" name="i-lucide-loader-2" class="size-3.5 animate-spin text-meta" />
+        </button>
+      </div>
+
+      <div class="text-center">
+        <UButton label="Or create from scratch" variant="ghost" size="sm" @click="() => { showCreateModal = true }" />
       </div>
     </div>
 
@@ -267,3 +237,36 @@ async function useTemplate(templateId: string) {
     </UModal>
   </div>
 </template>
+
+<style scoped>
+.agent-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.agent-table th { text-align: left; font-size: 12px; font-weight: 500; color: var(--text-tertiary); }
+.agent-table thead th {
+  position: sticky; top: 0; z-index: 1; padding: 8px 14px;
+  background: var(--surface-raised);
+  border-bottom: 0.5px solid var(--border-default);
+}
+.agent-table thead th:first-child { width: 30%; }
+.agent-table thead th button { font: inherit; color: inherit; }
+.agent-table td { padding: 0 14px; height: 36px; color: var(--text-primary); border-bottom: 0.5px solid var(--border-default); }
+.agent-table tbody tr:not(.agent-table__group) { cursor: default; }
+.agent-table tbody tr:not(.agent-table__group):hover { background: var(--surface-hover); }
+.agent-table tbody tr:focus-visible { outline: 2px solid rgba(var(--accent-rgb), 0.5); outline-offset: -2px; }
+.agent-table__row--on, .agent-table__row--on:hover { background: var(--accent-muted) !important; }
+.agent-table__row--on td:first-child { font-weight: 600; }
+.agent-table__group th { padding: 14px 14px 6px; font-weight: 600; color: var(--text-tertiary); }
+.agent-inspector {
+  padding: 20px;
+  border-left: 0.5px solid var(--border-default);
+  background: var(--surface-base);
+}
+.agent-inspector__kv {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 8px 12px;
+  margin-top: 18px;
+  font-size: 12px;
+}
+.agent-inspector__kv dt { color: var(--text-tertiary); }
+.agent-inspector__kv dd { margin: 0; color: var(--text-primary); }
+</style>
