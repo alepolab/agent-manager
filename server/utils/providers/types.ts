@@ -55,12 +55,15 @@ export interface ProviderAdapter {
    * Respond to a permission request (optional, only for providers that support it).
    * @param permissionId Permission request ID
    * @param decision Allow or deny
+   * @param fromPeerId The socket answering, when it is the chat itself; absent from REST
+   * @returns false when nothing was waiting under that id (expired or already answered)
    */
   respondToPermission?(
     permissionId: string,
     decision: 'allow' | 'deny',
-    updatedInput?: any
-  ): Promise<void>
+    updatedInput?: any,
+    fromPeerId?: string
+  ): Promise<boolean | void>
 
   /**
    * Load agent instructions from slug (optional).

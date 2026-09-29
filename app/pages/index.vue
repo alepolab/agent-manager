@@ -3,6 +3,7 @@ import { isLiveStatus, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/ty
 import { RUN_STATUS_COLOR } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 import { oversightFor } from '~~/shared/utils/oversight'
+import { gateAsk } from '~~/shared/utils/notifications'
 
 /**
  * Home answers one question: what is open, addressed to me, and how long has it
@@ -184,12 +185,8 @@ async function startFromTicket() {
  * to say what for is a queue you have to open every row of.
  */
 const ask = (r: WorkflowRun): string => {
-  if (r.status === 'awaiting_review') return `${r.question?.artifact ?? 'Its drafts'} is waiting on your decisions`
-  if (r.status === 'paused') {
-    if (r.question?.reason === 'budget') return 'Out of budget - approve more, or stop it'
-    if (r.question?.reason === 'rework') return 'Out of send-backs - grant another, or stop it'
-    return r.question?.text || 'Paused - open it to see why'
-  }
+  // Gates are worded in one place, so this queue and /notifications ask the same question.
+  if (isWaitingOnAPerson(r.status)) return gateAsk(r)
   if (r.status === 'failed') return r.error || `Failed at ${r.steps.find(s => s.status === 'failed')?.label ?? 'a step'}`
   if (r.status === 'interrupted') return 'Stopped when the server restarted'
   if (r.ci?.status === 'failing') {

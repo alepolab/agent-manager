@@ -261,6 +261,11 @@ export function useChatV2Handler() {
           permissions.removePending(message.requestId)
           if (sessionId) {
             sessionStore.removePermission(sessionId, message.requestId)
+            // Answered from /notifications rather than here: record the outcome
+            // on the prompt, or it keeps offering Allow and Deny for a settled question.
+            if (message.resolvedDecision) {
+              sessionStore.updateMessageDecision(sessionId, message.requestId, message.resolvedDecision)
+            }
           }
         }
         break

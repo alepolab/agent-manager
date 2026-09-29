@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import type { Peer } from 'crossws'
 import type { NormalizedMessage, ProviderFetchOptions } from '~/types'
 import type { ProviderAdapter, ProviderQueryOptions, ProviderInfo } from './types'
+import type { PendingPermissionSummary } from '~~/shared/types/notification'
 import { normalizeSDKMessage } from '../messageNormalizer'
 import { getClaudeDir, resolveClaudePath } from '../claudeDir'
 import { parseFrontmatter } from '../frontmatter'
@@ -60,14 +61,26 @@ interface QueryInstance {
 const activeQueries = new Map<string, QueryInstance>()
 
 // Store pending permission approvals (Promise resolvers/rejectors keyed by permissionId)
-interface PermissionResolver {
+interface PermissionResolver extends PendingPermissionSummary {
   resolve: (decision: { allow: boolean; message?: string; updatedInput?: any }) => void
   reject: (error: Error) => void
   peerId: string
+  ws: Peer
 }
 const pendingPermissions = new Map<string, PermissionResolver>()
 
 const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
+/**
+ * Every tool-permission prompt still waiting on a person, for /notifications.
+ *
+ * A prompt used to be visible only to the socket that raised it, so a chat tab
+ * left in the background sat on a question nobody could see until it timed out
+ * and denied itself. Listing them is what lets the inbox show and answer them.
+ */
+export function listPendingPermissions(): PendingPermissionSummary[] {
+  return [...pendingPermissions.values()].map(({ resolve: _r, reject: _j, peerId: _p, ws: _w, ...summary }) => summary)
+}
 
 /**
  * Cleanup function to abort queries and reject permissions for a specific peer
@@ -219,7 +232,20 @@ export const claudeProvider: ProviderAdapter = {
 
           try {
             const decision = await new Promise<{ allow: boolean; message?: string; updatedInput?: any }>((resolve, reject) => {
-              pendingPermissions.set(permissionId, { resolve, reject, peerId: ws.id })
+              const askedAt = Date.now()
+              pendingPermissions.set(permissionId, {
+                resolve, reject, peerId: ws.id, ws,
+                id: permissionId,
+                sessionId,
+                toolName,
+                toolInput: input,
+                workingDir: options.workingDir || process.cwd(),
+                // What the person asked for, so whoever answers from the inbox
+                // can tell a command they expected from one they did not.
+                prompt: prompt.length > 2000 ? `${prompt.slice(0, 2000)}…` : prompt,
+                askedAt,
+                expiresAt: askedAt + PERMISSION_TIMEOUT_MS,
+              })
 
               setTimeout(() => {
                 if (pendingPermissions.has(permissionId)) {
@@ -331,7 +357,7 @@ export const claudeProvider: ProviderAdapter = {
     }
   },
 
-  async respondToPermission(permissionId: string, decision: 'allow' | 'deny', updatedInput?: any): Promise<void> {
+  async respondToPermission(permissionId: string, decision: 'allow' | 'deny', updatedInput?: any, fromPeerId?: string): Promise<boolean> {
     const pending = pendingPermissions.get(permissionId)
     if (pending) {
       pendingPermissions.delete(permissionId)
@@ -341,9 +367,24 @@ export const claudeProvider: ProviderAdapter = {
         updatedInput,
       })
       console.log(`[ClaudeProvider] Permission ${permissionId} resolved: ${decision}`)
-    } else {
-      console.warn(`[ClaudeProvider] No pending permission found for ${permissionId}`)
+      // Answered somewhere other than the chat that asked (the inbox): tell that
+      // chat, or its banner stays up asking a question that is already settled.
+      if (fromPeerId !== pending.peerId) {
+        sendMessage(pending.ws, {
+          kind: 'permission_cancelled',
+          id: randomUUID(),
+          sessionId: pending.sessionId,
+          timestamp: new Date().toISOString(),
+          requestId: permissionId,
+          content: `${decision === 'allow' ? 'Allowed' : 'Denied'} from Notifications`,
+          resolvedDecision: decision,
+          provider: 'claude',
+        })
+      }
+      return true
     }
+    console.warn(`[ClaudeProvider] No pending permission found for ${permissionId}`)
+    return false
   },
 
   async interrupt(sessionId: string): Promise<boolean> {

@@ -1,3 +1,4 @@
+import type { Ref } from 'vue'
 import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 
 /** One run by id: the record, its live output, and the actions on it. Streams while it is alive. */
@@ -53,4 +54,57 @@ export function useRun(id: string) {
     rework: (stepId: string, note: string) => act('rework')({ stepId, note: note.trim() }),
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),
   }
+}
+
+/**
+ * The gate and run actions with the toasts that report them, shared by the run
+ * page and the /notifications detail pane, so both say the same thing about
+ * what a button just did.
+ */
+export function useRunActionToasts(r: {
+  run: Ref<WorkflowRun | null>
+  reject: (note: string) => Promise<unknown>
+  rework: (stepId: string, note: string) => Promise<unknown>
+  /** undefined when there is no run to send it to (useWorkflowRun). */
+  sendNote: (text: string) => Promise<{ delivered?: string[] } | undefined>
+  restart: (stepId: string, note?: string) => Promise<unknown>
+  stop: () => Promise<unknown>
+  continueRun: (note?: string) => Promise<unknown>
+  respond: (reply: string) => Promise<unknown>
+}) {
+  const toast = useToast()
+  async function onReject(note: string) {
+    try {
+      await r.reject(note)
+      // This toast used to say "Sent back", which described something the route
+      // does not do: reject stops the run. Sending back to a step is `onRework`.
+      toast.add({ title: 'Run rejected', description: 'The run is stopped and your reason is on the record.', color: 'success' })
+    } catch (e: any) { toast.add({ title: 'Could not reject it', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onRework(stepId: string, note: string) {
+    try {
+      await r.rework(stepId, note)
+      const label = r.run.value?.steps.find(s => s.stepId === stepId)?.label ?? 'that step'
+      toast.add({ title: `Sent back to ${label}`, description: 'It restarts with your instruction.', color: 'success' })
+    } catch (e: any) { toast.add({ title: 'Could not send it back', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onNote(text: string) {
+    try {
+      const res = await r.sendNote(text)
+      toast.add({ title: res?.delivered?.length ? `Sent to ${res.delivered.join(', ')}` : 'Note queued for the next step', color: 'success' })
+    } catch (e: any) { toast.add({ title: 'Could not send the note', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onRestart(stepId: string, note?: string) {
+    try { await r.restart(stepId, note) } catch (e: any) { toast.add({ title: 'Could not restart', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onStop() {
+    try { await r.stop() } catch (e: any) { toast.add({ title: 'Failed to stop', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onContinue(note?: string) {
+    try { await r.continueRun(note) } catch (e: any) { toast.add({ title: 'Failed to continue', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  async function onRespond(reply: string) {
+    try { await r.respond(reply) } catch (e: any) { toast.add({ title: 'Failed to reply', description: e.data?.message || e.message, color: 'error' }) }
+  }
+  return { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond }
 }

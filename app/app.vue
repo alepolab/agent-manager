@@ -72,7 +72,7 @@ onMounted(async () => {
   initialized.value = true
   if (isLogin.value) return
   if (!settings.value) void loadSettings()
-  void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers(), fetchRunsAwaiting()])
+  void Promise.all([fetchAgents(), fetchCommands(), fetchPlugins(), fetchSkills(), fetchWorkflows(), fetchServers(), fetchNotifications()])
 })
 
 // The shared lists live here, so pages that only read them don't refetch them too.
@@ -80,12 +80,15 @@ onMounted(async () => {
 const canRefresh = () => initialized.value && claudeDirExists.value && !isLogin.value
 useAutoRefresh(() => canRefresh() && Promise.all([
   fetchAgents({}, { silent: true }), fetchCommands({}, { silent: true }), fetchPlugins({ silent: true }),
-  fetchWorkflows({}, { silent: true }), fetchServers({ silent: true }), fetchRunsAwaiting(),
+  fetchWorkflows({}, { silent: true }), fetchServers({ silent: true }),
 ]))
+// Its own, faster poll: a /cli permission prompt denies itself after five
+// minutes, and the badge is how anyone away from that tab learns it exists.
+useAutoRefresh(() => canRefresh() && fetchNotifications(), { interval: 15_000 })
 useAutoRefresh(() => canRefresh() && fetchSkills({}, { silent: true }), { interval: 0 })
 
 const { settings, load: loadSettings } = useSettings()
-const { count: runsAwaiting, fetchAll: fetchRunsAwaiting } = useRunsAwaiting()
+const { count: notificationsWaiting, fetchAll: fetchNotifications } = useNotifications()
 const { me, signOut, can, role, viewingAs, viewAs } = useUser()
 // Unfinished pages stay reachable by URL but leave the sidebar unless labs is on.
 // Per-developer, set on /profile: wanting to look at Graph or Explore is a
@@ -103,6 +106,7 @@ const labs = computed(() => me.value?.profile?.labs === true)
 const NAV_GROUPS: { key: string, label: string, links: { label: string, icon: string, to: string }[] }[] = [
   { key: 'operate', label: 'Operate', links: [
     { label: 'Dashboard', icon: 'i-lucide-layout-dashboard', to: '/' },
+    { label: 'Notifications', icon: 'i-lucide-bell', to: '/notifications' },
     { label: 'Runs', icon: 'i-lucide-play-circle', to: '/runs' },
     { label: 'Watches', icon: 'i-lucide-radio', to: '/watches' },
     { label: 'Schedules', icon: 'i-lucide-calendar-clock', to: '/schedules' },
@@ -130,8 +134,8 @@ const NAV_GROUPS: { key: string, label: string, links: { label: string, icon: st
  * about the old sidebar: it showed a reviewer the whole engine.
  */
 const NAV_BY_ROLE: Record<string, string[]> = {
-  developer: ['/', '/runs', '/agents', '/skills', '/commands'],
-  qa: ['/', '/runs'],
+  developer: ['/', '/notifications', '/runs', '/agents', '/skills', '/commands'],
+  qa: ['/', '/notifications', '/runs'],
   // A manager's screen is the board, not the run list with its buttons removed.
   // The board is the top of the Dashboard, and for a manager the whole of it.
   manager: ['/', '/runs'],
@@ -192,7 +196,7 @@ function isActive(to: string) {
 function badgeFor(to: string) {
   // The one badge that means "waiting on you". Everything below it counts
   // inventory, which is why this one is coloured differently in the template.
-  if (to === '/runs') return runsAwaiting.value || null
+  if (to === '/notifications') return notificationsWaiting.value || null
   if (to === '/agents') return agents.value.length || null
   if (to === '/commands') return commands.value.length || null
   if (to === '/skills') return skills.value.length || null
@@ -317,8 +321,8 @@ function badgeFor(to: string) {
               <span
                 v-if="badgeFor(link.to)"
                 class="font-mono t-small tabular-nums transition-colors duration-150"
-                :style="{ color: link.to === '/runs' ? 'var(--warning)' : isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
-                :title="link.to === '/runs' ? 'Runs waiting on you' : undefined"
+                :style="{ color: link.to === '/notifications' ? 'var(--warning)' : isActive(link.to) ? 'var(--accent)' : 'var(--text-disabled)' }"
+                :title="link.to === '/notifications' ? 'Decisions waiting on you' : undefined"
               >
                 {{ badgeFor(link.to) }}
               </span>

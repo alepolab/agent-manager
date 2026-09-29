@@ -1,15 +1,12 @@
 <script setup lang="ts">
-import type { Edge } from '@vue-flow/core'
-import { VueFlow, Handle, Position, MarkerType, useVueFlow } from '@vue-flow/core'
-import { Controls } from '@vue-flow/controls'
-import { MiniMap } from '@vue-flow/minimap'
-import '@vue-flow/core/dist/style.css'
-import '@vue-flow/controls/dist/style.css'
-import '@vue-flow/minimap/dist/style.css'
 import type { Workflow, WorkflowStep, WorkflowParameter } from '~/types'
-import { getAgentColor } from '~/utils/colors'
-import { buildGraph, edgeKey, maxVisitsOf, DEFAULT_MAX_VISITS } from '~~/shared/utils/workflowGraph'
-import { isValidParameterName, RESERVED_PARAM_PROJECT_DIR } from '~~/shared/utils/workflowParameters'
+import { buildGraph } from '~~/shared/utils/workflowGraph'
+import { toStack, type StackBlock } from '~~/shared/utils/workflowStack'
+import { canSave } from '~~/shared/utils/stackEdit'
+import { triggerSummary, type Selection } from '~/utils/buildStack'
+import { producesError } from '~/utils/produces'
+import { summarise } from '~/utils/summarise'
+import { isLiveStatus } from '~~/shared/types/run'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,17 +22,19 @@ const { can } = useUser()
 /**
  * Hiding a button is a courtesy to the person; it is not a control on the edit.
  *
- * Every mutation on this canvas funnels through the five handlers below, and
- * three of them need no button at all: clicking an edge deletes it, dragging a
- * node moves it, dropping an agent adds a step. Guarding the markup alone would
- * leave all three reachable. The server refuses the Save that would persist any
- * of it, so the damage was never permanent - but a canvas that silently discards
- * your edits on reload is a worse answer than one that does not accept them.
+ * Every edit on this page goes through the stack editor and the drawers, and
+ * some need no obvious button: dragging a card moves a step. So the guard is
+ * `editable`, handed to each of them as read-only, not the markup alone. The
+ * server refuses the Save that would persist any of it, so the damage was never
+ * permanent - but a page that silently discards your edits on reload is a worse
+ * answer than one that does not accept them.
  */
 const readOnly = computed(() => !can('configure'))
-const { run, runs, logs, attach, refresh: refreshRun, start, continueRun, stop, restart, respond, sendNote, reject, rework } = useWorkflowRun(slug)
-// The PAGE fetches, not the panel: the tab's own label carries the count, so it
-// is needed before the panel mounts.
+const workflowRun = useWorkflowRun(slug)
+const { run, runs, logs, attach, show, refresh: refreshRun, start } = workflowRun
+const { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond } = useRunActionToasts(workflowRun)
+// The PAGE fetches, not the drawer: the trigger card's summary carries the count,
+// so it is needed before the drawer mounts.
 const { fetchAll: fetchSchedules, forWorkflow } = useSchedules()
 const scheduleRows = forWorkflow(slug)
 const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string> } | undefined>()
@@ -45,13 +44,14 @@ const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, 
 function applyQueryIntent() {
   const q = route.query
   if (typeof q.run === 'string') {
-    const found = runs.value.find(r => r.id === q.run)
-    if (found) run.value = found
+    attachRun(q.run)
+    mode.value = 'run'
   }
   if (typeof q.clone === 'string') {
     const src = runs.value.find(r => r.id === q.clone)
     runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun, parameters: src.parameters } : undefined
     showRunModal.value = true
+    mode.value = 'run'
   }
   if (q.start === '1') { runInitial.value = undefined; showRunModal.value = true }
   // `tab` is carried through rather than stripped with the intents: it is a
@@ -59,41 +59,37 @@ function applyQueryIntent() {
   // when the intent is consumed.
   if (q.run || q.clone || q.start) router.replace({ path: route.path, query: q.tab ? { tab: q.tab } : {} })
 }
-const showRunDetails = ref(false)
 function cloneRun() {
   if (!run.value) return
   runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun, parameters: run.value.parameters }
   showRunModal.value = true
 }
 
-// The panel and the canvas nodes both read per-step status off the server-owned run.
-// These mirror the shape the old client-side engine exposed, so the rest of the page
-// (node status badges, the complete banner, next-step labels) is unchanged.
-const execSteps = computed(() => run.value?.steps ?? [])
-const isRunning = computed(() => run.value?.status === 'running')
-const isPaused = computed(() => run.value?.status === 'paused')
-/** Stopped on a person who has entries to decide about. Like paused for every
- *  purpose on this page: the canvas may not start a second run, and the run
- *  controls stay up. */
-const isReviewing = computed(() => run.value?.status === 'awaiting_review')
-/** Admitted but waiting for a slot in its concurrency group. Distinct from
- *  running: the canvas is still editable (launchQueuedRun re-reads the
- *  definition, so an edit made while it waits is the one that runs), but
- *  nothing may start a second run of this workflow. */
-const isQueued = computed(() => run.value?.status === 'queued')
-const isComplete = computed(() => !!run.value && ['completed', 'failed', 'stopped', 'interrupted'].includes(run.value.status))
+// Per-run status is read off the server-owned runs. The shown run may be an
+// older one picked in Run mode while another is live, so what may start and
+// what may be edited is asked of EVERY run of this workflow, not the shown one.
+/** This workflow's runs, the shown one as its stream last had it (fresher than the list). */
+const allRuns = computed(() => (run.value ? [run.value, ...runs.value.filter(r => r.id !== run.value!.id)] : runs.value))
+/** A run running, or joining its children: both go through rehydrate while
+ *  live, so a restart rebuilds from the file and a save now would change what
+ *  it runs. Queued is not: launchQueuedRun re-reads the definition, so an edit
+ *  made while it waits is the one that runs. */
+const editLocked = computed(() => allRuns.value.some(r => r.status === 'running' || r.status === 'joining'))
+/** Any run of this workflow not yet over - paused, awaiting review and queued
+ *  included. The server refuses a second run then (findActiveRun). */
+const anyLive = computed(() => allRuns.value.some(r => isLiveStatus(r.status)))
 
-/** Clicking a previous (terminal) run in the panel's history list just shows it - no stream needed. */
+/** Show a run from `runs` (the newest, when Run mode opens with none). Picking
+ *  one other than the live run stops following the live stream, so the pick
+ *  stays shown; picking the live run follows it again. */
 function attachRun(id: string) {
-  const found = runs.value.find(r => r.id === id)
-  if (found) run.value = found
+  show(id)
 }
 
-/** Return from a run's detail to the history list. The panel renders the list
- *  as v-else of the detail, so without a way to clear the selection, opening
- *  any run hid every other run for the rest of the visit. */
-function closeRun() {
-  run.value = null
+/** Run mode shows the current run; with none open yet, the newest one. */
+function showRunMode() {
+  if (!run.value && runs.value[0]) attachRun(runs.value[0].id)
+  mode.value = 'run'
 }
 
 const workflow = ref<Workflow | null>(null)
@@ -103,8 +99,32 @@ const workflowSteps = ref<WorkflowStep[]>([])
 const workflowParameters = ref<WorkflowParameter[]>([])
 const name = ref('')
 const description = ref('')
-// Edges are deleted by a click and nodes moved by a drag; leaving discards both silently without this.
-const isDirty = computed(() => !!workflow.value && JSON.stringify({ n: name.value, d: description.value, s: workflowSteps.value }) !== JSON.stringify({ n: workflow.value.name, d: workflow.value.description, s: workflow.value.steps }))
+
+const blocks = ref<StackBlock[]>([])
+/** Why the stack can't show this workflow, when it can't: the page is then read-only. */
+const notDrawable = ref<string | null>(null)
+const selected = ref<Selection>(null)
+const drawerTab = ref<'triggers' | 'inputs' | 'settings'>('triggers')
+const mode = ref<'build' | 'run'>('build')
+/** Not while a run is working (running or joining): a restart rebuilds from
+ *  the file, so a save mid-run would change what the restart runs. Queued is
+ *  fine - it re-reads the definition when it launches. */
+const editable = computed(() => !readOnly.value && !notDrawable.value && !editLocked.value)
+/** Editable but for the run, so the page says why rather than going quiet. */
+const pausedByRun = computed(() => !readOnly.value && !notDrawable.value && editLocked.value)
+/** The stack as last loaded or saved. A move or a split changes the blocks
+ *  before it changes any step, so the steps alone cannot say it is unsaved. */
+const savedBlocks = ref('[]')
+
+/** Called from applyWorkflow after the steps are set. */
+function layOut() {
+  const r = toStack(workflowSteps.value)
+  if (r.ok) { blocks.value = r.blocks; notDrawable.value = null }
+  else { blocks.value = workflowSteps.value.map(s => ({ kind: 'step' as const, stepId: s.id })); notDrawable.value = r.reason }
+}
+
+// Steps are moved by a drag and deleted in two clicks; leaving discards both silently without this.
+const isDirty = computed(() => !!workflow.value && JSON.stringify({ n: name.value, d: description.value, s: workflowSteps.value, b: JSON.stringify(blocks.value) }) !== JSON.stringify({ n: workflow.value.name, d: workflow.value.description, s: workflow.value.steps, b: savedBlocks.value }))
 // useUnsavedChanges(anyDirty) is called below, once the refs it reads exist.
 /** The concurrency group this workflow's runs count against. '' is ungrouped,
  *  which means the default group - and is sent as '' rather than omitted,
@@ -116,19 +136,9 @@ const group = ref('')
  *  because the PUT is a shallow merge. */
 const notifyChannel = ref('')
 const groups = ref<{ id: string, name: string, maxConcurrent: number, inFlight: number, waiting: number, implicit: boolean }[]>([])
-/** What the picked group means right now, so the cap is not a number with no
- *  context. Names the default group's cap for an ungrouped workflow, because
- *  ungrouped is capped too - it is not "unlimited". */
-const groupHint = computed(() => {
-  const g = groups.value.find(x => x.id === (group.value || 'default'))
-  if (!g) return 'Runs of this workflow share slots with the default group'
-  return `${g.name}: ${g.maxConcurrent} run${g.maxConcurrent === 1 ? '' : 's'} at once`
-    + ` (${g.inFlight} running, ${g.waiting} waiting). Automated starts over the cap queue; a run started here does not wait, but does occupy a slot.`
-})
 const saving = ref(false)
 const lastModified = ref<number | null>(null)
 const showRunModal = ref(false)
-const showParameters = ref(false)
 /**
  * Seeded once at setup, before any await, the way explore.vue does it - and
  * never written back on click. A query param the page both reads and writes
@@ -136,16 +146,16 @@ const showParameters = ref(false)
  * lose an intent or resurrect a consumed one. A link sets the tab; a click
  * does not need the URL to know.
  */
-const activeTab = ref<'canvas' | 'schedule'>(route.query.tab === 'schedule' ? 'schedule' : 'canvas')
+if (route.query.tab === 'schedule' || route.query.tab === 'inputs') {
+  selected.value = { kind: 'trigger' }
+  drawerTab.value = route.query.tab === 'inputs' ? 'inputs' : 'triggers'
+}
 /** The declaration as the server has it. The Inputs editor mutates
  *  workflowParameters; a schedule is validated against THIS, so the two are
  *  tracked separately and the difference is what warns the Schedule tab. */
 const savedParameters = ref<WorkflowParameter[]>([])
-const showMobileAgentPicker = ref(false)
-const paletteSearch = ref('')
 const editingName = ref(false)
 const editingDescription = ref(false)
-const settingsStepId = ref<string | null>(null)
 useHead({ title: computed(() => `${name.value || 'Workflow'} | Agent Manager`) })
 
 function applyWorkflow(data: Workflow) {
@@ -158,6 +168,11 @@ function applyWorkflow(data: Workflow) {
   description.value = data.description
   group.value = data.group ?? ''
   notifyChannel.value = data.notifyChannel ?? ''
+  layOut()
+  savedBlocks.value = JSON.stringify(blocks.value)
+  // A reload can drop the step the drawer was showing.
+  const sel = selected.value
+  if (sel?.kind === 'step' && !data.steps.some(s => s.id === sel.stepId)) selected.value = null
 }
 
 // Load workflow
@@ -172,6 +187,8 @@ onMounted(async () => {
   // Attach to whatever the server is already running for this workflow, if anything -
   // a run outlives this tab, so a reload must not lose it. Then honour any
   // one-shot intent in the URL, which may point at a finished run instead.
+  // The page always opens in Build mode; a live run is one click away on the
+  // Run tab. Only ?run= / ?clone= and starting a run switch to it.
   await attach()
   applyQueryIntent()
   // Fire-and-forget: the tab label's count can arrive a moment later, and
@@ -182,7 +199,7 @@ onMounted(async () => {
 const parametersDirty = computed(() =>
   JSON.stringify(workflowParameters.value.filter(p => p.name.trim())) !== JSON.stringify(savedParameters.value))
 
-/** Everything unsaved, not just the canvas.
+/** Everything unsaved, not just the stack.
  *
  *  isDirty covers name, description and steps. It was also what guarded the
  *  page against being left, so editing only an input, the concurrency group or
@@ -216,306 +233,41 @@ function keepMine() {
 useAutoRefresh(() => Promise.all([refreshRun(), fetchSchedules({ silent: true })]))
 
 const graph = computed(() => buildGraph(workflowSteps.value))
-const stepById = (id: string) => workflowSteps.value.find(s => s.id === id)
-const agentBySlug = (agentSlug?: string) => agents.value.find(a => a.slug === agentSlug)
-const labelOf = (id: string) => stepById(id)?.label || 'Step'
 
-/** Distinct monitors in use, each rendered once with a dashed link to every step it watches. */
-const monitorGroups = computed(() => {
-  const groups = new Map<string, string[]>()
-  for (const step of workflowSteps.value) {
-    if (!step.monitorSlug) continue
-    const watched = groups.get(step.monitorSlug) ?? []
-    watched.push(step.id)
-    groups.set(step.monitorSlug, watched)
-  }
-  return groups
+const agentChoices = computed(() => agents.value.map(a => ({ slug: a.slug, name: a.frontmatter.name || a.slug, description: summarise(a.frontmatter.description) })))
+/** The inputs a dispatch step may fan out over: declared ones, named. */
+const parameterNames = computed(() => workflowParameters.value.filter(p => p.name.trim()).map(p => p.name))
+
+const { watches, fetchAll: fetchWatches } = useWatches()
+onMounted(() => { void fetchWatches().catch(() => {}) })
+const trigger = computed(() => triggerSummary(scheduleRows.value, watches.value.filter(w => w.workflowSlug === slug)))
+
+const selectedStep = computed(() => {
+  const s = selected.value
+  return s?.kind === 'step' ? workflowSteps.value.find(x => x.id === s.stepId) : undefined
 })
-
-// Unpositioned steps wrap into rows of five: a 13-step runbook in one row is 2,860px wide and unreadable once fitted.
-const defaultPosition = (i: number) => ({ x: (i % 5) * 220, y: 100 + Math.floor(i / 5) * 150 })
-
-// Fit once, when both the pane and the nodes are measured. `fit-view-on-init`
-// consumes itself against a pane that is still hidden behind app.vue's v-show
-// (the workflow often loads before /api/config does) and never retries.
-const { fitView, onPaneReady, onNodesInitialized } = useVueFlow()
-let paneReady = false
-let fitted = false
-// Only once the pane is measured: fitView on an unmeasured pane is a no-op that logs a warning.
-const fitOnce = async () => { if (paneReady && !fitted && await fitView()) fitted = true }
-onPaneReady(() => { paneReady = true; void fitOnce() })
-onNodesInitialized(fitOnce)
-
-const nodes = computed(() => {
-  const stepNodes = workflowSteps.value.map((step, i) => {
-    const agent = agentBySlug(step.agentSlug)
-    const exec = execSteps.value.find(e => e.stepId === step.id)
-    return {
-      id: step.id,
-      type: 'workflow',
-      position: step.position ?? defaultPosition(i),
-      data: {
-        label: step.label,
-        agentSlug: step.agentSlug,
-        agentColor: agent?.frontmatter.color,
-        agentModel: agent?.frontmatter.model,
-        monitorLabel: agentBySlug(step.monitorSlug)?.frontmatter.name ?? step.monitorSlug,
-        approval: step.approval === true,
-        runWhen: step.runWhen?.artifact,
-        triggerSource: step.triggerWorkflow?.source
-          ?? (step.triggerWorkflow?.fromParameter ? `parameter ${step.triggerWorkflow.fromParameter}` : undefined),
-        triggerJoin: step.triggerWorkflow?.join === true,
-        notifyChannel: step.notify?.channel,
-        produces: step.produces,
-        contextMode: step.contextMode,
-        testsUnlocked: step.testsUnlocked === true,
-        maxVisits: step.maxVisits,
-        status: exec?.status,
-        visits: exec?.visits,
-        monitorVerdict: exec?.monitorVerdict,
-      },
-    }
-  })
-
-  const monitorNodes = [...monitorGroups.value.entries()].map(([monitorSlug, watched]) => {
-    const positions = watched.map((id) => {
-      const idx = workflowSteps.value.findIndex(s => s.id === id)
-      return stepById(id)?.position ?? defaultPosition(idx)
-    })
-    const avgX = positions.reduce((sum, p) => sum + p.x, 0) / (positions.length || 1)
-    const maxY = Math.max(...positions.map(p => p.y), 100)
-    return {
-      id: `monitor:${monitorSlug}`,
-      type: 'monitor',
-      draggable: false,
-      selectable: false,
-      position: { x: avgX, y: maxY + 200 },
-      data: {
-        label: agentBySlug(monitorSlug)?.frontmatter.name ?? monitorSlug,
-        color: getAgentColor(agentBySlug(monitorSlug)?.frontmatter.color),
-        watching: watched.length,
-      },
-    }
-  })
-
-  return [...stepNodes, ...monitorNodes]
-})
-
-const edges = computed<Edge[]>(() => {
-  const g = graph.value
-  const flowEdges = workflowSteps.value.flatMap(step =>
-    (g.succ[step.id] ?? []).map((target) => {
-      const isBack = g.backEdges.has(edgeKey(step.id, target))
-      return {
-        id: `e-${step.id}-${target}`,
-        source: step.id,
-        target,
-        sourceHandle: isBack ? 'loop' : 'out',
-        targetHandle: 'in',
-        type: isBack ? 'smoothstep' : 'default',
-        animated: !isBack,
-        label: isBack ? `loop ≤${maxVisitsOf(stepById(target) ?? { id: target })}` : undefined,
-        labelStyle: { fill: 'var(--warning, #e5a93e)', fontSize: '10px' },
-        style: isBack
-          ? { stroke: 'var(--warning, #e5a93e)', strokeWidth: 1.5 }
-          : { strokeDasharray: '5 5', stroke: 'var(--accent)' },
-        markerEnd: { type: MarkerType.ArrowClosed, color: isBack ? 'var(--warning, #e5a93e)' : 'var(--accent)' },
-      }
-    }),
-  )
-
-  const monitorEdges = [...monitorGroups.value.entries()].flatMap(([monitorSlug, watched]) =>
-    watched.map(stepId => ({
-      id: `m-${monitorSlug}-${stepId}`,
-      source: `monitor:${monitorSlug}`,
-      target: stepId,
-      selectable: false,
-      style: { strokeDasharray: '2 4', stroke: 'var(--text-disabled)', strokeWidth: 1 },
-    })),
-  )
-
-  // The fix-it loop is not a graph edge, so nothing above draws it: an agent
-  // emits PIPELINE-REWORK at run time and the runner restarts the target, which
-  // means `next` holds nothing and buildGraph has nothing to classify as a back
-  // edge. Making it a real edge is not the fix - markCompleted arms a back-edge
-  // target on EVERY completion, so the run would loop on success too, until
-  // maxVisits ran out. Drawn here the way monitorEdges are instead: derived,
-  // never stored, and inert to the editing handlers.
-  //
-  // Matched on agentSlug rather than the label "Implement Fix" because labels
-  // are editable on this canvas, and a renamed step would silently lose the
-  // edge that explains the whole mechanism.
-  const reworkSenders = new Set(['sdlc-verifier', 'sdlc-security-review', 'sdlc-pr-follow-up'])
-  const fixStep = workflowSteps.value.find(s => s.agentSlug === 'sdlc-fix-implementer')
-  const reworkEdges = fixStep
-    ? workflowSteps.value
-        .filter(s => reworkSenders.has(s.agentSlug) && s.id !== fixStep.id)
-        .map(s => ({
-          id: `r-${s.id}-${fixStep.id}`,
-          source: s.id,
-          target: fixStep.id,
-          sourceHandle: 'loop',
-          targetHandle: 'in',
-          type: 'smoothstep',
-          selectable: false,
-          // The bound is REWORK_LIMIT in server/utils/workflowRunner.ts, which a
-          // browser bundle cannot import. Duplicated here knowingly; if it moves,
-          // this label moves with it.
-          label: 'send-back ≤2 per trigger',
-          labelStyle: { fill: 'var(--warning, #e5a93e)', fontSize: '10px' },
-          style: { stroke: 'var(--warning, #e5a93e)', strokeWidth: 1.5, strokeDasharray: '4 3' },
-          markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--warning, #e5a93e)' },
-        }))
-    : []
-
-  return [...flowEdges, ...monitorEdges, ...reworkEdges]
-})
-
-/**
- * Freeze the implicit array-order chain into explicit `next` arrays. Called before the first
- * hand-drawn change, so legacy workflows keep their shape instead of losing every link.
- */
-function materializeEdges() {
-  if (workflowSteps.value.some(s => s.next !== undefined)) return
-  const g = buildGraph(workflowSteps.value)
-  workflowSteps.value = workflowSteps.value.map(s => ({ ...s, next: [...(g.succ[s.id] ?? [])] }))
+function patchSelected(patch: Partial<WorkflowStep>) {
+  const id = selectedStep.value?.id
+  if (!id) return
+  workflowSteps.value = workflowSteps.value.map(s => (s.id === id ? { ...s, ...patch } : s))
+}
+function openInputs() {
+  selected.value = { kind: 'trigger' }
+  drawerTab.value = 'inputs'
+  mode.value = 'build'
 }
 
-function onConnect({ source, target }: { source: string, target: string }) {
-  if (readOnly.value || isRunning.value || !source || !target || source.startsWith('monitor:') || target.startsWith('monitor:')) return
-  materializeEdges()
-  workflowSteps.value = workflowSteps.value.map((s) => {
-    if (s.id !== source) return s
-    const next = s.next ?? []
-    return next.includes(target) ? s : { ...s, next: [...next, target] }
-  })
-}
-
-function onEdgeClick({ edge }: { edge: { id: string, source: string, target: string } }) {
-  // 'r-' is a send-back edge: derived, not stored in `next`, so deleting it
-  // would filter a target that was never there and leave the user thinking they
-  // had removed something.
-  if (readOnly.value || isRunning.value || edge.id.startsWith('m-') || edge.id.startsWith('r-')) return
-  materializeEdges()
-  workflowSteps.value = workflowSteps.value.map(s =>
-    s.id === edge.source ? { ...s, next: (s.next ?? []).filter(id => id !== edge.target) } : s,
-  )
-}
-
-function onNodeDragStop({ node }: { node: { id: string, position: { x: number, y: number } } }) {
-  if (readOnly.value || node.id.startsWith('monitor:')) return
-  workflowSteps.value = workflowSteps.value.map(s =>
-    s.id === node.id ? { ...s, position: { x: Math.round(node.position.x), y: Math.round(node.position.y) } } : s,
-  )
-}
-
-function addStep(agentSlug: string, position?: { x: number, y: number }) {
-  const agent = agentBySlug(agentSlug)
-  if (!agent || readOnly.value || isRunning.value) return
-  // Once edges are explicit, a new node starts unconnected rather than silently
-  // inheriting the array-order fallback.
-  const explicit = workflowSteps.value.some(s => s.next !== undefined)
-  workflowSteps.value = [...workflowSteps.value, {
-    id: crypto.randomUUID(),
-    agentSlug,
-    label: agent.frontmatter.name,
-    ...(explicit ? { next: [] } : {}),
-    ...(position ? { position } : {}),
-  }]
-  showMobileAgentPicker.value = false
-}
-
-function onDrop(event: DragEvent) {
-  const agentSlug = event.dataTransfer?.getData('agentSlug')
-  if (!agentSlug) return
-  addStep(agentSlug)
-}
-
-function onDragOver(event: DragEvent) { event.preventDefault() }
-
-function removeStep(stepId: string) {
-  if (readOnly.value || isRunning.value) return
-  workflowSteps.value = workflowSteps.value
-    .filter(s => s.id !== stepId)
-    .map(s => (s.next ? { ...s, next: s.next.filter(id => id !== stepId) } : s))
-}
-
-// Per-step settings (monitor agent + loop cap)
-const settingsStep = computed(() => (settingsStepId.value ? stepById(settingsStepId.value) : undefined))
-// Agent descriptions run to whole paragraphs here - clip them or the picker is unreadable.
-const summarise = (text?: string) => {
-  const oneLine = (text ?? '').replace(/\s+/g, ' ').trim()
-  return oneLine.length > 90 ? `${oneLine.slice(0, 90)}…` : oneLine
-}
-const agentOptions = computed(() => agents.value.map(a => ({ value: a.slug, label: a.frontmatter.name || a.slug })))
-const settingsAgent = computed({
-  get: () => settingsStep.value?.agentSlug,
-  set: (value?: string) => { if (settingsStepId.value && value) patchStep(settingsStepId.value, { agentSlug: value }) },
+/** Below lg the drawer is a bottom sheet rather than a column. Read from the
+ *  viewport, not rendered twice, so one drawer instance holds its own state. */
+const wide = ref(true)
+onMounted(() => {
+  const mq = window.matchMedia('(min-width: 64rem)')
+  wide.value = mq.matches
+  const onChange = (e: MediaQueryListEvent) => { wide.value = e.matches }
+  mq.addEventListener('change', onChange)
+  onScopeDispose(() => mq.removeEventListener('change', onChange))
 })
-const monitorOptions = computed(() => [
-  { value: undefined, label: 'No monitor', description: 'Run this step unsupervised' },
-  ...agents.value.map(a => ({ value: a.slug, label: a.frontmatter.name, description: summarise(a.frontmatter.description) })),
-])
-
-const contextModeOptions = [
-  { value: 'predecessors', label: 'Only the steps just before it', description: 'The default: immediate forward predecessors' },
-  { value: 'ancestors', label: 'Every step upstream', description: 'The full ancestry, budgeted and truncation-marked' },
-]
-
-function patchStep(stepId: string, changes: Partial<WorkflowStep>) {
-  workflowSteps.value = workflowSteps.value.map(s => (s.id === stepId ? { ...s, ...changes } : s))
-}
-
-const settingsMonitor = computed({
-  get: () => settingsStep.value?.monitorSlug,
-  set: (value?: string) => settingsStepId.value && patchStep(settingsStepId.value, { monitorSlug: value || undefined }),
-})
-const settingsRunWhen = computed({
-  get: () => settingsStep.value?.runWhen?.artifact ?? '',
-  set: (value: string) => {
-    const artifact = value.trim()
-    if (settingsStepId.value) patchStep(settingsStepId.value, { runWhen: artifact ? { artifact } : undefined })
-  },
-})
-/** The files this step must leave behind, edited one per line - the same shape
- *  as the routing table below, and for the same reason: a JSON array in a text
- *  box is a worse thing to type than one entry per line. */
-const settingsProduces = computed({
-  get: () => (settingsStep.value?.produces ?? []).join('\n'),
-  set: (value: string) => {
-    const names = value.split('\n').map(n => n.trim()).filter(Boolean)
-    if (settingsStepId.value) patchStep(settingsStepId.value, { produces: names.length ? names : undefined })
-  },
-})
-/** `predecessors` is never persisted: computeInput only tests for 'ancestors',
- *  so writing the default would be a key that says nothing. */
-const settingsContextMode = computed({
-  get: () => settingsStep.value?.contextMode ?? 'predecessors',
-  set: (value: string) => {
-    if (settingsStepId.value) patchStep(settingsStepId.value, { contextMode: value === 'ancestors' ? 'ancestors' : undefined })
-  },
-})
-/** The channel a notify step posts to. Emptying it removes the whole notify
- *  block, for the same reason emptying a dispatch source removes that one: a
- *  message with no destination is config that can never fire. */
-const settingsNotifyChannel = computed({
-  get: () => settingsStep.value?.notify?.channel ?? '',
-  set: (value: string) => {
-    const channel = value.trim()
-    if (!settingsStepId.value) return
-    const current = settingsStep.value?.notify
-    patchStep(settingsStepId.value, { notify: channel ? { ...current, channel } : undefined })
-  },
-})
-const settingsNotifyMessage = computed({
-  get: () => settingsStep.value?.notify?.message ?? '',
-  set: (value: string) => {
-    const message = value.trim()
-    const current = settingsStep.value?.notify
-    if (!settingsStepId.value || !current) return
-    patchStep(settingsStepId.value, { notify: { ...current, message: message || undefined } })
-  },
-})
+const sheetTitle = computed(() => selected.value?.kind === 'trigger' ? 'Trigger' : (selectedStep.value?.label || 'Step'))
 
 /** The channels this instance has configured, for the notify step's picker. A
  *  dropdown rather than a text box on purpose: a mistyped channel name is a
@@ -529,172 +281,23 @@ onMounted(async () => {
   }
 })
 
-/** The artifact a dispatch step fans out over. Emptying it removes the whole
- *  triggerWorkflow block - a step with a routing table and no source to read it
- *  against is config that can never fire - unless the step fans out over a run
- *  parameter instead, which is the other half of the same field.
- *
- *  Setting one source clears the other rather than leaving both: naming both is
- *  a step the runner refuses, and a step cannot be saved into a state whose
- *  only outcome is a failure at run time. */
-const settingsTriggerSource = computed({
-  get: () => settingsStep.value?.triggerWorkflow?.source ?? '',
-  set: (value: string) => {
-    const source = value.trim()
-    if (!settingsStepId.value) return
-    const current = settingsStep.value?.triggerWorkflow
-    const rest = { ...current, fromParameter: undefined }
-    patchStep(settingsStepId.value, {
-      triggerWorkflow: source
-        ? { ...rest, source }
-        : (current?.fromParameter ? { ...current, source: undefined } : undefined),
-    })
-  },
-})
-/** The run parameter a dispatch step fans out over, one item per line. A picker
- *  rather than a text box, for the reason the notify channel is one: a mistyped
- *  name is a fan-out that silently dispatches nothing. */
-const settingsTriggerFromParameter = computed({
-  get: () => settingsStep.value?.triggerWorkflow?.fromParameter ?? '',
-  set: (value: string) => {
-    const fromParameter = value.trim()
-    if (!settingsStepId.value) return
-    const current = settingsStep.value?.triggerWorkflow
-    const rest = { ...current, source: undefined }
-    patchStep(settingsStepId.value, {
-      triggerWorkflow: fromParameter
-        ? { ...rest, fromParameter }
-        : (current?.source ? { ...current, fromParameter: undefined } : undefined),
-    })
-  },
-})
-/** The input each child is given its own item as. Required with a parameter
- *  source, and checked against every target workflow before anything starts. */
-const settingsTriggerItemParameter = computed({
-  get: () => settingsStep.value?.triggerWorkflow?.itemParameter ?? '',
-  set: (value: string) => {
-    const itemParameter = value.trim()
-    const current = settingsStep.value?.triggerWorkflow
-    if (!settingsStepId.value || !current) return
-    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, itemParameter: itemParameter || undefined } })
-  },
-})
-/** Whether the run waits for its children before going on. */
-const settingsTriggerJoin = computed({
-  get: () => settingsStep.value?.triggerWorkflow?.join === true,
-  set: (value: boolean) => {
-    const current = settingsStep.value?.triggerWorkflow
-    if (!settingsStepId.value || !current) return
-    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, join: value || undefined } })
-  },
-})
-const settingsTriggerSlug = computed({
-  get: () => settingsStep.value?.triggerWorkflow?.slug ?? '',
-  set: (value: string) => {
-    const slug = value.trim()
-    const current = settingsStep.value?.triggerWorkflow
-    if (!settingsStepId.value || !current) return
-    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, slug: slug || undefined } })
-  },
-})
-const settingsTriggerRouteBy = computed({
-  get: () => settingsStep.value?.triggerWorkflow?.routeBy ?? '',
-  set: (value: string) => {
-    const routeBy = value.trim()
-    const current = settingsStep.value?.triggerWorkflow
-    if (!settingsStepId.value || !current) return
-    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, routeBy: routeBy || undefined } })
-  },
-})
-/** The routing table, edited as `value: workflow-slug` lines. A JSON object in
- *  a text box is a worse thing to type than one pair per line, and this is the
- *  only place a person writes it. */
-const settingsTriggerRoutes = computed({
-  get: () => Object.entries(settingsStep.value?.triggerWorkflow?.routes ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
-  set: (value: string) => {
-    const current = settingsStep.value?.triggerWorkflow
-    if (!settingsStepId.value || !current) return
-    const routes: Record<string, string> = {}
-    for (const line of value.split('\n')) {
-      const at = line.indexOf(':')
-      if (at < 1) continue
-      const key = line.slice(0, at).trim()
-      const slug = line.slice(at + 1).trim()
-      if (key && slug) routes[key] = slug
-    }
-    patchStep(settingsStepId.value, { triggerWorkflow: { ...current, routes: Object.keys(routes).length ? routes : undefined } })
-  },
-})
-const settingsMaxVisits = computed({
-  get: () => settingsStep.value?.maxVisits ?? DEFAULT_MAX_VISITS,
-  set: (value: number) => {
-    const clamped = Math.max(1, Math.min(20, Math.floor(Number(value) || DEFAULT_MAX_VISITS)))
-    if (settingsStepId.value) patchStep(settingsStepId.value, { maxVisits: clamped })
-  },
-})
-
-function addParameter() {
-  workflowParameters.value.push({ name: '' })
-}
-
-function removeParameter(index: number) {
-  workflowParameters.value.splice(index, 1)
-}
-
-/** A name that is not an identifier reads as two tokens in a step header and
- *  cannot be referred to, so it is flagged here rather than silently dropped
- *  on save. */
-function parameterNameError(index: number): string | null {
-  const param = workflowParameters.value[index]
-  if (!param) return null
-  const name = param.name.trim()
-  if (!name) return null
-  if (!isValidParameterName(name)) return 'Letters, digits and _ only, starting with a lowercase letter'
-  if (workflowParameters.value.some((other, i) => i !== index && other.name.trim() === name)) return 'Declared twice'
-  return null
-}
-
-/**
- * A produced filename the runner can never satisfy, caught while a person is
- * looking at it. `resolveRunArtifact` returns null for anything that resolves
- * outside the run's artifacts directory, and the output check turns that null
- * into "<name> was not written" - so a typo'd `../report.md` is an
- * unsatisfiable requirement whose only symptom is a step sent back, after it
- * has already run and spent its budget.
- */
-function producesError(names: string[] | undefined): string | null {
-  for (const name of names ?? []) {
-    if (/^[/\\]/.test(name) || /^[A-Za-z]:/.test(name) || name.includes('\\')) return `"${name}" must be a path inside the run's artifacts directory`
-    if (name.split('/').includes('..')) return `"${name}" climbs out of the run's artifacts directory`
-  }
-  return null
-}
-const settingsProducesError = computed(() => producesError(settingsStep.value?.produces))
-/** The same check across every step, because save() is the last place a name
- *  nobody can satisfy can still be stopped. */
-const badProducesStep = computed(() => {
-  for (const step of workflowSteps.value) {
-    const error = producesError(step.produces)
-    if (error) return { label: step.label, error }
-  }
-  return null
-})
-
 async function save() {
+  if (!editable.value) return
   if (!workflow.value) return
+  const r = canSave(blocks.value, workflowSteps.value)
+  if (!r.ok) { toast.add({ title: 'This can’t be saved yet', description: r.reason, color: 'warning' }); return }
   // Refused rather than saved-and-warned: the runner reads this list as files it
   // must find, so a name that can never resolve is a step that always fails, and
   // the first sign of it is a run sent back after it has already spent budget.
-  if (badProducesStep.value) {
-    toast.add({ title: `"${badProducesStep.value.label}" has a file nothing can write`, description: badProducesStep.value.error, color: 'error' })
-    return
-  }
+  const bad = r.steps.find(s => producesError(s.produces ?? []))
+  if (bad) { toast.add({ title: `Fix the files list on ${bad.label}`, description: producesError(bad.produces ?? [])!, color: 'warning' }); return }
+  workflowSteps.value = r.steps
   saving.value = true
   try {
     const saved = await update(slug, {
       name: name.value,
       description: description.value,
-      steps: workflowSteps.value,
+      steps: r.steps,
       parameters: workflowParameters.value.filter(p => p.name.trim()),
       group: group.value,
       notifyChannel: notifyChannel.value,
@@ -705,6 +308,9 @@ async function save() {
     // The baseline a schedule is checked against moves with the save, which is
     // what clears the Schedule tab's unsaved-inputs warning.
     savedParameters.value = workflowParameters.value.filter(p => p.name.trim())
+    // The layout follows the file: what reloads is what is shown now.
+    layOut()
+    savedBlocks.value = JSON.stringify(blocks.value)
     toast.add({ title: 'Workflow saved', color: 'success' })
   } catch (e: any) {
     if (e?.statusCode === 409 || e?.data?.statusCode === 409) toast.add({ title: 'Changed by someone else', description: (e.data?.message || 'Reload to see the latest version before saving again.') + (e.data?.data?.lastModified ? ` Last saved ${new Date(e.data.data.lastModified).toLocaleTimeString()}.` : ''), color: 'warning' })
@@ -736,6 +342,7 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false, pa
   showRunModal.value = false
   if (!workflow.value) return
   await start(prompt, projectDir, autoRun, parameters)
+  mode.value = 'run'
   try {
     await update(slug, { lastRunAt: new Date().toISOString() } as any)
   } catch {
@@ -743,26 +350,17 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false, pa
   }
 }
 
-const canRun = computed(() => workflowSteps.value.length > 0 && !isRunning.value && !isPaused.value && !isReviewing.value && !isQueued.value)
-const filteredAgents = computed(() => {
-  if (!paletteSearch.value) return agents.value
-  const q = paletteSearch.value.toLowerCase()
-  return agents.value.filter(a => a.frontmatter.name.toLowerCase().includes(q))
-})
+const canRun = computed(() => workflowSteps.value.length > 0 && !anyLive.value)
 
 const parallelHint = computed(() => graph.value.entries.length > 1
   || workflowSteps.value.some(s => (graph.value.succ[s.id] ?? []).length > 1))
-
-// Track the run's own end, not "every node has a terminal status" - with a cycle every node
-// can read completed while the loop still has laps left, and between waves while it is paused.
-const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.value && !isRunning.value)
 </script>
 
 <template>
-  <div class="flex flex-col h-full">
+  <div class="flex flex-col h-full min-w-0">
     <!-- Top bar -->
     <div
-      class="h-14 flex items-center gap-3 px-4 shrink-0 sticky top-0 z-10"
+      class="min-h-14 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 shrink-0 sticky top-0 z-10"
       style="border-bottom: 1px solid var(--border-subtle); background: var(--surface-base);"
     >
       <NuxtLink to="/workflows" class="p-1.5 rounded-lg hover-bg focus-ring" aria-label="Back to workflows">
@@ -770,108 +368,104 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       </NuxtLink>
 
       <!-- Editable name -->
-      <div class="flex-1 min-w-0">
+      <div class="flex-1 min-w-0 basis-32">
         <input
-          v-if="editingName"
+          v-if="editingName && editable"
           v-model="name"
           class="field-input t-body font-medium w-full max-w-xs"
           @blur="editingName = false"
           @keydown.enter="editingName = false"
         />
         <button
-          v-else
-          class="t-body font-medium truncate text-left"
+          v-else-if="editable"
+          class="t-body font-medium truncate text-left max-w-full"
           style="color: var(--text-primary);"
           @click="editingName = true"
         >
           {{ name || 'Untitled Workflow' }}
         </button>
+        <span v-else data-testid="workflow-name" class="block t-body font-medium truncate" style="color: var(--text-primary);">
+          {{ name || 'Untitled Workflow' }}
+        </span>
       </div>
 
-      <!-- Mobile: Add Agent button. `configure` like Save, because a step added
-           by someone who cannot save is a step that quietly disappears on
-           reload — a worse outcome than not offering it. -->
-      <UButton
-        v-if="can('configure')"
-        class="md:hidden"
-        label="Add Agent"
-        icon="i-lucide-plus"
-        size="xs"
-        variant="soft"
-        @click="() => { showMobileAgentPicker = true }"
-      />
+      <!-- Build | Run: the definition, or what a run of it did. -->
+      <div class="flex items-center gap-2">
+        <div role="tablist" aria-label="Builder mode" class="flex rounded-lg p-0.5" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+          <button
+            role="tab"
+            data-testid="mode-build"
+            :aria-selected="mode === 'build'"
+            class="t-small px-2.5 py-1 rounded-md focus-ring"
+            :style="mode === 'build' ? 'background: var(--surface-base); color: var(--text-primary);' : 'color: var(--text-tertiary);'"
+            @click="mode = 'build'"
+          >
+            Build
+          </button>
+          <button
+            role="tab"
+            data-testid="mode-run"
+            :aria-selected="mode === 'run'"
+            :disabled="!runs.length"
+            class="t-small px-2.5 py-1 rounded-md focus-ring font-mono disabled:opacity-50"
+            :style="mode === 'run' ? 'background: var(--surface-base); color: var(--text-primary);' : 'color: var(--text-tertiary);'"
+            @click="showRunMode"
+          >
+            {{ run ? `Run #${run.id.slice(0, 6)}` : 'Run' }}
+          </button>
+        </div>
+        <select
+          v-if="mode === 'run' && runs.length > 1"
+          :value="run?.id ?? ''"
+          class="field-input t-small max-w-[11rem]"
+          aria-label="Recent runs"
+          @change="attachRun(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-if="!run" value="" disabled>Choose a run…</option>
+          <option v-for="r in runs" :key="r.id" :value="r.id">
+            #{{ r.id.slice(0, 6) }} · {{ r.status }} · {{ r.startedAt ? new Date(r.startedAt).toLocaleString() : 'not started' }}
+          </option>
+        </select>
+      </div>
 
       <!-- Each of these maps to a route that already refuses the wrong role:
-           Stop needs `runEngine`, Run needs `startRun`, Save and Delete need
-           `configure`. They rendered for everyone regardless, so the only way to
-           learn you could not use one was to press it and read the 403. -->
-      <UButton
-        v-if="(isRunning || isPaused || isReviewing || isQueued) && can('runEngine')"
-        label="Stop"
-        icon="i-lucide-square"
-        size="sm"
-        color="error"
-        variant="soft"
-        @click="stop"
-      />
-      <UButton
-        v-else-if="!isRunning && !isPaused && can('startRun')"
-        label="Run"
-        icon="i-lucide-play"
-        size="sm"
-        :disabled="!canRun"
-        @click="() => { showRunModal = true }"
-      />
-      <UButton
-        v-if="can('configure')"
-        :label="workflowParameters.length ? `Inputs (${workflowParameters.length})` : 'Inputs'"
-        icon="i-lucide-sliders-horizontal"
-        size="sm"
-        variant="ghost"
-        color="neutral"
-        @click="() => { showParameters = true }"
-      />
-      <!-- Which runs this workflow's runs share slots with. Beside Inputs
-           because both are things you state about the workflow rather than
-           about one run, and both are saved by the same Save. -->
-      <select
-        v-if="can('configure')"
-        v-model="group"
-        class="field-input t-small max-w-[11rem]"
-        aria-label="Concurrency group"
-        :title="groupHint"
-      >
-        <option value="">Ungrouped (default)</option>
-        <option v-for="g in groups.filter(x => !x.implicit)" :key="g.id" :value="g.id">
-          {{ g.name }} - {{ g.maxConcurrent }} at once
-        </option>
-      </select>
-      <!-- Where this workflow's runs announce themselves. Beside the group for
-           the same reason: both are stated about the workflow, not about a run. -->
-      <select
-        v-if="can('configure')"
-        v-model="notifyChannel"
-        class="field-input t-small max-w-[11rem]"
-        aria-label="Notification channel"
-        title="Where this workflow's runs announce that they paused, finished or failed"
-      >
-        <option value="">Default channel</option>
-        <option v-for="c in channels" :key="c.name" :value="c.name">Announce to {{ c.name }}</option>
-      </select>
-      <UButton v-if="can('configure')" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
-      <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
-      <!-- Said out loud rather than left as an absence: a page with its controls
-           quietly removed is indistinguishable from a broken one, and the
-           pipeline definition is worth reading before answering a gate on it. -->
-      <span v-if="!can('configure')" class="t-small text-label whitespace-nowrap">
-        Read-only - changing a workflow is an operator's job.
-      </span>
+           Run needs `startRun`, Save and Delete need `configure`. They rendered
+           for everyone regardless, so the only way to learn you could not use
+           one was to press it and read the 403. -->
+      <div class="flex items-center gap-2">
+        <UButton
+          :label="workflowParameters.length ? `Inputs (${workflowParameters.length})` : 'Inputs'"
+          icon="i-lucide-sliders-horizontal"
+          size="sm"
+          variant="ghost"
+          color="neutral"
+          @click="() => { openInputs() }"
+        />
+        <UButton
+          v-if="can('startRun')"
+          label="Run"
+          icon="i-lucide-play"
+          size="sm"
+          :disabled="!canRun"
+          @click="() => { showRunModal = true }"
+        />
+        <!-- Disabled rather than hidden while a run works, so the button does not
+             jump when the run ends. -->
+        <UButton v-if="editable || pausedByRun" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" :disabled="!editable || !anyDirty" @click="save" />
+        <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
+        <!-- Said out loud rather than left as an absence: a page with its controls
+             quietly removed is indistinguishable from a broken one, and the
+             pipeline definition is worth reading before answering a gate on it. -->
+        <span v-if="!can('configure')" class="t-small text-label">
+          Read-only - changing a workflow is an operator's job.
+        </span>
+      </div>
     </div>
 
     <!-- Description -->
-    <div class="px-4 py-2 flex items-center gap-3" style="border-bottom: 1px solid var(--border-subtle);">
+    <div class="px-4 py-2 flex items-center gap-3 min-w-0" style="border-bottom: 1px solid var(--border-subtle);">
       <input
-        v-if="editingDescription"
+        v-if="editingDescription && editable"
         v-model="description"
         class="field-input t-small w-full max-w-lg"
         placeholder="Workflow description..."
@@ -879,16 +473,19 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         @keydown.enter="editingDescription = false"
       />
       <button
-        v-else
-        class="t-small text-left flex-1 truncate"
+        v-else-if="editable"
+        class="t-small text-left flex-1 truncate min-w-0"
         style="color: var(--text-tertiary);"
         @click="editingDescription = true"
       >
         {{ description || 'Click to add a description...' }}
       </button>
+      <span v-else class="t-small flex-1 truncate min-w-0" style="color: var(--text-tertiary);">
+        {{ description }}
+      </span>
       <span
         v-if="parallelHint"
-        class="t-small shrink-0"
+        class="t-small shrink-0 hidden sm:inline"
         style="color: var(--text-disabled);"
         title="Parallel branches share one project folder. Safe for agents that read and analyse; risky for two agents writing the same files."
       >
@@ -896,197 +493,125 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       </span>
     </div>
 
-    <!-- Canvas / Schedule. A hand-rolled strip, matching studio/EditorPanel:
-         nothing in this app uses UTabs, and its chrome would not match these
-         CSS-var styles. -->
-    <div class="shrink-0 flex" style="border-bottom: 1px solid var(--border-subtle);">
-      <button
-        v-for="tab in (['canvas', 'schedule'] as const)"
-        :key="tab"
-        class="px-4 py-2.5 t-small font-medium capitalize transition-all relative"
-        :style="{ color: activeTab === tab ? 'var(--text-primary)' : 'var(--text-tertiary)' }"
-        :data-testid="`workflow-tab-${tab}`"
-        @click="activeTab = tab"
-      >
-        {{ tab }}<!-- Omitted rather than shown as (0) while the fetch is in
-             flight: a wrong zero on a workflow that IS scheduled is worse than
-             no number. -->
-        <span v-if="tab === 'schedule' && scheduleRows.length" class="ml-1 text-meta">({{ scheduleRows.length }})</span>
-        <div
-          v-if="activeTab === tab"
-          class="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
-          style="background: var(--accent);"
-        />
-      </button>
-    </div>
+    <p v-if="pausedByRun" data-testid="editing-paused" class="px-4 py-1.5 t-small" style="color: var(--text-tertiary); border-bottom: 1px solid var(--border-subtle);">
+      Editing is paused while a run is in progress.
+    </p>
 
     <ExternalChangeBanner v-if="externalPending" class="mx-4 my-2" @reload="external.reload" @keep="keepMine" />
-
-    <!-- Body: palette + canvas.
-         v-show, not v-if: VueFlow fits the view on init, so a remount would
-         throw away the pan and zoom the person set. The panel below is v-if
-         because it should not mount until it is looked at. -->
-    <div v-show="activeTab === 'canvas'" class="flex-1 flex min-h-0">
-      <!-- Left palette (hidden on mobile) -->
-      <div
-        v-if="can('configure')"
-        class="hidden md:flex flex-col w-[200px] shrink-0 overflow-hidden"
-        style="border-right: 1px solid var(--border-subtle); background: var(--surface-raised);"
-      >
-        <div class="px-3 pt-3 pb-2">
-          <div class="t-small font-medium mb-2" style="color: var(--text-secondary);">Your Agents</div>
-          <input
-            v-model="paletteSearch"
-            placeholder="Filter..."
-            aria-label="Filter agents"
-            class="field-search w-full t-small"
-          />
-        </div>
-        <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
-          <button
-            v-for="agent in filteredAgents"
-            :key="agent.slug"
-            type="button"
-            draggable="true"
-            class="w-full text-left flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-grab active:cursor-grabbing hover-bg transition-colors focus-ring"
-            @dragstart="(e: DragEvent) => { e.dataTransfer?.setData('agentSlug', agent.slug) }"
-            @click="addStep(agent.slug)"
-          >
-            <div
-              class="size-2 rounded-full shrink-0"
-              :style="{ background: getAgentColor(agent.frontmatter.color) }"
-            />
-            <span class="t-small truncate" style="color: var(--text-secondary);">
-              {{ agent.frontmatter.name }}
-            </span>
-            <UIcon name="i-lucide-grip-vertical" class="size-3 ml-auto text-meta opacity-50" />
-          </button>
-          <div v-if="!filteredAgents.length" class="t-small text-center py-4 text-meta">
-            No agents found
-          </div>
-        </div>
-        <div class="px-3 py-2 t-small leading-relaxed" style="border-top: 1px solid var(--border-subtle); color: var(--text-tertiary);">
-          Click or drag an agent to add a step. Drag a handle to link steps. Several links out of one step run in parallel; a link back to an
-          earlier step loops. Click a link to delete it.
-        </div>
-      </div>
-
-      <!-- Canvas -->
-      <div class="flex-1 flex flex-col min-w-0">
-        <!-- Run controls stay in view; per-step detail opens in a slide-over. -->
-        <WorkflowRunBar
-          :run="run"
-          :runs="runs"
-          :logs="logs"
-          @continue="continueRun()"
-          @stop="stop"
-          @restart="restart"
-          @clone="cloneRun"
-          @close="closeRun"
-          @details="showRunDetails = true"
-        />
-        <div class="flex-1 min-h-[300px] relative">
-          <VueFlow
-            id="workflow-canvas"
-            :nodes="nodes"
-            :edges="edges"
-            :min-zoom="0.3"
-            :max-zoom="2"
-            :nodes-connectable="!isRunning && can('configure')"
-            :nodes-draggable="!isRunning && can('configure')"
-            @drop="onDrop"
-            @dragover="onDragOver"
-            @connect="onConnect"
-            @edge-click="onEdgeClick"
-            @node-drag-stop="onNodeDragStop"
-          >
-            <template #node-workflow="nodeProps">
-              <WorkflowNode
-                :data="nodeProps.data"
-                :editable="!readOnly"
-                @remove="removeStep(nodeProps.id)"
-                @settings="settingsStepId = nodeProps.id"
-              />
-            </template>
-
-            <template #node-monitor="nodeProps">
-              <div
-                class="rounded-xl px-3 py-2 flex items-center gap-2"
-                style="width: 170px; background: var(--surface-raised); border: 1px dashed var(--border-subtle);"
-              >
-                <Handle id="out" type="source" :position="Position.Top" />
-                <UIcon name="i-lucide-shield" class="size-3.5 shrink-0" :style="{ color: nodeProps.data.color }" />
-                <div class="min-w-0">
-                  <div class="t-small font-medium truncate" style="color: var(--text-primary);">
-                    {{ nodeProps.data.label }}
-                  </div>
-                  <div class="t-small" style="color: var(--text-disabled);">
-                    monitoring {{ nodeProps.data.watching }} step{{ nodeProps.data.watching === 1 ? '' : 's' }}
-                  </div>
-                </div>
-              </div>
-            </template>
-
-            <Controls position="bottom-right" />
-            <MiniMap v-if="workflowSteps.length >= 5" position="top-right" />
-          </VueFlow>
-
-          <!-- Empty canvas state -->
-          <div
-            v-if="!workflowSteps.length && workflow"
-            class="absolute inset-0 flex items-center justify-center pointer-events-none"
-          >
-            <div class="text-center space-y-2">
-              <UIcon name="i-lucide-mouse-pointer-click" class="size-8 mx-auto" style="color: var(--text-disabled);" />
-              <p class="t-ui" style="color: var(--text-tertiary);">
-                Drag agents from the left panel onto the canvas
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Workflow complete banner -->
-        <div
-          v-if="allCompleted && execSteps.length > 0"
-          class="px-4 py-2.5 flex items-center gap-2"
-          style="background: rgba(74, 222, 128, 0.06); border-top: 1px solid rgba(74, 222, 128, 0.12);"
-        >
-          <UIcon name="i-lucide-check-circle" class="size-4" style="color: var(--success, #22c55e);" />
-          <span class="t-small font-medium" style="color: var(--success, #22c55e);">Workflow complete</span>
-        </div>
-
-      </div>
+    <div
+      v-if="notDrawable"
+      data-testid="not-drawable"
+      class="mx-4 my-2 rounded-xl px-4 py-3 flex items-start gap-3 t-small"
+      style="background: var(--surface-raised); border: 1px solid var(--warning);"
+    >
+      <UIcon name="i-lucide-triangle-alert" class="size-4 shrink-0 mt-0.5" style="color: var(--warning);" />
+      <span style="color: var(--text-secondary);">
+        This workflow's shape can't be shown as a stack, so it opens read-only. {{ notDrawable }}
+      </span>
     </div>
 
-    <!-- When this workflow runs on its own. Mounted lazily, unlike the canvas. -->
-    <WorkflowSchedulePanel
-      v-if="activeTab === 'schedule'"
-      class="flex-1 min-h-0 overflow-y-auto"
-      :workflow-slug="slug"
-      :workflow-name="name"
-      :parameters="savedParameters"
-      :schedulable="workflowSteps.length > 0"
-      :parameters-dirty="parametersDirty"
-    />
-
-    <!-- Run detail: live per-agent rows while a run is active, run history otherwise -->
-    <USlideover v-model:open="showRunDetails" title="Run details">
-      <template #body>
-        <WorkflowRunPanel
-          :run="run"
-          :runs="runs"
-          :logs="logs"
-          @continue="(n) => continueRun(n)"
-          @respond="respond"
-          @reject="reject"
-          @rework="rework"
-          @note="sendNote"
-          @stop="stop"
-          @attach="attachRun"
-          @restart="(stepId, note) => restart(stepId, note)"
-          @clone="cloneRun"
-          @close="closeRun"
+    <!-- Build: the stack, and the drawer for whatever is selected in it. -->
+    <div
+      v-if="mode === 'build'"
+      class="flex-1 min-h-0 overflow-y-auto grid grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start"
+    >
+      <WorkflowStackEditor
+        v-model:blocks="blocks"
+        v-model:steps="workflowSteps"
+        v-model:selected="selected"
+        class="w-full min-w-0"
+        :read-only="!editable"
+        :agents="agentChoices"
+        :trigger-summary="trigger"
+      />
+      <aside
+        v-if="wide"
+        data-testid="drawer-column"
+        class="hidden lg:block rounded-xl p-4 lg:sticky lg:top-0 max-h-full overflow-y-auto"
+        style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+      >
+        <TriggerDrawer
+          v-if="selected?.kind === 'trigger'"
+          v-model:tab="drawerTab"
+          v-model:parameters="workflowParameters"
+          v-model:group="group"
+          v-model:notify-channel="notifyChannel"
+          :workflow-slug="slug"
+          :workflow-name="name"
+          :saved-parameters="savedParameters"
+          :schedulable="workflowSteps.length > 0"
+          :groups="groups"
+          :channels="channels"
+          :read-only="!editable"
         />
+        <StepDrawer
+          v-else-if="selectedStep"
+          :key="selectedStep.id"
+          :step="selectedStep"
+          :agents="agentChoices"
+          :channels="channels"
+          :parameter-names="parameterNames"
+          :read-only="!editable"
+          :workflow-slug="slug"
+          @patch="patchSelected"
+        />
+        <p v-else class="t-small text-label">Select the trigger or a step to change it.</p>
+      </aside>
+    </div>
+
+    <!-- Run: the current run as its own stack. -->
+    <div v-else class="flex-1 min-h-0 overflow-y-auto p-4 min-w-0">
+      <RunStack
+        v-if="run"
+        :run="run"
+        :logs="logs"
+        @continue="onContinue"
+        @respond="onRespond"
+        @reject="onReject"
+        @rework="onRework"
+        @note="onNote"
+        @stop="onStop"
+        @restart="onRestart"
+        @clone="cloneRun"
+      />
+      <p v-else class="t-small text-label">No run is open. Start one with Run, or pick one above.</p>
+    </div>
+
+    <!-- Below lg: the same drawer as a bottom sheet. -->
+    <USlideover
+      v-if="!wide"
+      side="bottom"
+      :title="sheetTitle"
+      :open="mode === 'build' && !!selected"
+      @update:open="(v: boolean) => { if (!v) selected = null }"
+    >
+      <template #body>
+        <TriggerDrawer
+          v-if="selected?.kind === 'trigger'"
+          v-model:tab="drawerTab"
+          v-model:parameters="workflowParameters"
+          v-model:group="group"
+          v-model:notify-channel="notifyChannel"
+          :workflow-slug="slug"
+          :workflow-name="name"
+          :saved-parameters="savedParameters"
+          :schedulable="workflowSteps.length > 0"
+          :groups="groups"
+          :channels="channels"
+          :read-only="!editable"
+        />
+        <StepDrawer
+          v-else-if="selectedStep"
+          :key="selectedStep.id"
+          :step="selectedStep"
+          :agents="agentChoices"
+          :channels="channels"
+          :parameter-names="parameterNames"
+          :read-only="!editable"
+          :workflow-slug="slug"
+          @patch="patchSelected"
+        />
+        <p v-else class="t-small text-label">Select the trigger or a step to change it.</p>
       </template>
     </USlideover>
 
@@ -1098,298 +623,5 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
       @update:open="showRunModal = $event"
       @start="startRun"
     />
-
-    <!-- Workflow inputs: what an operator (or a schedule) must state before a
-         run starts, instead of hoping it was buried in the prompt. -->
-    <UModal :open="showParameters" @update:open="showParameters = $event">
-      <template #content>
-        <div class="p-6 space-y-4 bg-overlay">
-          <h3 class="text-page-title">Workflow inputs</h3>
-          <p class="t-small text-label">
-            Named values collected when a run starts and stated to every step. Declare what this
-            workflow needs - which repository, which Jira project - so no agent has to work it out
-            from the prompt.
-          </p>
-
-          <div v-if="!workflowParameters.length" class="t-small" style="color: var(--text-disabled);">
-            No inputs declared. Runs are started with just the prompt.
-          </div>
-
-          <div v-for="(param, index) in workflowParameters" :key="index" class="field-group">
-            <div class="flex items-start gap-2">
-              <div class="flex-1 space-y-2">
-                <input
-                  v-model="param.name"
-                  placeholder="name, e.g. jira_project"
-                  class="field-input w-full"
-                >
-                <span v-if="parameterNameError(index)" class="field-hint" style="color: var(--text-error, #dc2626);">
-                  {{ parameterNameError(index) }}
-                </span>
-                <input
-                  v-model="param.description"
-                  placeholder="what it is for (shown to whoever starts the run)"
-                  class="field-input w-full"
-                >
-                <div class="flex items-center gap-3">
-                  <input
-                    v-model="param.default"
-                    placeholder="default (optional)"
-                    class="field-input flex-1"
-                  >
-                  <label class="flex items-center gap-2 cursor-pointer shrink-0">
-                    <input v-model="param.required" type="checkbox" class="shrink-0">
-                    <span class="field-label mb-0">Required</span>
-                  </label>
-                </div>
-                <span v-if="param.name.trim() === RESERVED_PARAM_PROJECT_DIR" class="field-hint">
-                  Reserved name: this one becomes the run's project folder, and replaces that field
-                  in the run dialog. Everything else is stated to the agents as text.
-                </span>
-              </div>
-              <UButton
-                icon="i-lucide-trash-2"
-                size="sm"
-                variant="ghost"
-                color="error"
-                @click="removeParameter(index)"
-              />
-            </div>
-          </div>
-
-          <div class="flex justify-between gap-2 pt-3">
-            <UButton label="Add input" icon="i-lucide-plus" size="sm" variant="soft" @click="addParameter" />
-            <div class="flex gap-2">
-              <UButton label="Close" variant="ghost" color="neutral" size="sm" @click="() => { showParameters = false }" />
-              <UButton label="Save" icon="i-lucide-save" size="sm" :loading="saving" @click="save" />
-            </div>
-          </div>
-        </div>
-      </template>
-    </UModal>
-
-    <!-- Step settings -->
-    <UModal :open="!!settingsStepId" @update:open="settingsStepId = $event ? settingsStepId : null">
-      <template #content>
-        <div v-if="settingsStep" class="p-6 space-y-4 bg-overlay max-h-[85vh] overflow-y-auto">
-          <h3 class="text-page-title">{{ settingsStep.label }}</h3>
-
-          <div class="field-group">
-            <label class="field-label">Agent</label>
-            <div class="flex items-center gap-2">
-              <USelectDropdown v-model="settingsAgent" :options="agentOptions" class="flex-1" />
-              <UButton :to="`/agents/${settingsStep.agentSlug}`" size="sm" variant="ghost" color="neutral" icon="i-lucide-pencil" label="Edit agent" />
-            </div>
-            <span class="field-hint">The agent that runs this step. Editing changes its prompt for every workflow that uses it; a promoted agent changes it for the team.</span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">Monitor agent</label>
-            <USelectDropdown v-model="settingsMonitor" :options="monitorOptions" placeholder="No monitor" />
-            <span class="field-hint">
-              Reviews this step's output and replies CONTINUE, RETRY or ABORT. RETRY re-runs the step
-              with the monitor's feedback. Doubles the agent calls for this step.
-            </span>
-          </div>
-
-          <div class="field-group">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" :checked="settingsStep.approval === true" @change="settingsStepId && patchStep(settingsStepId, { approval: ($event.target as HTMLInputElement).checked || undefined })">
-              <span class="field-label mb-0">Ask me before this step runs</span>
-            </label>
-            <span class="field-hint">The run pauses on the run page until you approve, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">Run only when this artifact has content</label>
-            <input
-              v-model="settingsRunWhen" type="text" class="field-input" placeholder="approved-drafts.json"
-            >
-            <span class="field-hint">
-              A filename in the run's artifacts directory, for a step that consumes what an
-              earlier step wrote. Leave empty and the step always runs. When the file is not
-              written, or holds an empty array or object, the step is skipped and everything
-              downstream still runs. When it exists but is not valid JSON the step fails, so a
-              step that crashed mid-write is never mistaken for one with nothing to do.
-            </span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">Files this step must leave behind, one per line</label>
-            <textarea
-              v-model="settingsProduces" rows="3" class="field-input font-mono text-xs"
-              placeholder="plan.md&#10;qa-plan.json"
-            />
-            <span v-if="settingsProducesError" class="field-hint" style="color: var(--error);">{{ settingsProducesError }}</span>
-            <span class="field-hint">
-              Filenames in the run's artifacts directory. Checked before the monitor runs, so a step
-              that left one out is sent back for that exact file instead of paying for a model to
-              notice — which costs it a visit. A step with no visits left fails instead, and a step
-              that skipped itself is exempt. Leave empty to check nothing.
-            </span>
-          </div>
-
-          <div v-if="settingsStep.agentSlug === 'sdlc-jira-tracker'" class="field-group">
-            <label class="field-label">Move the ticket to</label>
-            <input
-              :value="settingsStep.jira?.transition ?? ''" type="text" class="field-input" placeholder="In Progress"
-              @change="settingsStepId && patchStep(settingsStepId, { jira: { ...(settingsStep.jira ?? {}), transition: ($event.target as HTMLInputElement).value.trim() || undefined } })"
-            >
-            <label class="flex items-center gap-2 cursor-pointer mt-2">
-              <input type="checkbox" :checked="settingsStep.jira?.comment === true" @change="settingsStepId && patchStep(settingsStepId, { jira: { ...(settingsStep.jira ?? {}), comment: ($event.target as HTMLInputElement).checked || undefined } })">
-              <span class="field-label mb-0">Post the outcome comment</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer mt-2">
-              <input type="checkbox" :checked="settingsStep.jira?.attach === true" @change="settingsStepId && patchStep(settingsStepId, { jira: { ...(settingsStep.jira ?? {}), attach: ($event.target as HTMLInputElement).checked || undefined } })">
-              <span class="field-label mb-0">Attach the run's evidence files</span>
-            </label>
-            <span class="field-hint">Runner-executed, no model call. The status is matched to the ticket's own workflow (with synonyms), so "Dev Done" lands even where the project calls it "Ready for Review"; when nothing matches, the output lists what the ticket offers. Writes reach Jira only when JIRA_POST_ENABLED=1 on the instance.</span>
-          </div>
-
-          <div v-if="settingsStep.agentSlug === 'sdlc-auto-dispatcher'" class="field-group">
-            <template v-if="!settingsTriggerFromParameter">
-              <label class="field-label">Dispatch one run per entry in</label>
-              <input v-model="settingsTriggerSource" type="text" class="field-input" placeholder="created-tickets.json">
-            </template>
-            <template v-if="!settingsTriggerSource">
-              <label class="field-label" :class="{ 'mt-2': !settingsTriggerFromParameter }">
-                {{ settingsTriggerFromParameter ? 'Dispatch one run per line of' : 'or one run per line of a run input' }}
-              </label>
-              <select v-model="settingsTriggerFromParameter" class="field-input">
-                <option value="">Choose a run input…</option>
-                <option v-for="p in workflowParameters.filter(p => p.name.trim())" :key="p.name" :value="p.name">{{ p.name }}</option>
-              </select>
-              <span v-if="!workflowParameters.some(p => p.name.trim())" class="field-hint">
-                This workflow declares no inputs yet. Add one under <strong>Inputs</strong> above, then choose it here.
-              </span>
-            </template>
-            <template v-if="settingsTriggerSource || settingsTriggerFromParameter">
-              <label class="field-label mt-2">Give each child this input</label>
-              <input v-model="settingsTriggerItemParameter" type="text" class="field-input" placeholder="repo">
-              <label class="field-label mt-2 flex items-center gap-2">
-                <input v-model="settingsTriggerJoin" type="checkbox" class="rounded">
-                <span>Wait for every child before the next step</span>
-              </label>
-              <template v-if="settingsTriggerSource">
-                <label class="field-label mt-2">Route on this field</label>
-                <input v-model="settingsTriggerRouteBy" type="text" class="field-input" placeholder="work_type">
-                <label class="field-label mt-2">Routes, one <code>value: workflow-slug</code> per line</label>
-                <textarea v-model="settingsTriggerRoutes" rows="5" class="field-input font-mono text-xs" placeholder="bug: runbook-a-ticket-to-evidence-backed-pr&#10;feature: runbook-b-feature-request-to-evidence-backed-pr" />
-              </template>
-              <label class="field-label mt-2">
-                {{ settingsTriggerFromParameter ? 'Workflow every item goes to' : 'Workflow for anything the routes miss' }}
-              </label>
-              <input v-model="settingsTriggerSlug" type="text" class="field-input" placeholder="runbook-a-ticket-to-evidence-backed-pr">
-            </template>
-            <span class="field-hint">Runner-executed, no model call. Starts one run per item, each in its own checkout, from either an artifact this run's earlier steps wrote or a run input holding one item per line. The input is the way to fan out over a list somebody types when they start the run — scanning five repositories needs no step to produce a file first — and it has no field to route on, so it goes to one workflow. <strong>Every target workflow must declare the input you name above</strong>, or the step fails before starting anything: a child that was not told which item it is for would work on whatever its checkout contained. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. <strong>Waiting</strong> holds this run at <code>JOINING</code> until every child has settled, then writes <code>children.json</code> — one entry per child with its status — so one step downstream can report on the whole fan-out. A joining run spends no slot in its group, so a group that dispatches and receives can be capped at 1; without waiting, this step completes as soon as the children exist and each reports to its own run, and this run holds a slot while it dispatches, so such a group needs a cap of at least 2.</span>
-          </div>
-
-          <div v-if="settingsStep.agentSlug === 'sdlc-notifier'" class="field-group">
-            <label class="field-label">Post to channel</label>
-            <select v-model="settingsNotifyChannel" class="field-input">
-              <option value="">Choose a channel…</option>
-              <option v-for="c in channels" :key="c.name" :value="c.name">{{ c.name }} ({{ c.kind }}{{ c.host ? ` · ${c.host}` : '' }})</option>
-            </select>
-            <span v-if="!channels.length" class="field-hint">
-              No channels are configured on this instance yet. Add one under
-              <NuxtLink to="/settings" class="underline">Settings</NuxtLink>, then choose it here.
-            </span>
-            <template v-if="settingsNotifyChannel">
-              <label class="field-label mt-2">Message</label>
-              <textarea v-model="settingsNotifyMessage" rows="3" class="field-input" placeholder="{count} drafts need a decision." />
-            </template>
-            <span class="field-hint">
-              Runner-executed, no model call. Posts one message and completes. <code>{{ '{count}' }}</code> is
-              the number of entries in this step's "Run only when this artifact has content" file above, and the
-              entries are named the same way the review panel names them; a link to the run is appended. The
-              channel's webhook is never stored in this workflow — only its name. A delivery failure is recorded
-              in the step's output and never fails the run, so verify a new channel with "Send test" in Settings
-              rather than on the branch that matters.
-              Beside a step that waits for approval is fine: only the gated step waits, so this one sends
-              before the run stops on the person.
-            </span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">What this step is shown from upstream</label>
-            <USelectDropdown v-model="settingsContextMode" :options="contextModeOptions" />
-            <span class="field-hint">
-              By default a step receives only the steps immediately before it. "Every step upstream"
-              is for a step that must see evidence produced several hops back — it is not free: the
-              input is capped at 60,000 characters shared evenly between the contributors, and what
-              does not fit is cut with the truncation marked.
-            </span>
-          </div>
-
-          <div class="field-group">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" :checked="settingsStep.testsUnlocked === true" @change="settingsStepId && patchStep(settingsStepId, { testsUnlocked: ($event.target as HTMLInputElement).checked || undefined })">
-              <span class="field-label mb-0">This step writes tests and code together</span>
-              <HelpTip
-                title="Lifting the test lock"
-                body="The plugin's test lock denies test edits once source has been edited, so a step cannot quietly rewrite the test that was meant to catch it. A step that owns both by design needs that lock lifted: the runner writes .agent/test-unlock.json into the checkout with the reason before the step starts, and preflight checks the lock against this step before the run spends a token. Tick it only for a step whose whole job is test-and-code in one pass."
-              />
-            </label>
-            <span class="field-hint">
-              The runner lifts the plugin's test lock for this step and records why. Leave it off for
-              any step that edits source without owning the tests that cover it.
-            </span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">Max visits per run</label>
-            <input
-              :value="settingsMaxVisits"
-              type="number"
-              min="1"
-              max="20"
-              class="field-input w-24"
-              @change="settingsMaxVisits = ($event.target as HTMLInputElement).valueAsNumber"
-            />
-            <span class="field-hint">
-              How many times a loop or a monitor retry may bring this step back. Default {{ DEFAULT_MAX_VISITS }}.
-            </span>
-          </div>
-
-          <div class="flex justify-end">
-            <UButton label="Done" size="sm" @click="() => { settingsStepId = null }" />
-          </div>
-        </div>
-      </template>
-    </UModal>
-
-    <!-- Mobile agent picker -->
-    <UModal v-model:open="showMobileAgentPicker">
-      <template #content>
-        <div class="p-4 space-y-3 bg-overlay">
-          <h3 class="text-page-title">Add Agent</h3>
-          <input
-            v-model="paletteSearch"
-            placeholder="Search agents..."
-            aria-label="Search agents"
-            class="field-search w-full"
-          />
-          <div class="space-y-1 max-h-64 overflow-y-auto">
-            <button
-              v-for="agent in filteredAgents"
-              :key="agent.slug"
-              class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover-bg text-left"
-              @click="addStep(agent.slug)"
-            >
-              <div
-                class="size-2 rounded-full shrink-0"
-                :style="{ background: getAgentColor(agent.frontmatter.color) }"
-              />
-              <span class="t-small" style="color: var(--text-secondary);">
-                {{ agent.frontmatter.name }}
-              </span>
-            </button>
-          </div>
-          <div class="flex justify-end">
-            <UButton label="Cancel" variant="ghost" color="neutral" size="sm" @click="() => { showMobileAgentPicker = false }" />
-          </div>
-        </div>
-      </template>
-    </UModal>
   </div>
 </template>
