@@ -32,7 +32,7 @@ function finish() {
         <div class="flex justify-center">
           <div
             class="size-16 rounded-2xl flex items-center justify-center"
-            style="background: linear-gradient(135deg, rgba(229, 169, 62, 0.15) 0%, rgba(229, 169, 62, 0.05) 100%); border: 1px solid rgba(229, 169, 62, 0.12);"
+            style="background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.15) 0%, rgba(var(--accent-rgb), 0.05) 100%); border: 1px solid rgba(var(--accent-rgb), 0.12);"
           >
             <UIcon name="i-lucide-bot" class="size-7" style="color: var(--accent);" />
           </div>

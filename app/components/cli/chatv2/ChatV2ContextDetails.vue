@@ -97,7 +97,7 @@ const getStatusColor = () => {
     </div>
 
     <!-- Information Box -->
-    <div class="p-3 rounded-xl border space-y-2" style="background: rgba(229, 169, 62, 0.05); border-color: rgba(229, 169, 62, 0.15);">
+    <div class="p-3 rounded-xl border space-y-2" style="background: rgba(var(--accent-rgb), 0.05); border-color: rgba(var(--accent-rgb), 0.15);">
       <div class="flex items-center gap-2">
         <UIcon name="i-lucide-info" class="size-3.5" style="color: var(--accent);" />
         <span class="t-small font-bold" style="color: var(--accent);">About Context Window</span>

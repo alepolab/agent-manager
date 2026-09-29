@@ -240,7 +240,7 @@ onMounted(async () => {
       :style="{
         background: 'var(--surface-raised)',
         border: isFocused ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
-        boxShadow: isFocused ? '0 0 0 3px rgba(229, 169, 62, 0.1)' : 'none',
+        boxShadow: isFocused ? '0 0 0 3px rgba(var(--accent-rgb), 0.1)' : 'none',
       }"
     >
       <!-- Textarea -->

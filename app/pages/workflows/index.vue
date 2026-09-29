@@ -229,7 +229,7 @@ async function saveGroups() {
           <div class="flex justify-center">
             <div
               class="size-12 rounded-xl flex items-center justify-center"
-              style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.15);"
+              style="background: var(--accent-muted); border: 1px solid rgba(var(--accent-rgb), 0.15);"
             >
               <UIcon name="i-lucide-git-branch" class="size-6" style="color: var(--accent);" />
             </div>

@@ -100,7 +100,7 @@ function dismissSuggestion() {
         class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg t-small font-medium transition-all"
         :style="{
           background: isImproving ? 'var(--accent-muted)' : 'var(--surface-raised)',
-          border: '1px solid ' + (isImproving ? 'rgba(229, 169, 62, 0.2)' : 'var(--border-subtle)'),
+          border: '1px solid ' + (isImproving ? 'rgba(var(--accent-rgb), 0.2)' : 'var(--border-subtle)'),
           color: isImproving ? 'var(--accent)' : 'var(--text-secondary)',
         }"
         :disabled="isImproving"
@@ -114,7 +114,7 @@ function dismissSuggestion() {
     <div
       v-if="suggestion"
       class="shrink-0 mx-4 mt-3 rounded-xl p-3 space-y-2"
-      style="background: var(--accent-muted); border: 1px solid rgba(229, 169, 62, 0.15);"
+      style="background: var(--accent-muted); border: 1px solid rgba(var(--accent-rgb), 0.15);"
     >
       <div class="flex items-center gap-2">
         <UIcon name="i-lucide-sparkles" class="size-3.5" style="color: var(--accent);" />

@@ -1598,7 +1598,7 @@ function handleClosePreview() {
               <div
                 v-if="isStreaming"
                 class="flex items-center gap-2 px-2 py-1 rounded t-small font-medium"
-                style="background: rgba(229, 169, 62, 0.1); color: var(--accent);"
+                style="background: rgba(var(--accent-rgb), 0.1); color: var(--accent);"
               >
                 <UIcon name="i-lucide-loader-2" class="size-3 animate-spin" />
                 <span>Generating...</span>
@@ -1696,7 +1696,7 @@ function handleClosePreview() {
             <!-- Welcome / Select State -->
             <div v-if="viewMode === 'live' && !isLiveChat && !currentSessionId" class="flex items-center justify-center h-full text-center">
               <div class="max-w-md px-6">
-                <div class="size-20 mx-auto mb-6 rounded-3xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(229, 169, 62, 0.1) 0%, rgba(229, 169, 62, 0.05) 100%); border: 1px solid rgba(229, 169, 62, 0.1);">
+                <div class="size-20 mx-auto mb-6 rounded-3xl flex items-center justify-center" style="background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.1) 0%, rgba(var(--accent-rgb), 0.05) 100%); border: 1px solid rgba(var(--accent-rgb), 0.1);">
                   <UIcon :name="urlProjectName ? 'i-lucide-folder-root' : 'i-lucide-terminal'" class="size-10" style="color: var(--accent);" />
                 </div>
                 <h2 class="t-head font-semibold mb-3" style="color: var(--text-primary); font-family: var(--font-sans);">

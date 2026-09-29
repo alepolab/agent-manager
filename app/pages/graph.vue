@@ -512,7 +512,7 @@ function onNodeClick(first: unknown, second?: unknown) {
               <span
                 class="ml-auto t-small font-mono px-1 py-px rounded-full shrink-0 uppercase border"
                 :style="{
-                  borderColor: data.scope === 'global' ? 'rgba(229,169,62,0.3)' : 'var(--border-subtle)',
+                  borderColor: data.scope === 'global' ? 'rgba(var(--accent-rgb), 0.3)' : 'var(--border-subtle)',
                   color: data.scope === 'global' ? 'var(--accent)' : 'var(--text-disabled)',
                 }"
               >
