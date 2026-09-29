@@ -914,10 +914,36 @@ export function isUnresumable(message: string): boolean {
  * time. With no time stated, `fallbackMs` stands in and the run says so.
  */
 export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
-  if (!/\b429\b|rate[ -]?limit|quota|usage limit/i.test(message) || isAuthFailure(message)) return null
+  if (!/\b429\b|rate[ -]?limit|quota|usage limit|hit your .{0,30}limit/i.test(message) || isAuthFailure(message)) return null
   const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
   // A minute's margin: a request exactly at the reset time is often still refused.
-  return s ? now + Number(s[1]) * 1000 + 60_000 : now + fallbackMs
+  if (s) return now + Number(s[1]) * 1000 + 60_000
+  const at = resetsAtClock(message, now)
+  return at ? at + 60_000 : now + fallbackMs
+}
+
+/**
+ * A subscription's limit names a wall-clock time and a zone, not a delay:
+ * "You've hit your session limit · resets 6:40pm (Asia/Kolkata)". The next
+ * time that clock reads so, as epoch ms, or null when the text says no time
+ * this can read.
+ */
+export function resetsAtClock(message: string, now = Date.now()): number | null {
+  const m = message.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b(?:\s*\(([A-Za-z_]+\/[A-Za-z_\/]+|UTC)\))?/i)
+  if (!m) return null
+  let hour = Number(m[1]) % 12
+  if (m[3]!.toLowerCase() === 'pm') hour += 12
+  const minute = Number(m[2] ?? 0)
+  const zone = m[4] ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  let parts: Record<string, number>
+  try {
+    parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+      .formatToParts(new Date(now)).filter(p => p.type !== 'literal').map(p => [p.type, Number(p.value)]))
+  } catch { return null }
+  const nowMin = parts.hour! * 60 + parts.minute! + parts.second! / 60
+  let wait = hour * 60 + minute - nowMin
+  if (wait < 0) wait += 24 * 60
+  return now + Math.round(wait * 60_000)
 }
 
 /** The steps that make a run's change, and so know what approving it gains and risks. */

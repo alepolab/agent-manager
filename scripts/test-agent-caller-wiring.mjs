@@ -143,6 +143,14 @@ console.log('OK: the real agent caller (server/utils/agentCaller.ts#callAgent) i
   try { interpretResultMessage({ subtype: 'error_during_execution', is_error: true, errors: ['tool crashed'] }, undefined, apiError) } catch (e) { listed = e }
   assert.match(listed.message, /tool crashed/)
   assert.doesNotMatch(listed.message, /429/)
+
+  // A subscription's limit, which says neither "API Error" nor 429.
+  const { isApiErrorLine } = await import('../server/utils/agentCaller.ts')
+  const limit = "You've hit your session limit · resets 6:40pm (Asia/Kolkata)"
+  assert.equal(isApiErrorLine({ type: 'assistant', isApiErrorMessage: true, error: 'rate_limit' }, limit), true)
+  assert.equal(isApiErrorLine({ type: 'assistant' }, limit), true, 'by its words alone too')
+  assert.equal(isApiErrorLine({ type: 'assistant' }, 'API Error: 500'), true)
+  assert.equal(isApiErrorLine({ type: 'assistant' }, 'The tests pass; the rate limiter is unchanged.'), false, 'ordinary prose is not an error')
 }
 
 console.log('    into workflowRunner.ts at module-load time, with no import-order dependency.')

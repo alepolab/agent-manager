@@ -31,6 +31,14 @@ assert.equal(quotaResetAt(REAL, now), now + 3551_000 + 60_000, 'the stated reset
 assert.equal(quotaResetAt('API Error: 429 rate limit exceeded', now), now + 15 * 60_000, 'no time stated: fifteen minutes')
 assert.equal(quotaResetAt('error_max_turns: no further detail', now), null)
 assert.equal(quotaResetAt('Not logged in · Please run /login', now), null, 'a login failure is not a quota')
+// A subscription's limit names a clock time and a zone. 18:15 IST, resetting at 18:40 IST.
+{
+  const at = Date.parse('2026-09-29T12:45:00Z')
+  const limit = "Claude Code returned an error result (success, is_error): You've hit your session limit · resets 6:40pm (Asia/Kolkata)"
+  assert.equal(quotaResetAt(limit, at), Date.parse('2026-09-29T13:10:00Z') + 60_000, 'the named time in the named zone, plus a minute')
+  assert.equal(quotaResetAt("You've hit your weekly limit · resets 6:40pm (Asia/Kolkata)", Date.parse('2026-09-29T13:20:00Z')), Date.parse('2026-09-30T13:10:00Z') + 60_000, 'a time already past today is tomorrow')
+  assert.equal(quotaResetAt("You've hit your usage limit", at), at + 15 * 60_000, 'no time: fifteen minutes')
+}
 
 // ── Through the runner ───────────────────────────────────────────────────────
 const wf = { slug: 'q', name: 'Q', steps: [
