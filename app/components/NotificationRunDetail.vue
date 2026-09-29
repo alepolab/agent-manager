@@ -5,7 +5,7 @@ import type { NotificationItem } from '~~/shared/types/notification'
 /**
  * A run's open gate, decided in place.
  *
- * WorkflowRunPanel already carries everything a gate needs: the question, whose
+ * RunStack already carries everything a gate needs: the question, whose
  * it is, the verdict card, the per-draft review, the earlier decisions and the
  * buttons. This adds what the inbox reader has not seen yet because they did not
  * start the run: what it is for, and the ticket it came from.
@@ -14,8 +14,8 @@ const props = defineProps<{ item: Extract<NotificationItem, { kind: 'gate' }> }>
 const emit = defineEmits<{ decided: [] }>()
 
 const runApi = useRun(props.item.runId)
-const { run, logs, error, load, continueRun, stop, respond } = runApi
-const { onReject, onRework, onNote, onRestart } = useRunActionToasts(runApi)
+const { run, logs, error, load } = runApi
+const { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond } = useRunActionToasts(runApi)
 onMounted(load)
 
 // The run streams over SSE, so a decision taken here — or by someone else,
@@ -45,7 +45,7 @@ const headline = computed(() => {
       <div class="flex items-center gap-3">
         <span v-if="run.ticketKey" class="t-small font-mono text-label">{{ run.ticketKey }}</span>
         <StatusLabel :status="run.status" />
-        <UButton :to="`/runs/${run.id}`" size="xs" variant="ghost" color="neutral" trailing-icon="i-lucide-arrow-right" label="Full run and evidence" class="ml-auto shrink-0" />
+        <UButton :to="`/runs/${run.id}${run.question?.stepId ? `#step-${run.question.stepId}` : ''}`" size="xs" variant="ghost" color="neutral" trailing-icon="i-lucide-arrow-right" label="Full run and evidence" class="ml-auto shrink-0" />
       </div>
       <h2 class="text-page-title">{{ headline }}</h2>
       <p class="t-small text-label">
@@ -59,10 +59,10 @@ const headline = computed(() => {
       </details>
     </header>
 
-    <WorkflowRunPanel
-      :run="run" :runs="[run]" :logs="logs" full-page
-      @continue="(n) => continueRun(n)" @respond="respond" @reject="onReject" @rework="onRework"
-      @note="onNote" @stop="stop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${run.id}`)"
+    <RunStack
+      :run="run" :logs="logs"
+      @continue="onContinue" @respond="onRespond" @reject="onReject" @rework="onRework"
+      @note="onNote" @stop="onStop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${run.id}`)"
     />
   </div>
   <SkeletonCard v-else />

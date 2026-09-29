@@ -149,6 +149,23 @@ await check('a run directory missing the post-fix oracle produces a bundle the v
     }
   })
 
+// A ticket that asked only for a test: the oracle passes before any change,
+// and the breaks recorded on it in meta.json reach the bundle, which is valid.
+await check('a test-only ticket\'s passing oracle carries its mutation proof into a valid bundle', async () => {
+    const dir = runDir(({ files }) => {
+      files['oracle-before.xml'] = XUNIT_ALL_PASS
+      files['meta.json'] = JSON.stringify({ ...META, oracle: { ...META.oracle, mutation_proof: { mutants: 3, killed: 3, report: 'mutation-proof.md' } } })
+    })
+    try {
+      const { bundle, problems } = await assembleBundle(dir)
+      assert.equal(bundle.oracle.verdict, 'PASS')
+      assert.deepEqual(bundle.oracle.mutation_proof, { mutants: 3, killed: 3, report: 'mutation-proof.md' })
+      assert.deepEqual(problems, [])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
 // ── 3. Missing context packet is caught, not hashed as empty string ──────
 await check('a run directory missing the context packet produces a bundle the validator rejects', async () => {
     const dir = runDir(({ skip }) => skip('context-packet.json'))

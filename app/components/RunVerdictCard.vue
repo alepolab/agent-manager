@@ -2,6 +2,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { oversightReason, needsJustification } from '~~/shared/utils/oversight'
 import { parseJunit, junitLabel, junitPassed } from '~/utils/junit'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 
 /**
  * What a reviewer is actually approving.
@@ -26,6 +27,7 @@ const props = defineProps<{ run: WorkflowRun }>()
 interface FixRepo { repo?: string, commits?: string[], pr?: string }
 interface Meta {
   blast_radius?: string
+  blast_radius_reason?: string
   work_type?: string
   class?: string
   fix?: { files_changed?: number, lines_changed?: number, tests_added?: number, repos?: FixRepo[] }
@@ -40,6 +42,18 @@ const meta = ref<Meta | null>(null)
 const metaMissing = ref(false)
 const files = ref<string[]>([])
 const tests = ref<{ label: string, passed: boolean, from: string } | null>(null)
+/** Which files and commits, measured from git - see server/utils/gitFacts.ts computeChangeSummary. */
+/** The implementer's brief for whoever approves the change: what it gains and what it risks. */
+const brief = ref<DecisionBrief | null>(null)
+/** The runner is having the brief written (workflowRunner ensureChangeBrief); checked again until it lands. */
+const briefPending = ref(false)
+let briefPoll: ReturnType<typeof setTimeout> | null = null
+watch(briefPending, (on) => {
+  if (briefPoll) clearTimeout(briefPoll)
+  briefPoll = on ? setTimeout(() => load(true), 15_000) : null
+})
+onUnmounted(() => { if (briefPoll) clearTimeout(briefPoll) })
+const changes = ref<{ commits: { sha: string, subject: string }[], files: { path: string, added: number | null, removed: number | null }[] } | null>(null)
 const loading = ref(true)
 
 /** Reports the bundle writes as prose. Linked, never summarised into a verdict. */
@@ -52,11 +66,14 @@ const REPORTS: { file: string, label: string }[] = [
 ]
 const presentReports = computed(() => REPORTS.filter(r => files.value.includes(r.file)))
 
-async function load() {
-  loading.value = true
-  metaMissing.value = false
-  meta.value = null
-  tests.value = null
+/** `quiet`: re-read for a brief being written, without blanking the card meanwhile. */
+async function load(quiet = false) {
+  if (!quiet) {
+    loading.value = true
+    metaMissing.value = false
+    meta.value = null
+    tests.value = null
+  }
   const id = props.run.id
   try {
     meta.value = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/meta.json`, { responseType: 'text' }))
@@ -68,6 +85,14 @@ async function load() {
   } catch {
     files.value = []
   }
+  if (!quiet) brief.value = null
+  briefPending.value = files.value.includes(CHANGE_BRIEF_PENDING)
+  if (files.value.includes(CHANGE_BRIEF_FILE)) {
+    try {
+      const parsed = parseDecisionBrief(await $fetch<string>(`/api/runs/${id}/artifacts/${CHANGE_BRIEF_FILE}`, { responseType: 'text' }))
+      if ('brief' in parsed) brief.value = parsed.brief
+    } catch { /* the measured facts below still stand */ }
+  }
   // The test report the reviewer should be judging: the run AFTER the fix.
   // oracle-before proves the bug reproduced, which is a different question.
   for (const name of ['oracle-after.xml', 'fix-full-suite.xml', 'regression.xml']) {
@@ -78,9 +103,14 @@ async function load() {
       if (j) { tests.value = { label: junitLabel(j), passed: junitPassed(j), from: name }; break }
     } catch { /* try the next one */ }
   }
+  try {
+    changes.value = await $fetch(`/api/runs/${id}/changes`)
+  } catch {
+    changes.value = null
+  }
   loading.value = false
 }
-watch(() => [props.run.id, props.run.question?.stepId], load, { immediate: true })
+watch(() => [props.run.id, props.run.question?.stepId], () => load(), { immediate: true })
 
 const gatedStep = computed(() => props.run.steps.find(s => s.stepId === props.run.question?.stepId))
 
@@ -170,6 +200,39 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           </div>
         </div>
 
+        <!-- 2b. Why this class, in intake's words. Missing reads as missing. -->
+        <p v-if="run.blastRadius && meta?.blast_radius_reason" class="m-0 t-small">
+          <span class="text-label">Why <span class="font-mono">{{ run.blastRadius }}</span>:</span> {{ meta.blast_radius_reason }}
+        </p>
+        <p v-else-if="run.blastRadius" class="m-0 t-small text-label">
+          Intake recorded no reason for classifying this <span class="font-mono">{{ run.blastRadius }}</span>.
+        </p>
+
+        <!-- 2c. What changed: the commit subjects are the change described in
+             its author's words, and the file list is what to read. -->
+        <div v-if="changes?.commits.length" class="space-y-0.5">
+          <div v-for="c in changes.commits" :key="c.sha" class="flex gap-2 t-small">
+            <span class="font-mono text-label shrink-0">{{ c.sha.slice(0, 9) }}</span>
+            <span style="color: var(--text-primary);">{{ c.subject }}</span>
+          </div>
+        </div>
+        <details v-if="changes?.files.length" class="t-small">
+          <summary class="cursor-pointer text-label">{{ changes.files.length }} changed file(s)</summary>
+          <div v-for="f in changes.files" :key="f.path" class="flex gap-2 font-mono mt-0.5">
+            <span class="tabular-nums shrink-0" style="color: var(--success);">+{{ f.added ?? '?' }}</span>
+            <span class="tabular-nums shrink-0" style="color: var(--error);">−{{ f.removed ?? '?' }}</span>
+            <span class="truncate" :title="f.path">{{ f.path }}</span>
+          </div>
+        </details>
+
+        <!-- 2d. What approving gains and risks, in the implementer's words. -->
+        <RunDecisionBrief v-if="brief" :brief="brief" :can-answer="false" approval />
+        <p v-else-if="briefPending" class="m-0 t-small text-label flex items-center gap-1.5">
+          <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
+          The step that made this change is writing its advantages and disadvantages. It shows here when it is done.
+        </p>
+        <p v-else class="m-0 t-small text-label">The step that made this change wrote no brief of its advantages and disadvantages.</p>
+
         <!-- 3. Did it reproduce, and does it pass now. -->
         <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">
           <span v-if="meta?.oracle?.kind">
@@ -213,7 +276,10 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 
         <div v-if="presentReports.length" class="flex flex-wrap gap-x-3 gap-y-1 t-small">
           <span class="text-label">Reports:</span>
-          <span v-for="r in presentReports" :key="r.file" class="font-mono">{{ r.label }}</span>
+          <a
+            v-for="r in presentReports" :key="r.file" :href="`/api/runs/${run.id}/artifacts/${r.file}`"
+            target="_blank" rel="noopener" class="font-mono underline" style="color: var(--accent);"
+          >{{ r.label }}</a>
         </div>
       </template>
     </div>

@@ -11,7 +11,7 @@ import { runArtifactsDir } from './runArtifacts.ts'
 // runtime, and the plain-node test scripts that import this module directly
 // resolve no aliases. The type-only imports below may keep the alias because
 // they are erased.
-import { isLiveStatus, isWorkingStatus } from '../../shared/types/run.ts'
+import { isLiveStatus, isTestRun, isWorkingStatus } from '../../shared/types/run.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
 
@@ -237,7 +237,9 @@ export async function listRuns(workflowSlug?: string): Promise<WorkflowRun[]> {
  *  queue on its next cycle, which is the dedupe this function exists for. */
 export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun | null> {
   const runs = await listRuns(workflowSlug)
-  return runs.find(r => isLiveStatus(r.status)) ?? null
+  // A test run is not the real thing this dedupe protects: it must never be
+  // mistaken for "this workflow is already running" and block a real one.
+  return runs.find(r => isLiveStatus(r.status) && !isTestRun(r)) ?? null
 }
 
 /**
@@ -259,6 +261,10 @@ export async function findActiveRun(workflowSlug: string): Promise<WorkflowRun |
  *    are pointed at one `projectDir` for the queue to launch into each other.
  *    Two parents dispatching the same ticket key produce the same collision,
  *    since a child's directory is derived from that key.
+ *
+ * Test runs are not counted. Each works in its own `test/` worktree beside
+ * the clone (see ensureTestCheckout in workflowRunner.ts), so it shares no
+ * checkout with a real run: it must neither block one nor be blocked by one.
  */
 export async function findRunInWorkspace(
   workspace: string,
@@ -269,6 +275,7 @@ export async function findRunInWorkspace(
   return runs.find(r =>
     (opts.includeQueued ? isLiveStatus(r.status) : isWorkingStatus(r.status))
     && r.id !== excludeRunId
+    && !isTestRun(r)
     && runWorkspace(r) === workspace,
   ) ?? null
 }

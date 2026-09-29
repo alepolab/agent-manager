@@ -15,6 +15,8 @@ import { isWaitingOnAPerson } from '../types/run.ts'
 export function gateAsk(run: Pick<WorkflowRun, 'status' | 'question'>): string {
   if (run.status === 'awaiting_review') return `${run.question?.artifact ?? 'Its drafts'} is waiting on your decisions`
   if (run.question?.reason === 'budget') return 'Out of budget - approve more, or stop it'
+  if (run.question?.reason === 'quota') return `Quota spent - resumes on its own at ${new Date(run.question.resumeAt ?? 0).toLocaleTimeString()}`
+  if (run.question?.reason === 'auth') return 'Could not reach the model - fix the server\'s credentials, then retry'
   if (run.question?.reason === 'rework') return 'Out of send-backs - grant another, or stop it'
   return run.question?.text || 'Paused - open it to see why'
 }
@@ -22,7 +24,7 @@ export function gateAsk(run: Pick<WorkflowRun, 'status' | 'question'>): string {
 /**
  * Is this gate the viewer's to answer? A gate that names no role is everyone's,
  * and an operator is the backstop for all of them. The same rule as
- * `mineToAnswer` on the dashboard and in WorkflowRunPanel.
+ * `mineToAnswer` on the dashboard and in RunGate.
  */
 export function gateIsMine(gateRole: Role | undefined, viewer: Role | undefined | null): boolean {
   // A manager holds no answerGate, so no gate is theirs however it is labelled.
@@ -47,7 +49,8 @@ export function buildNotifications(
   viewer: Role | undefined | null,
 ): NotificationItem[] {
   const gates: NotificationItem[] = runs
-    .filter(r => !r.dismissed && isWaitingOnAPerson(r.status))
+    // A quota pause resumes itself at the reset time: nobody owes it a decision.
+    .filter(r => !r.dismissed && isWaitingOnAPerson(r.status) && r.question?.reason !== 'quota')
     .map(r => ({
       kind: 'gate',
       id: `run:${r.id}`,

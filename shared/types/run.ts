@@ -1,4 +1,5 @@
 import type { Role } from './role'
+import type { DecisionBrief } from '../utils/decisionBrief'
 
 export type WorkflowRunStatus =
   /**
@@ -122,13 +123,20 @@ export function isWorkingStatus(status: WorkflowRunStatus): boolean {
  * At a cap of 1 that is a deadlock rather than a slowdown - the children never
  * start, so the parent never stops waiting.
  *
+ * A run waiting on a person gives its slot back too. It spends nothing while it
+ * waits, and nothing bounds the wait: at the default cap of two, two fix runs
+ * stopped at an approval gate held the group shut, and every nightly scan
+ * queued behind a question nobody had answered yet. When the person answers,
+ * the run goes on at once rather than queueing again, so the group can briefly
+ * run one over its cap - the price of an approval never waiting twice.
+ *
  * Separate from `isWorkingStatus` rather than carved out of it because the two
  * questions only look alike. A joining parent still owns its checkout and its
  * process, which is what every other caller of that predicate is asking about;
  * it is only the machine's budget for concurrent WORK that it is not spending.
  */
 export function holdsGroupSlot(status: WorkflowRunStatus): boolean {
-  return isWorkingStatus(status) && status !== 'joining'
+  return isWorkingStatus(status) && status !== 'joining' && !isWaitingOnAPerson(status)
 }
 
 /**
@@ -151,6 +159,49 @@ export type RunStepStatus =
   /** The step stopped to ask the operator something and waits for the answer. */
   | 'waiting'
 
+/** One monitor verdict on one visit of a step. `monitorVerdict` on the step is the latest; this is all of them. */
+export interface StepCheck {
+  visit: number
+  verdict: 'CONTINUE' | 'RETRY' | 'ABORT'
+  note: string
+  at: number
+}
+
+/**
+ * A run sent back to an earlier step by an AGENT (PIPELINE-REWORK). A person's
+ * send-back is a RunDecision instead: `decisions` is what people chose, and the
+ * manager board counts and attributes it, so agent send-backs are kept apart.
+ */
+export interface SendBack {
+  /** Step that raised it. */
+  from: string
+  /** Step the run went back to. */
+  target: string
+  instruction: string
+  /** `agent:<slug>` */
+  by: string
+  at: number
+}
+
+/**
+ * What a test run is testing: one step of another (real) run, on its own
+ * branch, with no side effects on the source run or its accounting.
+ */
+export interface TestOf {
+  /** The run this test is testing a step of. */
+  sourceRunId: string
+  /** The step, within that run, being tested. */
+  stepId: string
+  /** Overrides to the step's config for this test only (e.g. a different prompt). */
+  stepOverride?: Record<string, unknown>
+  /** The commit or ref the test's worktree started from — the source step's `headAtStart`, or its run's `branch` when that is absent. Empty until the worktree exists. */
+  startPoint: string
+  /** Why the test's code differs from what the step saw, when it does: set when the step has no `headAtStart` and the worktree starts from the end of the source run instead. */
+  codeNote?: string
+  /** Set once the test's worktrees and branch have been removed after it settled, so that is done once. */
+  testWorktreeRemoved?: true
+}
+
 export interface RunStep {
   stepId: string
   label: string
@@ -165,6 +216,8 @@ export interface RunStep {
   visits: number
   monitorVerdict?: 'CONTINUE' | 'RETRY' | 'ABORT'
   monitorNote?: string
+  /** Every monitor verdict this step received, oldest first. Kept across restarts. */
+  checks?: StepCheck[]
   /** The model the agent call actually ran, as the SDK's own system/init
    *  message reported it (an observed id, e.g. 'claude-sonnet-4-6') - never
    *  the alias requested. Absent when a stub caller (tests) never returned
@@ -221,6 +274,8 @@ export interface RunStep {
    *  The step does not wait for them, so this is the only link back: without
    *  it a dispatched child is an orphan run nobody can trace to its cause. */
   childRunIds?: string[]
+  /** The commit (`git rev-parse HEAD` in the run's worktree) this step started from. Lets a test of this step start from the same code. Absent on runs from before it was recorded. */
+  headAtStart?: string
 }
 
 /** CI outcome of the PR a run opened, recorded by the poller after the run completes. */
@@ -348,6 +403,8 @@ export interface WorkflowRun {
   reworksBy?: { ci?: number, verification?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
+  /** Agent-raised send-backs, oldest first. See SendBack. */
+  sendBacks?: SendBack[]
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
@@ -387,7 +444,11 @@ export interface WorkflowRun {
     /** An approval raised by the runner itself: the budget is spent and continuing
      *  grants another allowance, or a step has spent its send-backs and whether to
      *  grant one more is the developer's call. */
-    reason?: 'budget' | 'rework'
+    reason?: 'budget' | 'rework' | 'auth' | 'quota'
+    /** For a `quota` pause: when the provider said the quota resets. The run resumes on its own then. */
+    resumeAt?: number
+    /** For a step's question: what a person needs to answer it (shared/utils/decisionBrief.ts). */
+    brief?: DecisionBrief
     /**
      * The send-back this question is about, carried so that answering can perform
      * it.
@@ -487,6 +548,35 @@ export interface WorkflowRun {
    * field; everything about elapsed work reads `startedAt`.
    */
   queuedAt?: number
+  /**
+   * A person's decision recorded while the run's group was full: the run waits
+   * in the queue, ahead of newer runs, and the queue carries the decision out
+   * when a slot frees. Answering a question or approving a gate used to put
+   * the run straight back to running whatever its group allowed - a paused run
+   * gives its slot back, the queue fills it, and each answer took the group one
+   * over its cap.
+   */
+  /**
+   * The compose project this run's stack steps use, when it is not the run's
+   * own `sdlc-<id>`: an up stack of the same product it claimed from another
+   * run (server/utils/runTeardown.ts). Absent means its own.
+   */
+  stackProject?: string
+  /** The run whose stack `stackProject` names. */
+  stackClaimedFrom?: string
+  parked?: {
+    action: 'continue' | 'respond' | 'restart'
+    /** The status to return to before the decision is carried out. */
+    from: WorkflowRunStatus
+    note?: string
+    reply?: string
+    stepId?: string
+    startedBy?: string
+    grantApproval?: boolean
+    /** Nobody decided anything: the run stepped aside for this group (WorkflowGroup.yieldsTo). */
+    gaveWayTo?: string
+    at: number
+  }
   steps: RunStep[]
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
@@ -523,6 +613,19 @@ export interface WorkflowRun {
   /** Random id of the server process that owns this run. In a container every
    *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
   bootId?: string
+  /** Set on a run that tests one step of another run. Never set on a real run. See TestOf. */
+  testOf?: TestOf
+  /** The runner arms nothing after this step and settles the run when it settles. Set on test runs. */
+  stopAfter?: string
+}
+
+/**
+ * A run that tests one step of another run, rather than doing real work: it
+ * has no ticket to comment on, holds no concurrency-group slot, and must
+ * never be counted alongside the real runs it is testing.
+ */
+export function isTestRun(run: Pick<WorkflowRun, 'testOf'>): boolean {
+  return !!run.testOf
 }
 
 /**
@@ -604,6 +707,10 @@ export interface CostAggregate {
   totals: RunCostSummary['totals']
   runs: RunCostSummary[]
   note: string
+  /** The same aggregate, but over test runs only (see TestOf) — kept apart
+   *  from the real-run totals above, never folded into them. Optional so
+   *  every existing consumer of this shape needs no change. */
+  tests?: CostAggregate
 }
 
 export interface NewRunInput {

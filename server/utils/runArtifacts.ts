@@ -552,9 +552,20 @@ export async function markArtifactsUnusable(runId: string): Promise<void> {
  * assembled into the run directory and served by the app.
  */
 
+type StackNote = { project: string, claimedFrom?: string, /** Its stack was taken down while it waited, and none was free to take over. */ gone?: boolean }
+
+/** The line that names the compose project a run's stack steps use. Also sent
+ *  on its own to a resumed session whose stack changed while it waited. */
+export function stackNote(runId: string, stack?: StackNote): string {
+  const own = `sdlc-${runId.toLowerCase()}`
+  if (stack?.gone) return `Compose project for this run's stack: ${stack.project} - not up now: it was taken down while the run waited, and no other stack of this product was free to take over. Stand it up again under that name, the way the provisioner did, before you use it. (The verifier's own: ${own}-verify.)`
+  if (stack && stack.project !== own) return `Compose project for this run's stack: ${stack.project} - already up, taken over from run ${stack.claimedFrom ?? 'another run'} for the same product rather than standing up another. Check it is healthy and reuse it; do not bring it down or stand up a second one. It may be running a different build: deploy this run's own build into it before you test against it. (The verifier's own: ${own}-verify.)`
+  return `Compose project for any stack this run stands up: ${own} (the verifier's own: ${own}-verify).`
+}
+
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
-export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }, parameters?: Record<string, string>): string {
+export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }, parameters?: Record<string, string>, stack?: StackNote): string {
   // The app serves this directory, so an agent can point a reviewer at it
   // instead of copying files into a product repository to make them reachable.
   const appUrl = (process.env.AGENT_MANAGER_URL || 'http://localhost:3030').replace(/\/+$/, '')
@@ -565,6 +576,12 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
     '',
     ...(runId
       ? [
+          `Run id: ${runId}`,
+          // Stated, not left to be read out of a URL: the runner removes this
+          // run's stacks by exactly this name when it ends, and a stack under
+          // any other name stays running for ever. See runTeardown.ts.
+          stackNote(runId, stack),
+          '',
           `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
           `and shown on the run page at ${appUrl}/runs/${runId}. Link that in a pull`,
           'request body; never copy artifacts into the repository to make them reachable.',

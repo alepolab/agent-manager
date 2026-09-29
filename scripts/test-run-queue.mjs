@@ -78,11 +78,20 @@ await groups.replaceGroups([
   await mk({ status: 'running', group: 'scans' })
   await mk({ status: 'running' })   // ungrouped
 
-  // awaiting_review counts. A run stopped on a person still holds its working
-  // directory and its clone; letting it hand the slot back would drain another
-  // run onto the same machine while it waits.
-  assert.equal(await queue.inFlightForGroup('sdlc'), 3,
-    'running, paused and awaiting_review occupy slots; queued, completed, failed and interrupted do not')
+  // A run stopped on a person does NOT count. It used to, on the reasoning that
+  // it still holds its directory and clone - and it does, which is why the
+  // workspace lock (isWorkingStatus) still covers it. But nothing bounds how
+  // long a person takes: two fix runs at an approval gate held the default
+  // group of two shut, and every nightly scan queued behind them.
+  //
+  // An interrupted run DOES count, because the boot resume brings it back: left
+  // uncounted, the queue started queued runs into the slots a reload had
+  // interrupted, and the group went over its cap when they resumed.
+  assert.equal(await queue.inFlightForGroup('sdlc'), 2,
+    'running and interrupted occupy a slot; paused, awaiting_review, queued, joining and the terminal statuses do not')
+  process.env.RESUME_ON_BOOT = '0'
+  assert.equal(await queue.inFlightForGroup('sdlc'), 1, 'unless nothing will resume it')
+  delete process.env.RESUME_ON_BOOT
 
   // `joining` does NOT count, and this is the one exclusion that is a
   // correctness requirement rather than an accounting choice. A joining parent

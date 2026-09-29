@@ -129,3 +129,10 @@ export function runElapsedLabel(run: RunClockRecord, now: number = Date.now()): 
 export const RUN_DURATION_HINT =
   'Time this run spent executing. Time it sat failed, stopped or paused waiting for a person is not counted, '
   + 'so a restarted run does not accumulate the gap. The Started column shows when it first began.'
+
+/** A gate decision as a status and a word, for StatusLabel. */
+export const GATE_VERDICT: Record<string, { status: string, word: string }> = {
+  approved: { status: 'completed', word: 'Approved' },
+  rejected: { status: 'failed', word: 'Rejected' },
+  'sent-back': { status: 'paused', word: 'Sent back' },
+}

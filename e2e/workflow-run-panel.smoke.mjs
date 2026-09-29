@@ -1,15 +1,15 @@
 /**
- * Browser smoke test for the workflow run status panel
- * (app/pages/workflows/[slug].vue, app/components/WorkflowRunPanel.vue,
- * app/composables/useWorkflowRun.ts).
+ * Browser smoke test for the workflow run stack
+ * (app/pages/workflows/[slug].vue's Run mode, app/components/RunStack.vue,
+ * app/components/RunStackCard.vue, app/composables/useWorkflowRun.ts).
  *
- * Why this exists: the panel's data path is covered by scripts/test-workflow-runner.mjs
+ * Why this exists: the run's data path is covered by scripts/test-workflow-runner.mjs
  * and friends, which prove the server produces correct per-agent rows. None of that
  * proves the browser actually paints them - a broken template, a v-if that hides every
  * row, a class name typo, all pass a fully green data-path suite. This test starts a
  * real dev server against a seeded, disposable CLAUDE_DIR (never the deployed
- * container), opens the page in a real (headless) browser, and asserts the three step
- * rows the seed describes are visible with their labels and status colors.
+ * container), opens the page in Run mode in a real (headless) browser, and asserts the
+ * three seeded steps render as step cards with their labels and status.
  *
  * This is NOT part of the fast scripts/test-*.mjs sweep - it boots a dev server and a
  * browser, so it takes tens of seconds rather than milliseconds. Run it on its own:
@@ -47,6 +47,19 @@ const repoRoot = join(__dirname, '..')
 
 const SERVER_READY_TIMEOUT_MS = 90_000
 const ROW_VISIBLE_TIMEOUT_MS = 30_000
+
+// Bounds for the ERR_NETWORK_CHANGED retry loops below (loadRunMode, loadRunsList).
+// Worst case per loop, if the network flake persists for every attempt:
+// LOAD_RETRY_ATTEMPTS * (LOAD_GOTO_TIMEOUT_MS + LOAD_WAIT_TIMEOUT_MS) + (LOAD_RETRY_ATTEMPTS - 1) * LOAD_RETRY_SLEEP_MS
+// = 3 * (20s + 20s) + 2 * 3s = 126s. There are two such loops in this file, so
+// 252s covers both retrying maximally, leaving comfortable margin under the
+// external `timeout 400` for server startup and the rest of the smoke's
+// assertions - none of which retry, so a genuine (non-network) failure now
+// surfaces on the first attempt instead of being multiplied by the retry loop.
+const LOAD_RETRY_ATTEMPTS = 3
+const LOAD_GOTO_TIMEOUT_MS = 20_000
+const LOAD_WAIT_TIMEOUT_MS = 20_000
+const LOAD_RETRY_SLEEP_MS = 3_000
 
 /** Ask the OS for an unused port rather than guessing one - guessing risks colliding
  *  with the deployed container on 3030 or anything else already listening. */
@@ -237,44 +250,71 @@ try {
   const baseUrl = `http://127.0.0.1:${port}`
   await waitForServer(baseUrl, SERVER_READY_TIMEOUT_MS)
 
-  // ── 3. Load the workflow page in a real browser ──────────────────────────
+  // ── 3. Load the workflow's run directly into Run mode ────────────────────
   browser = await chromium.launch()
   const page = await browser.newPage()
   page.setDefaultTimeout(ROW_VISIBLE_TIMEOUT_MS)
-  await page.goto(`${baseUrl}/workflows/${slug}`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
 
-  // ── 4. Assert the three seeded step rows are visible with label + status ─
-  const STATUS_COLOR = {
-    completed: 'var(--success, #22c55e)',
-    running: 'var(--info, #3b82f6)',
-    pending: 'var(--text-disabled, #9ca3af)',
+  /** Guards against intermittent ERR_NETWORK_CHANGED on this host - the docker
+   *  bridges churn, and Chromium aborts module loads when they do. Only that
+   *  error is retried: anything else (a real assertion of app breakage, e.g.
+   *  Run mode never actually selecting) is rethrown from the first attempt, so
+   *  a genuine regression fails fast with a FAIL message instead of being
+   *  multiplied by the retry loop and killed from outside by `timeout 400`
+   *  with no message and a leaked dev server. Also covers `?run=` being a
+   *  one-shot intent applied only after the run list itself has loaded
+   *  client-side, which the "mode-run selected" wait accounts for. */
+  async function loadRunMode(url) {
+    for (let attempt = 0; attempt < LOAD_RETRY_ATTEMPTS; attempt++) {
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: LOAD_GOTO_TIMEOUT_MS })
+        await page.waitForFunction(
+          () => document.querySelector('[data-testid=mode-run]')?.getAttribute('aria-selected') === 'true',
+          null, { timeout: LOAD_WAIT_TIMEOUT_MS },
+        )
+        return
+      } catch (err) {
+        if (!String(err?.message).includes('ERR_NETWORK_CHANGED') || attempt === LOAD_RETRY_ATTEMPTS - 1) throw err
+        await new Promise(r => setTimeout(r, LOAD_RETRY_SLEEP_MS))
+      }
+    }
   }
+  await loadRunMode(`${baseUrl}/workflows/${slug}?run=${run.id}`)
+
+  // ── 4. Assert the three seeded steps render as run-stack cards ───────────
+  const STATUS_DOT_LABEL = { completed: 'completed', running: 'running', pending: 'pending' }
   const expectedRows = [
-    { label: stepIntake.label, agentSlug: stepIntake.agentSlug, status: 'completed' },
-    { label: stepStack.label, agentSlug: stepStack.agentSlug, status: 'running' },
-    { label: stepTest.label, agentSlug: stepTest.agentSlug, status: 'pending' },
+    { stepId: stepIntake.id, label: stepIntake.label, agentSlug: stepIntake.agentSlug, status: 'completed' },
+    { stepId: stepStack.id, label: stepStack.label, agentSlug: stepStack.agentSlug, status: 'running' },
+    { stepId: stepTest.id, label: stepTest.label, agentSlug: stepTest.agentSlug, status: 'pending' },
   ]
 
   for (const expected of expectedRows) {
-    // Each run-panel row is a <button> containing the status dot, the label and the
-    // agent slug (app/components/WorkflowRunPanel.vue) - match on both label and
-    // agent slug together so this can't accidentally match an unrelated element.
-    const row = page.locator('button', { hasText: expected.label }).filter({ hasText: expected.agentSlug }).first()
+    // Each run-stack step is an `article[data-step]` (app/components/RunStackCard.vue) -
+    // locate by the id rather than by text, so a card that renders with the wrong
+    // label still gets found and its text checked, rather than the test itself
+    // failing to locate anything.
+    const card = page.locator(`article[data-step="${expected.stepId}"]`)
     try {
-      await row.waitFor({ state: 'visible' })
+      await card.waitFor({ state: 'visible' })
     } catch (err) {
       throw new Error(
-        `Expected a visible workflow-run-panel row for step "${expected.label}" `
+        `Expected a visible run-stack card for step "${expected.label}" (${expected.stepId}) `
         + `(agent: ${expected.agentSlug}, status: ${expected.status}) but it never became visible `
-        + `within ${ROW_VISIBLE_TIMEOUT_MS}ms. WorkflowRunPanel.vue is rendering no matching row.`,
+        + `within ${ROW_VISIBLE_TIMEOUT_MS}ms. RunStack.vue is rendering no matching card.`,
       )
     }
 
-    const dotStyle = await row.locator('span.rounded-full').first().getAttribute('style')
+    const cardText = await card.innerText()
     assert.ok(
-      dotStyle && dotStyle.includes(STATUS_COLOR[expected.status]),
-      `Step "${expected.label}" row is visible, but its status dot does not show the "${expected.status}" `
-      + `color (expected style to include ${STATUS_COLOR[expected.status]}, got "${dotStyle}")`,
+      cardText.includes(expected.label),
+      `Card for step "${expected.stepId}" is visible, but its text does not carry the label "${expected.label}". Text:\n${cardText}`,
+    )
+
+    const dotLabel = await card.locator('[role="img"][aria-label]').first().getAttribute('aria-label')
+    assert.equal(
+      dotLabel, STATUS_DOT_LABEL[expected.status],
+      `Step "${expected.label}" card is visible, but its status dot's aria-label is "${dotLabel}", not "${expected.status}"`,
     )
   }
 
@@ -284,7 +324,7 @@ try {
   const countEl = page.locator('[data-testid="run-progress-count"]')
   await countEl.waitFor({ state: 'visible', timeout: 30_000 })
   const countText = (await countEl.textContent()).replace(/\s+/g, ' ').trim()
-  assert.equal(countText, 'Step 1 of 3', `progress count must report settled steps, got "${countText}"`)
+  assert.equal(countText, '1 of 3', `progress count must report settled steps, got "${countText}"`)
 
   const segments = page.locator('[data-testid="run-progress-bar"] > span')
   assert.equal(await segments.count(), 3,
@@ -298,32 +338,77 @@ try {
   // the global page finds that run and reports the same settled count the
   // panel does - the two views reading one run differently is exactly the
   // drift that made extracting app/utils/runStatus.ts worth doing.
-  await page.goto(`${baseUrl}/runs`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  //
+  // /runs is a master-detail page now (app/pages/runs/index.vue): a `ul` of run
+  // rows on the left (`aria-live="polite"`, one `button` per run with
+  // `aria-current` marking the open one) and, on the right, a detail pane
+  // (RunDetailPane.vue) that renders the very same RunStack used in Run mode
+  // above - so the assertions below reuse the same `run-progress-count` /
+  // `run-progress-bar` / `article[data-step]` selectors, just against the
+  // detail pane's copy of them rather than the workflow page's.
+  // Same ERR_NETWORK_CHANGED-only retry as loadRunMode above - anything else
+  // rethrows on the first attempt.
+  async function loadRunsList(url) {
+    for (let attempt = 0; attempt < LOAD_RETRY_ATTEMPTS; attempt++) {
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: LOAD_GOTO_TIMEOUT_MS })
+        await page.waitForFunction(
+          () => document.querySelector('ul[aria-live="polite"]') !== null,
+          null, { timeout: LOAD_WAIT_TIMEOUT_MS },
+        )
+        return
+      } catch (err) {
+        if (!String(err?.message).includes('ERR_NETWORK_CHANGED') || attempt === LOAD_RETRY_ATTEMPTS - 1) throw err
+        await new Promise(r => setTimeout(r, LOAD_RETRY_SLEEP_MS))
+      }
+    }
+  }
+  await loadRunsList(`${baseUrl}/runs`)
 
-  const historyRows = page.locator('[data-testid="run-history-row"]')
-  await historyRows.first().waitFor({ state: 'visible', timeout: 30_000 })
-  assert.equal(await historyRows.count(), 1,
-    'the history page must list the one seeded run, found via GET /api/runs rather than a workflow slug')
+  // Exactly one row: a locator that fails loudly if the seeded run is missing
+  // (zero rows) or duplicated (two rows) rather than silently picking "first".
+  const runRows = page.locator('ul[aria-live="polite"] > li button')
+  await runRows.first().waitFor({ state: 'visible', timeout: 30_000 })
+  assert.equal(await runRows.count(), 1,
+    'the history page must list exactly the one seeded run, found via GET /api/runs rather than a workflow slug')
 
-  const historyCount = page.locator('[data-testid="run-history-count"]').first()
-  const historyCountText = (await historyCount.textContent()).replace(/\s+/g, ' ').trim()
-  assert.equal(historyCountText, '1 of 3',
-    `history must report the same settled count as the panel, got "${historyCountText}"`)
+  // Select it. The page can auto-select the first (and only) run on load, but
+  // clicking it is still correct either way, and is what proves the row is
+  // actually the thing that opens the detail pane rather than a coincidence.
+  await runRows.first().click()
+  await page.waitForFunction(
+    () => document.querySelector('ul[aria-live="polite"] > li button')?.getAttribute('aria-current') === 'true',
+    null, { timeout: ROW_VISIBLE_TIMEOUT_MS },
+  )
 
-  const historySegments = page.locator('[data-testid="run-history-bar"] > span')
-  assert.equal(await historySegments.count(), 3,
-    'history rows carry one segment per step, matching the panel')
+  // The detail pane renders RunStack for the selected run - same testids, same
+  // per-step cards, as the panel assertions above. Scoped to the detail
+  // `<section>` (identified by containing an `article[data-step]`, which only
+  // the detail pane renders): the run's own row in the list on the left also
+  // carries a `run-progress-bar` (app/pages/runs/index.vue renders one per
+  // row), so an unscoped query here double-counts both bars' segments.
+  const pane = page.locator('section').filter({ has: page.locator('article[data-step]') })
 
-  // Expanding is the only way to see per-step detail from history, so a broken
-  // toggle makes the page a dead end rather than an obviously empty one.
-  await historyRows.first().locator('button').first().click()
-  const intakeRow = page.getByText(stepIntake.label, { exact: false }).first()
-  await intakeRow.waitFor({ state: 'visible', timeout: 15_000 })
+  const paneCountEl = pane.locator('[data-testid="run-progress-count"]')
+  await paneCountEl.waitFor({ state: 'visible', timeout: 30_000 })
+  const paneCountText = (await paneCountEl.textContent()).replace(/\s+/g, ' ').trim()
+  assert.equal(paneCountText, '1 of 3',
+    `the /runs detail pane must report the same settled count as the panel, got "${paneCountText}"`)
+
+  const paneSegments = pane.locator('[data-testid="run-progress-bar"] > span')
+  assert.equal(await paneSegments.count(), 3,
+    'the detail pane\'s bar carries one segment per step, matching the panel')
+
+  const paneIntakeCard = pane.locator(`article[data-step="${stepIntake.id}"]`)
+  await paneIntakeCard.waitFor({ state: 'visible', timeout: 30_000 })
+  const paneIntakeText = await paneIntakeCard.innerText()
+  assert.ok(paneIntakeText.includes(stepIntake.label),
+    `the detail pane's card for step "${stepIntake.id}" does not carry the label "${stepIntake.label}". Text:\n${paneIntakeText}`)
 
   console.log(
     'PASS: workflow run panel rendered all 3 seeded step rows (completed, running, pending) '
-    + 'with correct labels and status colors; run history page listed the same run '
-    + 'with a matching settled count and expandable step detail',
+    + 'with correct labels and status colors; /runs listed exactly the one seeded run and its '
+    + 'detail pane rendered the same run stack with a matching settled count and step card',
   )
 } catch (err) {
   exitCode = 1

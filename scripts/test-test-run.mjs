@@ -1,0 +1,441 @@
+/**
+ * Self-check for test runs: one step run against a finished run's outputs,
+ * on its own branch, with no side effects, kept apart from real runs.
+ *
+ *   node scripts/test-test-run.mjs
+ */
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'test-run-'))
+process.env.CLAUDE_DIR = CLAUDE_DIR
+process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'test-run-artifacts-'))
+
+const runner = await import('../server/utils/workflowRunner.ts')
+const store = await import('../server/utils/workflowRunStore.ts')
+const queue = await import('../server/utils/runQueue.ts')
+const { isTestRun } = await import('../shared/types/run.ts')
+runner.setPreflight(async () => ({ at: Date.now(), checks: [] }))
+
+const TIMEOUT = 30_000
+mkdirSync(join(CLAUDE_DIR, 'workflows'), { recursive: true })
+const save = w => writeFileSync(join(CLAUDE_DIR, 'workflows', `${w.slug}.json`), JSON.stringify(w, null, 2))
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+function repo() {
+  const dir = mkdtempSync(join(tmpdir(), 'test-run-repo-'))
+  git(dir, 'init', '-q', '-b', 'develop')
+  git(dir, 'config', 'user.email', 't@example.com'); git(dir, 'config', 'user.name', 't')
+  writeFileSync(join(dir, 'README.md'), 'one\n'); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', 'one')
+  return dir
+}
+
+// ── 1. isTestRun, and a real run records headAtStart ───────────────────────
+assert.equal(isTestRun({}), false)
+assert.equal(isTestRun({ testOf: { sourceRunId: 'r', stepId: 's', startPoint: 'x' } }), true)
+{
+  const workflow = { slug: 'heads', name: 'Heads', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  runner.setAgentCaller(async (slug, _input, dir) => {
+    if (slug === 'agent-a') { writeFileSync(join(dir, 'a.txt'), 'a\n'); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', 'a') }
+    return `output of ${slug}`
+  })
+  const started = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })
+  const run = await runner.waitForSettled(started.id, TIMEOUT)
+  assert.equal(run.status, 'completed')
+  const [a, b] = run.steps
+  assert.match(a.headAtStart, /^[0-9a-f]{40}$/, 'a step records the commit it started from')
+  assert.notEqual(a.headAtStart, b.headAtStart, 'b started after a committed')
+}
+
+// ── 2. test runs are kept apart ────────────────────────────────────────────
+{
+  const live = { id: 't1', workflowSlug: 'heads', status: 'running', group: undefined, testOf: { sourceRunId: 'x', stepId: 'a', startPoint: 'develop' } }
+  assert.equal(await queue.inFlightForGroup('default', [live]), 0, 'a test run holds no group slot')
+  assert.equal(await queue.inFlightForGroup('default', [{ ...live, testOf: undefined }]), 1, 'a real one does')
+}
+
+// ── 3. a test run: seeded, one step, no gates, override ────────────────────
+{
+  const workflow = { slug: 'tested', name: 'Tested', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: ['c'], approval: true },
+    { id: 'c', agentSlug: 'agent-c', label: 'Charlie', next: [] },
+  ] }
+  save(workflow)
+  const seen = []
+  runner.setAgentCaller(async (slug, input) => { seen.push({ slug, input }); return `output of ${slug}` })
+  const src = await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+  let source = await runner.waitForSettled(src.id, TIMEOUT)
+  if (source.status === 'paused') { await runner.continueRun(source.id); source = await runner.waitForSettled(src.id, TIMEOUT) }
+  assert.equal(source.status, 'completed', 'the source run finishes (its approval answered)')
+
+  seen.length = 0
+  const t = await runner.startTestRun(source.id, 'b', { stepOverride: { agentSlug: 'agent-b2', id: 'hijack', next: ['a'] } })
+  const test = await runner.waitForSettled(t.id, TIMEOUT)
+  assert.equal(test.status, 'completed', 'the approval did not pause the test')
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b2'], 'only the tested step ran, with the overridden agent')
+  assert.match(seen[0].input, /output of agent-a/, 'it saw the source run\'s earlier output')
+  const byId = Object.fromEntries(test.steps.map(s => [s.stepId, s]))
+  assert.equal(byId.a.status, 'completed'); assert.equal(byId.a.output, 'output of agent-a')
+  assert.equal(byId.b.status, 'completed')
+  assert.equal(byId.c.status, 'skipped'); assert.equal(byId.c.skipReason, 'Not part of this test')
+  assert.equal(byId.b.agentSlug, 'agent-b2', 'the tested record names the agent that ran')
+  assert.equal(test.testOf.sourceRunId, source.id)
+  assert.equal(test.stopAfter, 'b')
+  assert.equal(test.parentRunId, undefined, 'dispatch lineage untouched')
+
+  await assert.rejects(runner.startTestRun(source.id, 'zz'), e => e.status === 400)
+  await assert.rejects(runner.startTestRun('nope', 'b'), e => e.status === 404)
+
+  // A failing tested step fails the test run, and still runs nothing after it.
+  seen.length = 0
+  runner.setAgentCaller(async (slug) => { seen.push({ slug }); if (slug === 'agent-b') throw new Error('boom'); return `output of ${slug}` })
+  const f = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(f.status, 'failed')
+  assert.ok(!seen.some(s => s.slug === 'agent-c'), 'nothing after the tested step')
+
+  // A source run that never reached the step is refused with a reason.
+  runner.setAgentCaller(async (slug) => { if (slug === 'agent-a') throw new Error('stop'); return 'x' })
+  const early = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  await assert.rejects(runner.startTestRun(early.id, 'c'), e => e.status === 409 && /did not finish/.test(e.message))
+}
+
+// ── 4. a test run's rework or widen is its outcome, never a restart ───────
+{
+  const workflow = { slug: 'reworked', name: 'Reworked', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b', 's'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: ['c'] },
+    { id: 's', agentSlug: 'agent-s', label: 'Sierra', next: [] },
+    { id: 'c', agentSlug: 'agent-c', label: 'Charlie', next: [] },
+  ] }
+  save(workflow)
+  runner.setAgentCaller(async (slug) => `output of ${slug}`)
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  assert.equal(source.status, 'completed')
+
+  for (const line of ['PIPELINE-REWORK: Alpha — redo it', 'PIPELINE-WIDEN: someorg/other-repo — the fault is there']) {
+    const seen = []
+    runner.setAgentCaller(async (slug) => { seen.push(slug); return slug === 'agent-b' ? `looked\n${line}` : `fresh ${slug}` })
+    const test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+    assert.deepEqual(seen, ['agent-b'], `${line}: only the tested step ran`)
+    assert.equal(test.status, 'completed', `${line}: the test settles`)
+    const byId = Object.fromEntries(test.steps.map(s => [s.stepId, s]))
+    assert.equal(byId.a.output, 'output of agent-a', `${line}: the seeded ancestor keeps its output`)
+    assert.equal(byId.s.status, 'skipped'); assert.equal(byId.s.skipReason, 'Not part of this test')
+    assert.ok(byId.b.output.includes(line), `${line}: the instruction stays visible in the step's output`)
+    assert.equal(test.product, source.product, `${line}: the run's scope is not widened`)
+  }
+}
+
+// ── 5. a stale produces file does not pass the test; runWhen does not skip it ──
+{
+  const workflow = { slug: 'producing', name: 'Producing', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [], produces: ['b-report.md'], maxVisits: 1 },
+  ] }
+  save(workflow)
+  runner.setAgentCaller(async (slug, input) => {
+    if (slug === 'agent-b') writeFileSync(join(input.match(/Write every artifact you produce into: (\S+)/)[1], 'b-report.md'), 'the report\n')
+    return `output of ${slug}`
+  })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  assert.equal(source.status, 'completed', 'the source step wrote its file')
+  runner.setAgentCaller(async (slug) => `output of ${slug}`)
+  const test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(test.status, 'failed', 'the source\'s copy of the file does not satisfy the tested step')
+  assert.match(test.error, /Output check/)
+}
+{
+  const workflow = { slug: 'conditional', name: 'Conditional', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [], runWhen: { artifact: 'missing.md' } },
+  ] }
+  save(workflow)
+  const seen = []
+  runner.setAgentCaller(async (slug) => { seen.push(slug); return `output of ${slug}` })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })).id, TIMEOUT)
+  assert.equal(source.status, 'completed'); assert.deepEqual(seen, ['agent-a'], 'the source skipped b on its condition')
+  seen.length = 0
+  const test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.deepEqual(seen, ['agent-b'], 'a test always runs its step')
+  assert.equal(test.status, 'completed')
+}
+
+// ── 6. runner steps dry-run in a test ──────────────────────────────────────
+{
+  const workflow = { slug: 'drytest', name: 'Dry', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['j'] },
+    { id: 'j', agentSlug: 'sdlc-jira-tracker', label: 'Jira', jira: { transition: 'In Review', comment: true }, next: ['n'] },
+    { id: 'n', agentSlug: 'sdlc-notifier', label: 'Tell', notify: { channel: 'team', message: 'done' }, next: [] },
+  ] }
+  save(workflow)
+  // The source run needs the Jira and notify steps to have completed; mark them
+  // completed by seeding the source record directly rather than calling Jira.
+  runner.setAgentCaller(async slug => `output of ${slug}`)
+  const src = await store.createRun({ workflowSlug: 'drytest', workflowName: 'Dry', initialPrompt: 'go', watch: 'direct-invocation',
+    steps: workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })) })
+  for (const s of src.steps) Object.assign(s, { status: 'completed', output: `real ${s.stepId}` })
+  Object.assign(src, { status: 'completed', ticketKey: 'SUP-1', endedAt: Date.now() })
+  await store.saveRun(src)
+
+  const tj = await runner.waitForSettled((await runner.startTestRun(src.id, 'j')).id, TIMEOUT)
+  assert.equal(tj.status, 'completed')
+  assert.equal(tj.steps.find(s => s.stepId === 'j').output, '[Test run] Would move SUP-1 to "In Review", and post the outcome comment')
+  assert.notEqual(tj.ticketCommented, true, 'no outcome comment was posted for a test run')
+
+  const tn = await runner.waitForSettled((await runner.startTestRun(src.id, 'n')).id, TIMEOUT)
+  assert.equal(tn.steps.find(s => s.stepId === 'n').output, '[Test run] Would post to team: done')
+
+  // A loop step plans for real and starts nothing.
+  const loopWf = { slug: 'looptest', name: 'Loop', steps: [
+    { id: 'd', agentSlug: 'sdlc-auto-dispatcher', label: 'Fan out', triggerWorkflow: { fromParameter: 'repos', itemParameter: 'repo', slug: 'drytest' }, next: [] },
+  ] }
+  save(loopWf)
+  const lsrc = await store.createRun({ workflowSlug: 'looptest', workflowName: 'Loop', initialPrompt: 'go', watch: 'direct-invocation',
+    parameters: { repos: 'one\ntwo' }, steps: loopWf.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })) })
+  for (const s of lsrc.steps) Object.assign(s, { status: 'completed', output: 'real' })
+  Object.assign(lsrc, { status: 'completed', endedAt: Date.now() })
+  await store.saveRun(lsrc)
+  const tl = await runner.waitForSettled((await runner.startTestRun(lsrc.id, 'd')).id, TIMEOUT)
+  const dstep = tl.steps.find(s => s.stepId === 'd')
+  assert.equal(dstep.output, '[Test run] Would start 2 runs:\none → drytest\ntwo → drytest')
+  assert.equal(dstep.childRunIds, undefined, 'no child run was started')
+  assert.equal((await store.listRuns()).filter(r => r.parentRunId === tl.id).length, 0)
+}
+
+// ── 7. the test worktree: its own branch, from the step's start commit, removed after ──
+{
+  const workflow = { slug: 'wt', name: 'Wt', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  runner.setAgentCaller(async (slug, _i, dir) => {
+    writeFileSync(join(dir, `${slug}.txt`), slug); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', slug)
+    return `output of ${slug}`
+  })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })).id, TIMEOUT)
+  const bStart = source.steps.find(s => s.stepId === 'b').headAtStart
+
+  let testDir = null
+  runner.setAgentCaller(async (slug, _i, dir) => {
+    testDir = dir
+    assert.equal(git(dir, 'rev-parse', 'HEAD'), bStart, 'the test starts from the commit b started from')
+    assert.equal(existsSync(join(dir, 'agent-b.txt')), false, 'not from the end of the source run')
+    return 'tested'
+  })
+  const t = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(t.status, 'completed')
+  assert.match(t.branch, new RegExp(`^test/${source.id.slice(0, 8)}-b-1$`))
+  assert.equal(t.testOf.startPoint, bStart)
+  assert.equal(t.testOf.codeNote, undefined)
+  assert.ok(testDir, 'the agent ran in a directory')
+  for (let i = 0; i < 50 && existsSync(testDir); i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(existsSync(testDir), false, 'the test worktree is removed when the test settles')
+  assert.equal(git(projectDir, 'branch', '--list', t.branch), '', 'and its branch')
+  assert.notEqual(git(projectDir, 'branch', '--list', source.branch), '', 'the source run\'s branch is untouched')
+
+  // A run's real branch is never removed.
+  const ws = await import('../server/utils/workspace.ts')
+  await assert.rejects(ws.removeTestWorktrees(projectDir, source.branch), /test\//)
+  assert.notEqual(git(projectDir, 'branch', '--list', source.branch), '', 'still there after the refusal')
+}
+
+// ── 8. a live test run neither holds nor is refused by the workspace lock ──
+{
+  const dir = repo()
+  const live = await store.createRun({ workflowSlug: 'wt', workflowName: 'Wt', initialPrompt: 'go', watch: 'direct-invocation', projectDir: dir,
+    steps: [{ stepId: 'a', label: 'Alpha', agentSlug: 'agent-a' }] })
+  live.testOf = { sourceRunId: 'x', stepId: 'a', startPoint: 'develop' }
+  await store.saveRun(live)
+  assert.equal(await store.findRunInWorkspace(dir), null, 'a live test run does not lock its workspace')
+  assert.equal(await store.findRunInWorkspace(dir, undefined, { includeQueued: true }), null, 'nor count as aimed at it')
+  delete live.testOf
+  await store.saveRun(live)
+  assert.equal((await store.findRunInWorkspace(dir))?.id, live.id, 'a real one does')
+  live.status = 'stopped'; await store.saveRun(live)
+}
+
+// ── 9. cleanup robustness: a stop while the agent unwinds, a squatted directory, a partial create ──
+{
+  const workflow = { slug: 'wt2', name: 'Wt2', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  runner.setAgentCaller(async (slug, _i, dir) => {
+    writeFileSync(join(dir, `${slug}.txt`), slug); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', slug)
+    return `output of ${slug}`
+  })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })).id, TIMEOUT)
+  assert.equal(source.status, 'completed')
+  const stem = `test/${source.id.slice(0, 8)}-b-`
+  const wtDir = n => `${projectDir}@${`${stem}${n}`.replace(/[^A-Za-z0-9_.-]+/g, '-')}`
+
+  // A directory already where test/…-1 would go: the test takes -2.
+  mkdirSync(wtDir(1))
+
+  // Stopped while its agent is still running: the worktree stays until the agent returns.
+  let release, started
+  const agentStarted = new Promise(r => { started = r })
+  const agentReleased = new Promise(r => { release = r })
+  let testDir = null
+  runner.setAgentCaller(async (_slug, _i, dir) => { testDir = dir; started(); await agentReleased; return 'late' })
+  const t = await runner.startTestRun(source.id, 'b')
+  await agentStarted
+  await runner.stopRun(t.id)
+  await new Promise(r => setTimeout(r, 300))
+  assert.ok(existsSync(testDir), 'not removed from under an agent that is still unwinding')
+  release()
+  for (let i = 0; i < 100 && existsSync(testDir); i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(existsSync(testDir), false, 'removed once the agent returned')
+  // The directory goes before the record saying so is written.
+  let stopped = await store.getRun(t.id)
+  for (let i = 0; i < 50 && !stopped.testOf.testWorktreeRemoved; i++) { await new Promise(r => setTimeout(r, 100)); stopped = await store.getRun(t.id) }
+  assert.equal(stopped.status, 'stopped', 'the cleanup did not change the outcome')
+  assert.equal(stopped.branch, `${stem}2`, 'a squatted worktree directory is skipped like a taken branch')
+  assert.equal(stopped.testOf.testWorktreeRemoved, true, 'the saved record carries the marker')
+  assert.equal(git(projectDir, 'branch', '--list', `${stem}*`), '', 'no test branch left behind')
+
+  // A nested repository whose start cannot be made fails the create, and the
+  // root worktree already made for it is removed rather than left behind.
+  const nested = join(projectDir, 'mod')
+  mkdirSync(nested)
+  git(nested, 'init', '-q', '-b', 'develop')
+  git(nested, 'config', 'user.email', 't@example.com'); git(nested, 'config', 'user.name', 't')
+  writeFileSync(join(nested, 'x'), 'x'); git(nested, 'add', '.'); git(nested, 'commit', '-q', '-m', 'x')
+  runner.setAgentCaller(async () => 'never')
+  const p = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(p.status, 'failed')
+  assert.match(`${p.error ?? ''} ${p.steps.find(s => s.stepId === 'b').error ?? ''}`, /could not create the test worktree/)
+  assert.equal(git(projectDir, 'branch', '--list', `${stem}*`), '', 'the root\'s test branch was removed')
+  assert.equal(existsSync(wtDir(1)), true, 'the squatted directory is not ours to remove')
+  assert.equal(existsSync(wtDir(2)), false, 'nothing left where the worktree was made')
+}
+
+// ── 10. a settled test run re-runs only its tested step, into a fresh worktree ──
+{
+  const workflow = { slug: 'replayed', name: 'Replayed', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b', 'c'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+    { id: 'c', agentSlug: 'agent-c', label: 'Charlie', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  const seen = []
+  runner.setAgentCaller(async (slug, input, dir) => {
+    seen.push({ slug, input })
+    writeFileSync(join(dir, `${slug}.txt`), slug); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', slug)
+    return `output of ${slug}`
+  })
+  const src = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })).id, TIMEOUT)
+  assert.equal(src.status, 'completed')
+  assert.ok(seen.every(s => !/This is a test run of one step/.test(s.input)), 'a real run\'s agents are not told it is a test')
+  // The product expects a checkout, the way a routed run's does.
+  const source = await store.getRun(src.id)
+  source.product = { name: 'p', repos: ['someorg/replayed'], branches: { bug: 'develop' }, tests: {} }
+  await store.saveRun(source)
+
+  seen.length = 0
+  const dirs = []
+  runner.setAgentCaller(async (slug, input, dir) => { seen.push({ slug, input }); dirs.push({ dir, there: existsSync(dir) }); return `tested ${slug}` })
+  let test = await runner.waitForSettled((await runner.startTestRun(source.id, 'b')).id, TIMEOUT)
+  assert.equal(test.status, 'completed', `${test.error} | ${test.steps.map(s => s.error).join(' ')}`)
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b'])
+  assert.match(seen[0].input, /This is a test run of one step\. Do not push, open pull requests, post messages or change tickets; describe what you would do instead\./, 'the tested agent is told it is a test')
+  for (let i = 0; i < 50 && existsSync(dirs[0].dir); i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(existsSync(dirs[0].dir), false, 'the worktree went when the test settled')
+  test = await store.getRun(test.id)
+  for (let i = 0; i < 50 && !test.testOf.testWorktreeRemoved; i++) { await new Promise(r => setTimeout(r, 100)); test = await store.getRun(test.id) }
+  assert.equal(test.testOf.testWorktreeRemoved, true)
+
+  // Replaying from anywhere but the tested step would run what the test is not.
+  for (const other of ['a', 'c']) {
+    await assert.rejects(runner.restartRun(test.id, other), e => e.statusCode === 409 && /only re-runs the step it tests/.test(e.message), `restart from ${other} is refused`)
+  }
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b'], 'nothing ran for the refused restarts')
+
+  // The tested step itself: only it runs, in a worktree made again, removed again after.
+  seen.length = 0; dirs.length = 0
+  await runner.restartRun(test.id, 'b')
+  const again = await runner.waitForSettled(test.id, TIMEOUT)
+  assert.equal(again.status, 'completed', 'a test of a product workflow restarts although its worktree was removed')
+  assert.deepEqual(seen.map(s => s.slug), ['agent-b'], 'only the tested step re-ran')
+  assert.equal(dirs[0].there, true, 'the worktree was made again for it')
+  const byId = Object.fromEntries(again.steps.map(s => [s.stepId, s]))
+  assert.equal(byId.a.output, 'output of agent-a'); assert.equal(byId.c.status, 'skipped')
+  for (let i = 0; i < 50 && existsSync(dirs[0].dir); i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(existsSync(dirs[0].dir), false, 'and removed again when it settled')
+  assert.equal(git(projectDir, 'branch', '--list', 'test/*'), '', 'no test branch left behind')
+
+  // A test run is not something to test against.
+  await assert.rejects(runner.startTestRun(test.id, 'b'), e => e.status === 409 && /Pick a real run to test against, not a test run\./.test(e.message))
+}
+
+// ── 11. two tests of the same step at once each get their own worktree ─────
+{
+  const workflow = { slug: 'racing', name: 'Racing', steps: [
+    { id: 'a', agentSlug: 'agent-a', label: 'Alpha', next: ['b'] },
+    { id: 'b', agentSlug: 'agent-b', label: 'Bravo', next: [] },
+  ] }
+  save(workflow)
+  const projectDir = repo()
+  runner.setAgentCaller(async (slug, _i, dir) => {
+    writeFileSync(join(dir, `${slug}.txt`), slug); git(dir, 'add', '.'); git(dir, 'commit', '-q', '-m', slug)
+    return `output of ${slug}`
+  })
+  const source = await runner.waitForSettled((await runner.startRun({ workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, projectDir })).id, TIMEOUT)
+  assert.equal(source.status, 'completed')
+  const seenDirs = []
+  runner.setAgentCaller(async (_slug, _i, dir) => {
+    await new Promise(r => setTimeout(r, 500))
+    seenDirs.push({ dir, there: existsSync(join(dir, '.git')) })
+    return 'tested'
+  })
+  const [t1, t2] = await Promise.all([runner.startTestRun(source.id, 'b'), runner.startTestRun(source.id, 'b')])
+  const [r1, r2] = await Promise.all([runner.waitForSettled(t1.id, TIMEOUT), runner.waitForSettled(t2.id, TIMEOUT)])
+  assert.deepEqual([r1.status, r2.status], ['completed', 'completed'], `both tests ran: ${r1.error ?? ''} ${r2.error ?? ''}`)
+  assert.notEqual(r1.branch, r2.branch, 'each on its own branch')
+  assert.equal(seenDirs.length, 2)
+  assert.ok(seenDirs.every(d => d.there), 'neither worktree was removed from under its agent')
+}
+
+// ── 12. a crash between settle and cleanup: the boot sweep removes what was left ──
+{
+  const projectDir = repo()
+  const ws = await import('../server/utils/workspace.ts')
+  const leftover = async (branch, testOf) => {
+    const [wt] = await ws.ensureTestWorktrees(projectDir, branch, 'HEAD', 'HEAD', { fresh: true })
+    const r = await store.createRun({ workflowSlug: 'swept', workflowName: 'Swept', initialPrompt: 'go', watch: 'direct-invocation', projectDir: wt,
+      steps: [{ stepId: 'b', label: 'Bravo', agentSlug: 'agent-b' }] })
+    r.status = 'completed'; r.branch = branch
+    if (testOf) r.testOf = testOf
+    await store.saveRun(r)
+    return { id: r.id, wt }
+  }
+  const settled = await leftover('test/crashed-b-1', { sourceRunId: 'crashed', stepId: 'b', startPoint: 'HEAD' })
+  // Not a test run, whatever its branch is called: never swept.
+  const real = await leftover('test/not-a-test-1')
+  const out = await runner.resumeInterruptedRuns()
+  assert.ok(out.swept.includes(settled.id), `the settled test was swept: ${JSON.stringify(out)}`)
+  assert.equal(existsSync(settled.wt), false, 'its leftover worktree is removed at boot')
+  assert.equal(git(projectDir, 'branch', '--list', 'test/crashed-b-1'), '', 'and its branch')
+  assert.equal((await store.getRun(settled.id)).testOf.testWorktreeRemoved, true, 'the marker is saved')
+  assert.equal((await store.getRun(settled.id)).status, 'completed', 'the outcome is unchanged')
+  assert.ok(!out.swept.includes(real.id))
+  assert.equal(existsSync(real.wt), true, 'a real run\'s worktree is never touched')
+  assert.notEqual(git(projectDir, 'branch', '--list', 'test/not-a-test-1'), '')
+  assert.deepEqual((await runner.resumeInterruptedRuns()).swept, [], 'once only')
+}
+
+console.log('testRun: all checks passed')
+process.exit(0)

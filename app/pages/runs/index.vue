@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
+import { isLiveStatus, isTestRun, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/types/run'
 import { runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
-import { currentStep, isQuiet, stepsDone } from '~/utils/runActivity'
+import { currentStep, isQuiet, shortDuration, stepsDone } from '~/utils/runActivity'
+import { gateIsMine } from '~~/shared/utils/notifications'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 
 const route = useRoute()
@@ -17,7 +18,7 @@ const busy = ref<string | null>(null)
 // click and see what happens — and the fourth, Delete, did NOT 403, because its
 // route checked identity and never capability. A manager could destroy a run and
 // its evidence bundle from here.
-const { me, can } = useUser()
+const { me, can, role } = useUser()
 const mine = computed({
   get: () => route.query.mine === '1',
   set: v => router.replace({ query: { ...route.query, mine: v ? '1' : undefined } }),
@@ -28,19 +29,37 @@ const filter = computed({
   get: () => (typeof route.query.q === 'string' ? route.query.q : ''),
   set: v => router.replace({ query: { ...route.query, q: v || undefined } }),
 })
+const view = computed({
+  get: () => (typeof route.query.view === 'string' ? route.query.view : ''),
+  set: v => router.replace({ query: { ...route.query, view: v || undefined } }),
+})
 const status = computed({
   get: () => (typeof route.query.status === 'string' ? route.query.status : ''),
   set: v => router.replace({ query: { ...route.query, status: v || undefined } }),
 })
 
+const parent = computed(() => (typeof route.query.parent === 'string' ? route.query.parent : ''))
+
+/** Group occupancy, so a queued row can say what it is waiting behind rather
+ *  than only that it is waiting. */
+const groups = ref<{ id: string, name: string, inFlight: number, maxConcurrent: number }[]>([])
+const loadFor = (r: WorkflowRun) => groups.value.find(g => g.id === (r.group?.trim() || 'default'))
 
 async function refresh() {
+  // A response for a view the page has since left would overwrite the new view's list.
+  const forView = view.value
   try {
-    runs.value = await $fetch<WorkflowRun[]>('/api/runs')
+    // Test runs are only fetched for the Tests view: everywhere else they would
+    // sit beside the real runs they test, and be counted with them.
+    const list = await $fetch<WorkflowRun[]>(forView === 'tests' ? '/api/runs?tests=1' : '/api/runs')
+    if (view.value !== forView) return
+    runs.value = list
     // Best-effort: a queued row without its group's numbers still says it is
     // waiting, which is the load-bearing half.
+    groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => groups.value)
     loadError.value = null
   } catch (e: any) {
+    if (view.value !== forView) return
     loadError.value = e.data?.message || e.message || 'Failed to load runs'
   } finally {
     loaded.value = true
@@ -66,6 +85,8 @@ onUnmounted(() => {
 })
 // The 5s poll stops once nothing is live; this picks up runs a watch, schedule or another tab starts.
 useAutoRefresh(refresh)
+// Switching to or from Tests swaps the list, so the selected run would be one it no longer shows.
+watch(view, (v, was) => { if ((v === 'tests') !== (was === 'tests')) { select(null); refresh() } })
 
 // Runs that can still change, newest first: the "what is happening now" list.
 // Deliberately NOT filtered by the table's filters — those exist to search
@@ -86,19 +107,24 @@ let clock: ReturnType<typeof setInterval> | null = null
  */
 const VIEWS = [
   { key: '', label: 'All' },
-  { key: 'waiting', label: 'Waiting' },
+  { key: 'waiting', label: 'Waiting on me' },
   { key: 'running', label: 'Active' },
   { key: 'failed', label: 'Failed' },
+  { key: 'tests', label: 'Tests' },
 ] as const
-const view = computed({
-  get: () => (typeof route.query.view === 'string' ? route.query.view : ''),
-  set: v => router.replace({ query: { ...route.query, view: v || undefined } }),
-})
-const inView = (r: WorkflowRun) =>
-  view.value === 'waiting' ? r.status === 'paused' || r.status === 'awaiting_review'
-  : view.value === 'running' ? isLiveStatus(r.status) && r.status !== 'paused' && r.status !== 'awaiting_review'
-  : view.value === 'failed' ? r.status === 'failed' || r.status === 'interrupted'
+const waitingOnMe = (r: WorkflowRun) => isWaitingOnAPerson(r.status) && gateIsMine(r.question?.role, role.value)
+// A test run matches only Tests, and Tests only test runs: the list holds both
+// while that view is open, and neither may be counted as the other.
+const matchesView = (r: WorkflowRun, v: string) =>
+  v === 'tests' ? isTestRun(r)
+  : isTestRun(r) ? false
+  : v === 'waiting' ? waitingOnMe(r)
+  : v === 'running' ? isLiveStatus(r.status) && !isWaitingOnAPerson(r.status)
+  : v === 'failed' ? r.status === 'failed' || r.status === 'interrupted'
   : true
+const inView = (r: WorkflowRun) => matchesView(r, view.value)
+/** Like the views: test runs count only while Tests is the view. */
+const headerCount = computed(() => runs.value.filter(r => view.value === 'tests' ? isTestRun(r) : !isTestRun(r)).length)
 
 /** The selected run lives in the URL, so a run in the split view can be linked to. */
 const selectedId = computed(() => (typeof route.query.run === 'string' ? route.query.run : null))
@@ -106,11 +132,17 @@ function select(id: string | null) { router.replace({ query: { ...route.query, r
 
 const headline = (r: WorkflowRun) => {
   const first = r.initialPrompt.split('\n')[0] ?? ''
-  return r.ticketKey && first.startsWith(r.ticketKey) ? first.slice(r.ticketKey.length).replace(/^[:\s·-]+/, '') : first
+  const t = r.ticketKey && first.startsWith(r.ticketKey) ? first.slice(r.ticketKey.length).replace(/^[:\s·-]+/, '') : first
+  return r.testOf ? `Test of #${r.testOf.sourceRunId.slice(0, 6)} · ${t}` : t
 }
 const ago = (ms: number) => { const m = Math.round((now.value - ms) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m / 60)}h ago` : `${Math.floor(m / 1440)}d ago` }
 /** The row's second line: where the run is, and whether it has gone quiet. */
 const whereNow = (r: WorkflowRun) => {
+  if (r.status === 'queued') {
+    const g = loadFor(r)
+    const waiting = `waiting ${shortDuration(now.value - (r.queuedAt ?? r.startedAt))}`
+    return g ? `Queued behind ${g.name}: ${g.inFlight} of ${g.maxConcurrent} running · ${waiting}` : `Queued · ${waiting}`
+  }
   const step = currentStep(r)
   // "Runbook A — Ticket to Evidence-Backed PR" on every row pushed the step
   // and the time off the end; the name before the dash is enough to tell runbooks apart.
@@ -122,9 +154,10 @@ const whereNow = (r: WorkflowRun) => {
 
 const shown = computed(() => runs.value.filter(r =>
   inView(r) &&
-  (!filter.value || [r.workflowName, r.initialPrompt.split('\n')[0] ?? '', r.startedBy ?? '', r.product?.name ?? ''].some(v => v.toLowerCase().includes(filter.value.toLowerCase())))
+  (!filter.value || [r.workflowName, r.initialPrompt.split('\n')[0] ?? '', r.startedBy ?? '', r.product?.name ?? '', r.ticketKey ?? ''].some(v => v.toLowerCase().includes(filter.value.toLowerCase())))
   && (!status.value || r.status === status.value)
-  && (!mine.value || r.startedBy === me.value?.login))
+  && (!mine.value || r.startedBy === me.value?.login)
+  && (!parent.value || r.parentRunId === parent.value))
   // Working runs lead: "what is happening right now" is the question this
   // page is opened with. Otherwise newest first, as the API returns them.
   .sort((a, b) => Number(isLiveStatus(b.status)) - Number(isLiveStatus(a.status))))
@@ -153,30 +186,12 @@ const restartPoint = (r: WorkflowRun) =>
 // Folding the capability in here rather than at each button keeps the two
 // buttons and the bulk control from drifting apart later.
 const canRestart = (r: WorkflowRun) => can('runEngine') && ['failed', 'stopped', 'interrupted'].includes(r.status) && !!restartPoint(r)
-// A queued run is stoppable - that is how it is cancelled - and stopping it
-// is the step before deleting it.
-const canStop = (r: WorkflowRun) => can('runEngine') && isLiveStatus(r.status)
-
-// Stop is irreversible for the step in flight: ask once, inline, then forget.
-const confirmingStop = ref<string | null>(null)
-let confirmTimer: ReturnType<typeof setTimeout> | null = null
-function stop(r: WorkflowRun) {
-  if (confirmingStop.value !== r.id) {
-    confirmingStop.value = r.id
-    if (confirmTimer) clearTimeout(confirmTimer)
-    confirmTimer = setTimeout(() => { confirmingStop.value = null }, 4000)
-    return
-  }
-  confirmingStop.value = null
-  act(r, 'stop')
-}
-
-async function act(r: WorkflowRun, path: 'restart' | 'stop', body?: Record<string, unknown>) {
+async function act(r: WorkflowRun, path: 'restart', body?: Record<string, unknown>) {
   busy.value = r.id
   try {
     await $fetch(`/api/runs/${r.id}/${path}`, { method: 'POST', body })
     await refresh()
-    if (path === 'restart') navigateTo(`/workflows/${r.workflowSlug}?run=${r.id}`)
+    navigateTo(`/workflows/${r.workflowSlug}?run=${r.id}`)
   } catch (e: any) {
     toast.add({ title: `Failed to ${path}`, description: e.data?.message || e.message, color: 'error' })
   } finally {
@@ -243,7 +258,7 @@ async function deleteFailed() {
   <div class="h-full flex flex-col">
     <PageHeader title="Runs">
       <template #trailing>
-        <span class="t-small text-meta font-normal">{{ runs.length }}</span>
+        <span class="t-small text-meta font-normal">{{ headerCount }}</span>
       </template>
       <template #right>
         <UButton
@@ -263,16 +278,19 @@ async function deleteFailed() {
       <div class="min-h-0 flex flex-col runs-pane" :class="{ 'hidden lg:flex': selectedId }">
         <div class="shrink-0 p-3 space-y-2" style="border-bottom: 0.5px solid var(--border-default);">
           <div class="flex items-center gap-2">
-            <nav class="segmented" aria-label="Show">
+            <nav class="segmented w-full" aria-label="Show">
               <button
                 v-for="v in VIEWS" :key="v.key"
                 class="segmented__item focus-ring" :class="{ 'segmented__item--on': view === v.key }"
                 :aria-pressed="view === v.key" @click="view = v.key"
               >{{ v.label }}</button>
             </nav>
-            <label class="t-small text-label flex items-center gap-1.5 ml-auto"><input v-model="mine" type="checkbox" /> Mine</label>
           </div>
-          <input v-model="filter" placeholder="Filter by ticket, workflow, product or person" class="field-input t-small" aria-label="Filter runs" />
+          <div class="flex items-center gap-2">
+            <input v-model="filter" placeholder="Filter by ticket, workflow, product or person" class="field-input t-small flex-1 min-w-0" aria-label="Filter runs" />
+            <label class="t-small text-label flex items-center gap-1.5 shrink-0"><input v-model="mine" type="checkbox" /> Mine</label>
+          </div>
+          <UButton v-if="parent" size="xs" variant="soft" color="neutral" icon="i-lucide-x" :label="`Children of ${parent.slice(0, 8)}`" @click="() => { router.replace({ query: { ...route.query, parent: undefined } }) }" />
         </div>
 
         <div class="flex-1 min-h-0 overflow-y-auto" aria-live="polite">
@@ -295,7 +313,7 @@ async function deleteFailed() {
           >
             <span class="flex items-baseline gap-2 min-w-0">
               <span class="truncate font-medium flex-1 min-w-0"><span v-if="r.ticketKey" class="font-mono mr-1.5">{{ r.ticketKey }}</span><span class="font-normal">{{ headline(r) }}</span></span>
-              <StatusLabel :status="r.status" class="shrink-0" />
+              <StatusLabel :status="r.status" :label="waitingOnMe(r) ? 'Yours' : undefined" class="shrink-0" />
             </span>
             <span class="t-small text-label truncate block">
               {{ whereNow(r) }} · <span data-testid="run-history-count">{{ stepsDone(r) }} of {{ r.steps.length }}</span>
@@ -313,15 +331,9 @@ async function deleteFailed() {
             <UButton class="lg:hidden" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Runs" @click="select(null)" />
             <span class="t-small text-label ml-1" :title="RUN_DURATION_HINT">{{ duration(selected) }} run time · started {{ new Date(selected.startedAt).toLocaleString() }}</span>
             <span class="flex-1" />
-            <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-folder-open" label="Evidence" :to="`/runs/${selected.id}`" />
+            <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-external-link" label="Open run page" :to="`/runs/${selected.id}`" />
             <UButton v-if="canRestart(selected)" size="xs" variant="ghost" color="neutral" icon="i-lucide-rotate-ccw" label="Restart" :loading="busy === selected.id" @click="act(selected, 'restart', { stepId: restartPoint(selected) })" />
-            <!-- Clone lands in the workflow builder, which has no role gating of its own. -->
-            <UButton v-if="can('startRun')" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone" :to="`/workflows/${selected.workflowSlug}?clone=${selected.id}`" />
-            <UButton
-              v-if="canStop(selected)"
-              size="xs" :variant="confirmingStop === selected.id ? 'solid' : 'ghost'" color="error" icon="i-lucide-square"
-              :label="confirmingStop === selected.id ? 'Confirm stop' : 'Stop'" :loading="busy === selected.id" @click="stop(selected)"
-            />
+            <!-- Stop, Resume and Clone are the run header's, inside the stack below. -->
             <UButton
               v-if="canDelete(selected)"
               size="xs" :variant="confirmingDelete === selected.id ? 'solid' : 'ghost'" :color="confirmingDelete === selected.id ? 'error' : 'neutral'"
@@ -332,7 +344,7 @@ async function deleteFailed() {
             />
           </div>
           <div class="flex-1 min-h-0 overflow-y-auto px-6 py-5">
-            <div class="max-w-4xl"><RunDetail :id="selected.id" :key="selected.id" compact /></div>
+            <div class="max-w-4xl"><RunDetailPane :id="selected.id" :key="selected.id" @changed="refresh" /></div>
           </div>
         </template>
         <p v-else-if="loaded && shown.length" class="p-6 t-ui text-label">Choose a run on the left.</p>
@@ -342,6 +354,8 @@ async function deleteFailed() {
 </template>
 
 <style scoped>
+/* Five views across the 24rem list pane: share the width instead of padding each. */
+.runs-pane .segmented > .segmented__item { flex: 1; padding-inline: 6px; text-align: center; }
 .runs-pane {
   border-right: 0.5px solid var(--border-default);
   background: var(--surface-raised);

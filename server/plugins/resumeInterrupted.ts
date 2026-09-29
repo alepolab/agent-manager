@@ -1,5 +1,6 @@
 /**
- * Picks up runs the previous process left mid-step.
+ * Picks up runs the previous process left mid-step, and removes the worktrees
+ * of settled test runs it never got to clean up.
  *
  * A container rebuild used to cost whatever step was in flight: the run froze
  * as `interrupted`, and a person had to notice and restart it, which re-ran
@@ -15,17 +16,27 @@
  * ponytail: a fixed delay, not a handshake — make it a signal if seeding ever
  * grows slow enough to matter.
  */
-import { resumeInterruptedRuns } from '../utils/workflowRunner.ts'
+import { backfillChangeBriefs, resumeInterruptedRuns, resumeQuotaPaused } from '../utils/workflowRunner.ts'
 
 export default defineNitroPlugin(() => {
   if (process.env.RESUME_ON_BOOT === '0') return
   setTimeout(() => {
     resumeInterruptedRuns()
       .then((r) => {
-        if (r.resumed.length || r.paused.length) {
-          console.log(`[resume] ${r.resumed.length} run(s) resumed, ${r.paused.length} paused for a person, ${r.skipped.length} left alone`)
+        if (r.resumed.length || r.paused.length || r.waiting.length) {
+          console.log(`[resume] ${r.resumed.length} run(s) resumed, ${r.waiting.length} waiting for a slot in their group, ${r.paused.length} paused for a person, ${r.skipped.length} left alone`)
         }
+        if (r.swept.length) console.log(`[resume] removed the leftover worktrees of ${r.swept.length} settled test run(s)`)
       })
       .catch(err => console.error('[resume] could not resume interrupted runs:', err?.message ?? err))
+      // Runs waiting out a spent quota: back now if its reset has passed, and
+      // on a timer - with the queue held - if it has not.
+      .then(() => resumeQuotaPaused())
+      .catch(err => console.error('[resume] could not resume quota-paused runs:', err?.message ?? err))
+      // Changes already waiting at a gate without a brief of what approving
+      // them gains and risks: written now, one run at a time.
+      .then(() => backfillChangeBriefs())
+      .then(ids => { if (ids.length) console.log(`[resume] wrote a change brief for ${ids.length} run(s) waiting at a gate`) })
+      .catch(err => console.error('[resume] could not write change briefs:', err?.message ?? err))
   }, 5000)
 })

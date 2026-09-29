@@ -1,7 +1,7 @@
 /** Checkout state, run branches, parking changes and the artifacts probe, against throwaway git repos. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -76,6 +76,22 @@ git(wt, ['reset', '-q'])
   assert.equal(git(mwt, ['rev-parse', '--show-toplevel']), realpathSync.native(mwt).replace(/\\/g, '/'), 'and it is a worktree of the module, not an empty placeholder answering for the parent')
   assert.equal(git(mwt, ['branch', '--show-current']), 'fix/BIL-1-01234567')
   assert.ok(existsSync(join(mwt, 's.txt')), 'with the module\'s files in it')
+}
+
+{
+  // `worktree add -b` makes the branch before the worktree: a failure after that (here the
+  // admin directory is unwritable, as when a concurrent prune/add races it) must not leave the branch.
+  const admin = join(repo, '.git', 'worktrees')
+  chmodSync(admin, 0o555)
+  try {
+    await assert.rejects(W.ensureTestWorktrees(repo, 'test/orphan-1', 'HEAD', 'HEAD', { fresh: true }), /worktrees/)
+  } finally { chmodSync(admin, 0o755) }
+  assert.equal(git(repo, ['branch', '--list', 'test/orphan-1']), '', 'the branch the failed -b add made is removed')
+  // A test/ branch that was already there belongs to someone else, worktree or not.
+  git(repo, ['branch', 'test/theirs-1'])
+  await assert.rejects(W.ensureTestWorktrees(repo, 'test/theirs-1', 'HEAD', 'HEAD', { fresh: true }), /already exists/)
+  assert.notEqual(git(repo, ['branch', '--list', 'test/theirs-1']), '', 'a branch this call did not make is left alone')
+  git(repo, ['branch', '-D', 'test/theirs-1'])
 }
 
 const r = await W.stashCheckout(repo, 'sandeep')

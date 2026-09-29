@@ -21,10 +21,10 @@
  */
 
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { capFor } from './workflowGroups.ts'
+import { capFor, yieldsToFor } from './workflowGroups.ts'
 import { listRuns } from './workflowRunStore.ts'
 import { createLogger } from './log.ts'
-import { holdsGroupSlot } from '../../shared/types/run.ts'
+import { holdsGroupSlot, isTestRun } from '../../shared/types/run.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 // The runner's own namespace: this is work the runner does, not a subsystem of
@@ -90,7 +90,24 @@ function serialised<T>(fn: () => Promise<T>): Promise<T> {
  */
 export async function inFlightForGroup(group: string, runs?: WorkflowRun[]): Promise<number> {
   const all = runs ?? await listRuns()
-  return all.filter(r => holdsGroupSlot(r.status) && groupOf(r) === group).length
+  // A test run uses no clone and no agent budget of the real kind this cap
+  // protects, and it must never compete with real runs for a slot.
+  return all.filter(r => (holdsGroupSlot(r.status) || resumable(r)) && groupOf(r) === group && !isTestRun(r)).length
+}
+
+/**
+ * An interrupted run the boot resume will bring back holds its slot meanwhile.
+ * Uncounted, the queue saw every run a reload interrupted as a free slot and
+ * started queued runs into them; when the interrupted ones resumed, the group
+ * was over its cap - three Runbook A runs against a cap of 2, with seven more
+ * waiting to come back. One waiting on a person does not count, as a paused
+ * run does not.
+ */
+export function resumable(r: WorkflowRun): boolean {
+  // With the boot resume turned off nothing brings it back, and counting it
+  // would hold the slot until a person noticed.
+  if (process.env.RESUME_ON_BOOT === '0') return false
+  return r.status === 'interrupted' && !r.question && !r.steps.some(s => s.status === 'waiting')
 }
 
 /**
@@ -127,6 +144,18 @@ export async function groupLoad(group: string): Promise<{ group: string, inFligh
     waiting: (await waiting(group, runs)).length,
     maxConcurrent: await capFor(group),
   }
+}
+
+/**
+ * The group `group` is giving way to right now: the one it yields to (see
+ * WorkflowGroup.yieldsTo), while any run of that one is working. Undefined
+ * when it has none, or that group is idle. Checked each time, from the runs
+ * themselves - nothing is scheduled or remembered.
+ */
+export async function givingWayTo(group: string, runs?: WorkflowRun[]): Promise<string | undefined> {
+  const to = await yieldsToFor(group)
+  if (!to) return undefined
+  return await inFlightForGroup(to, runs) > 0 ? to : undefined
 }
 
 /**
@@ -177,7 +206,7 @@ export async function admit<T extends WorkflowRun>(opts: {
     const free = cap - await inFlightForGroup(opts.group, runs)
     const ahead = (await waiting(opts.group, runs)).length
 
-    if (free > 0 && ahead === 0) {
+    if (free > 0 && ahead === 0 && !quotaBlocked() && !await givingWayTo(opts.group, runs)) {
       const started = await opts.start()
       const staged = typeof (started as { rest?: unknown }).rest === 'function'
         ? started as { run: T, rest: () => Promise<unknown> }
@@ -207,6 +236,19 @@ export async function admit<T extends WorkflowRun>(opts: {
  */
 let mayHaveWaiting = true
 export function noteQueued() { mayHaveWaiting = true }
+
+/**
+ * Until when nothing new starts because the model's quota is spent. Every run
+ * started into a spent quota fails - or now pauses - within seconds, and its
+ * slot goes to the next queued run, which does the same: on 2026-09-24 that
+ * took five scans in forty seconds. Set from the reset time the provider
+ * states; see workflowRunner.ts's quota pause.
+ */
+let quotaBlockedUntil = 0
+export function blockForQuota(until: number) { quotaBlockedUntil = Math.max(quotaBlockedUntil, until) }
+export function quotaBlocked(now = Date.now()): number | null { return quotaBlockedUntil > now ? quotaBlockedUntil : null }
+/** The reset has come: lift the hold, if `now` is past it. */
+export function releaseQuota(now = Date.now()) { if (quotaBlockedUntil <= now) quotaBlockedUntil = 0 }
 export function mightHaveWaiting() { return mayHaveWaiting }
 
 /**
@@ -221,6 +263,7 @@ export function mightHaveWaiting() { return mayHaveWaiting }
  */
 export function drainRunQueue(launch: Launcher): Promise<number> {
   return serialised(async () => {
+    if (quotaBlocked()) return 0
     const runs = await listRuns()
     const queued = runs.filter(r => r.status === 'queued')
     if (!queued.length) {
@@ -231,6 +274,7 @@ export function drainRunQueue(launch: Launcher): Promise<number> {
 
     let started = 0
     for (const group of [...new Set(queued.map(groupOf))]) {
+      if (await givingWayTo(group, runs)) continue
       let free = await capFor(group) - await inFlightForGroup(group, runs)
       const candidates = await waiting(group, runs)
 

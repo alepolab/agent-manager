@@ -68,5 +68,13 @@ assert.match(header, /bug: main/, 'header names the branch policy')
 assert.match(header, /Recipe: .*selfcarenow\.md/, 'header points at the recipe')
 assert.doesNotMatch(A.artifactHeader('/tmp/x'), /## Product/, 'no product, no block')
 
+// A repo name is an identifier, matched exactly: the word-matching resolver
+// took "alepolab/ase-crm" for the `crm` product, because a hyphen is a word
+// boundary. A run started for a repo resolves by that repo first.
+assert.equal((await R.productByRepo('alepolab/pcrf_cpp14'))?.name, 'pcrf', 'a listed repo names its product')
+assert.equal((await R.productByRepo('ALEPOLAB/Selfcarenow'))?.name, 'selfcarenow', 'case does not matter')
+assert.equal(await R.productByRepo('alepolab/pcrf'), undefined, 'a prefix of a repo is not that repo')
+assert.equal(await R.productByRepo('  '), undefined, 'blank names nothing')
+
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
 console.log('registry: all assertions passed')
