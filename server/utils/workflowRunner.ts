@@ -946,6 +946,17 @@ export function resetsAtClock(message: string, now = Date.now()): number | null 
   return now + Math.round(wait * 60_000)
 }
 
+/**
+ * Whether a step's last words say it stopped to wait for something still
+ * running: "I'll wait for the background notification that the regression
+ * build container has finished", "I'll pause here and pick up as soon as it
+ * completes". No notification reaches a pipeline step.
+ */
+export function endedToWait(output: string): boolean {
+  const tail = output.slice(-600)
+  return /\b(wait(ing)? for (the )?(background|notification)|background notification|(still )?running in the background|pick (it )?up (again )?(as soon as|once|when) it (completes|finishes)|(once|when) (it|the (build|job|task|container)) (finishes|completes)[^.]{0,40}(I'll|I will))/i.test(tail)
+}
+
 /** The steps that make a run's change, and so know what approving it gains and risks. */
 const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work)$/
 
@@ -1550,7 +1561,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
           // in the same session rather than paying to redo it.
           const session = resumableSession(rec)
           if (session) l.resumeFrom[id] = session
-          l.retryFeedback[id] = `${why} Write each missing file into the run artifacts directory from the work you have already done - do not start over - then end with the directory listing.`
+          // A step that ended its turn to wait on a background job is told why
+          // the wait never ends, or it waits again: ASECRM-293's verifier did,
+          // on all three visits, with its build still running.
+          const waited = endedToWait(rec.output ?? '')
+          l.retryFeedback[id] = waited
+            ? `${why} Your turn ended while you waited for a background job, and in this pipeline no notification ever arrives: ending your turn ends the step. Wait for the job in the foreground, a bounded wait at a time (\`timeout 540 docker wait <container>\`, or \`timeout 540 bash -c 'until <done>; do sleep 15; done'\`), repeated until it has exited; then write each missing file from its result and end with the directory listing. Do not start the job again if it is still running.`
+            : `${why} Write each missing file into the run artifacts directory from the work you have already done - do not start over - then end with the directory listing.`
           l.state.status[id] = 'completed'
           armNode(l.state, id)
           return true

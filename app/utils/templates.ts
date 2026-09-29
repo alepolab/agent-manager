@@ -73,6 +73,8 @@ These hold at every step in this pipeline, not just this one:
 
   The runner re-runs that step with your instruction as its note, and everything after it again. Two send-backs happen automatically; a third stops the run and asks the developer, with both positions on record, rather than throwing away a branch, its commits and an open PR. The count is per kind of problem rather than per step: a red CI check and a proven regression each have their own two, so one cannot spend the other's. Halt only when no step of this run can fix what you found.
 
+- **Never end your turn to wait for a background job.** Nobody sends you a notification here: the moment your turn ends, your step ends, and a build still running in the background is lost to it. Wait for a long job in the foreground instead, a bounded wait at a time - \`timeout 540 docker wait <container>\`, or \`timeout 540 bash -c 'until <done>; do sleep 15; done'\` - repeated until it has exited, then read its result and finish. ASECRM-293's verifier started a 28-minute regression build, ended with "I'll wait for the background notification that the regression build container has finished", and the step failed three times with its build still running; five other steps ended the same way.
+
 - **Halt rather than hand a problem downstream.** Reporting a problem and letting the run continue is the failure mode this pipeline exists to prevent — later steps build on what you assert here. If you cannot complete your step honestly, say so with \`PIPELINE-HALT: <reason>\` per "## Stopping" below, and stop.`
 
 /**
