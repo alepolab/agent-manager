@@ -96,5 +96,23 @@ const settle = async (id) => {
   assert.ok(!existsSync(join(runArtifactsDir(stale.id), 'change-brief.pending')), 'a stale marker is cleared at boot')
 }
 
+// ── Intake left questions open: the brief answers each, or is asked for again ─
+{
+  let run = (await runner.startOrQueue({ workflow: wf, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev4' })).run
+  dirOf = runArtifactsDir(run.id)
+  run = await runner.waitForSettled(run.id, 8000)
+  await settle(run.id)
+  // ASECRM-297: two questions above a brief that answered neither.
+  writeFileSync(join(dirOf, 'intent.md'), '# Intent\n\n## Open questions\n\n- Which branch row applies to security?\n- Are the other generators in scope?\n\n## Scope\n\n- one file\n')
+  const before = asks.length
+  BRIEF.open_questions = [{ question: 'Which branch row applies to security?', answer: 'develop, as every row' }, { question: 'Are the other generators in scope?', answer: 'No: send back to add them' }]
+  assert.equal(await runner.ensureChangeBrief(run), 'written', 'a brief that answers none of them is not present')
+  assert.equal(asks.length, before + 1)
+  assert.match(asks.at(-1), /Intake left 2 question\(s\) open/)
+  assert.match(asks.at(-1), /- Are the other generators in scope\?/, 'each question is named in the ask')
+  assert.equal(await runner.ensureChangeBrief(run), 'present', 'answered, it is not asked for again')
+  delete BRIEF.open_questions
+}
+
 console.log('ok - a change waiting at a gate gets a brief of its advantages and disadvantages from the step that made it')
 process.exit(0)

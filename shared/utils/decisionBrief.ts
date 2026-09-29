@@ -13,6 +13,18 @@
  * shape makes it say so for a person, and lets the runner check that it did.
  */
 
+/**
+ * The questions intake left open, read from intent.md's "## Open questions"
+ * bullets. Not from the context packet: its copy of ASECRM-297's first
+ * question was a placeholder (`<<ccr:…>>`), never the text.
+ */
+export function openQuestionsIn(intentMd: string | null | undefined): string[] {
+  const section = intentMd?.split(/^## Open questions\s*$/m)[1]?.split(/^## /m)[0] ?? ''
+  const items = section.split('\n').filter(l => /^\s*[-*]\s+\S/.test(l)).map(l => l.replace(/^\s*[-*]\s+/, '').trim())
+  // "None stated" and the like are not questions.
+  return items.filter(q => !/^(none|n\/a|no open questions)\b/i.test(q))
+}
+
 /** The file a step writes into its run artifacts directory before `PIPELINE-ASK:`. */
 export const DECISION_FILE = 'decision.json'
 
@@ -47,6 +59,12 @@ export interface DecisionBrief {
   findings?: string[]
   options: DecisionOption[]
   recommendation?: { option: string, why: string }
+  /**
+   * Each question intake left open, and how the step answered it: resolved,
+   * assumed, or still open and which option decides it. ASECRM-297's gate
+   * listed intake's two questions above a brief that answered neither.
+   */
+  open_questions?: { question: string, answer: string }[]
 }
 
 const str = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0
@@ -88,6 +106,9 @@ export function parseDecisionBrief(raw: string | null | undefined): { brief: Dec
         ...(str(o.risk) ? { risk: o.risk.trim() } : {}),
       })),
       ...(str(d.recommendation?.option) && str(d.recommendation?.why) ? { recommendation: { option: d.recommendation.option.trim(), why: d.recommendation.why.trim() } } : {}),
+      ...(Array.isArray(d.open_questions) && d.open_questions.some((q: any) => str(q?.question) && str(q?.answer))
+        ? { open_questions: d.open_questions.filter((q: any) => str(q?.question) && str(q?.answer)).map((q: any) => ({ question: q.question.trim(), answer: q.answer.trim() })) }
+        : {}),
     },
   }
 }

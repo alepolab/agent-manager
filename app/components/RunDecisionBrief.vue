@@ -47,6 +47,16 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
         </ul>
       </section>
 
+      <section v-if="brief.open_questions?.length">
+        <h4 class="t-label mb-1" style="color: var(--text-secondary);">The questions intake left open</h4>
+        <dl class="m-0 space-y-1.5">
+          <div v-for="(q, i) in brief.open_questions" :key="i">
+            <dt class="font-medium" style="color: var(--text-primary);">{{ q.question }}</dt>
+            <dd class="m-0 whitespace-pre-wrap">{{ q.answer }}</dd>
+          </div>
+        </dl>
+      </section>
+
       <section>
         <h4 class="t-label mb-1" style="color: var(--text-secondary);">Your options</h4>
         <div class="space-y-2">

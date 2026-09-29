@@ -35,7 +35,7 @@ import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -930,26 +930,34 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
   const file = resolveRunArtifact(run.id, CHANGE_BRIEF_FILE)
   const pending = resolveRunArtifact(run.id, CHANGE_BRIEF_PENDING)
   if (!file || !pending) return 'none'
-  if ('brief' in parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))) return 'present'
+  const asked = openQuestionsIn(await readFile(resolveRunArtifact(run.id, 'intent.md') ?? '', 'utf8').catch(() => null))
+  const answersAll = (b: ReturnType<typeof parseDecisionBrief>) => 'brief' in b && (b.brief.open_questions?.length ?? 0) >= asked.length
+  if (answersAll(parseDecisionBrief(await readFile(file, 'utf8').catch(() => null)))) return 'present'
   if (briefsWriting.has(run.id)) return 'none'
   briefsWriting.add(run.id)
   await writeFile(pending, new Date().toISOString()).catch(() => {})
   try {
     const env = await envResolver(run.startedBy).catch(() => ({}))
     let feedback = ''
+    // ASECRM-297's gate listed intake's two open questions above a brief that answered neither.
+    const questions = asked.length
+      ? `\n\nIntake left ${asked.length} question(s) open in intent.md. \`open_questions\` must answer every one of them:\n${asked.map(q => `- ${q}`).join('\n')}`
+      : ''
     for (let attempt = 1; attempt <= 2; attempt++) {
       const resume = resumableSession(maker)
-      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.
+      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
 
 That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
       await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
       const parsed = parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))
-      if ('brief' in parsed) {
+      if (answersAll(parsed)) {
         log.info('change brief written for a gate', { runId: run.id, by: maker.agentSlug, resumed: !!resume })
         return 'written'
       }
-      feedback = `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
-      log.warn('change brief unusable', { runId: run.id, attempt, error: parsed.error })
+      feedback = 'brief' in parsed
+        ? `The brief you wrote answers ${parsed.brief.open_questions?.length ?? 0} of the ${asked.length} open questions. Write it again with an answer for each.\n\n`
+        : `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+      log.warn('change brief unusable', { runId: run.id, attempt, error: 'error' in parsed ? parsed.error : 'open questions unanswered' })
     }
     return 'failed'
   } catch (err) {

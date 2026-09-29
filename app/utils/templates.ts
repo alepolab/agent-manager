@@ -198,6 +198,7 @@ A person may have to approve this change at a gate before it goes further, and t
 - \`findings\` - one fact per entry: the test results before and after with counts, what else was run, who calls the changed code and whether any of them now behaves differently, and anything you could not verify.
 - \`options\` - at least approve and send back, each \`{ key, label, next, delivers, leaves, risk }\`: \`next\` is what the pipeline does if it is chosen, \`delivers\` the advantages (what the ticket and the product gain), \`leaves\` the disadvantages (what stays open or could go wrong), \`risk\` the worst plausible outcome, if there is one worth naming.
 - \`recommendation\` - \`{ option, why }\`.
+- \`open_questions\` - when intent.md or the context packet lists open questions, one \`{ question, answer }\` for every one of them: how it was resolved and on what evidence, what you assumed and why, or that it is still open and which option above decides it. A question the brief leaves unanswered is one the reviewer has to answer blind.
 
 Rewrite it if a later attempt changes the change. It is for the reviewer, not a question: do not end with \`PIPELINE-ASK:\` because of it.`
 

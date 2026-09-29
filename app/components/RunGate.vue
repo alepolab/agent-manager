@@ -163,6 +163,7 @@ const askingLabel = computed(() => `${props.run.steps.find(s => s.stepId === pro
     <!-- What the reviewer is actually approving. The gate used to show a step
          label and one line of agent prose, with the measured change, the test
          results and the security verdict all sitting unread in the bundle. -->
+    <RunBudgetBrief v-else-if="run.question?.reason === 'budget' && !run.parked" :run="run" />
     <RunVerdictCard
       v-else-if="run.question?.kind === 'approval' && !runnerPause && !run.parked"
       :run="run"
