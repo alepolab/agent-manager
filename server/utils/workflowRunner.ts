@@ -2721,13 +2721,24 @@ async function ensureBranchWorktree(run: WorkflowRun, base: string): Promise<voi
  * its source run's projectDir, which is that run's worktree, so it is read
  * as a recorded worktree too: the test's own goes beside the clone, never
  * inside the source's.
+ *
+ * Last, the product's own clone. A dispatched run is given a directory of its
+ * own named for its ticket, which startRun creates empty, and nothing in it is
+ * a checkout: with no fallback the run got no worktree and no branch at all.
+ * ASECRM-331 to 337 each had an empty directory, and their agents cut
+ * branches into it by hand with `git worktree add`. Only for a run on a
+ * ticket: a scan or a plain product run with nothing to fix is not given a
+ * fix branch it never asked for.
  */
 function runCheckout(run: WorkflowRun): string | undefined {
-  const repoName = run.product?.repos?.[0]?.split('/').pop()
+  const repo = run.product?.repos?.[0]
+  const repoName = repo?.split('/').pop()
   const recordedClone = (run.branch || run.testOf) && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
+  const productClone = repo && run.ticketKey && !run.testOf ? checkoutDirFor(repo, run.startedBy) : undefined
   return (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
     : (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir
       : findCheckout(runWorkspace(run), repoName)
+        ?? (productClone && existsSync(join(productClone, '.git')) ? productClone : undefined)
 }
 
 /**
