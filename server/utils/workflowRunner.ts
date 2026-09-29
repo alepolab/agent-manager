@@ -19,7 +19,7 @@ import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type Agent
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, checkoutDirFor, cloneRepo, ensureRunBranch, findCheckout, remoteBranchExists } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 import { claimableStack, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
@@ -31,7 +31,7 @@ import { claimableStack, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardown
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
@@ -49,11 +49,12 @@ import { capFor } from './workflowGroups.ts'
 // Relative, not an alias, for the same reason workflowGraph.ts above is: the
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { childrenSettled, holdsGroupSlot, isWaitingOnAPerson } from '../../shared/types/run.ts'
+import { childrenSettled, holdsGroupSlot, isLiveStatus, isTestRun, isWaitingOnAPerson } from '../../shared/types/run.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
+import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
-import type { ProductMatch, WorkflowRun, RunStep, RunUsage } from '~~/shared/types/run'
+import type { ProductMatch, WorkflowRun, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
 
 const log = createLogger('runner')
 
@@ -368,6 +369,52 @@ function budgetExceeded(run: WorkflowRun): string | null {
   return null
 }
 
+/** Test runs whose worktrees this process has removed. The marker on testOf
+ *  is the persisted record of it, but stopRun and the wave each publish their
+ *  own copy of the run, and only one of them carries the marker. */
+const testWorktreesRemoved = new Set<string>()
+
+function testCleanupDue(run: WorkflowRun): boolean {
+  return !!run.testOf && !run.testOf.testWorktreeRemoved && !testWorktreesRemoved.has(run.id)
+    && TERMINAL_STATUSES.includes(run.status) && !!run.branch?.startsWith('test/')
+}
+
+/** Removes a settled test's worktrees and test/ branch. Best effort: the
+ *  test's outcome is what it was whether or not git cooperates, and
+ *  projectDir is kept as recorded so the run page still names where it ran.
+ *  The caller saves the run. */
+async function removeTestWorktreesOnce(run: WorkflowRun): Promise<void> {
+  testWorktreesRemoved.add(run.id)
+  run.testOf!.testWorktreeRemoved = true
+  const checkout = runCheckout(run)
+  try {
+    if (checkout) await removeTestWorktrees(checkout, run.branch!)
+    log.info('test worktree removed', { runId: run.id, branch: run.branch, checkout })
+  } catch (err) {
+    log.warn('could not remove the test worktree; remove it by hand', {
+      runId: run.id, branch: run.branch, checkout, error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+/** A stopped test's cleanup, once its agent has returned, for the case where
+ *  the wave publishes nothing more (a stop between waves). Reads the record
+ *  back from disk and saves it in the run's publish order, so it can never
+ *  write over a newer copy. */
+async function afterUnwound(runId: string): Promise<void> {
+  const deadline = Date.now() + 30 * 60_000
+  while (live.get(runId)?.running && Date.now() < deadline) await new Promise(r => setTimeout(r, 250))
+  const prior = publishChains.get(runId) ?? Promise.resolve()
+  const next = prior.catch(() => {}).then(async () => {
+    const saved = await getRun(runId)
+    if (!saved || !testCleanupDue(saved)) return
+    await removeTestWorktreesOnce(saved)
+    await saveRun(saved)
+  })
+  publishChains.set(runId, next)
+  await next.catch(() => {})
+}
+
 async function publish(run: WorkflowRun) {
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -416,7 +463,8 @@ async function publish(run: WorkflowRun) {
         // is done either way, and a run reported as failed because Jira was
         // unreachable would be a lie about the code.
         // Unless a Jira step of the workflow already posted it.
-        if (run.ticketKey && !run.ticketCommented) {
+        // A test run tells no one: it has no ticket of its own to comment on.
+        if (!isTestRun(run) && run.ticketKey && !run.ticketCommented) {
           try {
             const result = await notifyTicketOutcome(
               { id: run.watch, name: run.workflowName },
@@ -456,10 +504,21 @@ async function publish(run: WorkflowRun) {
         try { await markArtifactsUnusable(run.id) } catch { /* nothing further we can do */ }
       }
     }
+    // A settled test leaves nothing behind in the clone: its worktrees and its
+    // test/ branch go, once. Not while a stopped test's agent is still
+    // unwinding in the worktree: stopRun publishes its own copy of the record
+    // the moment it aborts, and the wave publishes again once the agent has
+    // returned; that later publish does it (or afterUnwound, if the stop
+    // landed between waves and the wave never publishes).
+    if (testCleanupDue(run)) {
+      if (run.status === 'stopped' && live.get(run.id)?.running) void afterUnwound(run.id)
+      else { await removeTestWorktreesOnce(run); await saveRun(run) }
+    }
     for (const fn of subscribers.get(run.id) ?? []) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
-    onRunTransition(run)
+    // A test run tells no one: no Slack message, no channel notification.
+    if (!isTestRun(run)) onRunTransition(run)
     // A settled run has given its slot back, so whatever is waiting in its
     // group can start. Here rather than in notify.ts, which cannot reach
     // startRun without an import cycle. Not awaited: the drain starts runs of
@@ -486,7 +545,10 @@ async function publish(run: WorkflowRun) {
     // Here, where every ending passes - completed, failed and stopped alike -
     // rather than as a last workflow step, which a failed run never reaches.
     // Not awaited: `docker compose down` takes seconds and publish must not.
-    if (TERMINAL_STATUSES.includes(run.status)) {
+    // A test run's worktree is not this code's: removeTestWorktreesOnce takes
+    // it once the tested step's agent has returned, and taking it here, the
+    // moment the run is stopped, pulled it from under an agent still writing.
+    if (TERMINAL_STATUSES.includes(run.status) && !isTestRun(run)) {
       const ended = run
       void teardownRun(ended)
         .then(report => (report.stacks.length || report.worktree) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
@@ -515,15 +577,6 @@ const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'awaiting_review', 
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
-
-/**
- * Automatic send-backs allowed per trigger before the run stops and asks.
- *
- * Per trigger rather than per run: a red check and a proven regression are
- * different problems with different fixes, and one spending the other's
- * allowance means a routine second CI failure lands on a person.
- */
-const REWORK_LIMIT = 2
 
 /**
  * Which allowance a send-back spends, read from the step that raised it.
@@ -775,6 +828,7 @@ async function runMonitor(
     const { output: review } = normalizeAgentResult(raw)
     const verdict = parseVerdict(review)
     Object.assign(rec, { monitorVerdict: verdict, monitorNote: review })
+    recordCheck(rec, verdict, review)
     // CONTINUE is the expected, silent-majority outcome; RETRY/ABORT are the
     // noteworthy ones — a monitor sending a step back, or killing the run,
     // is exactly the kind of decision a reviewer reconstructing a run needs
@@ -787,6 +841,7 @@ async function runMonitor(
   } catch (err) {
     const monitorNote = `Monitor failed: ${err instanceof Error ? err.message : 'unknown error'}`
     Object.assign(rec, { monitorVerdict: 'CONTINUE', monitorNote })
+    recordCheck(rec, 'CONTINUE', monitorNote)
     log.warn('monitor call failed; defaulting to CONTINUE', {
       stepId: rec.stepId, monitorSlug: step.monitorSlug,
       error: err instanceof Error ? err.message : String(err),
@@ -992,6 +1047,8 @@ export function parseAsk(output: string): string | null {
   return ask && !NO_QUESTION.test(ask) ? ask : null
 }
 
+const TEST_RUN_NOTE = 'This is a test run of one step. Do not push, open pull requests, post messages or change tickets; describe what you would do instead.'
+
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
   const step = stepOf(l, id)
   const rec = recOf(run, id)
@@ -1011,6 +1068,11 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     body += `\n\n---\nOperator note from ${run.startedBy ?? 'the operator'}, sent while the run was in flight: ${note}`
     delete l.notes[id]
     if (l.nextNote === note) l.nextNote = undefined
+  }
+  // A test run's agent works for real on its own throwaway branch; what it must
+  // not do is reach outside it. The runner's own steps already dry-run.
+  if (isTestRun(run) && !step.jira && !step.notify && !step.triggerWorkflow && !body.includes(TEST_RUN_NOTE)) {
+    body += `\n\n---\n${TEST_RUN_NOTE}`
   }
   l.lastInputs[id] = body
   // The provisioner may have cloned since the last step: the branch is made
@@ -1046,6 +1108,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   }
   markRunning(l.state, id)
   l.firstStartedAt[id] ??= Date.now()
+  // The commit this visit started from, so a later test of this one step can
+  // start from the same code. Absent when there is no checkout to read.
+  const headAtStart = run.projectDir ? (await captureBaseline(run.projectDir)) ?? undefined : undefined
   Object.assign(rec, {
     status: 'running', input, output: '', error: undefined, model: undefined, usage: undefined,
     completedAt: undefined, monitorVerdict: undefined, monitorNote: undefined,
@@ -1056,6 +1121,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // Progress telemetry is per-visit, not cumulative across retries — a
     // fresh visit's turn count must not start from a previous attempt's.
     assistantMessages: undefined, lastTool: undefined, lastActivityAt: undefined,
+    headAtStart,
   })
   log.debug('step starting', () => ({
     runId: run.id, stepId: id, agentSlug: step.agentSlug, visits: rec.visits,
@@ -1074,7 +1140,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
     let output: string
     try {
-      output = await runJiraStep(run, step.jira)
+      // A test run calls nothing: it says what it would have done and settles
+      // down the same path a real Jira step does.
+      output = isTestRun(run) ? jiraDryRun(run, step.jira) : await runJiraStep(run, step.jira)
     } catch (err) {
       output = `Jira step failed: ${err instanceof Error ? err.message : String(err)}. The ticket was not changed; the run goes on.`
     }
@@ -1154,7 +1222,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // status stays `completed`: the error is how it says so, not how it fails.
   if (step.notify) {
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const { output, error } = await runNotifyStep(run, step.notify, step.runWhen?.artifact)
+    const { output, error } = isTestRun(run)
+      ? { output: `[Test run] Would post to ${step.notify.channel}: ${step.notify.message ?? '(default message)'}`, error: undefined }
+      : await runNotifyStep(run, step.notify, step.runWhen?.artifact)
     for (const line of output.split('\n')) logLine(l, run, rec, line)
     l.outputs[id] = output
     Object.assign(rec, { status: 'completed', output, ...(error ? { error } : {}), model: null, usage: null, completedAt: Date.now() })
@@ -1222,7 +1292,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     if (widen) {
       let added: string[]
       try {
-        added = await widenProduct(run, widen.target)
+        // A test run records the widen as its step's outcome; it never acts on
+        // it, so the run's scope is not the step's to change.
+        added = isTestRun(run) ? [] : await widenProduct(run, widen.target)
       } catch (err) {
         markFailed(l.state, id)
         Object.assign(rec, { status: 'failed', output, model, usage, error: `Step asked to widen the run and could not: ${err instanceof Error ? err.message : String(err)}`, completedAt: Date.now() })
@@ -1232,7 +1304,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       l.outputs[id] = output
       Object.assign(rec, { status: 'completed', output, model, usage, completedAt: Date.now() })
       l.widen = { from: id, target: widen.target, reason: widen.reason, added }
-      logLine(l, run, rec, `widened the run to ${widen.target}: ${added.length ? added.join(', ') + ' added' : 'already in scope'}`)
+      logLine(l, run, rec, isTestRun(run)
+        ? `asked to widen the run to ${widen.target}: recorded, not acted on, because this is a test run`
+        : `widened the run to ${widen.target}: ${added.length ? added.join(', ') + ' added' : 'already in scope'}`)
       log.info('step widened the run', () => ({ runId: run.id, stepId: id, target: widen.target, added, reason: preview(widen.reason) }))
       markCompleted(l.graph, l.state, id)
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
@@ -1623,6 +1697,10 @@ async function resolveConditions(l: Live, run: WorkflowRun): Promise<{ failed: b
     // The FULL ready set, not the MAX_CONCURRENCY slice: a step that is about to
     // be skipped must not occupy one of the three slots a real step could use.
     for (const id of readyNodes(l.graph, l.state)) {
+      // A test run runs only its one step. What its settling arms is settled by
+      // the stop-after branch in runWave, not evaluated here, where an
+      // unreadable artifact would fail a test whose step succeeded.
+      if (run.stopAfter && id !== run.stopAfter) continue
       const step = stepOf(l, id)
       const artifact = step?.runWhen?.artifact
       if (!artifact) continue
@@ -1788,6 +1866,14 @@ async function startChild(item: DispatchItem): Promise<{ run: WorkflowRun, queue
   })
 }
 
+/** What a Jira step would have done, for a test run, which calls nothing. */
+function jiraDryRun(run: WorkflowRun, cfg: JiraStepConfig): string {
+  if (cfg.action === 'create') return `[Test run] Would create Jira tickets from ${cfg.source}`
+  return `[Test run] Would move ${run.ticketKey ?? 'the ticket'} to "${cfg.transition}"`
+    + (cfg.comment ? ', and post the outcome comment' : '')
+    + (cfg.attach ? ', and attach the evidence files' : '')
+}
+
 /**
  * Runs one `triggerWorkflow` step: reads the artifact it dispatches over,
  * routes each entry to a workflow, and starts a child run per entry up to the
@@ -1836,6 +1922,14 @@ async function runDispatchStep(
     // Nothing to dispatch is a real outcome, not a failure: the step ran, read
     // the source, and there was no work in it.
     return { output: `Dispatched nothing: ${label} ${plan.detail}.`, failed: false }
+  }
+  // A test run plans for real, so the list is the one a real run would act
+  // on, and starts nothing.
+  if (isTestRun(run)) {
+    return {
+      output: `[Test run] Would start ${plan.targets.length} runs:\n${plan.targets.map(t => `${t.key} → ${t.slug}`).join('\n')}`,
+      failed: false,
+    }
   }
 
   // Recursion, checked before anything starts. A workflow that dispatches one
@@ -2178,6 +2272,22 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // perfectly runnable node was sitting just past the cut - the stall the
   // split below exists to avoid, reappearing at three concurrent gates.
   const ready = readyNodes(l.graph, l.state)
+  // A test run settles with its one step: nothing after it is armed or run,
+  // and the steps that were never going to run are not a stuck run.
+  if (run.stopAfter) {
+    const rec = run.steps.find(s => s.stepId === run.stopAfter)
+    if (rec && ['completed', 'failed', 'skipped'].includes(rec.status)) {
+      for (const s of run.steps) if (s.status === 'pending') { s.status = 'skipped'; s.skipReason ??= 'Not part of this test' }
+      run.status = rec.status === 'failed' ? 'failed' : 'completed'
+      if (rec.status === 'failed') run.error ??= rec.error ?? `"${rec.label}" failed.`
+      run.endedAt = Date.now()
+      run.currentStepIds = []
+      run.nextStepIds = []
+      l.running = false
+      await publish(run)
+      return run
+    }
+  }
   if (!ready.length && l.waiting) {
     // Nothing can run because a step is waiting on the operator: that is a
     // pause with a question, never a stuck run.
@@ -2250,8 +2360,9 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // then capped at MAX_CONCURRENCY. `gated` deliberately keeps every gated
   // node, because it is published verbatim as run.nextStepIds below and
   // truncating it would drop steps from the run page.
+  // A test run never stops for a person: it runs one step nobody is shipping.
   const gatedSet = new Set(ready.filter(id => stepOf(l, id)?.approval && !l.approved.has(id)
-    && oversightFor(run.blastRadius) !== 'auto'))
+    && oversightFor(run.blastRadius) !== 'auto' && !isTestRun(run)))
   const gated = [...gatedSet]
   const runnable = ready.filter(id => !gatedSet.has(id)).slice(0, MAX_CONCURRENCY)
   const gate = runnable.length ? undefined : gated[0]
@@ -2364,6 +2475,18 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     return run
   }
 
+  // In a test run a widen or a rework is the tested step's recorded outcome,
+  // never a restart: acting on it would re-run the seeded ancestors and the
+  // steps that are not part of the test, and overwrite what was seeded. The
+  // instruction stays in the step's output, where the step wrote it.
+  if (isTestRun(run) && (l.widen || l.rework)) {
+    for (const w of [l.widen, l.rework]) {
+      if (w) logLine(l, run, recOf(run, w.from), 'recorded, not acted on: this is a test run')
+    }
+    l.widen = undefined
+    l.rework = undefined
+  }
+
   // A step is waiting on the operator: nothing else starts until they answer.
   if (l.widen) {
     // Re-provision with the wider scope and continue from there: the same reset
@@ -2421,6 +2544,8 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     run.currentStepIds = []
     run.nextStepIds = [w.target]
     l.running = false
+    // Before publish: restartRun re-reads the run from disk.
+    recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${raiser?.agentSlug ?? w.from}` })
     await publish(run)
     log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, bucket, spent })
     return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${REWORK_LIMIT}): ${w.instruction}`, run.startedBy, { fromRunner: true })
@@ -2554,6 +2679,80 @@ async function ensureBranchWorktree(run: WorkflowRun, base: string): Promise<voi
   log.info('run worktree ready', { runId: run.id, checkout: clone, worktree: run.projectDir, branch, base, reason: 'the run names its branch' })
 }
 
+/**
+ * The clone a run's worktree is made beside. A test run starts out holding
+ * its source run's projectDir, which is that run's worktree, so it is read
+ * as a recorded worktree too: the test's own goes beside the clone, never
+ * inside the source's.
+ */
+function runCheckout(run: WorkflowRun): string | undefined {
+  const repoName = run.product?.repos?.[0]?.split('/').pop()
+  const recordedClone = (run.branch || run.testOf) && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
+  return (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
+    : (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir
+      : findCheckout(runWorkspace(run), repoName)
+}
+
+/**
+ * A test run's own worktree, on a throwaway `test/` branch: the root
+ * repository from the commit the tested step started from in the source run,
+ * nested ones from the source run's branch. Removed when the test settles
+ * (see publish). The source run's branch and worktree are never touched.
+ */
+async function ensureTestCheckout(run: WorkflowRun, testOf: TestOf, checkout: string): Promise<void> {
+  const source = await getRun(testOf.sourceRunId)
+  if (!source) throw new Error(`the run this test is testing (${testOf.sourceRunId.slice(0, 8)}) no longer exists`)
+  const nestedStart = source.branch
+  let rootStart = source.steps.find(s => s.stepId === testOf.stepId)?.headAtStart
+  if (!rootStart && nestedStart) {
+    rootStart = nestedStart
+    testOf.codeNote = `Code is the state at the end of run ${testOf.sourceRunId.slice(0, 8)}, not when this step ran.`
+  }
+  // A source run that never had a branch of its own worked in the clone
+  // itself; a test of it has nothing to branch from, and must not work there.
+  if (!rootStart || !nestedStart) {
+    throw new Error(`run ${testOf.sourceRunId.slice(0, 8)} never had a branch of its own, so there is no code to test this step against`)
+  }
+  // A fresh name is claimed by making it: two tests of the same step started
+  // together can both see test/…-n free, and the one whose create fails moves
+  // on to the next n rather than failing (a bounded number of times).
+  const fresh = !run.branch
+  const stem = `test/${testOf.sourceRunId.slice(0, 8)}-${testOf.stepId.slice(0, 8)}-`
+  let n = 1
+  let branch = run.branch ?? ''
+  let worktrees: string[] | undefined
+  for (let attempt = 0; !worktrees; attempt++) {
+    if (fresh) {
+      // A directory left where the worktree would go blocks `worktree add` as surely as a branch does.
+      while (await branchExists(checkout, `${stem}${n}`) || existsSync(worktreeDirFor(checkout, `${stem}${n}`))) n++
+      branch = `${stem}${n}`
+    }
+    try {
+      // On a failure ensureTestWorktrees removes what it made, and only that.
+      worktrees = await ensureTestWorktrees(checkout, branch, rootStart, nestedStart, { fresh })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const taken = fresh && (await branchExists(checkout, branch) || existsSync(worktreeDirFor(checkout, branch)) || /already exists|already checked out|already used by worktree/i.test(msg))
+      // Another test's prune/add in .git/worktrees at the same moment: worth another go.
+      // ensureTestWorktrees has removed the branch its -b made, so nothing is left behind.
+      const raced = fresh && /\.git\/worktrees\//.test(msg)
+      if (!(taken || raced) || attempt >= 4) throw new Error(`could not create the test worktree for ${branch} beside ${checkout}: ${msg}`)
+      n++
+    }
+  }
+  // Made again (a restart after the test settled): the next settle removes them again.
+  delete testOf.testWorktreeRemoved
+  testWorktreesRemoved.delete(run.id)
+  run.branch = branch
+  testOf.startPoint = rootStart
+  run.projectDir = worktrees[0] ?? checkout
+  run.baseBranch = source.baseBranch
+  // The fix facts diff against where the test started: only what it did.
+  run.baseCommit = (await captureBaseline(run.projectDir)) ?? run.baseCommit
+  await saveRun(run)
+  log.info('test worktree ready', { runId: run.id, sourceRunId: testOf.sourceRunId, checkout, worktree: run.projectDir, branch, startPoint: rootStart, repos: worktrees.length })
+}
+
 async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // A run that has its worktree is left alone. One whose worktree is gone (a
   // developer ran `git worktree remove` after the PR merged, then restarted
@@ -2561,13 +2760,15 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // to the Claude config directory as cwd and every step ran in the wrong
   // place while the header still named the deleted path.
   if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
-  if (run.parameters?.branch?.trim() && !run.branch) return ensureBranchWorktree(run, run.parameters.branch.trim())
-  const repoName = run.product?.repos?.[0]?.split('/').pop()
-  const recordedClone = run.branch && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
-  const checkout = (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
-    : (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir
-      : findCheckout(runWorkspace(run), repoName)
+  if (run.parameters?.branch?.trim() && !run.branch && !run.testOf) return ensureBranchWorktree(run, run.parameters.branch.trim())
+  const checkout = runCheckout(run)
+  // A test run with a directory but no clone to make its worktree beside
+  // would otherwise work in the source run's directory: refuse instead.
+  if (!checkout && run.testOf && run.projectDir) {
+    throw new Error(`no git checkout found for ${run.projectDir}, so there is nowhere to make this test's own worktree; the test will not work in the source run's directory`)
+  }
   if (!checkout) return
+  if (run.testOf) return ensureTestCheckout(run, run.testOf, checkout)
   // The base branch follows the kind of work, which intake classifies into
   // meta.json. Until it has, no step touches the code, so the branch waits:
   // a branch cut before the classification would start from the clone's
@@ -2964,7 +3165,7 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   }))
 
   try {
-    const { rest } = await beginRun(toWorkflowLike(wf), {
+    const { rest } = await beginRun(toWorkflowLike({ ...wf, steps: withTestOverride(wf.steps, run) }), {
       product: run.product, projectDir: run.projectDir, ticketKey: run.ticketKey, workspace,
     }, async (baseCommit) => {
       run.baseCommit = baseCommit
@@ -3056,6 +3257,10 @@ const MAX_INTERRUPTIONS = 3
  * interruption, it is a question nobody answered — and pauses rather than
  * resuming a run that keeps being interrupted, which would otherwise be a loop
  * that spends money on every boot.
+ *
+ * Also sweeps the worktrees of settled test runs the previous process never
+ * got to remove (their cleanup is deferred in memory, so a crash loses it):
+ * the same once-only removal publish does, best effort, test runs only.
  */
 /** Interrupted runs a resume left for want of a slot; resumed as runs settle. */
 const awaitingSlot = new Set<string>()
@@ -3068,9 +3273,32 @@ function resumeAwaitingSlot(): Promise<unknown> {
   return resumingWaiting
 }
 
-export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resumed: string[], paused: string[], skipped: string[], waiting: string[] }> {
-  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], waiting: [] as string[] }
+export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resumed: string[], paused: string[], skipped: string[], waiting: string[], swept: string[] }> {
+  const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], waiting: [] as string[], swept: [] as string[] }
   const all = await listRuns()
+  // The full boot pass only; a pass for runs waiting on a slot has none to sweep.
+  if (!only) for (const run of all) {
+    // Not one this process is still unwinding: publish/afterUnwound own that.
+    if (testCleanupDue(run) && !live.get(run.id)?.running) {
+      // Logs its own failure and still sets the marker: a worktree git will
+      // not remove is not retried on every boot.
+      // Through the run's publish chain, on a fresh read: a restart or publish
+      // that landed since listRuns() must not be saved over.
+      let swept = false
+      const prior = publishChains.get(run.id) ?? Promise.resolve()
+      const next = prior.catch(() => {}).then(async () => {
+        const saved = await getRun(run.id)
+        if (!saved || !testCleanupDue(saved) || live.get(run.id)?.running) return
+        await removeTestWorktreesOnce(saved)
+        await saveRun(saved).catch(err => log.warn('could not record the test worktree sweep', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+        swept = true
+      })
+      publishChains.set(run.id, next)
+      await next.catch(() => {})
+      if (swept) out.swept.push(run.id)
+      continue
+    }
+  }
   // Within its group's cap, oldest first. Every interrupted run used to resume
   // at once whatever its group allowed: after a burst of reloads nine Runbook A
   // runs came back together against a cap of 2, each standing up a ~2 GiB
@@ -3417,7 +3645,9 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   if (!workflow) {
     throw new RestartError(409, `Workflow "${run.workflowSlug}" no longer exists, so this run cannot be rebuilt`)
   }
-  const steps = alignStepIds(workflow.steps, run)
+  // Overridden before alignment too: a test run's record carries the tested
+  // step's overridden agent, and must align with the list it was built from.
+  const steps = withTestOverride(alignStepIds(withTestOverride(workflow.steps, run), run), run)
   const aligned = { ...workflow, steps }
   const graph = buildGraph(steps)
   const state = initRunState(graph)
@@ -3512,15 +3742,21 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
         : 'wait for it to settle'
     throw new RestartError(409, `A ${run.status} run cannot be restarted; ${instead}`)
   }
+  // A test run is one step: its ancestors are the source run's outputs, and
+  // everything else is not part of the test. Restarting anywhere but the tested
+  // step would run steps the test exists not to run.
+  if (run.testOf && stepId !== run.testOf.stepId) throw new RestartError(409, 'A test run only re-runs the step it tests.')
   // A person's restart waits for a slot like any start. The runner's own
   // hand-overs (widen, rework) keep the slot the run already holds, and an
   // interrupted run is counted against its group already.
-  if (!opts.fromRunner && !opts.admitted && run.status !== 'interrupted') {
+  if (!opts.fromRunner && !opts.admitted && run.status !== 'interrupted' && !run.testOf) {
     const parked = await parkUnlessSlot(run, { action: 'restart', stepId, note, startedBy })
     if (parked) return parked
   }
   // Same scope as starting a run: what conflicts is a shared working directory.
-  const active = await findRunInWorkspace(runWorkspace(run), run.id)
+  // A test run never counts against that lock (it works on its own worktree),
+  // so it is not refused by it either.
+  const active = run.testOf ? null : await findRunInWorkspace(runWorkspace(run), run.id)
   if (active) {
     throw new RestartError(
       409,
@@ -3567,7 +3803,9 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // threw away a finished scan, triage and drafting every time the dev server
   // reloaded, because its derived directory had never been meant to hold code.
   const repos = run.product?.repos ?? []
-  const expectsCheckout = repos.length > 0
+  // A test run is exempt: its worktree was removed when it settled, and
+  // ensureTestCheckout makes it again before the tested step runs.
+  const expectsCheckout = !run.testOf && repos.length > 0
   const sharedCheckout = repos.some(r => hasCheckout(checkoutDirFor(r, run.startedBy)))
   if (expectsCheckout && !hasCheckout(runWorkspace(run)) && !sharedCheckout && ancestorsOf(l.graph, stepId).length > 0) {
     throw new RestartError(
@@ -3582,11 +3820,15 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // to the environment should say so in seconds, and a restart into an
   // environment still missing its compose file or its Jira status should not
   // spend a step's budget rediscovering that.
-  run.preflight = await preflight(run, l.workflow.steps)
-  const blocked = preflightFailure(run.preflight)
-  if (blocked) {
-    await saveRun(run)
-    throw new RestartError(409, `Preflight: ${blocked}`)
+  // Not for a test run, which never ran one: its checkout is its own
+  // throwaway worktree, made again before the tested step runs.
+  if (!run.testOf) {
+    run.preflight = await preflight(run, l.workflow.steps)
+    const blocked = preflightFailure(run.preflight)
+    if (blocked) {
+      await saveRun(run)
+      throw new RestartError(409, `Preflight: ${blocked}`)
+    }
   }
 
   const previousOutput = recOf(run, stepId).output
@@ -3683,6 +3925,130 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.currentStepIds = []
   run.nextStepIds = [stepId, ...readyFailed]
   await publish(run)
+  void driveToSettlement(l, run)
+  return run
+}
+
+/**
+ * A step's saved definition, with a test run's override laid over the tested
+ * step. Applied wherever a running run obtains its step definitions, so the
+ * override holds across a rebuild from disk as well as at the start. `id` and
+ * `next` are never overridden: the graph is the saved workflow's.
+ */
+function withTestOverride<T extends { id: string }>(steps: T[], run: Pick<WorkflowRun, 'testOf'>): T[] {
+  const o = run.testOf?.stepOverride
+  if (!o) return steps
+  const { id: _id, next: _next, ...patch } = o as Record<string, unknown>
+  return steps.map(s => (s.id === run.testOf!.stepId ? { ...s, ...patch } as T : s))
+}
+
+export class TestRunError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+/**
+ * Runs one step of a finished run again, as a new run, against that run's
+ * outputs: every ancestor of the step is seeded from the source, the step
+ * itself runs, and nothing after it does. The source run is not touched.
+ */
+export async function startTestRun(
+  sourceRunId: string,
+  stepId: string,
+  opts: { stepOverride?: Record<string, unknown>, startedBy?: string } = {},
+): Promise<WorkflowRun> {
+  const source = await getRun(sourceRunId)
+  if (!source) throw new TestRunError(404, 'Run not found')
+  if (isTestRun(source)) throw new TestRunError(409, 'Pick a real run to test against, not a test run.')
+  if (isLiveStatus(source.status)) throw new TestRunError(409, 'Wait for this run to finish before testing one of its steps.')
+  const tested = source.steps.find(s => s.stepId === stepId)
+  if (!tested) throw new TestRunError(400, `Unknown step "${stepId}" on this run.`)
+
+  const wf = await loadWorkflowSteps(source.workflowSlug)
+  if (!wf) throw new TestRunError(409, `Workflow "${source.workflowSlug}" no longer exists, so a step of this run cannot be tested.`)
+  let steps: any[]
+  try { steps = alignStepIds(wf.steps, source) }
+  catch (err) { throw new TestRunError(409, err instanceof Error ? err.message : String(err)) }
+  const ancestors = new Set(ancestorsOf(buildGraph(steps), stepId))
+  const settled = (s: RunStep) => s.status === 'completed' || (s.status === 'skipped' && !!s.skipReason)
+  // In run order, so the reason names the earliest step that fell short.
+  const unsettled = source.steps.find(s => ancestors.has(s.stepId) && !settled(s))
+  if (unsettled) {
+    throw new TestRunError(409, `This run stopped before "${tested.label}" could run: "${unsettled.label}" did not finish. Pick a run that got that far.`)
+  }
+
+  const run = await createRun({
+    workflowSlug: source.workflowSlug,
+    workflowName: source.workflowName,
+    initialPrompt: source.initialPrompt,
+    parameters: source.parameters,
+    projectDir: source.projectDir,
+    watch: source.watch,
+    startedBy: opts.startedBy ?? source.startedBy,
+    product: source.product,
+    autoRun: true,
+    steps: source.steps.map(s => ({ stepId: s.stepId, label: s.label, agentSlug: s.agentSlug })),
+  })
+  run.testOf = { sourceRunId, stepId, ...(opts.stepOverride ? { stepOverride: opts.stepOverride } : {}), startPoint: '' }
+  run.stopAfter = stepId
+  run.ticketKey = source.ticketKey
+  run.product = source.product
+  run.workType = source.workType
+  run.origin = source.origin
+  run.blastRadius = source.blastRadius
+  run.autoRun = true
+  // The tested step as it runs: the saved definition with the override over it.
+  const testedDef = withTestOverride(steps, run).find(s => s.id === stepId)
+  for (const rec of run.steps) {
+    const from = source.steps.find(s => s.stepId === rec.stepId)!
+    if (ancestors.has(rec.stepId)) {
+      // The cost stays with the source run: the test did not spend it.
+      Object.assign(rec, {
+        status: from.status, input: from.input, output: from.output, skipReason: from.skipReason, usage: null, visits: from.visits,
+      })
+    } else if (rec.stepId !== stepId) {
+      Object.assign(rec, { status: 'skipped', skipReason: 'Not part of this test' })
+    } else {
+      // The record, and the artifact named after it, show what actually runs.
+      if (typeof testedDef?.agentSlug === 'string') rec.agentSlug = testedDef.agentSlug
+      if (typeof testedDef?.label === 'string') rec.label = testedDef.label
+    }
+  }
+  await saveRun(run)
+
+  if (existsSync(runArtifactsDir(sourceRunId))) {
+    await cp(runArtifactsDir(sourceRunId), runArtifactsDir(run.id), { recursive: true, force: false })
+    // The source's own copy of what the tested step writes would satisfy its
+    // output check without the step writing anything. Only those files, and
+    // only inside this run's directory (resolveRunArtifact refuses anything else).
+    const produces = testedDef?.produces
+    for (const name of Array.isArray(produces) ? produces : []) {
+      const path = typeof name === 'string' ? resolveRunArtifact(run.id, name) : null
+      if (path) await rm(path, { force: true }).catch(() => { /* a directory, not a file: left alone */ })
+    }
+  }
+
+  let l: Live
+  try {
+    l = await rehydrate(run)
+  } catch (err) {
+    await failRun(run, err)
+    throw new TestRunError(409, err instanceof Error ? err.message : String(err))
+  }
+  // Armed the way restartRun arms its restart point. Every forward
+  // predecessor is an ancestor, and every ancestor was seeded settled.
+  armNode(l.state, stepId)
+  // A test always runs its step: as with a restart, naming the step waives
+  // its `runWhen`, which would otherwise skip it and report a test of nothing.
+  l.conditionOverride = new Set([stepId])
+  l.running = true
+  run.status = 'running'
+  run.currentStepIds = []
+  run.nextStepIds = [stepId]
+  await saveRun(run)
   void driveToSettlement(l, run)
   return run
 }

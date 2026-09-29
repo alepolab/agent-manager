@@ -12,9 +12,12 @@ export function useWorkflowRun(slug: string) {
   /** Live output per step id while the run streams; what the agent is doing, newest last. */
   const logs = ref<Record<string, string[]>>({})
   let source: EventSource | null = null
+  /** The run `source` streams. Its frames overwrite `run`, so it must be the one shown. */
+  let streaming = ''
 
   function listen(runId: string) {
     source?.close()
+    streaming = runId
     source = new EventSource(`/api/runs/${runId}/stream`)
     source.onmessage = (e) => {
       try {
@@ -42,6 +45,22 @@ export function useWorkflowRun(slug: string) {
     // stream follows it into `running` on its own.
     const active = runs.value.find(r => isLiveStatus(r.status))
     if (active) { run.value = active; listen(active.id) }
+  }
+
+  /**
+   * Show one of this workflow's runs, picked by a person. Following another
+   * run's stream stops, or its next frame would put that run back; picking a
+   * live run follows it (again).
+   */
+  function show(runId: string) {
+    const found = runs.value.find(r => r.id === runId)
+    if (!found) return
+    // Already following it: the streamed record is fresher than the list's copy.
+    if (source && streaming === runId) return
+    // Its logs belong to the run being left; steps share ids across runs.
+    if (source) { source.close(); source = null; logs.value = {} }
+    run.value = found
+    if (!source && isLiveStatus(found.status)) listen(found.id)
   }
 
   /** Background refresh: the run list, and the open run's stream if another tab made it live again.
@@ -87,7 +106,7 @@ export function useWorkflowRun(slug: string) {
   onScopeDispose(() => source?.close())
 
   return {
-    run, runs, loading, error, logs, attach, start, refreshRuns, refresh,
+    run, runs, loading, error, logs, attach, show, start, refreshRuns, refresh,
     continueRun: (note?: string) => act('continue')(note?.trim() ? { note: note.trim() } : undefined),
     sendNote: async (text: string) => run.value ? $fetch<{ delivered?: string[], queued?: string }>(`/api/runs/${run.value.id}/note`, { method: 'POST', body: { text } }) : undefined,
     restart: (stepId: string, note?: string) => act('restart')({ stepId, note: note?.trim() || undefined }),

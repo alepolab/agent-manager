@@ -24,7 +24,7 @@ export function gateAsk(run: Pick<WorkflowRun, 'status' | 'question'>): string {
 /**
  * Is this gate the viewer's to answer? A gate that names no role is everyone's,
  * and an operator is the backstop for all of them. The same rule as
- * `mineToAnswer` on the dashboard and in WorkflowRunPanel.
+ * `mineToAnswer` on the dashboard and in RunGate.
  */
 export function gateIsMine(gateRole: Role | undefined, viewer: Role | undefined | null): boolean {
   // A manager holds no answerGate, so no gate is theirs however it is labelled.

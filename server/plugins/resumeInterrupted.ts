@@ -1,5 +1,6 @@
 /**
- * Picks up runs the previous process left mid-step.
+ * Picks up runs the previous process left mid-step, and removes the worktrees
+ * of settled test runs it never got to clean up.
  *
  * A container rebuild used to cost whatever step was in flight: the run froze
  * as `interrupted`, and a person had to notice and restart it, which re-ran
@@ -25,6 +26,7 @@ export default defineNitroPlugin(() => {
         if (r.resumed.length || r.paused.length || r.waiting.length) {
           console.log(`[resume] ${r.resumed.length} run(s) resumed, ${r.waiting.length} waiting for a slot in their group, ${r.paused.length} paused for a person, ${r.skipped.length} left alone`)
         }
+        if (r.swept.length) console.log(`[resume] removed the leftover worktrees of ${r.swept.length} settled test run(s)`)
       })
       .catch(err => console.error('[resume] could not resume interrupted runs:', err?.message ?? err))
       // Runs waiting out a spent quota: back now if its reset has passed, and

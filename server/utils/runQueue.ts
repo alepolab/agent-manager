@@ -24,7 +24,7 @@ import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { capFor } from './workflowGroups.ts'
 import { listRuns } from './workflowRunStore.ts'
 import { createLogger } from './log.ts'
-import { holdsGroupSlot } from '../../shared/types/run.ts'
+import { holdsGroupSlot, isTestRun } from '../../shared/types/run.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 // The runner's own namespace: this is work the runner does, not a subsystem of
@@ -90,7 +90,9 @@ function serialised<T>(fn: () => Promise<T>): Promise<T> {
  */
 export async function inFlightForGroup(group: string, runs?: WorkflowRun[]): Promise<number> {
   const all = runs ?? await listRuns()
-  return all.filter(r => (holdsGroupSlot(r.status) || resumable(r)) && groupOf(r) === group).length
+  // A test run uses no clone and no agent budget of the real kind this cap
+  // protects, and it must never compete with real runs for a slot.
+  return all.filter(r => (holdsGroupSlot(r.status) || resumable(r)) && groupOf(r) === group && !isTestRun(r)).length
 }
 
 /**

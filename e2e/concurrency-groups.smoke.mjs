@@ -212,6 +212,9 @@ async function main() {
   mkdirSync(shots, { recursive: true })
 
   // ── 3. The runs page paints the queued run as waiting, not as started ───
+  // /runs is a single `li` list beside a detail pane now, not a table plus a
+  // separate "in flight" section of its own cards - see app/pages/runs/index.vue
+  // and app/components/RunDetailPane.vue.
   await page.goto(`${baseUrl}/runs`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
   await page.getByText('SMOKE-2').first().waitFor({ state: 'visible' })
   // The group occupancy arrives from a second request, so wait for it rather
@@ -219,51 +222,54 @@ async function main() {
   await page.waitForFunction(
     () => /of \d+ running/.test(document.body.innerText),
     null, { timeout: VISIBLE_TIMEOUT_MS })
-  const runsBody = await page.locator('body').innerText()
 
   // THE ASSERTION THIS FILE EXISTS FOR. currentStep() falls through to the
   // first pending step for a run with none running, so without the queued
   // branch the card reads "0/2 steps" over a step name and an agent slug, as
-  // though work had begun.
-  assert.ok(/Waiting for a slot/i.test(runsBody),
-    `the queued run says it is waiting. Page text:\n${runsBody}`)
-  assert.ok(runsBody.includes('Smoke SDLC'),
-    'and names the group it is waiting on, so "why is my run not starting" has an answer on the page')
-  assert.ok(/1 of 1 running/.test(runsBody),
-    'with the occupancy that explains it - a cap alone does not')
+  // though work had begun. liveLine() in runs/index.vue carries this on the
+  // row itself, so scope to the queued run's `li` rather than the whole body.
+  const queuedRow = page.locator('li', { hasText: 'SMOKE-2' }).first()
+  await queuedRow.waitFor({ state: 'visible' })
+  const rowText = await queuedRow.innerText()
+  assert.ok(/queued/i.test(rowText), `the row shows the status. Row:\n${rowText}`)
+  assert.ok(rowText.includes('Smoke SDLC'),
+    `and names the group it is waiting on, so "why is my run not starting" has an answer on the row. Row:\n${rowText}`)
+  assert.ok(/1 of 1 running/.test(rowText),
+    `with the occupancy that explains it - a cap alone does not. Row:\n${rowText}`)
   // Minutes, not a fixed number: the dev server takes a while to build, so how
   // long the seeded run has "waited" by the time the page paints is not fixed.
-  assert.ok(/waiting \d+m/.test(runsBody),
-    'and how long it has waited, measured from queuedAt rather than startedAt')
-  assert.ok(!/no activity reported yet[\s\S]{0,80}SMOKE-2/.test(runsBody)
-    && !/SMOKE-2[\s\S]{0,200}no activity reported yet/.test(runsBody),
-    'and does NOT report a stalled agent - it has not called one yet')
+  assert.ok(/waiting \d+m/.test(rowText),
+    `and how long it has waited, measured from queuedAt rather than startedAt. Row:\n${rowText}`)
+  assert.ok(!/no activity reported yet/i.test(rowText),
+    `and does NOT report a stalled agent - it has not called one yet. Row:\n${rowText}`)
 
-  // Both runs are in flight: the section is unfiltered by design, and a queued
-  // run belongs in it.
+  // The run holding the slot is listed too - the list is unfiltered by design.
+  const runsBody = await page.locator('body').innerText()
   assert.ok(runsBody.includes('SMOKE-1'), 'the run holding the slot is listed too')
-  assert.ok(/in flight\s*\n?\s*2/i.test(runsBody), 'and both count as in flight')
+
+  // Select the queued run to open its detail pane - Stop/Delete live there
+  // now, not on the row (see e2e/awaiting-review.smoke.mjs, which scopes the
+  // same way: a `section` located by the "Open run page" link it always has).
+  await queuedRow.click()
+  const pane = page.locator('section', { has: page.getByRole('link', { name: 'Open run page' }) })
+  await pane.getByText('SMOKE-2').first().waitFor({ state: 'visible' })
+  const paneText = await pane.innerText()
 
   await page.screenshot({ path: join(shots, 'runs-queued-row.png'), fullPage: true })
 
   // Stop is offered on the queued run - that is how it is cancelled - and
   // Delete is not, because deleting it from under the queue is not a thing.
-  const queuedRow = page.locator('tr', { hasText: 'SMOKE-2' }).first()
-  if (await queuedRow.count()) {
-    const rowText = await queuedRow.innerText()
-    assert.ok(/queued/i.test(rowText), `the history row shows the status. Row:\n${rowText}`)
-    // Stop, because cancelling is how a queued run is got rid of; not Delete,
-    // which would remove it from under the queue.
-    assert.ok(/\bStop\b/.test(rowText), `Stop is offered on a queued run. Row:\n${rowText}`)
-    assert.ok(!/\bDelete\b/.test(rowText), `Delete is not. Row:\n${rowText}`)
-  }
+  assert.equal(await pane.getByRole('button', { name: 'Stop', exact: true }).count(), 1,
+    `Stop is offered on a queued run. Pane:\n${paneText}`)
+  assert.equal(await pane.getByRole('button', { name: 'Delete', exact: true }).count(), 0,
+    `Delete is not. Pane:\n${paneText}`)
 
-  // The status filter can select it; a status you cannot filter for is one you
-  // cannot find in a long history.
-  await page.goto(`${baseUrl}/runs?status=queued`, { waitUntil: 'domcontentloaded' })
+  // The view chip can select it; `?status=` is not a real query param on this
+  // page - it's `?view=`, and `running` covers `queued` too (isLiveStatus).
+  await page.goto(`${baseUrl}/runs?view=running`, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => document.body.innerText.includes('SMOKE-2'), null, { timeout: VISIBLE_TIMEOUT_MS })
   const filtered = await page.locator('body').innerText()
-  assert.ok(filtered.includes('SMOKE-2'), 'filtering by queued finds it')
+  assert.ok(filtered.includes('SMOKE-2'), 'filtering to Running finds the queued run too')
 
   // ── 4. Stopping the queued run cancels it, and then it can be deleted ───
   const stopped = await page.evaluate(async (id) => {
@@ -332,7 +338,11 @@ async function main() {
     'and the file is untouched by the refusal')
 
   // ── 6. The workflow editor shows and saves its group ────────────────────
+  // The group picker moved into the trigger drawer's Settings tab, behind the
+  // trigger card - it is no longer inline on the builder page.
   await page.goto(`${baseUrl}/workflows/${SLUG}`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
+  await page.getByTestId('trigger-card').click()
+  await page.getByTestId('trigger-tab-settings').click()
   const picker = page.getByLabel('Concurrency group')
   await picker.waitFor({ state: 'visible' })
   assert.equal(await picker.inputValue(), 'smoke-sdlc',

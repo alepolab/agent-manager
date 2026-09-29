@@ -281,7 +281,9 @@ ${modal}`)
   assert.ok(tabBody.includes('Seeded Nightly Scan'),
     'a ?tab=schedule link lands on the Schedule tab with the workflow\'s schedule shown, without a click')
   assert.ok(tabBody.includes('0 2 * * *'), 'and the card carries the expression')
-  assert.ok(/schedule\s*\(1\)/i.test(tabBody), 'the tab label counts this workflow\'s schedules')
+  // The count moved off a tab label and onto the trigger card itself -
+  // triggerSummary() in app/utils/buildStack.ts renders "1 schedule" there.
+  assert.ok(/\b1\s*schedule\b/i.test(tabBody), 'the trigger card counts this workflow\'s schedules')
   await page.screenshot({ path: join(shots, 'workflow-schedule-tab.png'), fullPage: true })
 
   // The workflow is pinned here, so the form must not offer a picker.
@@ -308,7 +310,7 @@ ${modal}`)
   const afterCreate = await page.locator('body').innerText()
   assert.ok(afterCreate.includes('Created disabled'),
     'a new schedule says it is disabled, where the new row is - not only in a toast')
-  assert.ok(/schedule\s*\(2\)/i.test(afterCreate), 'and the tab count follows')
+  assert.ok(/\b2\s*schedules\b/i.test(afterCreate), 'and the trigger card count follows')
 
   await page.goto(`${baseUrl}/schedules`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
   await page.locator('[data-testid="schedule-card"]').first().waitFor({ state: 'visible', timeout: VISIBLE_TIMEOUT_MS })
@@ -317,17 +319,18 @@ ${modal}`)
     'a schedule created on the workflow tab is on the global page too - one store, not two')
   assert.ok(globalBody.includes(scanTarget), 'and the directory it states is reported there')
 
-  // Switching tabs must not destroy the canvas: it is v-show, because VueFlow
-  // fits the view on init and a remount would discard the pan and zoom.
+  // Opening the trigger drawer must not destroy the stack behind it: the
+  // drawer column swaps its own content, but WorkflowStackEditor is never
+  // remounted underneath it.
   await page.goto(`${baseUrl}/workflows/${SLUG}`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
-  await page.locator('[data-testid="workflow-tab-schedule"]').click()
+  await page.locator('[data-testid="trigger-card"]').click()
+  await page.locator('[data-testid="trigger-tab-triggers"]').waitFor({ state: 'visible', timeout: VISIBLE_TIMEOUT_MS })
   await page.locator('[data-testid="schedule-card"]').first().waitFor({ state: 'visible', timeout: VISIBLE_TIMEOUT_MS })
-  await page.locator('[data-testid="workflow-tab-canvas"]').click()
   await page.waitForFunction(
     () => document.body.innerText.includes('Scan'),
     null, { timeout: VISIBLE_TIMEOUT_MS })
   assert.ok((await page.locator('body').innerText()).includes('Scan'),
-    'coming back to the canvas still shows the step - the graph was hidden, not thrown away')
+    'the trigger drawer opening still shows the step in the stack - it was not thrown away')
 
   // ── 7. The workflow card says it is scheduled, and links to the tab ─────
   await page.goto(`${baseUrl}/workflows`, { waitUntil: 'domcontentloaded', timeout: SERVER_READY_TIMEOUT_MS })
