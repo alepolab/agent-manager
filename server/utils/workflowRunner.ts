@@ -182,6 +182,8 @@ interface Live {
   authFailure?: { stepId: string, message: string }
   /** A step hit the model's quota; the run pauses until `until`. */
   quotaFailure?: { stepId: string, message: string, until: number }
+  /** Steps whose session the API refused to continue, already retried cold once. */
+  coldRetried?: Set<string>
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
   /** Steps whose `runWhen` condition is waived for one evaluation, because an
@@ -894,6 +896,18 @@ export function isAuthFailure(message: string): boolean {
 }
 
 /**
+ * The API refused to continue a session, not the work: a transcript cut off
+ * mid-tool by a server reload can hold a tool call with no result, and every
+ * resume of it is rejected the same way. ASECRM-290's Failing Test failed on
+ * "API Error: 400 due to tool use concurrency issues" after a reload, and a
+ * restart would have resumed the same transcript into the same error.
+ */
+const UNRESUMABLE = /tool use concurrency|tool_use.{0,40}without.{0,20}tool_result|tool_result.{0,60}(does not|must) (correspond|have a corresponding)/i
+export function isUnresumable(message: string): boolean {
+  return UNRESUMABLE.test(message)
+}
+
+/**
  * The model's quota or rate limit is spent, and when it resets. The provider
  * says so in the error: "Request rejected (429) · … Quota resets in 3551s".
  * Retrying before then fails the same way, so the reset time is the retry
@@ -1579,6 +1593,17 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       scheduleQuotaResume(until)
       logLine(l, run, rec, `the model's quota is spent until ${new Date(until).toLocaleTimeString()}: ${message}`)
       log.warn('step hit the model quota; the run will wait for the reset', { runId: run.id, stepId: id, until: new Date(until).toISOString() })
+      return true
+    }
+    // A session the API will not continue: the same visit again, cold, once.
+    if (resume && !l.stopped && isUnresumable(message) && !l.coldRetried?.has(id)) {
+      (l.coldRetried ??= new Set()).add(id)
+      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.status[id] = 'pending'
+      armNode(l.state, id)
+      Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined, sessionId: undefined, sessionProject: undefined })
+      logLine(l, run, rec, `the API would not continue this step's session (${message}); starting it again fresh`)
+      log.warn('step session could not be resumed; retrying cold', { runId: run.id, stepId: id, error: message })
       return true
     }
     // Whatever the agent left running outlives the agent: `docker run` is a
