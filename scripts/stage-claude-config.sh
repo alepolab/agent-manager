@@ -107,7 +107,7 @@ find "$STAGE" -type d -name ".git" -prune -exec rm -rf {} + 2>/dev/null || true
 # be — and none of it is config describing how an agent behaves. A plugin whose
 # scripts genuinely need their dependencies must install them in the image, not
 # smuggle them in through ~/.claude.
-find "$STAGE" -type d -name "node_modules" -prune -exec rm -rf {} + 2>/dev/null || true
+find "$STAGE" -type d \( -name "node_modules" -o -name ".venv" \) -prune -exec rm -rf {} + 2>/dev/null || true
 
 # Marketplace CLONES. Every marketplace ever added is a git checkout under
 # plugins/marketplaces/, and on the machine that prompted this they were 229M of
