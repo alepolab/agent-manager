@@ -67,6 +67,37 @@ licence-gated. Example shape, drawn from AAA:}`
 > `REVIEW.md`'s two-node AAA worked example for what this catches that
 > automated gates do not.
 
+## In-product text (help, tooltips, descriptions, API docs)
+
+Everything a user can read is written for the operator or customer: what
+the screen, field or setting does and what to enter. Brief and
+presentable, like the rest of the UI. It must never contain internal
+information:
+
+- Jira keys (`PCRFV-…`, `SBN-…`, `SA-…`, `URM-…`, `SASKNEPCR-…`,
+  `CSUP-…`), Paperclip task ids (`ALE-…`), open-question or test-case ids
+  (`OQ-6`, `TC733`, `AC-REST…`)
+- Names of people, teams, customers or AI agents
+- Confluence / Atlassian links, internal hostnames or IPs
+- Design discussion, rationale, history or conclusions ("because a
+  mistyped value fails silently", "restored for legacy parity")
+- Words that betray unfinished or test content ("placeholder",
+  "synthetic", "TODO")
+
+This covers UI strings and templates, i18n and message bundles, help
+content, form field help, tooltips, sheet and dialog descriptions, toasts
+and error messages, email and SMS templates, System Config / customdata
+descriptions and values (including Liquibase and seed data), and API docs
+(`@Schema`, `@Operation`, OpenAPI text rendered in-app). Test data the
+product can display follows the same rule. Ticket ids and rationale
+belong in code comments, commit messages and the PR, never in a string.
+
+Enforced: the plugin's internal-references guard (T1) blocks an edit that
+adds such a reference to a user-facing file, and this repo keeps a test
+that scans its user-visible strings (`{path of this repo's
+no-internal-refs test}`), modelled on pcrf-ems-portal
+`tests/no-internal-refs.test.ts` and `ApiDocsAtddTest`.
+
 ## Review
 
 Every change to this repo is reviewed against this directory's own
