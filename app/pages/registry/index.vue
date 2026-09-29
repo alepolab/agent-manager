@@ -98,12 +98,12 @@ const sourceLabel = computed(() => ({
     <PageHeader title="Products" subtitle="What a ticket routes to: repos, branch policy, stack profile and test commands.">
       <template #right>
         <ReadOnlyBadge v-if="!can('configure')" reason="editing the registry" />
-        <UButton v-if="can('configure')" label="Check the registry" icon="i-lucide-shield-check" size="sm" variant="soft" :loading="checking" @click="runValidate" />
+        <UButton v-if="can('configure')" label="Check the registry" icon="i-lucide-shield-check" size="sm" variant="ghost" color="neutral" :loading="checking" @click="runValidate" />
         <UButton v-if="can('configure')" label="Add product" icon="i-lucide-plus" size="sm" to="/registry/new" />
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4 space-y-4">
+    <div class="page space-y-6">
       <div v-if="error" class="rounded-lg p-3 t-ui" style="color: var(--error); background: var(--surface-base);">{{ error }}</div>
 
       <!-- A store that does not parse routes every ticket on the seed instead. -->
@@ -113,7 +113,7 @@ const sourceLabel = computed(() => ({
       </div>
 
       <!-- Routing preview -->
-      <div class="rounded-xl p-5 space-y-3 bg-card">
+      <div class="group-card space-y-3">
         <div>
           <h3 class="text-section-title">Where would a ticket go?</h3>
           <p class="t-small text-meta mt-1">
@@ -139,7 +139,7 @@ const sourceLabel = computed(() => ({
       </div>
 
       <!-- Check results -->
-      <div v-if="checkResult" class="rounded-xl p-5 space-y-2 bg-card">
+      <div v-if="checkResult" class="group-card space-y-2">
         <h3 class="text-section-title">{{ checkResult.ok ? 'Valid' : 'Problems' }}</h3>
         <p v-if="!checkResult.problems.length" class="t-small text-meta">Nothing to report.</p>
         <div v-for="(p, i) in checkResult.problems" :key="i" class="t-small flex gap-2">
@@ -149,7 +149,7 @@ const sourceLabel = computed(() => ({
       </div>
 
       <!-- Drift against the plugin: reported, imported only on request -->
-      <div v-if="drift?.newInSource.length" class="rounded-xl p-5 space-y-2 bg-card">
+      <div v-if="drift?.newInSource.length" class="group-card space-y-2">
         <h3 class="text-section-title">The team ships products this instance does not have</h3>
         <p class="t-small text-meta">
           {{ drift.newInSource.join(', ') }}. A ticket for any of them resolves to nothing here until it is imported.
@@ -160,7 +160,7 @@ const sourceLabel = computed(() => ({
       </div>
 
       <!-- The registry -->
-      <div class="rounded-xl p-5 space-y-3 bg-card">
+      <div class="group-card space-y-3">
         <div class="flex items-baseline justify-between gap-4">
           <h3 class="text-section-title">{{ registry?.products.length ?? 0 }} products</h3>
           <span class="t-small text-meta">
@@ -170,52 +170,51 @@ const sourceLabel = computed(() => ({
         <p v-if="registry?.path" class="t-small text-meta font-mono">{{ registry.path }}</p>
 
         <div v-if="loading && !registry" class="space-y-2"><SkeletonRow v-for="i in 6" :key="i" /></div>
-        <div v-else class="space-y-1">
-          <div class="flex items-center gap-3 t-label font-mono uppercase tracking-wider text-meta px-2">
+        <div v-else>
+          <div class="flex items-center gap-3 t-small font-medium text-meta px-3.5 pb-1">
             <span style="flex: 0 0 2rem;">#</span>
             <span style="flex: 1 1 0%;">Product</span>
             <span style="flex: 2 1 0%;">Repos</span>
-            <span style="flex: 0 0 12rem;" />
+            <span style="flex: 0 0 16rem;" />
           </div>
+          <div class="inset-list inset-list--flush">
           <NuxtLink
             v-for="row in registry?.products ?? []" :key="row.key"
             :to="`/registry/${row.key}`"
-            class="flex items-center gap-3 px-2 py-2 rounded-lg hover-lift focus-ring t-ui"
-            style="border: 1px solid var(--border-subtle);"
+            class="inset-row inset-row--link focus-ring t-ui"
           >
-            <span class="text-meta font-mono t-small" style="flex: 0 0 2rem;">{{ row.position + 1 }}</span>
+            <span class="text-meta t-small tabular-nums" style="flex: 0 0 2rem;">{{ row.position + 1 }}</span>
             <span style="flex: 1 1 0%; min-width: 0;" class="truncate">
               <strong>{{ row.key }}</strong>
               <span v-if="row.product.suite" class="text-label t-small ml-2">{{ row.product.suite }}</span>
             </span>
             <span style="flex: 2 1 0%; min-width: 0;" class="truncate text-label font-mono t-small">{{ (row.product.repos ?? []).join(', ') }}</span>
-            <span class="flex items-center gap-1.5 justify-end" style="flex: 0 0 12rem;">
+            <span class="flex items-center gap-3 justify-end whitespace-nowrap" style="flex: 0 0 16rem;">
               <span
-                v-if="errorsOf(row.problems).length" class="t-small px-1.5 py-0.5 rounded"
-                :style="{ color: 'var(--error)', background: 'var(--surface-base)' }"
+                v-if="errorsOf(row.problems).length" class="t-small font-medium"
+                style="color: var(--error);"
                 :title="errorsOf(row.problems).map(p => p.message).join('; ')"
               >{{ errorsOf(row.problems).length }} error{{ errorsOf(row.problems).length === 1 ? '' : 's' }}</span>
               <span
-                v-if="warningsOf(row.problems).length" class="t-small px-1.5 py-0.5 rounded"
-                :style="{ color: 'var(--warning)', background: 'var(--surface-base)' }"
+                v-if="warningsOf(row.problems).length" class="t-small font-medium"
+                style="color: var(--warning);"
                 :title="warningsOf(row.problems).map(p => p.message).join('; ')"
-              >{{ warningsOf(row.problems).length }}</span>
+              >{{ warningsOf(row.problems).length }} warning{{ warningsOf(row.problems).length === 1 ? '' : 's' }}</span>
               <span
-                v-if="unconfirmed(row.product)" class="t-small px-1.5 py-0.5 rounded"
-                :style="{ color: 'var(--warning)', background: 'var(--surface-base)' }"
+                v-if="unconfirmed(row.product)" class="t-small text-label"
                 title="Carries a CONFIRM placeholder: a field somebody drafted and nobody has confirmed"
               >unconfirmed</span>
               <span
-                class="t-small px-1.5 py-0.5 rounded"
-                :style="{ color: row.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }"
+                v-if="!row.recipe || row.recipeSource === 'local'" class="t-small text-label"
                 :title="row.recipeSource === 'local'
                   ? `recipes/${row.key}.md in the config directory, edited here — it hides the plugin's copy on this machine only`
                   : row.recipe
                     ? `recipes/${row.key}.md tells the stack step how to bring this product up`
                     : `No recipes/${row.key}.md; the stack step improvises for this product`"
-              >{{ row.recipe ? (row.recipeSource === 'local' ? 'recipe · local' : 'recipe') : 'no recipe' }}</span>
+              >{{ row.recipe ? 'local recipe' : 'no recipe' }}</span>
             </span>
           </NuxtLink>
+          </div>
         </div>
       </div>
     </div>

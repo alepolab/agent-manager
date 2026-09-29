@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
-import { RUN_STATUS_COLOR, runElapsedLabel, runStatusLabel } from '~/utils/runStatus'
+import { runElapsedLabel } from '~/utils/runStatus'
 
 /**
  * The one-line run control that stays visible above the canvas. Every action a
@@ -62,13 +62,11 @@ function onStop() {
     data-testid="run-bar"
   >
     <template v-if="run">
-      <span class="t-small font-mono uppercase" :style="{ color: RUN_STATUS_COLOR[run.status] }" aria-live="polite">
-        {{ runStatusLabel(run.status) }}
-      </span>
+      <StatusLabel :status="run.status" aria-live="polite" />
       <div class="w-40"><RunProgressBar :steps="run.steps" /></div>
-      <span class="t-small text-label font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
+      <span class="t-small text-label tabular-nums" data-testid="run-progress-count">Step {{ progress.done }} of {{ progress.total }}</span>
       <span v-if="current" class="t-small text-label truncate max-w-[16rem]">{{ current }}</span>
-      <span class="t-small text-label font-mono tabular-nums">{{ elapsed }}</span>
+      <span class="t-small text-label tabular-nums">{{ elapsed }}</span>
       <div class="flex items-center gap-1 ml-auto">
         <UButton v-if="run.status === 'paused'" size="xs" icon="i-lucide-play" label="Continue" @click="emit('continue')" />
         <!-- The bar has no room for the drafts and their prompts, and a bare

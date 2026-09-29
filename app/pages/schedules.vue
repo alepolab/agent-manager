@@ -94,12 +94,7 @@ async function onDelete(schedule: ScheduleRow) {
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4">
-      <p class="t-ui mb-4 leading-relaxed text-label">
-        Starts a workflow run on a cron expression, with its inputs stated up front. A schedule
-        works in its own directory unless you point it at a checkout. A fire missed while the
-        server was down does not replay. You can also schedule a workflow from its own page.
-      </p>
+    <div class="page">
 
       <div
         v-if="error"
@@ -135,6 +130,11 @@ async function onDelete(schedule: ScheduleRow) {
           @update:enabled="onToggleEnabled(schedule, $event)"
         />
       </div>
+      <p class="t-small text-label mt-6 max-w-2xl">
+        A schedule starts a workflow run on a cron expression, with its inputs stated up front. It works in its own
+        directory unless you point it at a checkout. A fire missed while the server was down does not replay. You
+        can also schedule a workflow from its own page.
+      </p>
     </div>
 
     <ScheduleFormModal

@@ -811,7 +811,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         icon="i-lucide-square"
         size="sm"
         color="error"
-        variant="soft"
+        variant="ghost"
         @click="stop"
       />
       <UButton
@@ -859,7 +859,7 @@ const allCompleted = computed(() => execSteps.value.length > 0 && isComplete.val
         <option v-for="c in channels" :key="c.name" :value="c.name">Announce to {{ c.name }}</option>
       </select>
       <UButton v-if="can('configure')" label="Save" icon="i-lucide-save" size="sm" variant="soft" :loading="saving" @click="save" />
-      <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="error" aria-label="Delete workflow" @click="deleteWorkflow" />
+      <UButton v-if="can('configure')" icon="i-lucide-trash-2" size="sm" variant="ghost" color="neutral" aria-label="Delete workflow" title="Delete workflow" @click="deleteWorkflow" />
       <!-- Said out loud rather than left as an absence: a page with its controls
            quietly removed is indistinguishable from a broken one, and the
            pipeline definition is worth reading before answering a gate on it. -->

@@ -60,14 +60,14 @@ const directory = computed(() =>
 
 <template>
   <div
-    class="rounded-lg bg-card border border-subtle p-4 flex items-start gap-3"
+    class="group-card flex items-start gap-3"
     :style="schedule.enabled && !schedule.nextFireAt ? 'border-color: rgba(239, 68, 68, 0.35);' : ''"
     data-testid="schedule-card"
   >
     <div class="flex-1 min-w-0 space-y-1">
       <div class="flex items-center gap-2 flex-wrap">
         <span class="t-ui font-medium">{{ schedule.name }}</span>
-        <span v-if="workflowName" class="t-small font-mono text-meta">{{ workflowName }}</span>
+        <span v-if="workflowName" class="t-small text-meta">{{ workflowName }}</span>
         <span
           v-if="workflowMissing"
           class="t-small font-mono px-1.5 py-0.5 rounded"
@@ -81,8 +81,8 @@ const directory = computed(() =>
         >expression unusable</span>
       </div>
 
-      <div class="flex items-center gap-3 t-small text-meta font-mono flex-wrap">
-        <span>{{ schedule.cron }}{{ schedule.timezone ? ` (${schedule.timezone})` : '' }}</span>
+      <div class="flex items-center gap-3 t-small text-meta flex-wrap">
+        <span class="font-mono">{{ schedule.cron }}</span><span>{{ schedule.timezone ? ` (${schedule.timezone})` : '' }}</span>
         <span v-if="schedule.enabled">next {{ when(schedule.nextFireAt) }}</span>
         <span v-else style="color: var(--text-disabled);">disabled</span>
         <span :title="schedule.workspace">works in {{ directory }}</span>
@@ -90,14 +90,14 @@ const directory = computed(() =>
 
       <div
         v-if="Object.keys(schedule.parameters ?? {}).length"
-        class="flex flex-wrap gap-x-3 t-small font-mono text-label"
+        class="flex flex-wrap gap-x-4 t-small text-label"
       >
         <span v-for="(value, name) in schedule.parameters" :key="name">
-          <span style="color: var(--text-tertiary);">{{ name }}:</span> {{ value }}
+          {{ name }} <span class="font-mono" style="color: var(--text-primary);">{{ value }}</span>
         </span>
       </div>
 
-      <div v-if="schedule.state?.lastOutcome" class="t-small font-mono">
+      <div v-if="schedule.state?.lastOutcome" class="t-small">
         <span :style="{ color: OUTCOME_COLOR[schedule.state.lastOutcome] }">
           {{ schedule.state.lastOutcome }}
         </span>
@@ -105,9 +105,9 @@ const directory = computed(() =>
         <NuxtLink
           v-if="schedule.state.lastRunId"
           :to="`/runs/${schedule.state.lastRunId}`"
-          class="ml-2 underline"
+          class="ml-2 hover:underline"
           style="color: var(--accent);"
-        >open run</NuxtLink>
+        >Open run</NuxtLink>
         <span v-if="schedule.state.lastDetail" class="text-meta ml-1.5">— {{ schedule.state.lastDetail }}</span>
       </div>
     </div>

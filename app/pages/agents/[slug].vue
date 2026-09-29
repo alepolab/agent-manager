@@ -182,8 +182,7 @@ useUnsavedChanges(isDirty)
         </div>
       </template>
       <template #trailing>
-        <div class="size-2 rounded-full" :style="{ background: frontmatter.color || 'var(--accent)' }" />
-        <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full bg-accent/10 text-accent">Unsaved</span>
+        <span v-if="isDirty" class="t-small font-normal text-label">Edited</span>
       </template>
       <template #right>
         <UButton
@@ -218,11 +217,11 @@ useUnsavedChanges(isDirty)
         />
         <UButton
           v-if="can('configure')"
-          label="Delete"
+          :aria-label="`Delete this agent`"
           icon="i-lucide-trash-2"
           size="sm"
           variant="ghost"
-          color="error"
+          color="neutral"
           title="Delete agent"
           @click="() => { showDeleteConfirm = true }"
         />

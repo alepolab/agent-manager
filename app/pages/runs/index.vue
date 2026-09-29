@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isLiveStatus, type WorkflowRun } from '~~/shared/types/run'
 import { runElapsedLabel, RUN_DURATION_HINT } from '~/utils/runStatus'
-import { currentStep, isQuiet } from '~/utils/runActivity'
+import { currentStep, isQuiet, stepsDone } from '~/utils/runActivity'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 
 const route = useRoute()
@@ -288,6 +288,7 @@ async function deleteFailed() {
           <button
             v-for="r in shown" v-else :key="r.id"
             class="run-row focus-ring" :class="{ 'run-row--on': r.id === selectedId }"
+            data-testid="run-history-row"
             :aria-current="r.id === selectedId ? 'true' : undefined"
             :title="r.error || undefined"
             @click="select(r.id)"
@@ -297,10 +298,10 @@ async function deleteFailed() {
               <StatusLabel :status="r.status" class="shrink-0" />
             </span>
             <span class="t-small text-label truncate block">
-              {{ whereNow(r) }}
+              {{ whereNow(r) }} · <span data-testid="run-history-count">{{ stepsDone(r) }} of {{ r.steps.length }}</span>
               <template v-if="r.ci"> · <span :style="{ color: r.ci.status === 'failing' ? 'var(--error)' : r.ci.status === 'passing' ? 'var(--success)' : undefined }">CI {{ r.ci.status }}</span></template>
             </span>
-            <RunProgressBar :steps="r.steps" class="mt-1.5" />
+            <RunProgressBar :steps="r.steps" class="mt-1.5" data-testid="run-history-bar" />
           </button>
         </div>
       </div>

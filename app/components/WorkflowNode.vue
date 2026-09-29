@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { Handle, Position } from '@vue-flow/core'
-import { getAgentColor } from '~/utils/colors'
 import { getModelLabel } from '~/utils/models'
 
 const props = defineProps<{
@@ -34,8 +33,6 @@ const emit = defineEmits<{
   settings: []
 }>()
 
-const color = computed(() => getAgentColor(props.data.agentColor))
-
 const modelLabel = computed(() => getModelLabel(props.data.agentModel) ?? 'Default')
 
 const verdictColor: Record<string, string> = {
@@ -47,8 +44,8 @@ const verdictColor: Record<string, string> = {
 
 <template>
   <div
-    class="workflow-node relative rounded-xl overflow-hidden group"
-    style="width: 170px; height: 88px; background: var(--surface-raised); border: 1px solid var(--border-subtle);"
+    class="workflow-node relative rounded-[10px] overflow-hidden group"
+    style="width: 170px; height: 88px; background: var(--surface-raised); border: 0.5px solid var(--border-emphasis);"
     :class="{
       'workflow-node--running': data.status === 'running',
       'workflow-node--completed': data.status === 'completed',
@@ -59,7 +56,8 @@ const verdictColor: Record<string, string> = {
     <!-- Two source handles so a loop can leave from the left without crossing the node -->
     <Handle id="in" type="target" :position="Position.Left" />
     <Handle id="loop" type="source" :position="Position.Bottom" />
-    <div class="absolute inset-x-0 top-0 h-[3px]" :style="{ background: color }" />
+    <!-- No per-agent colour stripe: a node's colour is its status (the
+         workflow-node-- classes), and fourteen agent hues left it nowhere to show. -->
     <div class="p-2.5 h-full flex flex-col justify-between">
       <div class="flex items-center justify-between gap-1">
         <div class="flex items-center gap-1 min-w-0">

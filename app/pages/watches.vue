@@ -302,11 +302,7 @@ function relativeTime(ms: number): string {
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4">
-      <p class="t-ui mb-4 leading-relaxed text-label">
-        Polls a ticket source and starts a workflow run per new ticket. Three failed
-        attempts and a ticket is escalated and permanently skipped — it never blocks the rest of the queue.
-      </p>
+    <div class="page">
 
       <!-- Error state -->
       <div
@@ -335,8 +331,7 @@ function relativeTime(ms: number): string {
         <div
           v-for="watch in sortedWatches"
           :key="watch.id"
-          class="rounded-lg bg-card border border-subtle overflow-hidden"
-          :style="escalatedCount(watch.id) > 0 ? 'border-color: rgba(239, 68, 68, 0.35);' : ''"
+          class="group-card p-0! overflow-hidden"
         >
           <div class="p-4 flex items-start gap-3">
             <button class="flex-1 min-w-0 text-left flex items-start gap-3" @click="toggleExpanded(watch.id)">
@@ -347,16 +342,16 @@ function relativeTime(ms: number): string {
               <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
                   <span class="t-ui font-medium">{{ watch.name }}</span>
-                  <span class="t-small font-mono text-meta">{{ workflowName(watch.workflowSlug) }}</span>
+                  <span class="t-small text-meta">{{ workflowName(watch.workflowSlug) }}</span>
                   <span
                     v-if="escalatedCount(watch.id) > 0"
-                    class="t-small font-mono px-1.5 py-0.5 rounded"
-                    style="background: rgba(239, 68, 68, 0.1); color: var(--error);"
+                    class="t-small font-medium"
+                    style="color: var(--error);"
                   >
                     {{ escalatedCount(watch.id) }} escalated
                   </span>
                 </div>
-                <div class="flex items-center gap-3 mt-1 t-small text-meta font-mono">
+                <div class="flex items-center gap-3 mt-1 t-small text-meta flex-wrap">
                   <span>every {{ watch.intervalSeconds }}s</span>
                   <span v-for="d in DISPOSITION_ORDER" :key="d" :style="{ color: countsFor(watch.id)[d] ? DISPOSITION_COLOR[d] : 'var(--text-disabled)' }">
                     {{ countsFor(watch.id)[d] }} {{ d }}
@@ -443,6 +438,10 @@ function relativeTime(ms: number): string {
           </div>
         </div>
       </div>
+      <p class="t-small text-label mt-6 max-w-2xl">
+        A watch polls a ticket source and starts a workflow run per new ticket. After three failed attempts a
+        ticket is escalated and permanently skipped, so it never blocks the rest of the queue.
+      </p>
     </div>
 
     <!-- Create modal -->

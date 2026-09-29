@@ -245,11 +245,11 @@ useUnsavedChanges(isDirty)
         />
         <template v-if="!isImported && can('configure')">
           <UButton
-            label="Delete"
+            :aria-label="`Delete this skill`"
             icon="i-lucide-trash-2"
             size="sm"
             variant="ghost"
-            color="error"
+            color="neutral"
             @click="() => { showDeleteConfirm = true }"
           />
           <UButton 
@@ -292,26 +292,13 @@ useUnsavedChanges(isDirty)
 
         <!-- Configuration -->
         <div
-          class="rounded-xl relative z-20"
-          style="border: 1px solid var(--border-subtle);"
+          class="rounded-[10px] relative z-20"
+          style="box-shadow: 0 0 0 0.5px var(--border-default);"
         >
           <!-- Skill identity banner -->
-          <div class="relative px-5 pt-6 pb-5 rounded-t-xl overflow-hidden" style="background: var(--surface-raised);">
-            <!-- Top accent bar -->
-            <div
-              class="absolute inset-x-0 top-0 h-[3px]"
-              style="background: var(--accent);"
-            />
-
+          <div class="relative px-5 pt-5 pb-4 rounded-t-[10px] overflow-hidden" style="background: var(--surface-raised);">
             <!-- Identity row -->
             <div class="flex items-start gap-4">
-              <div
-                class="size-11 rounded-xl flex items-center justify-center shrink-0"
-                style="background: var(--accent-muted); border: 1px solid rgba(45, 212, 191, 0.15);"
-              >
-                <UIcon name="i-lucide-sparkles" class="size-5" style="color: var(--accent);" />
-              </div>
-
               <div class="flex-1 min-w-0 pt-0.5">
                 <div class="flex items-center gap-2.5 flex-wrap">
                   <span class="t-body font-semibold tracking-tight truncate">

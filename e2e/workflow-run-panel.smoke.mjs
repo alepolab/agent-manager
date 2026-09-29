@@ -284,7 +284,7 @@ try {
   const countEl = page.locator('[data-testid="run-progress-count"]')
   await countEl.waitFor({ state: 'visible', timeout: 30_000 })
   const countText = (await countEl.textContent()).replace(/\s+/g, ' ').trim()
-  assert.equal(countText, '1 / 3', `progress count must report settled steps, got "${countText}"`)
+  assert.equal(countText, 'Step 1 of 3', `progress count must report settled steps, got "${countText}"`)
 
   const segments = page.locator('[data-testid="run-progress-bar"] > span')
   assert.equal(await segments.count(), 3,
@@ -307,7 +307,7 @@ try {
 
   const historyCount = page.locator('[data-testid="run-history-count"]').first()
   const historyCountText = (await historyCount.textContent()).replace(/\s+/g, ' ').trim()
-  assert.equal(historyCountText, '1 / 3',
+  assert.equal(historyCountText, '1 of 3',
     `history must report the same settled count as the panel, got "${historyCountText}"`)
 
   const historySegments = page.locator('[data-testid="run-history-bar"] > span')
