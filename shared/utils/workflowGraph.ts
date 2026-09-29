@@ -321,12 +321,18 @@ export function parseVerdict(text: string): MonitorVerdict {
  * requires a non-empty reason: "something went wrong" with no reason is a
  * halt nobody can act on, and the safer reading of a bare marker is that it
  * was quoted rather than raised. Last match wins, matching parseVerdict.
+ *
+ * A reason that says there is nothing to halt for is not a halt. ASECRM-337's
+ * provisioner ended "PIPELINE-HALT: none — stack is up, healthy, and
+ * evidenced. Proceeding is safe." and the run failed on it.
  */
 export function parseHalt(text: string | undefined | null): string | null {
   const matches = [...(text ?? '').matchAll(/^PIPELINE-HALT:[^\S\n]*(\S.*)$/gm)]
   const last = matches[matches.length - 1]
-  return last ? last[1]!.trim() : null
+  const reason = last ? last[1]!.trim() : null
+  return reason && !NOT_A_HALT.test(reason) ? reason : null
 }
+const NOT_A_HALT = /^[`*_"'(\[]*(none|n\/a|no halt|nothing|not needed|not required|no blocker)s?\b[`*_"')\].]*([^\S\n]*$|[^\S\n]*[—–:;,.(-])/i
 
 /**
  * The last `PIPELINE-SKIP: <reason>` a step declared, or null.
