@@ -11,7 +11,7 @@ const clean = (html: string) => DOMPurify.sanitize(html, { USE_PROFILES: { html:
  * code highlighted with line numbers, logs coloured. Search, wrap and copy on
  * every file; raw is always one click away.
  */
-const props = defineProps<{ runId: string, live?: boolean }>()
+const props = defineProps<{ runId: string, live?: boolean, /** A file to open first: a report linked from a gate. */ initial?: string }>()
 const files = ref<{ name: string, size: number }[]>([])
 const selected = ref<string | null>(null)
 const raw = ref('')
@@ -165,9 +165,10 @@ const groups = computed(() => {
 })
 const size = (n: number) => n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`
 let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => { refresh(); timer = setInterval(() => { if (props.live) refresh() }, 10_000) })
+onMounted(() => { refresh(); if (props.initial) void open(props.initial); timer = setInterval(() => { if (props.live) refresh() }, 10_000) })
 onUnmounted(() => { if (timer) clearInterval(timer) })
-watch(() => props.runId, () => { selected.value = null; raw.value = ''; rendered.value = ''; refresh() })
+watch(() => props.runId, () => { selected.value = null; raw.value = ''; rendered.value = ''; refresh(); if (props.initial) void open(props.initial) })
+watch(() => props.initial, (f) => { if (f && f !== selected.value) void open(f) })
 watch(mode, () => { if (mode.value === 'rendered' && !rendered.value) render() })
 defineExpose({ refresh })
 </script>

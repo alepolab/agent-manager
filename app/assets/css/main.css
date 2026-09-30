@@ -108,6 +108,10 @@
   /* Semantic */
   --success: #047857;
   --warning: #8f5207; /* #a16207 fell to 4.2:1 on the selected-row tint */
+  /* Waiting on a person - a gate, a paused run, how long it has waited. The
+     brand accent, not --warning: a decision someone owes is not a fault, and
+     brown on every waiting row read as a warning across the whole app. */
+  --waiting: var(--accent);
   --error: #c4291c;
   /* `running`, the most-scanned colour in a monitoring console, is written as
      `var(--info, #3b82f6)` in app/utils/runStatus.ts — and --info was defined
@@ -326,7 +330,7 @@ body {
 .dark .track__seg { background: rgba(120, 120, 128, 0.3); }
 .track--lg .track__seg { height: 8px; border-radius: 4px; }
 .track__seg--done { background: var(--text-disabled) !important; } /* at 55% opacity done read 2.2:1 against pending's 1.2:1 */
-.track__seg--wait { background: var(--warning) !important; }
+.track__seg--wait { background: var(--waiting) !important; }
 .track__seg--fail { background: var(--error) !important; }
 .track__seg--now { background: var(--accent) !important; position: relative; overflow: hidden; }
 .track__seg--now::after {
@@ -359,7 +363,7 @@ body {
 @keyframes status-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .status-label__icon--spin { animation: none; } }
 .status-label--now { color: var(--accent); }
-.status-label--wait { color: var(--warning); }
+.status-label--wait { color: var(--waiting); }
 .status-label--fail { color: var(--error); }
 .status-label--done { color: var(--success); }
 .status-label--idle { color: var(--text-tertiary); }
@@ -485,7 +489,7 @@ a.inset-row:hover, .inset-row--link:hover { background: var(--surface-hover); }
 .gate-card {
   border-radius: 10px;
   padding: 12px 14px;
-  background: color-mix(in srgb, var(--warning) 9%, var(--surface-raised));
+  background: color-mix(in srgb, var(--waiting) 7%, var(--surface-raised));
 }
 
 /* A run's steps: a plain list divided by hairlines. Only the step running
@@ -669,11 +673,11 @@ a.inset-row:hover, .inset-row--link:hover { background: var(--surface-hover); }
 
 .graph-node--skill {
   padding: 8px 12px;
-  border-color: rgba(251, 191, 36, 0.2);
+  border-color: color-mix(in srgb, var(--accent-secondary) 25%, transparent);
 }
 
 .graph-node--skill:hover {
-  box-shadow: 0 0 28px rgba(251, 191, 36, 0.12);
+  box-shadow: 0 0 28px color-mix(in srgb, var(--accent-secondary) 14%, transparent);
 }
 
 .graph-node--plugin {

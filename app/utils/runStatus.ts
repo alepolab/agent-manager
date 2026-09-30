@@ -20,12 +20,12 @@ export const RUN_STATUS_COLOR = {
    *  run, it has not started. */
   queued: 'var(--text-secondary, #6b7280)',
   running: 'var(--info, #3b82f6)',
-  paused: 'var(--warning, #f59e0b)',
+  paused: 'var(--waiting)',
   /** Stopped on a person who has entries to decide about. Shares the warning
    *  colour with `paused` deliberately — both mean "this is on you now", and
    *  inventing a seventh hue would say they differ in urgency rather than in
    *  what is being asked. The label is what tells them apart. */
-  awaiting_review: 'var(--warning, #f59e0b)',
+  awaiting_review: 'var(--waiting)',
   /** Waiting for the child runs a fan-out step started. The blue of a run that
    *  is working, not the warning colour `paused` and `awaiting_review` share:
    *  the work is going on, in other runs, and nobody is being asked for
@@ -38,7 +38,7 @@ export const RUN_STATUS_COLOR = {
   interrupted: 'var(--error, #ef4444)',
   pending: 'var(--text-disabled, #9ca3af)',
   skipped: 'var(--text-disabled, #9ca3af)',
-  waiting: 'var(--warning, #f59e0b)',
+  waiting: 'var(--waiting)',
 } as Record<string, string>
 
 export function runStatusColor(status: string): string {

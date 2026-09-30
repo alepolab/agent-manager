@@ -275,7 +275,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           </summary>
           <div class="verdict-body flex flex-wrap gap-x-3 gap-y-1">
             <a
-              v-for="r in presentReports" :key="r.file" :href="`/api/runs/${run.id}/artifacts/${r.file}`"
+              v-for="r in presentReports" :key="r.file" :href="`/evidence/${run.id}?file=${encodeURIComponent(r.file)}`"
               target="_blank" rel="noopener" class="underline" style="color: var(--accent);"
             >{{ r.label }}</a>
           </div>
