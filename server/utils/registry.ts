@@ -232,6 +232,7 @@ function productMatchFrom(name: string, p: any): ProductMatch {
     name,
     ...(p.suite ? { suite: String(p.suite) } : {}),
     ...(p.multi_repo === true ? { multiRepo: true } : {}),
+    ...(Array.isArray(p.reviewers) && p.reviewers.length ? { reviewers: p.reviewers.map(String) } : {}),
     repos: p.repos ?? [],
     ...(Array.isArray(p.match?.projects) && p.match.projects.length ? { projects: p.match.projects.map(String) } : {}),
     ...(p.modules && Object.keys(p.modules).length ? { modules: p.modules } : {}),

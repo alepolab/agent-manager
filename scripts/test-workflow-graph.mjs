@@ -269,6 +269,18 @@ assert.equal(joinInputs([]), '')
 // parseHalt: a step's structured way of stopping the run
 {
   assert.equal(parseHalt('all good'), null, 'ordinary output does not halt')
+  // ASECRM-337: a reason that says there is nothing to halt for.
+  for (const t of ['none — stack is up, healthy, and evidenced. Proceeding is safe.', 'none', 'None.', 'n/a', '`none`', 'No halt - proceeding', 'None — stack is up, proceeding']) {
+    assert.equal(parseHalt(`done\nPIPELINE-HALT: ${t}`), null, `not a halt: ${t}`)
+  }
+  // Fail closed: a reason that starts with one of those words and then says
+  // what went wrong is an agent refusing (from the review of PR #116).
+  for (const t of ['nonexistent image tag', 'none of the services came up', 'nothing listens on 8080 after 10 minutes',
+    'Nothing - the migration would drop the subscribers table', 'None: all three services crashed and I could not verify the fix',
+    'nothing: tests red, I stopped', 'No blocker, but the money path is unverified', 'Not needed? The fix was not applied',
+    'N/A - nothing blocks', 'none (all checks passed)', 'no halt: proceeding', 'Cannot reach the billing service']) {
+    assert.equal(parseHalt(`PIPELINE-HALT: ${t}`), t, `still a halt: ${t}`)
+  }
   assert.equal(parseHalt('tried everything\nPIPELINE-HALT: stack would not come up'),
     'stack would not come up')
   assert.equal(parseHalt('PIPELINE-HALT: first\nPIPELINE-HALT: second'), 'second',

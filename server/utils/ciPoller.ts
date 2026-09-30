@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { listRuns, getRun, saveRun } from './workflowRunStore.ts'
 import { PLACEHOLDER_PR, runArtifactsDir } from './runArtifacts.ts'
+import { productByKey } from './registry.ts'
 import type { WorkflowRun, RunCi } from '~~/shared/types/run'
 
 const execFileP = promisify(execFile)
@@ -75,10 +76,57 @@ export async function pollOnce(now = Date.now()): Promise<number> {
   return checked
 }
 
+export type ReviewRequester = (prUrl: string, reviewers: string[]) => Promise<void>
+// The REST endpoint, not `gh pr edit --add-reviewer`: that one also queries
+// Projects (classic), which GitHub has retired, and fails on every PR.
+const realReviewRequester: ReviewRequester = async (prUrl, reviewers) => {
+  const m = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
+  if (!m) throw new Error(`not a GitHub pull request URL: ${prUrl}`)
+  await execFileP('gh', ['api', '-X', 'POST', `repos/${m[1]}/${m[2]}/pulls/${m[3]}/requested_reviewers`, ...reviewers.flatMap(r => ['-f', `reviewers[]=${r}`])], { timeout: 30_000 })
+}
+let reviewRequester: ReviewRequester = realReviewRequester
+/** Test seam. */
+export function setReviewRequester(fn: ReviewRequester) { reviewRequester = fn }
+
+/**
+ * Asks the product's reviewers (the registry's `reviewers`) to review every
+ * pull request a run has opened, once per PR, whatever step opened it and
+ * whatever the run is doing now: a run that opens its PR and then waits at a
+ * gate is exactly the one a reviewer should be looking at. The product is read
+ * from the registry now rather than from the run, so a reviewer added today
+ * reaches the runs already in flight. A request that fails is tried again on
+ * the next pass; one that succeeds is recorded on the run and never repeated.
+ */
+export async function requestReviewsOnce(now = Date.now()): Promise<number> {
+  let requested = 0
+  for (const run of await listRuns()) {
+    if (!run.product?.name || (run.endedAt ?? now) < now - 7 * LOOKBACK_MS) continue
+    const urls = (await prUrlsOf(run)).filter(u => !run.reviewRequested?.includes(u))
+    if (!urls.length) continue
+    const reviewers = (await productByKey(run.product.name).catch(() => undefined))?.reviewers ?? []
+    if (!reviewers.length) continue
+    const done: string[] = []
+    for (const url of urls) {
+      try { await reviewRequester(url, reviewers); done.push(url) } catch (err) {
+        console.error('[ciPoller] could not request review', url, err instanceof Error ? err.message : String(err))
+      }
+    }
+    if (!done.length) continue
+    const fresh = await getRun(run.id)
+    if (!fresh) continue
+    await saveRun({ ...fresh, reviewRequested: [...(fresh.reviewRequested ?? []), ...done] })
+    requested += done.length
+  }
+  return requested
+}
+
 let timer: ReturnType<typeof setInterval> | null = null
 export function startCiPoller(seconds = Number(process.env.CI_POLL_SECONDS) || DEFAULT_CI_POLL_SECONDS): void {
   if (timer) return
-  timer = setInterval(() => { void pollOnce().catch(err => console.error('[ciPoller]', err)) }, seconds * 1000)
+  timer = setInterval(() => {
+    void pollOnce().catch(err => console.error('[ciPoller]', err))
+    void requestReviewsOnce().catch(err => console.error('[ciPoller] review requests', err))
+  }, seconds * 1000)
   timer.unref?.()
 }
 export function stopCiPoller(): void { if (timer) { clearInterval(timer); timer = null } }

@@ -58,6 +58,12 @@ export async function capFor(groupId?: string): Promise<number> {
 }
 
 /** The group `groupId` gives way to, if it names one. */
+/** Whether a group is on hold (see WorkflowGroup.held). */
+export async function isHeld(groupId?: string): Promise<boolean> {
+  const id = groupId?.trim() || DEFAULT_GROUP_ID
+  return (await listGroups()).find(g => g.id === id)?.held === true
+}
+
 export async function yieldsToFor(groupId?: string): Promise<string | undefined> {
   const id = groupId?.trim() || DEFAULT_GROUP_ID
   const to = (await listGroups()).find(g => g.id === id)?.yieldsTo?.trim()
@@ -104,10 +110,14 @@ export async function replaceGroups(groups: WorkflowGroup[]): Promise<WorkflowGr
   // A row that does not mention yieldsTo keeps the one it has: the Groups
   // editor saves id, name and cap only, and saving a cap from it must not
   // quietly stop runbooks giving way to scans. An empty string clears it.
-  const before = new Map((await listGroups()).map(g => [g.id, g.yieldsTo]))
+  // The same for a hold: saving a cap must never lift it.
+  const existing = await listGroups()
+  const before = new Map(existing.map(g => [g.id, g.yieldsTo]))
+  const heldBefore = new Map(existing.map(g => [g.id, g.held === true]))
   const clean = groups.map((g) => {
     const yieldsTo = (g.yieldsTo === undefined ? before.get(g.id.trim()) : g.yieldsTo)?.trim()
-    return { id: g.id.trim(), name: g.name.trim(), maxConcurrent: g.maxConcurrent, ...(yieldsTo ? { yieldsTo } : {}) }
+    const held = g.held === undefined ? heldBefore.get(g.id.trim()) : g.held === true
+    return { id: g.id.trim(), name: g.name.trim(), maxConcurrent: g.maxConcurrent, ...(yieldsTo ? { yieldsTo } : {}), ...(held ? { held: true } : {}) }
   })
   await ensureDir()
   await writeFile(groupsPath(), JSON.stringify(clean, null, 2), 'utf-8')

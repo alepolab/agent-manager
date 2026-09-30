@@ -50,4 +50,18 @@ const [wt2] = await W.ensureRunBranch(clone, 'fix/T-2-bbbbbbbb', 'ci-release')
 assert.equal(git(wt2, ['branch', '--show-current']), 'fix/T-2-bbbbbbbb')
 assert.equal(git(wt2, ['rev-parse', 'HEAD']), mainSha, 'a base the remote does not have falls back to the clone\'s HEAD instead of failing the run')
 
+// The run's plan never shows as a change, even where the base still tracks one:
+// committed, every PR rewrote .agent/plan.md and conflicted with the others.
+{
+  const { mkdirSync } = await import('node:fs')
+  mkdirSync(join(seed, '.agent'), { recursive: true }); writeFileSync(join(seed, '.agent', 'plan.md'), 'an old plan\n')
+  git(seed, ['checkout', '--quiet', 'develop']); git(seed, ['add', '.agent/plan.md']); git(seed, ['commit', '--quiet', '-m', 'a plan reached develop']); git(seed, ['push', '--quiet', 'origin', 'develop'])
+  const [wt3] = await W.ensureRunBranch(clone, 'fix/T-3-cccccccc', 'develop')
+  writeFileSync(join(wt3, '.agent', 'plan.md'), 'this run\'s plan\n')
+  writeFileSync(join(wt3, '.agent', 'scratch.txt'), 'x\n')
+  assert.equal(git(wt3, ['status', '--porcelain']), '', 'neither the tracked plan nor new scratch under .agent/ shows as a change')
+  git(wt3, ['add', '-A'])
+  assert.equal(git(wt3, ['diff', '--cached', '--name-only']), '', 'and staging everything stages none of it')
+}
+
 console.log('branch policy: all checks passed')

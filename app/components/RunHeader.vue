@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { isLiveStatus, isTestRun, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
+import { CHANGE_BRIEF_FILE, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '~~/shared/utils/decisionBrief'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 
 /**
@@ -69,6 +70,20 @@ const prLinks = ref<string[]>([])
 async function loadFacts() {
   const id = props.run.id
   try { intake.value = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/context-packet.json`, { responseType: 'text' })) } catch { intake.value = null }
+  // intent.md holds the questions as intake wrote them; the packet's copy can
+  // be a placeholder (`<<ccr:…>>`) instead of the text, as ASECRM-297's was.
+  try {
+    const asked = openQuestionsIn(await $fetch<string>(`/api/runs/${id}/artifacts/intent.md`, { responseType: 'text' }))
+    if (asked.length) intake.value = { ...intake.value, open_questions: asked }
+  } catch {}
+  if (intake.value?.open_questions) intake.value.open_questions = intake.value.open_questions.filter(q => typeof q === 'string' && !q.startsWith('<<ccr:'))
+  // Once the change's brief answers them, the gate shows the ones still open
+  // and this list is noise: a question settled on evidence is not a person's
+  // to decide, and ASECRM-297's two were resolved before anyone saw them.
+  try {
+    const parsed = parseDecisionBrief(await $fetch<string>(`/api/runs/${id}/artifacts/${CHANGE_BRIEF_FILE}`, { responseType: 'text' }))
+    if (intake.value?.open_questions?.length && 'brief' in parsed && !unansweredQuestions(intake.value.open_questions, parsed.brief).length) intake.value = { ...intake.value, open_questions: [] }
+  } catch {}
   try {
     const meta = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/meta.json`, { responseType: 'text' }))
     // A real pull request only: the schema forces the fix step to write a placeholder URL before one exists.

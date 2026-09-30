@@ -34,7 +34,18 @@ export interface WorkflowGroup {
    * and the nightly scans are the work with a deadline.
    */
   yieldsTo?: string
+  /**
+   * On hold: nothing in this group starts, and a run of it that is working
+   * pauses at its next step boundary, back to the head of its queue, the way
+   * it steps aside for `yieldsTo`. Lifting the hold carries each on from the
+   * step after the one it finished. For "pause everything once the current
+   * steps are done", which a person asked for and nothing could do.
+   */
+  held?: boolean
 }
+
+/** What a run on hold records as the thing it gave way to. */
+export const HOLD = 'hold'
 
 export const WORKFLOW_GROUPS_FILE_NAME = 'workflow-groups.json'
 

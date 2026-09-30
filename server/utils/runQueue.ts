@@ -21,7 +21,8 @@
  */
 
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
-import { capFor, yieldsToFor } from './workflowGroups.ts'
+import { capFor, isHeld, yieldsToFor } from './workflowGroups.ts'
+import { HOLD } from '../../shared/types/workflowGroup.ts'
 import { listRuns } from './workflowRunStore.ts'
 import { createLogger } from './log.ts'
 import { holdsGroupSlot, isTestRun } from '../../shared/types/run.ts'
@@ -153,6 +154,7 @@ export async function groupLoad(group: string): Promise<{ group: string, inFligh
  * themselves - nothing is scheduled or remembered.
  */
 export async function givingWayTo(group: string, runs?: WorkflowRun[]): Promise<string | undefined> {
+  if (await isHeld(group)) return HOLD
   const to = await yieldsToFor(group)
   if (!to) return undefined
   return await inFlightForGroup(to, runs) > 0 ? to : undefined

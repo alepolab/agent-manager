@@ -298,6 +298,8 @@ export interface ProductMatch {
   suite?: string
   /** Every listed repo gets its own branch and PR; plan.md must give a merge order. */
   multiRepo?: boolean
+  /** GitHub logins asked to review every pull request a run opens on this product. */
+  reviewers?: string[]
   repos: string[]
   /** The Jira project keys this product routes from, straight out of the
    *  registry's `match.projects`. Carried on the run so a step can ask Jira
@@ -581,6 +583,8 @@ export interface WorkflowRun {
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
   ci?: RunCi
+  /** Pull requests whose product reviewers have been asked to review, by URL: asked once each. */
+  reviewRequested?: string[]
   /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
   budget: RunBudget
   currentStepIds: string[]

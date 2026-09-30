@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DecisionBrief } from '~~/shared/utils/decisionBrief'
+import { unresolvedQuestions, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 
 /**
  * A step's question, laid out so a person who has not read the ticket, the
@@ -18,6 +18,8 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ choose: [text: string] }>()
 
+/** Only what the step could not settle: a resolved question is not the reviewer's to decide. */
+const unresolved = computed(() => unresolvedQuestions(props.brief))
 const recommended = computed(() => props.brief.recommendation?.option.replace(/[()]/g, '').trim().toLowerCase())
 const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCase() === recommended.value
 </script>
@@ -45,6 +47,16 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
         <ul class="m-0 pl-4 list-disc space-y-1" style="color: var(--text-primary);">
           <li v-for="(f, i) in brief.findings" :key="i" class="whitespace-pre-wrap">{{ f }}</li>
         </ul>
+      </section>
+
+      <section v-if="unresolved.length">
+        <h4 class="t-label mb-1" style="color: var(--text-secondary);">Intake questions still open</h4>
+        <dl class="m-0 space-y-1.5">
+          <div v-for="(q, i) in unresolved" :key="i">
+            <dt class="font-medium" style="color: var(--text-primary);">{{ q.question }}</dt>
+            <dd class="m-0 whitespace-pre-wrap">{{ q.answer }}</dd>
+          </div>
+        </dl>
       </section>
 
       <section>
