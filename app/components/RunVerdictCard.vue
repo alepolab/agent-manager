@@ -65,6 +65,9 @@ const REPORTS: { file: string, label: string }[] = [
   { file: 'pr-body.md', label: 'PR body' },
 ]
 const presentReports = computed(() => REPORTS.filter(r => files.value.includes(r.file)))
+/** The report open in the drawer: read beside the decision, not in another tab. */
+const openReport = ref<{ file: string, label: string } | null>(null)
+const reportOpen = computed({ get: () => !!openReport.value, set: (v) => { if (!v) openReport.value = null } })
 
 /** `quiet`: re-read for a brief being written, without blanking the card meanwhile. */
 async function load(quiet = false) {
@@ -274,10 +277,10 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
             <span class="text-label">{{ presentReports.length }}</span>
           </summary>
           <div class="verdict-body flex flex-wrap gap-x-3 gap-y-1">
-            <a
-              v-for="r in presentReports" :key="r.file" :href="`/evidence/${run.id}?file=${encodeURIComponent(r.file)}`"
-              target="_blank" rel="noopener" class="underline" style="color: var(--accent);"
-            >{{ r.label }}</a>
+            <button
+              v-for="r in presentReports" :key="r.file" type="button"
+              class="underline focus-ring" style="color: var(--accent);" @click="openReport = r"
+            >{{ r.label }}</button>
           </div>
         </details>
         <details v-if="pipelineNotes.length">
@@ -289,6 +292,9 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
         </details>
       </div>
     </template>
+    <USlideover v-model:open="reportOpen" :title="openReport?.label ?? 'Report'" :ui="{ content: 'max-w-3xl' }">
+      <template #body><RunArtifacts v-if="openReport" :run-id="run.id" :initial="openReport.file" only /></template>
+    </USlideover>
   </div>
 </template>
 
