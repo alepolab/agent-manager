@@ -14,6 +14,23 @@
  */
 
 /**
+ * Whether the step settled an intake question on evidence. A reviewer has
+ * nothing to decide about one that was, and the gate used to lay each of them
+ * out with its resolution anyway. `resolved` when the step says so; for a
+ * brief written before the field, an answer that begins "Resolved" is.
+ * An assumption is not a resolution: the reviewer is the one to accept it.
+ */
+function isResolved(q: any): boolean {
+  if (typeof q?.resolved === 'boolean') return q.resolved
+  return /^\W*resolved\b(?!\s+(by|on)\s+(an\s+)?assum)/i.test(String(q?.answer ?? ''))
+}
+
+/** The questions a person still has to weigh: those not settled on evidence. */
+export function unresolvedQuestions(brief: DecisionBrief | null | undefined): { question: string, answer: string }[] {
+  return (brief?.open_questions ?? []).filter(q => !q.resolved)
+}
+
+/**
  * The questions intake left open, read from intent.md's "## Open questions"
  * bullets. Not from the context packet: its copy of ASECRM-297's first
  * question was a placeholder (`<<ccr:…>>`), never the text.
@@ -64,7 +81,7 @@ export interface DecisionBrief {
    * assumed, or still open and which option decides it. ASECRM-297's gate
    * listed intake's two questions above a brief that answered neither.
    */
-  open_questions?: { question: string, answer: string }[]
+  open_questions?: { question: string, answer: string, resolved: boolean }[]
 }
 
 const str = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0
@@ -107,7 +124,7 @@ export function parseDecisionBrief(raw: string | null | undefined): { brief: Dec
       })),
       ...(str(d.recommendation?.option) && str(d.recommendation?.why) ? { recommendation: { option: d.recommendation.option.trim(), why: d.recommendation.why.trim() } } : {}),
       ...(Array.isArray(d.open_questions) && d.open_questions.some((q: any) => str(q?.question) && str(q?.answer))
-        ? { open_questions: d.open_questions.filter((q: any) => str(q?.question) && str(q?.answer)).map((q: any) => ({ question: q.question.trim(), answer: q.answer.trim() })) }
+        ? { open_questions: d.open_questions.filter((q: any) => str(q?.question) && str(q?.answer)).map((q: any) => ({ question: q.question.trim(), answer: q.answer.trim(), resolved: isResolved(q) })) }
         : {}),
     },
   }

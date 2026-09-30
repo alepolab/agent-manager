@@ -105,3 +105,21 @@ const good = {
 }
 
 console.log('ok - a step question carries a brief a person can decide from')
+
+// ── Intake questions the step settled on evidence are not shown ───────────
+{
+  const { parseDecisionBrief, unresolvedQuestions } = await import('../shared/utils/decisionBrief.ts')
+  const base = { question: 'q?', situation: 's', options: [{ key: 'a', label: 'A', next: 'n', delivers: 'd', leaves: 'l' }, { key: 'b', label: 'B', next: 'n', delivers: 'd', leaves: 'l' }] }
+  const b = parseDecisionBrief(JSON.stringify({ ...base, open_questions: [
+    { question: 'Which branch?', answer: 'develop, every row says so', resolved: true },
+    { question: 'Other generators?', answer: 'Assumed out of scope', resolved: false },
+    // ASECRM-297's briefs predate the field.
+    { question: 'Old one', answer: 'Resolved, no assumption needed - every answer points to develop.' },
+    { question: 'Old assumed', answer: 'Resolved by assuming the ticket meant one file.' },
+    { question: 'Old searched', answer: 'Resolved by searching rather than assuming: one call site.' },
+    { question: 'Still open', answer: 'Open: option b decides it.' },
+  ] })).brief
+  assert.deepEqual(unresolvedQuestions(b).map(q => q.question), ['Other generators?', 'Old assumed', 'Still open'], 'only what evidence did not settle')
+  assert.deepEqual(unresolvedQuestions(parseDecisionBrief(JSON.stringify({ ...base, open_questions: [{ question: 'x', answer: 'y', resolved: true }] })).brief), [], 'all settled: nothing to show')
+}
+console.log('ok - settled intake questions are not shown')

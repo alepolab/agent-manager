@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isLiveStatus, isTestRun, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
-import { openQuestionsIn } from '~~/shared/utils/decisionBrief'
+import { CHANGE_BRIEF_FILE, openQuestionsIn, parseDecisionBrief } from '~~/shared/utils/decisionBrief'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 
 /**
@@ -77,6 +77,14 @@ async function loadFacts() {
     if (asked.length) intake.value = { ...intake.value, open_questions: asked }
   } catch {}
   if (intake.value?.open_questions) intake.value.open_questions = intake.value.open_questions.filter(q => typeof q === 'string' && !q.startsWith('<<ccr:'))
+  // Once the change's brief answers them, the gate shows the ones still open
+  // and this list is noise: a question settled on evidence is not a person's
+  // to decide, and ASECRM-297's two were resolved before anyone saw them.
+  try {
+    const parsed = parseDecisionBrief(await $fetch<string>(`/api/runs/${id}/artifacts/${CHANGE_BRIEF_FILE}`, { responseType: 'text' }))
+    const answered = 'brief' in parsed ? parsed.brief.open_questions?.length ?? 0 : 0
+    if (intake.value?.open_questions?.length && answered >= intake.value.open_questions.length) intake.value = { ...intake.value, open_questions: [] }
+  } catch {}
   try {
     const meta = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/meta.json`, { responseType: 'text' }))
     // A real pull request only: the schema forces the fix step to write a placeholder URL before one exists.
