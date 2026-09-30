@@ -1292,11 +1292,13 @@ optgroup {
   outline: none;
 }
 
+/* Solid accent, as an outline. At 50% opacity the ring was 2.4:1 against
+   white, under the 3:1 a focus indicator needs (WCAG 1.4.11); solid it is
+   6.7:1 in light and 6.9:1 in dark. An outline rather than a box-shadow
+   because forced-colors mode strips shadows and keeps outlines. */
 .focus-ring:focus-visible {
-  box-shadow:
-    0 0 0 1px var(--surface-base),
-    0 0 0 4px rgba(var(--accent-rgb), 0.5);
-  border-radius: inherit;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Nuxt UI's ghost and link buttons mark keyboard focus with a background
@@ -1304,7 +1306,7 @@ optgroup {
    button and link the same ring; the doubled :root outranks their
    focus:outline-none. */
 :root:root :is(button, a):focus-visible:not(.focus-ring) {
-  outline: 2px solid rgba(var(--accent-rgb), 0.6);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 

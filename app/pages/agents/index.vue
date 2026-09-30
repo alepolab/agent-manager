@@ -281,7 +281,7 @@ async function useTemplate(templateId: string) {
 .agent-table td { padding: 0 14px; height: 36px; color: var(--text-primary); border-bottom: 0.5px solid var(--border-default); }
 .agent-table tbody tr:not(.agent-table__group) { cursor: default; }
 .agent-table tbody tr:not(.agent-table__group):hover { background: var(--surface-hover); }
-.agent-table tbody tr:focus-visible { outline: 2px solid rgba(var(--accent-rgb), 0.5); outline-offset: -2px; }
+.agent-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agent-table__row--on, .agent-table__row--on:hover { background: var(--accent-muted) !important; }
 .agent-table__row--on td:first-child { font-weight: 600; }
 .agent-table__group th { padding: 14px 14px 6px; font-weight: 600; color: var(--text-tertiary); }

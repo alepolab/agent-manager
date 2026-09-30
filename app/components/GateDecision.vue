@@ -431,7 +431,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
 .choice:hover { background: var(--surface-hover); }
 .choice--on, .choice--on:hover { background: var(--accent-muted); }
 /* An outline, not a box-shadow: forced-colors mode strips shadows and keeps outlines. */
-.choice:focus-visible { outline: 2px solid rgba(var(--accent-rgb), 0.6); outline-offset: -2px; }
+.choice:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .choice__head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 12px 14px; }
 .choice__radio { width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-emphasis, var(--border-default)); margin-top: 1px; }
 .choice--on .choice__radio { box-shadow: inset 0 0 0 5px var(--accent); }

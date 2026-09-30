@@ -143,6 +143,14 @@ function badgeFor(to: string) {
  * view as a developer you lose `configure`, so a control gated on it would
  * disappear and strand you in the role you were inspecting.
  */
+/**
+ * The theme. The redesign dropped the sidebar's light/dark switch and left
+ * `system` as the only answer; someone whose OS is dark but wants this tool
+ * light had no recourse. Three choices, System the default.
+ */
+const colorMode = useColorMode()
+const THEMES = [['system', 'Match system', 'i-lucide-monitor'], ['light', 'Light', 'i-lucide-sun'], ['dark', 'Dark', 'i-lucide-moon']] as const
+
 const accountMenu = computed(() => {
   const groups: any[][] = [[
     { label: me.value?.name || me.value?.login || 'Profile', icon: 'i-lucide-user', to: '/profile' },
@@ -159,6 +167,16 @@ const accountMenu = computed(() => {
       })),
     ])
   }
+  groups.push([
+    { type: 'label', label: 'Appearance' },
+    ...THEMES.map(([value, label, icon]) => ({
+      // A checkbox item, so the chosen one carries a check and its state is
+      // announced; the icon alone says which theme, not which is on.
+      type: 'checkbox' as const, label, icon,
+      checked: colorMode.preference === value,
+      onUpdateChecked: () => { colorMode.preference = value },
+    })),
+  ])
   if (me.value && !me.value.authDisabled) {
     groups.push([{ label: 'Sign out', icon: 'i-lucide-log-out', onSelect: signOut }])
   }
