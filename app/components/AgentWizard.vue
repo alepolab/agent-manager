@@ -289,7 +289,7 @@ function toggleTool(tool: AgentTool) {
       >
         <div class="flex items-center gap-2 text-info">
           <UIcon name="i-lucide-info" class="size-3.5" />
-          <span class="t-small font-medium uppercase tracking-wider">Tip</span>
+          <span class="t-small font-medium">Tip</span>
         </div>
         <p class="t-small leading-relaxed text-info/80">
           Preloading skills is better than having the agent discover them during execution. It makes the agent faster and more reliable for specific tasks.

@@ -218,7 +218,6 @@ useAutoRefresh(() => (saving.value || rawJsonEdited() || statusLineEdited() ? nu
         <UButton v-if="viewMode === 'raw' && can('configure')" label="Save" icon="i-lucide-save" size="sm" :loading="saving" @click="saveRaw" />
       </template>
     </PageHeader>
-    <SettingsNav />
 
     <div v-if="loading && !settings" class="flex justify-center py-16">
       <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-meta" />
@@ -275,6 +274,7 @@ useAutoRefresh(() => (saving.value || rawJsonEdited() || statusLineEdited() ? nu
               <label v-if="can('configure')" class="field-toggle">
                 <input
                   type="checkbox"
+                  :aria-label="`Enable ${plugin.name}`"
                   :checked="plugin.enabled"
                   @change="togglePlugin(plugin.name, ($event.target as HTMLInputElement).checked)"
                 />
@@ -316,7 +316,7 @@ useAutoRefresh(() => (saving.value || rawJsonEdited() || statusLineEdited() ? nu
             <div class="flex items-center gap-2 mb-1.5">
               <UIcon name="i-lucide-webhook" class="size-3.5 text-meta" />
               <span class="t-small font-medium text-body">{{ hookEventLabels[hook.event] || hook.event }}</span>
-              <span class="font-mono t-small text-meta">{{ hook.commands.length }}</span>
+              <span class="t-small text-meta tabular-nums">{{ hook.commands.length }}</span>
             </div>
             <div class="ml-5 space-y-1">
               <div
@@ -358,7 +358,7 @@ useAutoRefresh(() => (saving.value || rawJsonEdited() || statusLineEdited() ? nu
         <div class="flex items-center justify-between px-4 py-2.5" style="background: var(--surface-raised); border-bottom: 1px solid var(--border-subtle);">
           <h3 class="text-section-title">settings.json</h3>
           <div class="flex items-center gap-3">
-            <span class="font-mono t-small text-meta">{{ lineCount }} lines</span>
+            <span class="t-small text-meta tabular-nums">{{ lineCount }} lines</span>
             <span class="font-mono t-small text-meta">{{ charCount.toLocaleString('en-US') }} chars</span>
           </div>
         </div>

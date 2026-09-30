@@ -133,7 +133,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
 
       <!-- Tools selection -->
       <div class="space-y-2 pt-2">
-        <label class="t-small font-medium uppercase tracking-wider opacity-50" style="color: var(--text-primary);">Allowed Tools</label>
+        <label class="t-small font-medium" style="color: var(--text-primary);">Allowed Tools</label>
         <div class="grid grid-cols-2 gap-2">
           <button
             v-for="tool in toolOptions"
@@ -168,7 +168,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
 
       <!-- Color -->
       <div class="space-y-2.5 pt-2">
-        <label class="t-small font-medium uppercase tracking-wider opacity-50" style="color: var(--text-primary);">UI Theme Color</label>
+        <label class="t-small font-medium" style="color: var(--text-primary);">UI Theme Color</label>
         <div class="flex flex-wrap gap-2">
           <!-- Preset Swatches -->
           <button
@@ -199,7 +199,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
               />
               <UIcon name="i-lucide-plus" class="absolute inset-0 m-auto size-3 pointer-events-none" style="color: white; mix-blend-mode: difference;" />
             </div>
-            <span class="t-small font-mono opacity-60 uppercase" style="color: var(--text-tertiary);">{{ frontmatter.color || 'Default' }}</span>
+            <span class="t-small capitalize" style="color: var(--text-tertiary);">{{ frontmatter.color || 'Default' }}</span>
           </div>
         </div>
       </div>
@@ -208,7 +208,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
     <div v-if="activeTab === 'skills'" class="flex-1 overflow-y-auto p-5 space-y-6">
       <div class="space-y-2.5">
         <div class="flex items-center justify-between">
-          <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Preloaded Skills</label>
+          <label class="t-small font-semibold" style="color: var(--text-tertiary);">Preloaded Skills</label>
           <HelpTip title="Preloading Skills" body="Injected directly into the subagent's context. Faster and more reliable than discovery." />
         </div>
         
@@ -230,7 +230,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
       </div>
 
       <div class="space-y-3">
-        <label class="t-small font-semibold uppercase tracking-wider" style="color: var(--text-tertiary);">Currently Attached</label>
+        <label class="t-small font-semibold" style="color: var(--text-tertiary);">Currently Attached</label>
         
         <div v-if="loadingSkills" class="t-small font-mono py-4 text-center" style="color: var(--text-disabled);">Loading attached skills...</div>
         <div v-else-if="!skills.length" class="t-small py-8 text-center border border-dashed rounded-xl" style="color: var(--text-tertiary); border-color: var(--border-subtle);">
@@ -254,7 +254,7 @@ const currentColor = computed(() => getAgentColor(props.frontmatter.color))
             </div>
             <div class="flex flex-col items-end gap-1 shrink-0">
               <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary); border: 1px solid var(--border-subtle);">{{ skill.source }}</span>
-              <span v-if="frontmatter.skills?.includes(skill.slug)" class="t-small font-bold uppercase tracking-tighter" style="color: var(--accent);">Preloaded</span>
+              <span v-if="frontmatter.skills?.includes(skill.slug)" class="t-small font-semibold" style="color: var(--accent);">Preloaded</span>
             </div>
           </NuxtLink>
         </div>

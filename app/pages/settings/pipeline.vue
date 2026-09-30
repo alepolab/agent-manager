@@ -95,7 +95,6 @@ useAutoRefresh(() => (saving.value ? null : load({ silent: true })))
         <ReadOnlyBadge v-if="!can('configure')" reason="changing these settings" />
       </template>
     </PageHeader>
-    <SettingsNav />
 
     <div v-if="loading && !settings" class="flex justify-center py-16">
       <UIcon name="i-lucide-loader-2" class="size-6 animate-spin text-meta" />
@@ -181,6 +180,7 @@ useAutoRefresh(() => (saving.value ? null : load({ silent: true })))
             <label v-if="can('configure')" class="field-toggle">
               <input
                 type="checkbox"
+                aria-label="Always thinking"
                 :checked="settings?.alwaysThinkingEnabled"
                 @change="toggleAlwaysThinking(($event.target as HTMLInputElement).checked)"
               />
@@ -208,6 +208,7 @@ useAutoRefresh(() => (saving.value ? null : load({ silent: true })))
                 min="1"
                 class="w-24 t-ui px-2 py-1 rounded-md bg-card border border-subtle text-right tabular-nums"
                 data-testid="tasks-picker-window"
+                aria-label="Task picker window in seconds"
                 :value="settings?.tasksPickerWindowSeconds ?? TASKS_PICKER_DEFAULT_SECONDS"
                 @change="updateTasksPickerWindow(($event.target as HTMLInputElement).value)"
               />
@@ -245,6 +246,7 @@ useAutoRefresh(() => (saving.value ? null : load({ silent: true })))
             <label v-else-if="can('configure')" class="field-toggle">
               <input
                 type="checkbox" :checked="jiraSettings.postEnabled === true"
+                aria-label="Post outcomes to Jira"
                 @change="setJira('postEnabled', ($event.target as HTMLInputElement).checked)"
               />
               <span class="field-toggle__track"><span class="field-toggle__thumb" /></span>

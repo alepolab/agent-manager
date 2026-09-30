@@ -183,7 +183,7 @@ onUnmounted(() => {
         
         <!-- Footer -->
         <div class="px-4 py-2 border-t border-border-subtle shrink-0 flex items-center justify-between">
-          <span class="t-small text-meta font-mono">{{ content.split('\n').length }} lines</span>
+          <span class="t-small text-meta tabular-nums">{{ content.split('\n').length }} lines</span>
           <div v-if="state.diffInfo" class="t-small px-2 py-0.5 rounded-full bg-accent-muted text-accent font-medium">
             Viewing Changes
           </div>

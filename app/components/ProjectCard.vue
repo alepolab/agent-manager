@@ -15,64 +15,32 @@ defineProps<{
 </script>
 
 <template>
-  <NuxtLink
-    :to="`/project-artifacts/${encodeURIComponent(project.name)}`"
-    class="block rounded-xl p-4 transition-all duration-200 focus-ring group relative overflow-hidden"
-    style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
-    @mouseenter="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-default)'; ($event.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'; ($event.currentTarget as HTMLElement).style.boxShadow = '0 4px 20px var(--card-shadow)'"
-    @mouseleave="($event.currentTarget as HTMLElement).style.borderColor = 'var(--border-subtle)'; ($event.currentTarget as HTMLElement).style.transform = ''; ($event.currentTarget as HTMLElement).style.boxShadow = ''"
-  >
-    <!-- Color accent bar -->
-    <div
-      class="absolute inset-x-0 top-0 h-[4px]"
-      style="background: var(--accent);"
+  <!-- One row of the Artifacts list. The CLI link sits beside the row link
+       rather than inside it: an anchor nested in an anchor is invalid HTML, and
+       the browser's repair of it broke hydration on this page. -->
+  <li class="inset-row">
+    <NuxtLink
+      :to="`/project-artifacts/${encodeURIComponent(project.name)}`"
+      class="flex items-center gap-3 flex-1 min-w-0 focus-ring rounded"
+    >
+      <span class="inset-row__lead"><UIcon name="i-lucide-box" class="size-4 text-meta" /></span>
+      <span class="inset-row__body">
+        <span class="inset-row__title t-ui">{{ project.displayName }}</span>
+        <span class="inset-row__sub font-mono" :title="project.path">{{ project.path }}</span>
+      </span>
+      <span class="inset-row__end">
+        {{ project.sessionCount }} {{ project.sessionCount === 1 ? 'session' : 'sessions' }}
+        · {{ formatRelativeTime(project.lastActivity) || 'No activity' }}
+      </span>
+    </NuxtLink>
+    <UButton
+      :to="`/cli/project/${encodeURIComponent(project.name)}`"
+      icon="i-lucide-terminal-square"
+      size="xs"
+      variant="ghost"
+      color="neutral"
+      aria-label="Open in CLI"
+      title="Open in CLI"
     />
-
-    <!-- Hover glow -->
-    <div
-      class="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-      style="background: radial-gradient(ellipse at top, var(--accent) 08 0%, transparent 60%)"
-    />
-
-    <div class="flex items-start gap-3 relative">
-      <div
-        class="size-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 transition-transform duration-200 group-hover:scale-105"
-        style="background: var(--accent-muted); border: 1px solid var(--border-subtle);"
-      >
-        <UIcon name="i-lucide-box" class="size-4" style="color: var(--accent);" />
-      </div>
-      <div class="flex-1 min-w-0">
-        <div class="t-body font-semibold truncate" style="color: var(--text-primary);">
-          {{ project.displayName }}
-        </div>
-        <div class="t-small mt-0.5 font-mono truncate" style="color: var(--text-tertiary);" :title="project.path">
-          {{ project.path }}
-        </div>
-      </div>
-    </div>
-    
-    <div class="flex items-center justify-between mt-4 pt-3 relative" style="border-top: 1px solid var(--border-subtle);">
-      <div class="flex items-center gap-2">
-        <span class="t-small font-medium px-1.5 py-0.5 rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
-          {{ project.sessionCount }} sessions
-        </span>
-      </div>
-      <div class="flex items-center gap-2">
-        <NuxtLink
-          :to="`/cli/project/${encodeURIComponent(project.name)}`"
-          @click.stop
-          class="flex items-center gap-1 t-small font-medium px-2 py-0.5 rounded-full transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-          style="background: var(--accent-muted); color: var(--accent);"
-          title="Open in CLI"
-        >
-          <UIcon name="i-lucide-terminal-square" class="size-3" />
-          CLI
-        </NuxtLink>
-        <span class="t-small" style="color: var(--text-tertiary);">
-          {{ formatRelativeTime(project.lastActivity) || 'No activity' }}
-        </span>
-      </div>
-    </div>
-  </NuxtLink>
+  </li>
 </template>
-

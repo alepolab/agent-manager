@@ -69,7 +69,7 @@ function replay() {
         class="w-full grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 text-left focus-ring"
         :aria-expanded="open" @click="ctx.toggle(stepId)"
       >
-        <span class="w-2.5 h-2.5 rounded-full" :class="{ 'animate-pulse': step.status === 'running' }" :style="{ background: STATUS_COLOR[step.status] }" role="img" :aria-label="step.status" :title="step.status" />
+        <StatusLabel :status="step.status" icon-only />
         <span class="min-w-0">
           <span class="flex items-center gap-2">
             <span class="t-ui font-medium truncate" style="color: var(--text-primary);">{{ step.label }}</span>
@@ -87,7 +87,7 @@ function replay() {
           </span>
           <span v-if="step.childRunIds?.length" class="block t-small text-label truncate" data-testid="child-run-count">{{ ctx.childSummary(stepId) }}</span>
         </span>
-        <span class="t-small font-mono text-label tabular-nums text-right whitespace-nowrap">
+        <span class="t-small text-label tabular-nums text-right whitespace-nowrap">
           {{ elapsed }}<template v-if="usage"><br>{{ usage }}</template>
         </span>
       </button>

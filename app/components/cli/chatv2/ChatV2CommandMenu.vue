@@ -60,13 +60,13 @@ watch(() => props.selectedIndex, (newIdx) => {
           <span v-if="item.argumentHint" class="t-small font-mono truncate" style="color: var(--text-tertiary);">
             {{ item.argumentHint }}
           </span>
-          <span v-if="item.type === 'builtin'" class="t-small font-bold uppercase tracking-wider px-1.5 py-px rounded ml-auto" style="background: rgba(139, 92, 246, 0.1); color: #8b5cf6;">
+          <span v-if="item.type === 'builtin'" class="t-small font-semibold px-1.5 py-px rounded ml-auto" style="background: rgba(139, 92, 246, 0.1); color: #8b5cf6;">
             Built-in
           </span>
-          <span v-else-if="item.type === 'skill'" class="t-small font-bold uppercase tracking-wider px-1.5 py-px rounded bg-accent/10 text-accent ml-auto">
+          <span v-else-if="item.type === 'skill'" class="t-small font-semibold px-1.5 py-px rounded bg-accent/10 text-accent ml-auto">
             Skill
           </span>
-          <span v-else-if="item.type === 'command'" class="t-small font-bold uppercase tracking-wider px-1.5 py-px rounded ml-auto" style="background: rgba(6, 182, 212, 0.1); color: #06b6d4;">
+          <span v-else-if="item.type === 'command'" class="t-small font-semibold px-1.5 py-px rounded ml-auto" style="background: rgba(6, 182, 212, 0.1); color: #06b6d4;">
             Command
           </span>
           <span v-if="item.directory" class="t-small font-mono px-1.5 py-px rounded-full badge-subtle opacity-60">

@@ -65,7 +65,8 @@ check('assigning a role is gated client-side too',
 // ---- the sidebar tells the truth about what it offers ----
 
 const app = read('app/app.vue')
-const navByRole = app.match(/const NAV_BY_ROLE[^}]+}/s)?.[0] ?? ''
+const navigation = read('app/utils/navigation.ts')
+const navByRole = navigation.match(/const NAV_BY_ROLE[^}]+}/s)?.[0] ?? ''
 check('a manager is offered the Dashboard, which carries the board',
   /manager: \['\/'/.test(navByRole) && !/\/board/.test(navByRole),
   'the board is the top of the Dashboard now; /board only redirects there')
@@ -87,7 +88,7 @@ check('the impersonation banner is app-level',
   'an operator who forgets they are impersonating reads a missing control as a broken one')
 
 check('labs is a per-developer preference',
-  /me\.value\?\.profile\?\.labs/.test(app),
+  /me\.value\?\.profile\?\.labs/.test(read('app/components/SectionTabs.vue')),
   'an instance-wide switch on an operator-only page meant nobody else could find out the pages existed')
 
 // ---- editor pages no longer offer work the API will refuse ----
@@ -132,9 +133,16 @@ check('the old 1,130-line settings page is gone',
   !settingsMonolith,
   'if it coexists with app/pages/settings/, Nuxt treats it as an outlet-less parent and the children never render')
 
+// The tabs are rendered by PageHeader from SETTINGS_TABS, so a settings page
+// is reachable from the others exactly when it has a PageHeader and a tab.
+const settingsTabs = navigation.match(/const SETTINGS_TABS[^=]*=\s*\[[^\]]+\]/s)?.[0] ?? ''
+check('PageHeader renders the section tabs', /<SectionTabs/.test(read('app/components/PageHeader.vue')),
+  'each settings route is reachable from the others')
 for (const r of ['pipeline', 'claude-code', 'integrations', 'instance']) {
   const src = read(`app/pages/settings/${r}.vue`)
-  check(`settings/${r} carries the shared sub-nav`, /<SettingsNav/.test(src), 'each route is reachable from the others')
+  check(`settings/${r} carries the shared sub-nav`,
+    /<PageHeader/.test(src) && settingsTabs.includes(`'/settings/${r}'`),
+    'each route is reachable from the others')
 }
 
 const pipeline = read('app/pages/settings/pipeline.vue')

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { Workflow } from '~/types'
-import { getAgentColor } from '~/utils/colors'
 
 const props = defineProps<{
   workflow: Workflow
@@ -14,12 +13,6 @@ const props = defineProps<{
    */
   schedules?: { total: number, enabled: number }
 }>()
-const { agents } = useAgents()
-
-const stepAgents = computed(() => {
-  return props.workflow.steps.map(s => agents.value.find(a => a.slug === s.agentSlug))
-})
-
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(ms / 60000)
@@ -55,16 +48,11 @@ function timeAgo(iso: string): string {
         </div>
       </div>
     </NuxtLink>
-    <div class="flex items-center gap-2 mx-4 pt-3 pb-4" style="border-top: 1px solid var(--border-subtle);">
-      <div class="flex -space-x-1">
-        <div
-          v-for="(agent, idx) in stepAgents.slice(0, 4)"
-          :key="idx"
-          class="size-5 rounded-full flex items-center justify-center t-small font-bold"
-          :style="{ background: agent ? getAgentColor(agent.frontmatter.color) + '30' : 'var(--badge-subtle-bg)', color: agent ? getAgentColor(agent.frontmatter.color) : 'var(--text-disabled)', border: '2px solid var(--surface-raised)', zIndex: 10 - idx }"
-        >
-          {{ idx + 1 }}
-        </div>
+    <div class="flex items-center gap-2 mx-4 pt-3 pb-4" style="border-top: 0.5px solid var(--border-default);">
+      <!-- The pipeline track at rest: one segment per step, the same shape a run
+           of this workflow shows. It replaced four numbered dots coloured per agent. -->
+      <div class="track w-20 shrink-0" aria-hidden="true">
+        <span v-for="step in workflow.steps" :key="step.id" class="track__seg" />
       </div>
       <span class="t-small" style="color: var(--text-disabled);">{{ workflow.steps.length }} step{{ workflow.steps.length === 1 ? '' : 's' }}</span>
       <ClientOnly>
@@ -84,7 +72,7 @@ function timeAgo(iso: string): string {
         <UIcon name="i-lucide-calendar-clock" class="size-3" />{{ schedules.total }}
       </NuxtLink>
       <UButton
-        size="xs" variant="soft" icon="i-lucide-play" label="Run"
+        size="xs" variant="ghost" color="neutral" icon="i-lucide-play" label="Run"
         class="ml-auto"
         :disabled="workflow.steps.length === 0"
         :title="workflow.steps.length === 0 ? 'Add a step before running' : 'Run this workflow'"

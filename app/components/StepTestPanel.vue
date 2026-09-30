@@ -113,13 +113,10 @@ const usage = computed(() => stepUsageLabel(tested.value?.usage))
         <UButton size="sm" icon="i-lucide-flask-conical" :loading="testing" :disabled="testing || !selected" :label="testing ? 'Testing…' : 'Test step'" @click="() => { runTest() }" />
       </template>
 
-      <div v-if="testRun" class="rounded-lg p-3 space-y-2" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" data-testid="step-test-result">
+      <div v-if="testRun" class="group-card p-3! space-y-2" data-testid="step-test-result">
         <div class="flex items-center gap-2">
-          <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-mono" :style="{ color: RUN_STATUS_COLOR[testRun.status], background: 'var(--surface-inset)' }" data-testid="step-test-status">
-            <span class="w-2 h-2 rounded-full" :class="{ 'animate-pulse': isLiveStatus(testRun.status) }" :style="{ background: RUN_STATUS_COLOR[testRun.status] }" />
-            {{ runStatusLabel(testRun.status) }}
-          </span>
-          <span v-if="usage" class="font-mono text-label tabular-nums">{{ usage }}</span>
+          <StatusLabel :status="testRun.status" :label="runStatusLabel(testRun.status)" data-testid="step-test-status" />
+          <span v-if="usage" class="text-label tabular-nums">{{ usage }}</span>
           <NuxtLink :to="`/runs/${testRun.id}`" class="ml-auto underline focus-ring">Open test run</NuxtLink>
         </div>
         <p v-if="testRun.testOf?.codeNote" style="color: var(--warning);">{{ testRun.testOf.codeNote }}</p>

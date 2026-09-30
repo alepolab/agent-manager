@@ -80,7 +80,9 @@ export const CHANGE_BRIEF_PENDING = 'change-brief.pending'
 export interface DecisionOption {
   /** "a", "b", … - what the person answers with. */
   key: string
-  /** The option in a few words. */
+  /** The option in two to six words, for the choice itself ("Unlock the test and ship the fix"). Optional: older briefs have only `label`. */
+  title?: string
+  /** The option in a sentence. */
   label: string
   /** What the next step will actually do if this is chosen. */
   next: string
@@ -88,11 +90,42 @@ export interface DecisionOption {
   delivers: string
   /** What is left undone, deferred or turned into a follow-up. */
   leaves: string
-  /** Cost or risk, when there is one worth naming. */
+  /** Cost or risk, when there is one worth naming. Leads with its level: "Low - …", "Medium - …", "High - …". */
   risk?: string
 }
 
+export type RiskLevel = 'low' | 'medium' | 'high'
+
+/** The level a risk leads with ("Medium -- silent data loss…"), if it states one. */
+export function riskLevel(risk: string | undefined): RiskLevel | undefined {
+  const m = risk?.trim().match(/^(low|medium|moderate|high)\b/i)
+  if (!m) return undefined
+  const w = m[1]!.toLowerCase()
+  return w === 'moderate' ? 'medium' : w as RiskLevel
+}
+
+/** A risk's text without the level it leads with: "Low -- the fix is narrow" is "the fix is narrow". */
+export function riskDetail(risk: string | undefined): string {
+  return (risk ?? '').trim().replace(/^(low|medium|moderate|high)\b\s*(?:[-–—:,.]+\s*)?/i, '').replace(/^./, c => c.toUpperCase())
+}
+
+/**
+ * The question in a line. An agent's `question` is the full PIPELINE-ASK text,
+ * often four lines of identifiers; `headline` is what a person reads first.
+ * A brief written before `headline` existed falls back to the question the step
+ * actually asked (`asked`, the PIPELINE-ASK line) - the brief's own `question`
+ * often opens with background rather than the question - to its first sentence.
+ */
+export function briefHeadline(brief: Pick<DecisionBrief, 'headline' | 'question'> | undefined, asked = ''): string {
+  if (brief?.headline) return brief.headline
+  const q = (asked || brief?.question || '').trim().split('\n')[0]!.trim()
+  const stop = q.search(/[?.](\s|$)/)
+  return stop > 0 ? q.slice(0, stop + 1) : q
+}
+
 export interface DecisionBrief {
+  /** The question in under twelve plain words, no identifiers: what the inbox lists and titles it with. Optional: older briefs have none. */
+  headline?: string
   /** The question, the same as the `PIPELINE-ASK:` line. */
   question: string
   /** Two or three plain sentences: what the step was doing and what stops it. */
@@ -141,12 +174,13 @@ export function parseDecisionBrief(raw: string | null | undefined): { brief: Dec
   if (problems.length) return { error: problems.join('; ') }
   return {
     brief: {
+      ...(str(d.headline) ? { headline: d.headline.trim() } : {}),
       question: d.question.trim(),
       situation: d.situation.trim(),
       ...(criteria.length ? { criteria } : {}),
       ...(Array.isArray(d.findings) && d.findings.some(str) ? { findings: d.findings.filter(str) } : {}),
       options: options.map((o: any) => ({
-        key: o.key.trim(), label: o.label.trim(), next: o.next.trim(), delivers: o.delivers.trim(), leaves: o.leaves.trim(),
+        key: o.key.trim(), ...(str(o.title) ? { title: o.title.trim() } : {}), label: o.label.trim(), next: o.next.trim(), delivers: o.delivers.trim(), leaves: o.leaves.trim(),
         ...(str(o.risk) ? { risk: o.risk.trim() } : {}),
       })),
       ...(str(d.recommendation?.option) && str(d.recommendation?.why) ? { recommendation: { option: d.recommendation.option.trim(), why: d.recommendation.why.trim() } } : {}),
@@ -174,10 +208,10 @@ export function referencedCriteria(text: string): Set<number> {
 export function briefFeedback(error: string): string {
   return `Your question cannot be shown to a person yet: ${error}. Before asking, write ${DECISION_FILE} into the run artifacts directory - `
     + 'the person answering has not read the ticket, the repository or your report. Shape: '
-    + '{ "question": the same one-line question, "situation": two or three plain sentences on what you were doing and what stops you, '
+    + '{ "headline": the question in under twelve plain words with no file or method names, "question": the same one-line question, "situation": two or three plain sentences on what you were doing and what stops you, '
     + '"criteria": [{ "ref": "criterion 2", "text": the full text of every acceptance criterion you mention }], '
     + '"findings": [one established fact per entry, every module, file, ticket or number explained in words], '
-    + '"options": [{ "key": "a", "label": a few words, "next": what the next step will do if chosen, "delivers": what the ticket ends up with, '
-    + '"leaves": what is left undone or becomes a follow-up, "risk": optional }], "recommendation": { "option": "a", "why": one sentence } }. '
+    + '"options": [{ "key": "a", "title": two to six words, "label": the option in a sentence, "next": what the next step will do if chosen, "delivers": what the ticket ends up with, '
+    + '"leaves": what is left undone or becomes a follow-up, "risk": optional, starting Low, Medium or High }], "recommendation": { "option": "a", "why": one sentence } }. '
     + 'Use the work you have already done - do not start over - then end with the same PIPELINE-ASK line.'
 }

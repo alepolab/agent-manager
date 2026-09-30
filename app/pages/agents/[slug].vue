@@ -25,7 +25,9 @@ const lastModified = ref<number | null>(null)
 const filePath = ref('')
 const skills = ref<AgentSkill[]>([])
 const loadingSkills = ref(false)
+// Open beside the editor only where there is room for both.
 const isTestPanelOpen = ref(true)
+onMounted(() => { if (window.innerWidth < 1024) isTestPanelOpen.value = false })
 
 const { hasDraft, draftAge, loadDraft, clearDraft, scheduleSave } = useDraftRecovery(`agent:${slug}`)
 
@@ -182,8 +184,7 @@ useUnsavedChanges(isDirty)
         </div>
       </template>
       <template #trailing>
-        <div class="size-2 rounded-full" :style="{ background: frontmatter.color || 'var(--accent)' }" />
-        <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full bg-accent/10 text-accent">Unsaved</span>
+        <span v-if="isDirty" class="t-small font-normal text-label">Edited</span>
       </template>
       <template #right>
         <UButton
@@ -218,11 +219,11 @@ useUnsavedChanges(isDirty)
         />
         <UButton
           v-if="can('configure')"
-          label="Delete"
+          :aria-label="`Delete this agent`"
           icon="i-lucide-trash-2"
           size="sm"
           variant="ghost"
-          color="error"
+          color="neutral"
           title="Delete agent"
           @click="() => { showDeleteConfirm = true }"
         />

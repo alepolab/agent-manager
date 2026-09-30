@@ -8,7 +8,7 @@ import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
 import type { Relationship } from '~/types'
 import { getAgentColor } from '~/utils/colors'
-import { getModelBadgeStyle } from '~/utils/models'
+import { getModelLabel } from '~/utils/models'
 
 const { agents } = useAgents()
 const { commands } = useCommands()
@@ -19,6 +19,15 @@ const router = useRouter()
 
 const relationships = ref<Relationship[]>([])
 const loading = ref(true)
+// fit-view-on-init fires while the columns are still empty, and the canvas
+// then sat at the maximum zoom on the first three nodes.
+const { fitView } = useVueFlow()
+// Fit the columns' width and the first rows, not the whole graph: with 48
+// skills the whole graph fits only at a zoom nobody can read.
+function fitTop() {
+  const top = nodes.value.filter(n => n.position.y < 10 * Y_GAP).map(n => n.id)
+  fitView({ nodes: top, padding: 0.2, maxZoom: 1 })
+}
 const showLegend = ref(true)
 
 const { workingDir } = useWorkingDir()
@@ -387,14 +396,14 @@ function onNodeClick(first: unknown, second?: unknown) {
       style="background: color-mix(in srgb, var(--surface-base) 85%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border-subtle);"
     >
       <h1 class="text-page-title flex-1">Graph</h1>
-      <span class="font-mono t-small" style="color: var(--text-disabled);">
+      <span class="t-small tabular-nums" style="color: var(--text-disabled);">
         {{ nodes.filter(n => n.type !== 'columnHeader').length }} nodes
       </span>
-      <span class="font-mono t-small" style="color: var(--text-disabled);">
+      <span class="t-small tabular-nums" style="color: var(--text-disabled);">
         {{ edges.length }} edges
       </span>
       <button
-        class="font-mono t-small px-2 py-1 rounded focus-ring"
+        class="t-small px-2 py-1 rounded focus-ring tabular-nums"
         style="color: var(--text-tertiary); background: var(--surface-raised); border: 1px solid var(--border-default);"
         @click="showLegend = !showLegend"
       >
@@ -414,6 +423,7 @@ function onNodeClick(first: unknown, second?: unknown) {
         :default-edge-options="{ type: 'smoothstep' }"
         :min-zoom="0.3"
         :max-zoom="2"
+        @nodes-initialized="fitTop"
         @node-click="onNodeClick"
         @node-mouse-enter="handleNodeMouseEnter"
         @node-mouse-leave="handleNodeMouseLeave"
@@ -437,15 +447,15 @@ function onNodeClick(first: unknown, second?: unknown) {
           >
             <div class="flex items-center gap-2">
               <div class="size-2 rounded-full shrink-0" :style="{ background: data.color }" />
-              <span class="font-mono t-small font-medium truncate" style="color: var(--text-primary);">
+              <span class="t-small font-medium truncate" style="color: var(--text-primary);">
                 {{ data.label }}
               </span>
               <span
                 v-if="data.model"
-                class="ml-auto t-small font-mono font-medium px-1.5 py-px rounded-full shrink-0"
-                :style="getModelBadgeStyle(data.model)"
+                class="ml-auto t-small shrink-0"
+                style="color: var(--text-tertiary);"
               >
-                {{ data.model }}
+                {{ getModelLabel(data.model) }}
               </span>
             </div>
           </div>
@@ -470,7 +480,7 @@ function onNodeClick(first: unknown, second?: unknown) {
           <div class="graph-node graph-node--skill" :class="{ 'graph-node--orphan': data.orphan }">
             <div class="flex items-center gap-1.5">
               <UIcon name="i-lucide-zap" class="size-3 shrink-0" style="color: var(--model-haiku);" />
-              <span class="font-mono t-small font-medium truncate" style="color: var(--text-secondary);">
+              <span class="t-small font-medium truncate" style="color: var(--text-secondary);">
                 {{ data.label }}
               </span>
             </div>
@@ -482,15 +492,12 @@ function onNodeClick(first: unknown, second?: unknown) {
           <div class="graph-node graph-node--plugin" :class="{ 'graph-node--orphan': data.orphan }">
             <div class="flex items-center gap-1.5">
               <UIcon name="i-lucide-puzzle" class="size-3 shrink-0" style="color: var(--model-sonnet);" />
-              <span class="font-mono t-small font-medium truncate" style="color: var(--text-secondary);">
+              <span class="t-small font-medium truncate" style="color: var(--text-secondary);">
                 {{ data.label }}
               </span>
               <span
-                class="ml-auto t-small font-mono px-1 py-px rounded-full shrink-0"
-                :style="{
-                  background: data.enabled ? 'rgba(74,222,128,0.15)' : 'var(--badge-subtle-bg)',
-                  color: data.enabled ? 'var(--success)' : 'var(--text-disabled)',
-                }"
+                class="ml-auto t-small shrink-0"
+                :style="{ color: data.enabled ? 'var(--success)' : 'var(--text-tertiary)' }"
               >
                 {{ data.enabled ? 'on' : 'off' }}
               </span>
@@ -506,11 +513,11 @@ function onNodeClick(first: unknown, second?: unknown) {
           <div class="graph-node graph-node--mcp" :class="{ 'graph-node--orphan': data.orphan }">
             <div class="flex items-center gap-1.5">
               <UIcon name="i-lucide-server" class="size-3 shrink-0" style="color: var(--accent);" />
-              <span class="font-mono t-small font-medium truncate" style="color: var(--text-secondary);">
+              <span class="t-small font-medium truncate" style="color: var(--text-secondary);">
                 {{ data.label }}
               </span>
               <span
-                class="ml-auto t-small font-mono px-1 py-px rounded-full shrink-0 uppercase border"
+                class="ml-auto t-small px-1 py-px rounded-full shrink-0 border capitalize"
                 :style="{
                   borderColor: data.scope === 'global' ? 'rgba(var(--accent-rgb), 0.3)' : 'var(--border-subtle)',
                   color: data.scope === 'global' ? 'var(--accent)' : 'var(--text-disabled)',
@@ -523,7 +530,7 @@ function onNodeClick(first: unknown, second?: unknown) {
         </template>
 
         <Controls position="bottom-right" />
-        <MiniMap position="top-right" :style="{ marginTop: '64px' }" />
+        <MiniMap position="bottom-right" :style="{ marginRight: '56px' }" />
       </VueFlow>
 
       <!-- Hover tooltip -->
@@ -542,7 +549,7 @@ function onNodeClick(first: unknown, second?: unknown) {
           class="absolute bottom-4 left-4 z-10 rounded-lg p-3 t-small space-y-2"
           style="background: color-mix(in srgb, var(--surface-base) 92%, transparent); backdrop-filter: blur(12px); border: 1px solid var(--border-default);"
         >
-          <div class="font-mono font-semibold mb-2" style="color: var(--text-secondary);">Legend</div>
+          <div class="font-semibold mb-2" style="color: var(--text-secondary);">Legend</div>
           <div class="flex items-center gap-2">
             <div class="size-2.5 rounded-full" style="background: var(--accent);" />
             <span style="color: var(--text-tertiary);">Agent</span>

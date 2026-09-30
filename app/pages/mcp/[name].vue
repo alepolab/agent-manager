@@ -185,7 +185,7 @@ useUnsavedChanges(isDirty)
         <h1 class="t-body font-semibold tracking-tight" style="color: var(--text-primary); font-family: var(--font-display);">
           {{ loading ? 'Loading...' : name }}
         </h1>
-        <span v-if="isDirty" class="t-small font-mono px-1.5 py-px rounded-full" style="background: rgba(var(--accent-rgb), 0.1); color: var(--accent);">Unsaved</span>
+        <span v-if="isDirty" class="t-small px-1.5 py-px rounded-full" style="background: rgba(var(--accent-rgb), 0.1); color: var(--accent);">Unsaved</span>
       </div>
       <div class="flex items-center gap-2">
         <ReadOnlyBadge v-if="!can('configure')" reason="changing an MCP server" />
@@ -228,7 +228,7 @@ useUnsavedChanges(isDirty)
         <div class="px-8 py-6 space-y-8">
           <!-- Basic Info -->
           <section class="space-y-4">
-            <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Basic Information</h3>
+            <h3 class="t-ui font-semibold" style="color: var(--text-primary);">Basic Information</h3>
             <div class="grid grid-cols-2 gap-6">
               <div class="space-y-1.5">
                 <label class="t-small font-medium" style="color: var(--text-tertiary);">Server Name</label>
@@ -267,7 +267,7 @@ useUnsavedChanges(isDirty)
 
           <!-- Transport -->
           <section class="space-y-4">
-            <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Transport Configuration</h3>
+            <h3 class="t-ui font-semibold" style="color: var(--text-primary);">Transport Configuration</h3>
             <div class="space-y-4">
               <div class="space-y-1.5">
                 <label class="t-small font-medium" style="color: var(--text-tertiary);">Transport Type</label>
@@ -284,7 +284,7 @@ useUnsavedChanges(isDirty)
                     <input v-model="form.transport" type="radio" value="sse" class="accent-accent" />
                     <div class="flex items-center gap-1.5" :class="form.transport === 'sse' ? 'opacity-100' : 'opacity-60'">
                       <span class="t-ui group-hover:opacity-100 transition-opacity" :class="form.transport === 'sse' ? 'font-medium' : ''">sse (Classic)</span>
-                      <span class="t-small font-mono px-1 py-0.5 rounded bg-error/10 text-error uppercase leading-none border border-error/20">Deprecated</span>
+                      <span class="t-small px-1 py-0.5 rounded bg-error/10 text-error leading-none border border-error/20">Deprecated</span>
                     </div>
                   </label>
                 </div>
@@ -316,7 +316,7 @@ useUnsavedChanges(isDirty)
           <section class="space-y-4">
             <div v-if="form.transport === 'stdio'">
               <div class="flex items-center justify-between mb-2">
-                <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Environment Variables</h3>
+                <h3 class="t-ui font-semibold" style="color: var(--text-primary);">Environment Variables</h3>
                 <button class="t-small font-medium transition-colors" style="color: var(--accent);" @click="addEnvRow">
                   + Add Row
                 </button>
@@ -338,7 +338,7 @@ useUnsavedChanges(isDirty)
 
             <div v-else>
               <div class="flex items-center justify-between mb-2">
-                <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Headers</h3>
+                <h3 class="t-ui font-semibold" style="color: var(--text-primary);">Headers</h3>
                 <button class="t-small font-medium transition-colors" style="color: var(--accent);" @click="addHeaderRow">
                   + Add Row
                 </button>
@@ -363,7 +363,7 @@ useUnsavedChanges(isDirty)
           <section class="space-y-6 pt-8 border-t" style="border-color: var(--border-subtle);">
             <div class="flex items-center justify-between">
               <div class="space-y-1">
-                <h3 class="t-ui font-semibold tracking-wider uppercase opacity-50" style="color: var(--text-primary);">Capabilities</h3>
+                <h3 class="t-ui font-semibold" style="color: var(--text-primary);">Capabilities</h3>
                 <p class="t-small opacity-40">Discovered tools, resources, and prompts from this server.</p>
               </div>
               <UButton
@@ -391,7 +391,7 @@ useUnsavedChanges(isDirty)
                   <div class="flex items-center gap-2">
                     <UIcon name="i-lucide-wrench" class="size-4 opacity-60 text-accent" />
                     <span class="t-ui font-semibold">Tools</span>
-                    <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.tools.length }}</span>
+                    <span class="t-small px-1.5 py-px rounded-full tabular-nums" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.tools.length }}</span>
                   </div>
                   <UIcon 
                     :name="isToolsCollapsed ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'" 
@@ -429,7 +429,7 @@ useUnsavedChanges(isDirty)
                       </div>
                       <div class="t-small leading-relaxed" style="color: var(--text-secondary);">{{ tool.description }}</div>
                       <div v-if="tool.inputSchema" class="mt-3 pt-3 border-t border-dashed" style="border-color: var(--border-subtle);">
-                        <div class="t-small uppercase tracking-wider font-semibold opacity-40 mb-2">Input Schema</div>
+                        <div class="t-small font-semibold mb-2">Input Schema</div>
                         <pre class="t-small p-2 rounded-lg font-mono overflow-x-auto" style="background: var(--surface-raised); color: var(--text-tertiary);">{{ JSON.stringify(tool.inputSchema.properties || {}, null, 2) }}</pre>
                       </div>
                     </div>
@@ -449,7 +449,7 @@ useUnsavedChanges(isDirty)
                   <div class="flex items-center gap-2">
                     <UIcon name="i-lucide-database" class="size-4 opacity-60 text-success" />
                     <span class="t-ui font-semibold">Resources</span>
-                    <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.resources.length }}</span>
+                    <span class="t-small px-1.5 py-px rounded-full tabular-nums" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.resources.length }}</span>
                   </div>
                   <UIcon 
                     :name="isResourcesCollapsed ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'" 
@@ -479,7 +479,7 @@ useUnsavedChanges(isDirty)
                   <div class="flex items-center gap-2">
                     <UIcon name="i-lucide-terminal" class="size-4 opacity-60 text-primary" />
                     <span class="t-ui font-semibold">Prompts</span>
-                    <span class="t-small font-mono px-1.5 py-px rounded-full" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.prompts.length }}</span>
+                    <span class="t-small px-1.5 py-px rounded-full tabular-nums" style="background: var(--badge-subtle-bg); color: var(--text-tertiary);">{{ capabilities.prompts.length }}</span>
                   </div>
                   <UIcon 
                     :name="isPromptsCollapsed ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'" 

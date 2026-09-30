@@ -272,7 +272,7 @@ onMounted(loadItems)
               class="size-3 shrink-0 text-meta transition-transform duration-150"
               :class="{ 'rotate-90': !collapsedCategories.has(String(category)) }"
             />
-            <span class="t-small font-mono uppercase tracking-widest text-meta shrink-0 group-hover/cat:text-label transition-colors">{{ category }}</span>
+            <span class="t-small text-meta shrink-0 group-hover/cat:text-label transition-colors capitalize">{{ category }}</span>
             <div class="flex-1 h-px" style="background: var(--border-subtle);" />
             <span class="t-small text-meta shrink-0">{{ items.length }}</span>
           </button>

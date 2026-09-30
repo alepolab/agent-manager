@@ -164,6 +164,8 @@ function updateWidth() {
 }
 
 onMounted(async () => {
+  // On a phone the history column and the chat cannot both fit; start on the chat.
+  if (window.innerWidth < 768) sidebarCollapsed.value = true
   // Set the correct width only after mounting on the client to avoid hydration mismatch
   leftSidebarWidth.value = getDefaultSidebarWidth()
   updateWidth()
@@ -1708,7 +1710,7 @@ function handleClosePreview() {
                 <div class="flex flex-col gap-3">
                   <button
                     class="w-full py-2.5 rounded-xl font-medium transition-all flex items-center justify-center gap-2"
-                    style="background: var(--accent); color: white;"
+                    style="background: var(--accent); color: var(--on-accent);"
                     @click="handleNewChat({ workingDir: localWorkingDir })"
                   >
                     <UIcon name="i-lucide-plus" class="size-4" />

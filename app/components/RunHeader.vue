@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isLiveStatus, isTestRun, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
 import { CHANGE_BRIEF_FILE, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '~~/shared/utils/decisionBrief'
-import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
+import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, GATE_VERDICT } from '~/utils/runStatus'
 
 /**
  * A run as a whole: what it is, how far it got, what it was given, what it
@@ -115,9 +115,9 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
 <template>
   <div class="space-y-3">
     <div class="flex flex-wrap items-center gap-3">
-      <span class="t-small font-mono uppercase" :style="{ color: STATUS_COLOR[run.status] }">{{ runStatusLabel(run.status) }}</span>
+      <StatusLabel :status="run.status" />
       <span class="t-small text-label">{{ run.workflowName }}</span>
-      <span class="t-small text-label ml-auto font-mono tabular-nums" data-testid="run-progress-count">{{ progress.done }} / {{ progress.total }}</span>
+      <span class="t-small text-label ml-auto tabular-nums" data-testid="run-progress-count">{{ progress.done }} of {{ progress.total }}</span>
       <span class="t-small text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(run, now) }}</span>
     </div>
     <p v-if="run.error" class="t-small" style="color: var(--error);">{{ run.error }}</p>
@@ -126,9 +126,9 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
     <!-- What this run was actually given. Shown because a reader deciding
          whether to clone or restart needs to know the inputs, and the prompt
          alone no longer carries them. -->
-    <div v-if="statedParameters.length" class="flex flex-wrap gap-x-3 gap-y-1 t-small font-mono" data-testid="run-parameters">
+    <div v-if="statedParameters.length" class="flex flex-wrap gap-x-4 gap-y-1 t-small" data-testid="run-parameters">
       <span v-for="[name, value] in statedParameters" :key="name" class="text-label">
-        <span style="color: var(--text-tertiary);">{{ name }}:</span> {{ value }}
+        <span style="color: var(--text-tertiary);">{{ name }}</span> <span class="font-mono" style="color: var(--text-primary);">{{ value }}</span>
       </span>
     </div>
 
@@ -138,10 +138,10 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
 
     <!-- What the runner checked before any agent ran. Only the checks that need
          a person: an all-clear is the silent, expected case. -->
-    <div v-if="preflightNotable.length" class="rounded-lg p-2 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <div v-if="preflightNotable.length" class="group-card p-3! t-small space-y-1">
       <div class="font-medium" style="color: var(--text-primary);">Preflight</div>
       <div v-for="c in preflightNotable" :key="c.name" class="flex gap-2">
-        <span class="font-mono shrink-0" :style="{ color: c.level === 'fail' ? STATUS_COLOR.failed : 'var(--warning)' }">{{ c.name }}</span>
+        <StatusLabel :status="c.level === 'fail' ? 'failed' : 'paused'" :label="c.name" class="shrink-0" />
         <span class="text-label">{{ c.detail }}</span>
       </div>
     </div>
@@ -157,7 +157,7 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
       <a
         v-for="u in prLinks" :key="u" :href="u" target="_blank" rel="noopener"
         class="inline-flex items-center gap-2 rounded-lg px-3 py-2 t-ui focus-ring"
-        style="background: var(--accent-muted); border: 1px solid var(--accent); color: var(--accent);"
+        style="background: var(--accent-muted); color: var(--accent);"
       >
         <UIcon name="i-lucide-git-pull-request" class="size-4 shrink-0" />
         <span class="flex flex-col leading-tight text-left">
@@ -169,7 +169,7 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
       <a
         v-if="run.ci"
         :href="run.ci.pr" target="_blank" rel="noopener"
-        class="ml-1 normal-case font-sans t-small underline self-center"
+        class="ml-1 t-small underline self-center"
         :title="run.ci.checks.map(c => `${c.name}: ${c.bucket}`).join('\n') || run.ci.error || ''"
         :style="{ color: run.ci.status === 'failing' ? STATUS_COLOR.failed : run.ci.status === 'passing' ? STATUS_COLOR.completed : 'inherit' }"
       >CI {{ run.ci.status }}</a>
@@ -177,7 +177,7 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
 
     <!-- Open on a live run, where they are a prompt to act. Collapsed on a
          settled one, where they are history and were taking the top of the page. -->
-    <details v-if="intake?.open_questions?.length" class="rounded-lg p-2 t-small" :open="!settledRun" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <details v-if="intake?.open_questions?.length" class="group-card p-3! t-small" :open="!settledRun">
       <summary class="font-medium cursor-pointer focus-ring" style="color: var(--text-primary);">
         Intake left {{ intake.open_questions.length }} question(s) open
       </summary>
@@ -188,13 +188,10 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
     <!-- What was decided at this run's earlier gates. A four-gate runbook used
          to arrive at its last gate with no record of who approved the first
          three or why: approval notes lived in memory and died with the process. -->
-    <div v-if="run.decisions?.length" class="rounded-lg p-2 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+    <div v-if="run.decisions?.length" class="group-card p-3! t-small space-y-1">
       <div class="font-medium" style="color: var(--text-primary);">Earlier decisions on this run</div>
       <div v-for="d in run.decisions" :key="d.at" class="flex gap-2">
-        <span
-          class="font-mono uppercase shrink-0"
-          :style="{ color: d.verdict === 'approved' ? STATUS_COLOR.completed : d.verdict === 'rejected' ? STATUS_COLOR.failed : STATUS_COLOR.paused }"
-        >{{ d.verdict }}</span>
+        <StatusLabel :status="GATE_VERDICT[d.verdict]?.status ?? 'paused'" :label="GATE_VERDICT[d.verdict]?.word ?? d.verdict" class="shrink-0" />
         <span class="shrink-0">{{ d.label }}</span>
         <span class="text-label truncate">{{ d.by }}<template v-if="d.note">: {{ d.note }}</template></span>
       </div>
@@ -238,7 +235,7 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
       <UButton
         v-if="mayDrive && isLiveStatus(run.status)"
         size="xs" :variant="confirmingStop ? 'solid' : 'ghost'" :color="confirmingStop ? 'error' : 'neutral'"
-        :label="confirmingStop ? 'Confirm stop' : 'Stop'" @click="handleStop"
+        icon="i-lucide-circle-stop" :label="confirmingStop ? 'Confirm stop' : 'Stop'" @click="handleStop"
       />
       <!-- Not for a test run: a clone is a REAL run, and would carry a test's config into real side effects. -->
       <UButton v-if="mayDrive && settledRun && !isTestRun(run)" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />

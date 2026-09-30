@@ -78,13 +78,13 @@ function onDirKeydown(e: KeyboardEvent) {
 <template>
   <UPopover v-model:open="showWorkingDirPopover" :ui="{ content: 'w-[280px]' }">
     <button
-      class="flex items-center gap-1 t-small font-mono hover:text-accent transition-colors focus-ring min-w-0"
-      style="color: var(--text-disabled);"
+      class="flex items-center gap-1 t-small hover:text-accent transition-colors focus-ring min-w-0"
+      style="color: var(--text-tertiary);"
       :title="workingDir || 'Set project directory'"
       @click="openWorkingDirPopover"
     >
       <UIcon name="i-lucide-folder" class="size-3 shrink-0" :style="{ color: workingDir ? 'var(--accent)' : undefined }" />
-      <span class="truncate max-w-[180px]">{{ workingDir ? displayPath : 'Set project directory' }}</span>
+      <span class="truncate max-w-[180px]" :class="{ 'font-mono': workingDir }">{{ workingDir ? displayPath : 'Set project directory' }}</span>
       <UIcon name="i-lucide-chevron-down" class="size-2.5 shrink-0" />
     </button>
             <template #content>

@@ -2,7 +2,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { oversightReason, needsJustification } from '~~/shared/utils/oversight'
 import { parseJunit, junitLabel, junitPassed } from '~/utils/junit'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, type DecisionBrief } from '~~/shared/utils/decisionBrief'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, riskDetail, riskLevel, unresolvedQuestions, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 
 /**
  * What a reviewer is actually approving.
@@ -141,147 +141,184 @@ const adversarialMissing = computed(() =>
   && !!meta.value && meta.value.adversarial === undefined)
 
 const repos = computed(() => meta.value?.fix?.repos ?? [])
+const commitCount = computed(() => repos.value.reduce((n, r) => n + (r.commits?.length ?? 0), 0))
+const securityOk = computed(() => /pass|clean/i.test(meta.value?.security?.verdict ?? ''))
+const pipelineNotes = computed(() => [
+  ...props.run.steps.filter(st => st.monitorVerdict && st.monitorVerdict !== 'CONTINUE').map(st => ({ key: st.stepId, text: `${st.monitorVerdict} at ${st.label}`, title: st.monitorNote || '' })),
+  ...props.run.steps.filter(st => st.visits > 1).map(st => ({ key: `v-${st.stepId}`, text: `${st.label} ran ${st.visits}×`, title: '' })),
+])
+/** The change brief's options, read as what approving and sending back each lead to. */
+const RISK_WORD = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' } as const
+const situationOpen = ref(false)
+/** Intake's questions the change could not settle: the only ones that are the reviewer's to weigh. */
+const openQuestions = computed(() => unresolvedQuestions(brief.value))
+const briefOptions = computed(() => (brief.value?.options ?? []).map(o => ({ ...o, name: o.title ?? o.label, level: riskLevel(o.risk), riskText: riskDetail(o.risk) })))
 const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 </script>
 
 <template>
-  <div class="rounded-lg t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-    <div class="px-3 py-2 flex items-center gap-2" style="border-bottom: 1px solid var(--border-subtle);">
-      <span class="t-small font-mono uppercase tracking-wider text-label">What you are approving</span>
-      <span
-        v-if="run.blastRadius"
-        class="ml-auto t-small font-mono uppercase px-1.5 py-0.5 rounded"
-        :style="{ background: 'var(--accent-muted)', color: 'var(--accent)' }"
-        :title="oversightReason(run.blastRadius)"
-      >{{ run.blastRadius }}</span>
-      <span v-else class="ml-auto t-small font-mono uppercase text-label">unclassified</span>
+  <div class="space-y-4 t-small">
+    <!-- What approving lets happen, in one sentence, and why it stopped here. -->
+    <div class="group-card space-y-1">
+      <h3 class="t-ui font-semibold m-0" style="color: var(--text-primary);">What approving does</h3>
+      <p class="m-0 text-label">{{ effect }}</p>
+    </div>
+    <div v-if="run.blastRadius" class="group-card space-y-1">
+      <h3 class="t-ui font-semibold m-0" style="color: var(--text-primary);">Why this stopped for you</h3>
+      <p class="m-0 text-label">
+        Classed <b class="font-mono" style="color: var(--text-primary);" :title="oversightReason(run.blastRadius)">{{ run.blastRadius }}</b><template v-if="meta?.blast_radius_reason">: {{ meta.blast_radius_reason }}</template><template v-else-if="!loading">. Intake recorded no reason for the class.</template>
+      </p>
+      <p v-if="mustJustify" class="m-0" style="color: var(--warning);">Owner-gated: approving needs a written reason.</p>
     </div>
 
-    <div class="px-3 py-2 space-y-2">
-      <!-- 1. The outward effect, in one sentence. -->
-      <p class="m-0" style="color: var(--text-primary);">{{ effect }}</p>
+    <p v-if="loading" class="m-0 text-label">Reading the evidence bundle…</p>
 
-      <p v-if="mustJustify" class="m-0 t-small" style="color: var(--warning);">
-        Owner-gated: approving needs a written reason.
-      </p>
+    <!-- Missing is missing. A bundle that was never written must not render as zeros. -->
+    <p v-else-if="metaMissing" class="m-0" style="color: var(--warning);">
+      No evidence bundle written yet, so there is nothing measured to show. Approving here means
+      approving the step on its description alone.
+    </p>
 
-      <div v-if="loading" class="t-small text-label">Reading the evidence bundle…</div>
-
-      <!-- Missing is missing. A bundle that was never written must not render as zeros. -->
-      <div v-else-if="metaMissing" class="t-small" style="color: var(--warning);">
-        No evidence bundle written yet, so there is nothing measured to show. Approving here means
-        approving the step on its description alone.
+    <template v-else>
+      <!-- The change, measured by the runner rather than reported by the agent. -->
+      <div class="verdict-stats" role="list">
+        <div v-if="meta?.fix?.files_changed !== undefined" role="listitem"><b>{{ meta.fix.files_changed }}</b><span>{{ meta.fix.files_changed === 1 ? 'file' : 'files' }}</span></div>
+        <div v-if="meta?.fix?.lines_changed !== undefined" role="listitem"><b>{{ meta.fix.lines_changed }}</b><span>lines changed</span></div>
+        <div v-if="meta?.fix?.tests_added !== undefined" role="listitem"><b>{{ meta.fix.tests_added }}</b><span>tests added</span></div>
+        <div v-if="repos.length" role="listitem"><b>{{ commitCount }}</b><span>{{ commitCount === 1 ? 'commit' : 'commits' }} in {{ repos.length }} {{ repos.length === 1 ? 'repo' : 'repos' }}</span></div>
       </div>
 
-      <template v-else>
-        <!-- 2. The change, measured by the runner rather than reported by the agent. -->
-        <div class="flex flex-wrap gap-x-4 gap-y-1">
-          <span v-if="meta?.fix?.files_changed !== undefined">
-            <b class="font-mono tabular-nums">{{ meta.fix.files_changed }}</b> <span class="text-label">files</span>
-          </span>
-          <span v-if="meta?.fix?.lines_changed !== undefined">
-            <b class="font-mono tabular-nums">{{ meta.fix.lines_changed }}</b> <span class="text-label">lines</span>
-          </span>
-          <span v-if="meta?.fix?.tests_added !== undefined">
-            <b class="font-mono tabular-nums">{{ meta.fix.tests_added }}</b> <span class="text-label">tests added</span>
-          </span>
-          <span v-if="repos.length">
-            <b class="font-mono tabular-nums">{{ repos.reduce((n, r) => n + (r.commits?.length ?? 0), 0) }}</b>
-            <span class="text-label"> commits across {{ repos.length }} repo(s)</span>
-          </span>
-        </div>
-        <div v-if="repos.length" class="space-y-0.5">
-          <div v-for="r in repos" :key="r.repo" class="flex gap-2 t-small">
-            <span class="font-mono truncate">{{ r.repo }}</span>
-            <a v-if="r.pr" :href="r.pr" target="_blank" rel="noopener" class="underline shrink-0" style="color: var(--accent);">
-              {{ r.pr.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}
-            </a>
-            <span v-else class="text-label shrink-0">no pull request yet</span>
-          </div>
-        </div>
+      <!-- Did it pass, as the record holds it. -->
+      <div class="flex flex-wrap gap-x-4 gap-y-1.5">
+        <StatusLabel v-if="tests" :status="tests.passed ? 'completed' : 'failed'" :label="`Tests after the fix: ${tests.label}`" :title="`from ${tests.from}`" />
+        <span v-else class="text-label">No machine-readable test report in the bundle</span>
+        <StatusLabel
+          v-if="meta?.security?.verdict" :status="securityOk ? 'completed' : 'paused'"
+          :label="`Security ${meta.security.verdict}${meta.security.high ? ` · ${meta.security.high} high` : ''}${meta.security.medium ? ` · ${meta.security.medium} medium` : ''}`"
+        />
+        <StatusLabel v-if="meta?.deployment?.migration_changed" status="paused" :label="`Changes a database migration${meta.deployment.rollback ? ` · rollback: ${meta.deployment.rollback}` : ''}`" />
+        <span v-if="meta?.oracle?.kind" class="text-label">Oracle {{ meta.oracle.kind }}<template v-if="meta.oracle.runs">, {{ meta.oracle.runs }} run(s)</template></span>
+      </div>
+      <p v-if="adversarialMissing" class="m-0" style="color: var(--error);">
+        This change is <span class="font-mono">{{ run.blastRadius }}</span>, which the evidence-bundle
+        schema requires an adversarial report for — and the bundle has none.
+      </p>
 
-        <!-- 2b. Why this class, in intake's words. Missing reads as missing. -->
-        <p v-if="run.blastRadius && meta?.blast_radius_reason" class="m-0 t-small">
-          <span class="text-label">Why <span class="font-mono">{{ run.blastRadius }}</span>:</span> {{ meta.blast_radius_reason }}
-        </p>
-        <p v-else-if="run.blastRadius" class="m-0 t-small text-label">
-          Intake recorded no reason for classifying this <span class="font-mono">{{ run.blastRadius }}</span>.
-        </p>
-
-        <!-- 2c. What changed: the commit subjects are the change described in
-             its author's words, and the file list is what to read. -->
-        <div v-if="changes?.commits.length" class="space-y-0.5">
-          <div v-for="c in changes.commits" :key="c.sha" class="flex gap-2 t-small">
-            <span class="font-mono text-label shrink-0">{{ c.sha.slice(0, 9) }}</span>
-            <span style="color: var(--text-primary);">{{ c.subject }}</span>
-          </div>
+      <!-- What approving gains and risks, in the implementer's words. -->
+      <div v-if="brief" class="space-y-2">
+        <p class="verdict-gist" :class="{ 'verdict-gist--open': situationOpen }">{{ brief.situation }}</p>
+        <button v-if="brief.situation.length > 260" class="t-small focus-ring rounded" style="color: var(--accent);" :aria-expanded="situationOpen" @click="situationOpen = !situationOpen">
+          {{ situationOpen ? 'Show less' : 'Show more' }}
+        </button>
+        <div v-if="openQuestions.length" class="group-card p-3! space-y-2">
+          <h3 class="t-ui font-semibold m-0 text-strong">Intake questions still open</h3>
+          <dl class="m-0 space-y-2">
+            <div v-for="(q, i) in openQuestions" :key="i"><dt class="font-medium text-strong">{{ q.question }}</dt><dd class="m-0 text-label whitespace-pre-wrap">{{ q.answer }}</dd></div>
+          </dl>
         </div>
-        <details v-if="changes?.files.length" class="t-small">
-          <summary class="cursor-pointer text-label">{{ changes.files.length }} changed file(s)</summary>
-          <div v-for="f in changes.files" :key="f.path" class="flex gap-2 font-mono mt-0.5">
-            <span class="tabular-nums shrink-0" style="color: var(--success);">+{{ f.added ?? '?' }}</span>
-            <span class="tabular-nums shrink-0" style="color: var(--error);">−{{ f.removed ?? '?' }}</span>
-            <span class="truncate" :title="f.path">{{ f.path }}</span>
+        <div class="verdict-options">
+          <details v-for="o in briefOptions" :key="o.key">
+            <summary class="focus-ring">
+              <UIcon name="i-lucide-chevron-right" class="chev" />
+              <span class="min-w-0 flex-1">
+                <span class="block font-semibold line-clamp-2" style="color: var(--text-primary);">{{ o.name }}</span>
+                <span class="block text-label line-clamp-2">{{ o.delivers }}</span>
+              </span>
+              <span v-if="o.level" class="verdict-risk" :class="`verdict-risk--${o.level}`"><i aria-hidden="true" />{{ RISK_WORD[o.level] }}</span>
+            </summary>
+            <dl class="verdict-facts">
+              <dt>What happens</dt><dd>{{ o.next }}</dd>
+              <dt>Left open</dt><dd>{{ o.leaves }}</dd>
+              <template v-if="o.riskText"><dt>Risk</dt><dd>{{ o.riskText }}</dd></template>
+            </dl>
+          </details>
+        </div>
+        <p v-if="brief.recommendation" class="m-0 text-label">
+          <b style="color: var(--text-primary);">The step recommends ({{ brief.recommendation.option.replace(/[()]/g, '') }}):</b> {{ brief.recommendation.why }}
+        </p>
+      </div>
+      <p v-else-if="briefPending" class="m-0 text-label flex items-center gap-1.5">
+        <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
+        The step that made this change is writing what approving gains and risks. It shows here when it is done.
+      </p>
+
+      <!-- The change itself, and the reports, folded. -->
+      <div class="verdict-options">
+        <details v-if="changes?.commits.length || changes?.files.length || repos.length">
+          <summary class="focus-ring">
+            <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">The change</span>
+            <span class="text-label">{{ changes?.files.length ?? meta?.fix?.files_changed ?? 0 }} files</span>
+          </summary>
+          <div class="verdict-body space-y-2">
+            <div v-for="r in repos" :key="r.repo" class="flex gap-2">
+              <span class="font-mono truncate">{{ r.repo }}</span>
+              <a v-if="r.pr && !r.pr.includes('example.invalid')" :href="r.pr" target="_blank" rel="noopener" class="underline shrink-0" style="color: var(--accent);">
+                {{ r.pr.replace(/^https?:\/\/(www\.)?github\.com\//, '') }}
+              </a>
+              <span v-else class="text-label shrink-0">no pull request yet</span>
+            </div>
+            <div v-for="c in changes?.commits ?? []" :key="c.sha" class="flex gap-2">
+              <span class="font-mono text-label shrink-0">{{ c.sha.slice(0, 9) }}</span>
+              <span style="color: var(--text-primary);">{{ c.subject }}</span>
+            </div>
+            <div v-for="f in changes?.files ?? []" :key="f.path" class="flex gap-2 font-mono">
+              <span class="tabular-nums shrink-0" style="color: var(--success);">+{{ f.added ?? '?' }}</span>
+              <span class="tabular-nums shrink-0" style="color: var(--error);">−{{ f.removed ?? '?' }}</span>
+              <span class="truncate" :title="f.path">{{ f.path }}</span>
+            </div>
           </div>
         </details>
-
-        <!-- 2d. What approving gains and risks, in the implementer's words. -->
-        <RunDecisionBrief v-if="brief" :brief="brief" :can-answer="false" approval />
-        <p v-else-if="briefPending" class="m-0 t-small text-label flex items-center gap-1.5">
-          <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
-          The step that made this change is writing its advantages and disadvantages. It shows here when it is done.
-        </p>
-        <p v-else class="m-0 t-small text-label">The step that made this change wrote no brief of its advantages and disadvantages.</p>
-
-        <!-- 3. Did it reproduce, and does it pass now. -->
-        <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">
-          <span v-if="meta?.oracle?.kind">
-            <span class="text-label">Oracle</span> {{ meta.oracle.kind }}<template v-if="meta.oracle.runs">, {{ meta.oracle.runs }} run(s)</template><template v-if="meta.oracle.rows">, {{ meta.oracle.rows }} row(s)</template>
-          </span>
-          <span v-if="tests" :style="{ color: tests.passed ? 'var(--success)' : 'var(--error)' }" :title="`from ${tests.from}`">
-            Tests after the fix: {{ tests.label }}
-          </span>
-          <span v-else-if="!loading" class="text-label">No machine-readable test report in the bundle.</span>
-        </div>
-
-        <!-- 4. Security and deployment, as the record holds them. -->
-        <div class="flex flex-wrap gap-x-4 gap-y-1 t-small">
-          <span v-if="meta?.security?.verdict">
-            <span class="text-label">Security</span>
-            <span :style="{ color: meta.security.verdict.toLowerCase().includes('pass') || meta.security.verdict.toLowerCase().includes('clean') ? 'var(--success)' : 'var(--warning)' }">
-              {{ meta.security.verdict }}
-            </span>
-            <span v-if="meta.security.high" style="color: var(--error);"> · {{ meta.security.high }} high</span>
-            <span v-if="meta.security.medium" class="text-label"> · {{ meta.security.medium }} medium</span>
-          </span>
-          <span v-if="meta?.deployment?.migration_changed" style="color: var(--warning);">
-            Changes a database migration<template v-if="meta.deployment.rollback"> · rollback: {{ meta.deployment.rollback }}</template>
-          </span>
-        </div>
-
-        <p v-if="adversarialMissing" class="m-0 t-small" style="color: var(--error);">
-          This change is <span class="font-mono">{{ run.blastRadius }}</span>, which the evidence-bundle
-          schema requires an adversarial report for — and the bundle has none.
-        </p>
-
-        <!-- 5. What the pipeline thought of itself on the way here. -->
-        <div class="flex flex-wrap gap-x-4 gap-y-1 t-small text-label">
-          <span v-for="s in run.steps.filter(st => st.monitorVerdict && st.monitorVerdict !== 'CONTINUE')" :key="s.stepId" :title="s.monitorNote || ''">
-            <span class="font-mono">{{ s.monitorVerdict }}</span> at {{ s.label }}
-          </span>
-          <span v-for="s in run.steps.filter(st => st.visits > 1)" :key="`v-${s.stepId}`">
-            {{ s.label }} ran {{ s.visits }}×
-          </span>
-        </div>
-
-        <div v-if="presentReports.length" class="flex flex-wrap gap-x-3 gap-y-1 t-small">
-          <span class="text-label">Reports:</span>
-          <a
-            v-for="r in presentReports" :key="r.file" :href="`/api/runs/${run.id}/artifacts/${r.file}`"
-            target="_blank" rel="noopener" class="font-mono underline" style="color: var(--accent);"
-          >{{ r.label }}</a>
-        </div>
-      </template>
-    </div>
+        <details v-if="presentReports.length">
+          <summary class="focus-ring">
+            <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">Reports</span>
+            <span class="text-label">{{ presentReports.length }}</span>
+          </summary>
+          <div class="verdict-body flex flex-wrap gap-x-3 gap-y-1">
+            <a
+              v-for="r in presentReports" :key="r.file" :href="`/api/runs/${run.id}/artifacts/${r.file}`"
+              target="_blank" rel="noopener" class="underline" style="color: var(--accent);"
+            >{{ r.label }}</a>
+          </div>
+        </details>
+        <details v-if="pipelineNotes.length">
+          <summary class="focus-ring">
+            <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">What the pipeline noted on the way</span>
+            <span class="text-label">{{ pipelineNotes.length }}</span>
+          </summary>
+          <ul class="verdict-body space-y-1"><li v-for="n in pipelineNotes" :key="n.key" :title="n.title">{{ n.text }}</li></ul>
+        </details>
+      </div>
+    </template>
   </div>
 </template>
+
+<style scoped>
+.verdict-gist { margin: 0; font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.verdict-gist--open { display: block; }
+.verdict-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); background: var(--surface-raised); border-radius: 12px; box-shadow: 0 0 0 0.5px var(--border-default); overflow: hidden; }
+.verdict-stats > div { padding: 10px 14px; border-left: 0.5px solid var(--border-subtle); }
+.verdict-stats > div:first-child { border-left: 0; }
+.verdict-stats b { display: block; font-size: 17px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.verdict-stats span { font-size: 12px; color: var(--text-tertiary); }
+.verdict-options { background: var(--surface-raised); border-radius: 12px; box-shadow: 0 0 0 0.5px var(--border-default); overflow: hidden; }
+.verdict-options:empty { display: none; }
+.verdict-options details { border-top: 0.5px solid var(--border-subtle); }
+.verdict-options details:first-child { border-top: 0; }
+.verdict-options summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; }
+.verdict-options summary::-webkit-details-marker { display: none; }
+.verdict-options summary:hover { background: var(--surface-hover); }
+.verdict-options .chev { width: 14px; height: 14px; color: var(--text-tertiary); flex: none; transition: transform 0.15s; }
+.verdict-options details[open] > summary .chev { transform: rotate(90deg); }
+.verdict-body { padding: 0 14px 12px 38px; margin: 0; color: var(--text-secondary); }
+.verdict-facts { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 6px 12px; margin: 0; padding: 0 14px 12px 38px; }
+.verdict-facts dt { color: var(--text-tertiary); }
+.verdict-facts dd { margin: 0; color: var(--text-primary); }
+.verdict-risk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.verdict-risk i { width: 7px; height: 7px; border-radius: 2px; background: currentColor; }
+.verdict-risk--low { color: var(--success); }
+.verdict-risk--medium { color: var(--warning); }
+.verdict-risk--high { color: var(--error); }
+@media (max-width: 640px) {
+  .verdict-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; padding-left: 14px; }
+}
+</style>

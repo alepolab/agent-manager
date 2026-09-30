@@ -14,7 +14,7 @@ const emit = defineEmits<{
   <div class="flex flex-col h-full overflow-hidden">
     <div class="px-4 py-2 border-b flex items-center justify-between" style="border-color: var(--border-subtle); background: var(--surface-raised);">
       <div class="flex items-center gap-2">
-        <span class="t-small font-bold uppercase tracking-wider text-meta">Git</span>
+        <span class="t-small font-semibold text-meta">Git</span>
         <span v-if="status?.branch" class="t-small font-mono px-1.5 py-0.5 rounded-full" style="background: var(--accent-muted); color: var(--accent);">
           <UIcon name="i-lucide-git-branch" class="size-2.5 inline mr-1" />
           {{ status.branch }}
@@ -40,8 +40,8 @@ const emit = defineEmits<{
         <!-- Staged Changes -->
         <div v-if="status.staged?.length" class="space-y-2">
           <div class="flex items-center justify-between">
-            <h4 class="t-small font-bold uppercase tracking-wider text-meta">Staged Changes</h4>
-            <span class="t-small font-mono" style="color: var(--text-tertiary);">{{ status.staged.length }}</span>
+            <h4 class="t-small font-semibold text-meta">Staged Changes</h4>
+            <span class="t-small tabular-nums" style="color: var(--text-tertiary);">{{ status.staged.length }}</span>
           </div>
           <div class="space-y-1">
             <button 
@@ -58,8 +58,8 @@ const emit = defineEmits<{
         <!-- Modified -->
         <div v-if="status.modified?.length" class="space-y-2">
           <div class="flex items-center justify-between">
-            <h4 class="t-small font-bold uppercase tracking-wider text-meta">Modified</h4>
-            <span class="t-small font-mono" style="color: var(--text-tertiary);">{{ status.modified.length }}</span>
+            <h4 class="t-small font-semibold text-meta">Modified</h4>
+            <span class="t-small tabular-nums" style="color: var(--text-tertiary);">{{ status.modified.length }}</span>
           </div>
           <div class="space-y-1">
             <button 
@@ -76,8 +76,8 @@ const emit = defineEmits<{
         <!-- Untracked -->
         <div v-if="status.untracked?.length" class="space-y-2">
           <div class="flex items-center justify-between">
-            <h4 class="t-small font-bold uppercase tracking-wider text-meta">Untracked</h4>
-            <span class="t-small font-mono" style="color: var(--text-tertiary);">{{ status.untracked.length }}</span>
+            <h4 class="t-small font-semibold text-meta">Untracked</h4>
+            <span class="t-small tabular-nums" style="color: var(--text-tertiary);">{{ status.untracked.length }}</span>
           </div>
           <div class="space-y-1">
             <button 
@@ -94,8 +94,8 @@ const emit = defineEmits<{
         <!-- Deleted -->
         <div v-if="status.deleted?.length" class="space-y-2">
           <div class="flex items-center justify-between">
-            <h4 class="t-small font-bold uppercase tracking-wider text-meta">Deleted</h4>
-            <span class="t-small font-mono" style="color: var(--text-tertiary);">{{ status.deleted.length }}</span>
+            <h4 class="t-small font-semibold text-meta">Deleted</h4>
+            <span class="t-small tabular-nums" style="color: var(--text-tertiary);">{{ status.deleted.length }}</span>
           </div>
           <div class="space-y-1">
             <div 

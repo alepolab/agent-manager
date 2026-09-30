@@ -167,11 +167,20 @@ try {
   mkdirSync(join(claudeDir, 'workflows'), { recursive: true })
   mkdirSync(join(claudeDir, 'workflow-runs'), { recursive: true })
 
-  // The real Runbook A workflow definition, not a stand-in - this is what's actually
-  // deployed, so the test exercises the real shape (7 steps, monitors, branches).
-  const workflowSourcePath = join(repoRoot, 'docker/claude-config/workflows/runbook-a-ticket-to-evidence-backed-pr.json')
-  const workflow = JSON.parse(readFileSync(workflowSourcePath, 'utf8'))
-  const slug = 'runbook-a-ticket-to-evidence-backed-pr'
+  // The real Runbook A workflow definition, not a stand-in: built from the
+  // template the team sync writes (server/utils/teamSync.ts runbookSteps), so
+  // the test exercises the shape that is actually deployed. It read a
+  // docker/claude-config copy that was never committed, and could not run.
+  const { workflowTemplates, materializeTemplateSteps, RUNBOOK_FILES } = await import('../app/utils/workflowTemplates.ts')
+  const runbook = workflowTemplates.find(t => t.id === 'runbook-a-jira-to-diff')
+  assert.ok(runbook, 'Runbook A template must exist in app/utils/workflowTemplates.ts')
+  const agentSlugs = {}
+  for (const st of runbook.steps) {
+    agentSlugs[st.agentTemplateId] = st.agentTemplateId
+    if (st.monitorSlug) agentSlugs[st.monitorSlug] = st.monitorSlug
+  }
+  const workflow = { name: runbook.name, description: runbook.description, parameters: runbook.parameters, steps: materializeTemplateSteps(runbook, agentSlugs) }
+  const slug = RUNBOOK_FILES['runbook-a-jira-to-diff']
   writeFileSync(join(claudeDir, 'workflows', `${slug}.json`), JSON.stringify(workflow, null, 2))
 
   const [stepIntake, stepStack, stepTest] = workflow.steps
@@ -311,10 +320,11 @@ try {
       `Card for step "${expected.stepId}" is visible, but its text does not carry the label "${expected.label}". Text:\n${cardText}`,
     )
 
-    const dotLabel = await card.locator('[role="img"][aria-label]').first().getAttribute('aria-label')
+    // The card's status is a StatusLabel (glyph plus word); `data-status` carries the raw status.
+    const dotLabel = await card.locator('[data-status]').first().getAttribute('data-status')
     assert.equal(
       dotLabel, STATUS_DOT_LABEL[expected.status],
-      `Step "${expected.label}" card is visible, but its status dot's aria-label is "${dotLabel}", not "${expected.status}"`,
+      `Step "${expected.label}" card is visible, but its status label reads "${dotLabel}", not "${expected.status}"`,
     )
   }
 
@@ -324,7 +334,7 @@ try {
   const countEl = page.locator('[data-testid="run-progress-count"]')
   await countEl.waitFor({ state: 'visible', timeout: 30_000 })
   const countText = (await countEl.textContent()).replace(/\s+/g, ' ').trim()
-  assert.equal(countText, '1 / 3', `progress count must report settled steps, got "${countText}"`)
+  assert.equal(countText, '1 of 3', `progress count must report settled steps, got "${countText}"`)
 
   const segments = page.locator('[data-testid="run-progress-bar"] > span')
   assert.equal(await segments.count(), 3,
@@ -353,7 +363,7 @@ try {
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: LOAD_GOTO_TIMEOUT_MS })
         await page.waitForFunction(
-          () => document.querySelector('ul[aria-live="polite"]') !== null,
+          () => document.querySelector('[data-testid="run-list"]') !== null,
           null, { timeout: LOAD_WAIT_TIMEOUT_MS },
         )
         return
@@ -367,7 +377,7 @@ try {
 
   // Exactly one row: a locator that fails loudly if the seeded run is missing
   // (zero rows) or duplicated (two rows) rather than silently picking "first".
-  const runRows = page.locator('ul[aria-live="polite"] > li button')
+  const runRows = page.locator('[data-testid="run-list"] [data-testid="run-history-row"]')
   await runRows.first().waitFor({ state: 'visible', timeout: 30_000 })
   assert.equal(await runRows.count(), 1,
     'the history page must list exactly the one seeded run, found via GET /api/runs rather than a workflow slug')
@@ -377,7 +387,7 @@ try {
   // actually the thing that opens the detail pane rather than a coincidence.
   await runRows.first().click()
   await page.waitForFunction(
-    () => document.querySelector('ul[aria-live="polite"] > li button')?.getAttribute('aria-current') === 'true',
+    () => document.querySelector('[data-testid="run-list"] [data-testid="run-history-row"]')?.getAttribute('aria-current') === 'true',
     null, { timeout: ROW_VISIBLE_TIMEOUT_MS },
   )
 
@@ -387,12 +397,12 @@ try {
   // the detail pane renders): the run's own row in the list on the left also
   // carries a `run-progress-bar` (app/pages/runs/index.vue renders one per
   // row), so an unscoped query here double-counts both bars' segments.
-  const pane = page.locator('section').filter({ has: page.locator('article[data-step]') })
+  const pane = page.locator('[data-testid="run-detail"]')
 
   const paneCountEl = pane.locator('[data-testid="run-progress-count"]')
   await paneCountEl.waitFor({ state: 'visible', timeout: 30_000 })
   const paneCountText = (await paneCountEl.textContent()).replace(/\s+/g, ' ').trim()
-  assert.equal(paneCountText, '1 / 3',
+  assert.equal(paneCountText, '1 of 3',
     `the /runs detail pane must report the same settled count as the panel, got "${paneCountText}"`)
 
   const paneSegments = pane.locator('[data-testid="run-progress-bar"] > span')

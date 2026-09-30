@@ -181,23 +181,15 @@ if (import.meta.client) {
 
     <div v-else-if="plugin" class="px-6 py-5 space-y-6">
       <!-- Plugin info card -->
-      <div
-        class="rounded-xl overflow-hidden"
-        style="border: 1px solid var(--border-subtle);"
-      >
-        <div class="relative px-5 pt-6 pb-5" style="background: var(--surface-raised);">
-          <!-- Top accent bar -->
-          <div
-            class="absolute inset-x-0 top-0 h-[3px]"
-            :style="{ background: plugin.enabled ? 'var(--success, #22c55e)' : 'var(--text-disabled)' }"
-          />
+      <div class="group-card p-0! overflow-hidden">
+        <div class="px-5 pt-5 pb-4">
 
           <div class="flex items-start gap-4">
             <div
-              class="size-11 rounded-xl flex items-center justify-center shrink-0"
-              style="background: var(--badge-subtle-bg); border: 1px solid var(--border-subtle);"
+              class="size-10 rounded-lg flex items-center justify-center shrink-0"
+              style="background: var(--surface-hover);"
             >
-              <UIcon name="i-lucide-puzzle" class="size-5" style="color: var(--accent);" />
+              <UIcon name="i-lucide-puzzle" class="size-5 text-label" />
             </div>
 
             <div class="flex-1 min-w-0 pt-0.5">
@@ -205,17 +197,8 @@ if (import.meta.client) {
                 <span class="t-body font-semibold tracking-tight truncate">
                   {{ plugin.name }}
                 </span>
-                <span
-                  class="t-small font-mono font-medium px-2 py-0.5 rounded-full shrink-0 badge badge-subtle"
-                >
-                  v{{ plugin.version }}
-                </span>
-                <span
-                  class="t-small font-mono font-medium px-2 py-0.5 rounded-full shrink-0 badge"
-                  :class="plugin.enabled ? 'badge-success' : 'badge-subtle'"
-                >
-                  {{ plugin.enabled ? 'enabled' : 'disabled' }}
-                </span>
+                <span class="t-small font-mono text-meta shrink-0">v{{ plugin.version }}</span>
+                <StatusLabel :status="plugin.enabled ? 'completed' : 'idle'" :label="plugin.enabled ? 'Enabled' : 'Disabled'" />
               </div>
               <p v-if="plugin.description" class="t-small mt-1 leading-relaxed text-label">
                 {{ plugin.description }}
@@ -225,39 +208,41 @@ if (import.meta.client) {
         </div>
 
         <!-- Metadata -->
-        <div class="px-5 py-3 flex items-center gap-6 flex-wrap" style="background: var(--surface-base); border-top: 1px solid var(--border-subtle);">
+        <div class="px-5 py-3 flex items-center gap-6 flex-wrap" style="border-top: 0.5px solid var(--border-default);">
           <div class="flex items-center gap-1.5">
             <span class="t-small text-meta">Marketplace</span>
             <span class="font-mono t-small text-body">{{ plugin.marketplace }}</span>
           </div>
           <div v-if="plugin.author" class="flex items-center gap-1.5">
             <span class="t-small text-meta">Author</span>
-            <span class="font-mono t-small text-body">{{ plugin.author.name }}</span>
+            <span class="t-small text-body tabular-nums">{{ plugin.author.name }}</span>
           </div>
           <div class="flex items-center gap-1.5">
             <span class="t-small text-meta">Installed</span>
-            <span class="font-mono t-small text-body">{{ formatDate(plugin.installedAt) }}</span>
+            <span class="t-small text-body tabular-nums">{{ formatDate(plugin.installedAt) }}</span>
           </div>
           <div class="flex items-center gap-1.5">
             <span class="t-small text-meta">Skills</span>
-            <span class="font-mono t-small text-body">{{ plugin.skillDetails.length }}</span>
+            <span class="t-small text-body tabular-nums">{{ plugin.skillDetails.length }}</span>
           </div>
         </div>
       </div>
 
       <!-- Skills -->
       <div v-if="plugin.skillDetails.length">
-        <h3 class="text-section-label mb-3">Skills</h3>
-        <div class="space-y-2">
+        <div class="group-head">
+          <h3>Skills</h3>
+          <span class="group-head__count">{{ plugin.skillDetails.length }}</span>
+        </div>
+        <div class="inset-list overflow-hidden">
           <div
-            v-for="skill in plugin.skillDetails"
+            v-for="(skill, i) in plugin.skillDetails"
             :key="skill.slug"
-            class="rounded-xl overflow-hidden"
-            style="border: 1px solid var(--border-subtle);"
+            :style="i ? { borderTop: '0.5px solid var(--border-default)' } : undefined"
           >
             <!-- Skill header (clickable) -->
             <button
-              class="w-full flex items-center gap-3 px-4 py-3 text-left hover-bg"
+              class="w-full flex items-center gap-3 px-4 py-2.5 text-left hover-bg focus-ring"
               :style="{ background: editingSkill === skill.slug ? 'var(--surface-raised)' : undefined }"
               @click="toggleSkillEditor(skill.slug)"
             >
@@ -270,20 +255,20 @@ if (import.meta.client) {
               </span>
               <span
                 v-if="skill.frontmatter.context"
-                class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-subtle"
+                class="t-small px-1.5 py-px rounded shrink-0 badge badge-subtle"
               >
                 {{ skill.frontmatter.context }}
               </span>
               <span
                 v-if="skill.frontmatter.agent"
-                class="t-small font-mono px-1.5 py-px rounded-full shrink-0 badge badge-agent"
+                class="t-small shrink-0 text-meta"
               >
-                agent: {{ skill.frontmatter.agent }}
+                {{ skill.frontmatter.agent }}
               </span>
               <span class="flex-1 t-small truncate text-label">
                 {{ skill.frontmatter.description }}
               </span>
-              <span class="font-mono t-small shrink-0 text-meta">
+              <span class="t-small shrink-0 text-meta tabular-nums">
                 {{ Math.round((skill.body?.length ?? 0) / 100) / 10 }}k chars
               </span>
             </button>
@@ -318,7 +303,7 @@ if (import.meta.client) {
                 <div class="flex items-center justify-between px-4 py-2.5" style="background: var(--surface-raised); border-bottom: 1px solid var(--border-subtle);">
                   <h4 class="text-section-label">Instructions</h4>
                   <div class="flex items-center gap-3">
-                    <span class="font-mono t-small text-meta">
+                    <span class="t-small text-meta tabular-nums">
                       {{ bodyFor(skill.slug).split('\n').length }} lines
                     </span>
                     <span class="font-mono t-small text-meta">

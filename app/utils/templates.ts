@@ -56,11 +56,12 @@ These hold at every step in this pipeline, not just this one:
 - **Ask when only a person can answer.** If you reach a decision that is genuinely the developer's — two behaviours the ticket could mean, a credential or access you do not have, an action that cannot be undone — end your output with one line, \`PIPELINE-ASK: <one precise question>\`, and stop. The run pauses, the developer answers, and you run again with your previous output and their answer. Never ask what the ticket, the repository or the run artifacts can tell you; a question that a search would have answered wastes a person's time.
 
   The person answering has not read the ticket, the repository or your report, and sees your question in an inbox. So before the \`PIPELINE-ASK:\` line, write \`decision.json\` into the run artifacts directory - the inbox lays it out, and a question without it is sent back to you:
+  - \`headline\`: the question in under twelve plain words, with no file, method or class names - the inbox lists and titles it with this. "Unlock one test so the race fix can land in PR #806?", not the \`PIPELINE-ASK:\` line again.
   - \`question\`: the same one-line question.
   - \`situation\`: two or three plain sentences - what you were doing and what stops you.
   - \`criteria\`: \`[{ "ref": "criterion 2", "text": "<its full text>" }]\` for every acceptance criterion you mention anywhere. Never "criteria 2-3" alone.
   - \`findings\`: one established fact per entry, with every module, file, ticket or number explained in words.
-  - \`options\`: \`[{ "key": "a", "label", "next": what the next step will do if chosen, "delivers": what the ticket ends up with, "leaves": what is left undone or becomes a follow-up, "risk" (optional) }]\`, at least two.
+  - \`options\`: \`[{ "key": "a", "title": the option in two to six words, "label": the option in a sentence, "next": what the next step will do if chosen, "delivers": what the ticket ends up with, "leaves": what is left undone or becomes a follow-up, "risk" (optional, starting with Low, Medium or High) }]\`, at least two. The person picks by \`title\` and weighs by \`risk\`; the rest opens when they select it.
   - \`recommendation\`: \`{ "option": "a", "why": "<one sentence>" }\`.
 
   A real run asked whether to "(a) fix the \`trouble-ticket\` 0.3062-vs-0.32 ratchet breach … (b) additionally raise one named module … or (c) narrow the oracle to criterion 4", and the developer could not answer: they had never seen criteria 2-4, did not know what trouble-ticket was, and could not tell what any option would lead to. The \`PIPELINE-ASK:\` line itself stays one short question.
@@ -196,11 +197,12 @@ const CHANGE_BRIEF = `## The reviewer's brief
 
 A person may have to approve this change at a gate before it goes further, and they have not read the ticket, the code or your report. Write \`change-brief.json\` into the run artifacts directory, in plain words, every term explained:
 
+- \`headline\` - the change in under twelve plain words, no file names: "Pin the production image to a digest?"
 - \`question\` - "Approve <ticket>: <the change in one line>?"
 - \`situation\` - two or three sentences: what the ticket asked, what was actually wrong (or that nothing was), and what you changed.
 - \`criteria\` - \`{ ref, text }\` with the full text of every acceptance criterion you mention.
 - \`findings\` - one fact per entry: the test results before and after with counts, what else was run, who calls the changed code and whether any of them now behaves differently, and anything you could not verify.
-- \`options\` - at least approve and send back, each \`{ key, label, next, delivers, leaves, risk }\`: \`next\` is what the pipeline does if it is chosen, \`delivers\` the advantages (what the ticket and the product gain), \`leaves\` the disadvantages (what stays open or could go wrong), \`risk\` the worst plausible outcome, if there is one worth naming.
+- \`options\` - at least approve and send back, each \`{ key, title, label, next, delivers, leaves, risk }\`: \`title\` is two to six words, \`next\` is what the pipeline does if it is chosen, \`delivers\` the advantages (what the ticket and the product gain), \`leaves\` the disadvantages (what stays open or could go wrong), \`risk\` the worst plausible outcome, starting with Low, Medium or High, if there is one worth naming.
 - \`recommendation\` - \`{ option, why }\`.
 - \`open_questions\` - when intent.md or the context packet lists open questions, one \`{ question, answer, resolved }\` for every one of them, \`question\` copied from the list: how it was resolved and on what evidence, what you assumed and why, or that it is still open and which option above decides it. \`resolved\` is true only when evidence settled it; an assumption or a question still open is false. The reviewer sees only the unresolved ones. A question the brief leaves unanswered is one the reviewer has to answer blind.
 
@@ -2645,7 +2647,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <one precise question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <one precise question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`headline\` (the question in under twelve plain words), \`options\` (each with \`key\`, \`title\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`, and \`risk\` starting Low, Medium or High) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step's work.** If an instruction belongs to a later stage, note it and leave it.
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2778,7 +2780,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`headline\` (the question in under twelve plain words), \`options\` (each with \`key\`, \`title\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`, and \`risk\` starting Low, Medium or High) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -2904,7 +2906,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`headline\` (the question in under twelve plain words), \`options\` (each with \`key\`, \`title\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`, and \`risk\` starting Low, Medium or High) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**
@@ -3038,7 +3040,7 @@ These hold at every step in this pipeline, not just this one:
 - **Never touch a remote, and never rewrite history.** Committing locally is the whole of your git mandate.
 - **Check whether it already exists before you add it — including under another name.**
 - **Nothing under \`.agent/\` but \`plan.md\` is ever staged.**
-- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`options\` (each with \`key\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`) and \`recommendation\`. A question without it is sent back to you.
+- **Ask when only a person can answer.** End with \`PIPELINE-ASK: <question>\`, and stop. Before it, write \`decision.json\` into the run artifacts directory for someone who has not read the ticket or your report: \`question\`, \`situation\` (plain words), \`criteria\` (the full text of every criterion you mention), \`findings\`, \`headline\` (the question in under twelve plain words), \`options\` (each with \`key\`, \`title\`, \`label\`, \`next\`, \`delivers\`, \`leaves\`, and \`risk\` starting Low, Medium or High) and \`recommendation\`. A question without it is sent back to you.
 - **Do only your own step’s work.**
 - **A negative result is a failed search until you have widened it.**
 - **A placeholder that passes is worse than a failure that is honest.**

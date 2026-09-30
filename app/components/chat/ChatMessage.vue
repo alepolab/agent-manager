@@ -53,7 +53,7 @@ defineProps<{
             :class="{ 'chat-thinking-pulse': isStreaming && activity?.type === 'thinking' }"
             style="color: var(--text-disabled);"
           />
-          <span class="t-small font-mono" style="color: var(--text-disabled);">
+          <span class="t-small" style="color: var(--text-tertiary);">
             {{ isStreaming && activity?.type === 'thinking' ? 'Thinking...' : 'Thought process' }}
           </span>
         </summary>

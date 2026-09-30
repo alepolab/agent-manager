@@ -122,7 +122,7 @@ function dismissSuggestion() {
       </div>
       <pre class="t-small leading-relaxed whitespace-pre-wrap max-h-[150px] overflow-y-auto" style="color: var(--text-secondary); font-family: var(--font-mono);">{{ suggestion }}</pre>
       <div class="flex gap-2">
-        <button class="px-3 py-1 rounded-lg t-small font-medium transition-all" style="background: var(--accent); color: white;" @click="acceptSuggestion">Accept</button>
+        <button class="px-3 py-1 rounded-lg t-small font-medium transition-all" style="background: var(--accent); color: var(--on-accent);" @click="acceptSuggestion">Accept</button>
         <button class="px-3 py-1 rounded-lg t-small font-medium transition-all hover-bg" style="color: var(--text-tertiary);" @click="dismissSuggestion">Dismiss</button>
       </div>
     </div>
@@ -198,7 +198,7 @@ function dismissSuggestion() {
   right: 0.75rem;
   font-size: 0.65rem;
   font-family: var(--font-mono, ui-monospace, monospace);
-  color: rgba(205, 214, 244, 0.4);
+  color: rgba(205, 214, 244, 0.7);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   pointer-events: none;

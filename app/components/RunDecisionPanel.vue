@@ -151,14 +151,14 @@ async function submit() {
     <p v-else-if="!queue" class="text-label">Reading the drafts…</p>
     <p v-else-if="!items.length" class="text-label">There is nothing to decide in {{ queue.artifact }}.</p>
 
-    <div v-for="(item, n) in items" :key="item.index" class="rounded-lg px-3 py-2 space-y-1.5" style="background: var(--surface-base); border: 1px solid var(--border-subtle);">
+    <div v-for="(item, n) in items" :key="item.index" class="group-card px-3! py-2! space-y-1.5">
       <div class="flex items-center gap-2 flex-wrap">
-        <span class="font-mono t-label text-meta">[{{ n + 1 }}/{{ items.length }}]</span>
-        <span class="font-mono t-label uppercase text-label">{{ [item.key, ...facets(item.fields, item.entry)].join(' | ') }}</span>
+        <span class="t-label text-meta tabular-nums">[{{ n + 1 }}/{{ items.length }}]</span>
+        <span class="t-small font-medium text-label">{{ [item.key, ...facets(item.fields, item.entry)].join(' | ') }}</span>
         <span
           v-if="decisions[item.index]"
-          class="ml-auto font-mono t-label uppercase"
-          :style="{ color: decisions[item.index] === 'approved' ? 'var(--success)' : 'var(--text-disabled)' }"
+          class="ml-auto t-small font-medium capitalize"
+          :style="{ color: decisions[item.index] === 'approved' ? 'var(--success)' : 'var(--text-tertiary)' }"
         >{{ decisions[item.index] }}</span>
       </div>
 

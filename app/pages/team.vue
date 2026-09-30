@@ -121,8 +121,9 @@ const enforcementTitle = computed(() => {
   if (!e) return ''
   return e.error ?? e.checks.map(c => `${c.name}: ${c.armed ? 'armed' : 'NOT armed'}${c.source ? ` (${c.source})` : ''}`).join('\n')
 })
-const card = 'rounded-xl p-4'
-const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--border-subtle);'
+// One container shape across the app: a grouped panel with a hairline, no border box.
+const card = 'group-card'
+const cardStyle = ''
 </script>
 
 <template>
@@ -133,7 +134,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
         <UButton v-if="can('configure')" label="Apply team standards" icon="i-lucide-refresh-cw" size="sm" :loading="syncing === 'all'" :disabled="!status || status.drifted === 0 || !!syncing" @click="apply()" />
       </template>
     </PageHeader>
-    <div class="px-6 py-4 space-y-5 max-w-5xl">
+    <div class="page space-y-6">
       <p class="t-ui leading-relaxed text-label">
         The team's agents, skills, commands, workflow, watches, registry and hooks ship in the alepo-engineering plugin and the app's templates. This page shows what on this instance differs from them, and whether the plugin's hooks are actually armed. Applying rewrites only the team-owned files; everything else in the config directory is left alone.
       </p>
@@ -146,38 +147,44 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
       </div>
       <div v-else-if="loading && !status" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
       <template v-else-if="status">
-        <div :class="[card, 'grid grid-cols-2 md:grid-cols-5 gap-4 t-small']" :style="cardStyle">
-          <div>
-            <div class="text-label">Drift</div>
+        <!-- Four figures in the stat row. Workflows was a fifth column holding
+             eleven wrapped lines; it is a list of its own below. -->
+        <div class="stat-row">
+          <div class="stat-row__cell">
+            <div class="stat-row__key">Drift</div>
             <div class="font-medium" :style="{ color: status.drifted ? 'var(--warning)' : 'var(--success)' }">{{ status.drifted ? `${status.drifted} item(s) need attention` : 'in sync' }}</div>
             <div v-if="status.lastApplied" class="t-small text-label mt-0.5" :title="new Date(status.lastApplied.at).toLocaleString()">applied by {{ status.lastApplied.by }}, {{ status.lastApplied.items }} item(s)</div>
           </div>
-          <div>
-            <div class="text-label">Enforcement</div>
+          <div class="stat-row__cell">
+            <div class="stat-row__key">Enforcement</div>
             <div class="font-medium" :style="{ color: status.enforcement.ok ? 'var(--success)' : 'var(--error)' }" :title="enforcementTitle">{{ enforcementText }}</div>
             <div class="t-small text-label mt-0.5">{{ status.enforcement.checks.map(c => c.name).join(', ') || 'on this instance' }}</div>
           </div>
-          <div>
-            <div class="text-label">Plugin</div>
+          <div class="stat-row__cell">
+            <div class="stat-row__key">Plugin</div>
             <div class="font-medium" style="color: var(--text-primary);">{{ status.pluginVersion ? `alepo-engineering ${status.pluginVersion}` : 'not installed' }}</div>
             <div v-if="status.shippedVersion && status.pluginVersion && status.shippedVersion !== status.pluginVersion" class="t-small mt-0.5" style="color: var(--warning);">this build ships {{ status.shippedVersion }}; reinstall the plugin</div>
             <div v-else-if="!status.pluginVersion && status.shippedVersion" class="t-small text-label mt-0.5">using the copy shipped in the app, {{ status.shippedVersion }}</div>
           </div>
-          <div>
-            <div class="text-label">Registry</div>
+          <div class="stat-row__cell">
+            <div class="stat-row__key">Registry</div>
             <div class="font-medium" :style="{ color: status.registry.ok ? 'var(--text-primary)' : 'var(--error)' }" :title="status.registry.path ?? undefined">{{ status.registry.ok ? `${status.registry.products} products` : 'not readable' }}</div>
             <div class="t-small text-label mt-0.5">{{ sourceLabel(status.sources.registry) }}</div>
           </div>
-          <div>
-            <div class="text-label">Workflows</div>
-            <div v-for="w in status.workflows" :key="w.slug" class="font-medium" :style="{ color: color(w.state) }" :title="w.name">
-              {{ w.state }} · {{ w.steps }} steps
-              <NuxtLink :to="`/workflows/${w.slug}`" class="t-small text-label underline focus-ring font-normal">{{ w.name }}</NuxtLink>
-            </div>
-          </div>
         </div>
 
-        <div v-if="status.unresolvedSkills.length" class="rounded-xl px-4 py-3 t-small" style="background: rgba(217, 119, 6, 0.06); border: 1px solid rgba(217, 119, 6, 0.2);">
+        <section>
+          <div class="group-head"><h2>Workflows</h2><span class="group-head__count">{{ status.workflows.length }}</span></div>
+          <div class="inset-list inset-list--flush">
+            <NuxtLink v-for="w in status.workflows" :key="w.slug" :to="`/workflows/${w.slug}`" class="inset-row focus-ring">
+              <span class="inset-row__body"><span class="inset-row__title">{{ w.name }}</span></span>
+              <span class="inset-row__end">{{ w.steps }} steps</span>
+              <span class="t-small font-medium w-14 text-right" :style="{ color: color(w.state) }">{{ w.state }}</span>
+            </NuxtLink>
+          </div>
+        </section>
+
+        <div v-if="status.unresolvedSkills.length" class="gate-card t-small">
           <span class="font-medium" style="color: var(--warning);">{{ status.unresolvedSkills.length }} declared skill(s) do not resolve on this instance:</span>
           <span class="font-mono ml-1">{{ status.unresolvedSkills.join(', ') }}</span>.
           <span class="text-label">The agents that declare them run without those instructions, silently. Applying team standards seeds every skill the plugin ships.</span>
@@ -188,9 +195,9 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
           <p class="t-small text-label mb-2">A drifted item was changed on this instance. Open it to keep or promote the local version, or apply the team version. A missing item is safe to add.</p>
           <div v-for="r in attention" :key="r.key" class="py-1.5 t-small" style="border-top: 1px solid var(--border-subtle);">
             <div class="flex items-center gap-3">
-              <span class="t-small uppercase tracking-wide text-label w-16">{{ r.kind }}</span>
-              <NuxtLink v-if="r.to" :to="r.to" class="font-mono truncate focus-ring underline" :title="`Open ${r.label}`">{{ r.label }}</NuxtLink>
-              <span v-else class="font-mono truncate">{{ r.label }}</span>
+              <span class="t-small text-label w-16 capitalize">{{ r.kind }}</span>
+              <NuxtLink v-if="r.to" :to="r.to" class="font-medium truncate focus-ring hover:underline" :title="`Open ${r.label}`">{{ r.label }}</NuxtLink>
+              <span v-else class="font-medium truncate">{{ r.label }}</span>
               <span :style="{ color: color(r.state) }">{{ r.state }}</span>
               <UButton v-if="can('configure')" size="xs" variant="ghost" color="neutral" class="ml-auto" :label="r.state === 'drifted' ? 'Apply team version' : 'Add'" :loading="syncing === r.key" :disabled="!!syncing" @click="apply([r.key])" />
             </div>
@@ -206,8 +213,8 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
           <div :class="card" :style="cardStyle">
             <h2 class="t-small font-medium mb-2" style="color: var(--text-primary);">Agents</h2>
             <div v-for="a in byState(status.agents)" :key="a.id" class="flex items-center justify-between gap-2 t-small py-0.5">
-              <NuxtLink v-if="a.state !== 'missing'" :to="`/agents/${a.id}`" class="font-mono truncate focus-ring" :title="a.id">{{ a.id }}</NuxtLink>
-              <span v-else class="font-mono truncate" :title="a.id">{{ a.id }}</span>
+              <NuxtLink v-if="a.state !== 'missing'" :to="`/agents/${a.id}`" class="truncate focus-ring hover:underline" :title="a.id">{{ a.id }}</NuxtLink>
+              <span v-else class="truncate" :title="a.id">{{ a.id }}</span>
               <span :style="{ color: color(a.state) }">{{ a.state }}</span>
             </div>
           </div>
@@ -216,8 +223,8 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <p class="t-small text-label mb-2">{{ sourceLabel(status.sources.skills) }}</p>
             <p v-if="!status.skills.length" class="t-small text-label">None shipped.</p>
             <div v-for="s in byState(status.skills)" :key="s.name" class="flex items-center justify-between gap-2 t-small py-0.5">
-              <NuxtLink v-if="s.state !== 'missing'" :to="`/skills/${s.name}`" class="font-mono truncate focus-ring" :title="s.name">{{ s.name }}</NuxtLink>
-              <span v-else class="font-mono truncate" :title="s.name">{{ s.name }}</span>
+              <NuxtLink v-if="s.state !== 'missing'" :to="`/skills/${s.name}`" class="truncate focus-ring hover:underline" :title="s.name">{{ s.name }}</NuxtLink>
+              <span v-else class="truncate" :title="s.name">{{ s.name }}</span>
               <span :style="{ color: color(s.state) }">{{ s.state }}</span>
             </div>
           </div>
@@ -238,7 +245,7 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             <p class="t-small text-label mb-2">{{ sourceLabel(status.sources.watches) }}</p>
             <p v-if="!status.watches.length" class="t-small text-label">None defined in the registry.</p>
             <div v-for="w in byState(status.watches)" :key="w.id" class="flex items-center justify-between t-small py-0.5">
-              <NuxtLink to="/watches" class="font-mono focus-ring">{{ w.id }}</NuxtLink><span :style="{ color: color(w.state) }">{{ w.state }}</span>
+              <NuxtLink to="/watches" class="focus-ring hover:underline">{{ w.id }}</NuxtLink><span :style="{ color: color(w.state) }">{{ w.state }}</span>
             </div>
             <p class="t-small text-label mt-2">Seeded disabled. Enable one on the Watches page once its query has been checked against real tickets.</p>
           </div>
@@ -260,12 +267,12 @@ const cardStyle = 'background: var(--surface-raised); border: 1px solid var(--bo
             </p>
             <p v-if="!status.registry.items.length" class="t-small text-label">Registry not readable{{ status.registry.path ? ` at ${status.registry.path}` : '' }}.</p>
             <div v-for="p in status.registry.items" :key="p.key" class="flex items-center gap-2 t-small py-0.5">
-              <span class="font-mono">{{ p.key }}</span>
+              <span class="font-medium">{{ p.key }}</span>
               <span v-if="p.suite" class="text-label">{{ p.suite }}</span>
               <span class="text-label truncate ml-auto" :title="p.repos.join(', ')">{{ p.repos.length }} repo{{ p.repos.length === 1 ? '' : 's' }}</span>
               <!-- 'local' is drift and this page is about drift: the recipe in force
                    was edited here and no longer matches whatever the plugin ships. -->
-              <span class="t-small px-1.5 py-0.5 rounded" :style="{ color: p.recipeSource === 'local' ? 'var(--warning)' : p.recipe ? 'var(--success)' : 'var(--warning)', background: 'var(--surface-base)' }" :title="p.recipeSource === 'local' ? `recipes/${p.key}.md was edited in the config directory; the plugin's copy, if any, is hidden behind it on this machine` : p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? (p.recipeSource === 'local' ? 'recipe · local' : 'recipe') : 'no recipe' }}</span>
+              <span class="t-small" :style="{ color: p.recipeSource === 'local' || !p.recipe ? 'var(--warning)' : 'var(--text-tertiary)' }" :title="p.recipeSource === 'local' ? `recipes/${p.key}.md was edited in the config directory; the plugin's copy, if any, is hidden behind it on this machine` : p.recipe ? `recipes/${p.key}.md in the plugin tells the stack step how to bring this product up` : `No recipes/${p.key}.md in the plugin; the stack step improvises for this product`">{{ p.recipe ? (p.recipeSource === 'local' ? 'recipe · local' : 'recipe') : 'no recipe' }}</span>
             </div>
           </div>
         </div>

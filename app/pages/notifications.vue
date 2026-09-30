@@ -41,7 +41,9 @@ watch([items, loaded], () => {
     if (vanished.value !== selectedId.value) vanished.value = selectedId.value
     return
   }
-  if (!selectedId.value && mine.value[0]) select(mine.value[0].id)
+  // Only where the decision can sit beside the list: on a phone, opening one
+  // unasked would hide the list the person came to read.
+  if (!selectedId.value && mine.value[0] && import.meta.client && window.matchMedia('(min-width: 1024px)').matches) select(mine.value[0].id)
 }, { immediate: true })
 
 /** After a decision: refresh, then move to the next one that is mine. */
@@ -57,7 +59,16 @@ const icon = (n: NotificationItem) =>
   n.kind === 'permission' ? 'i-lucide-terminal-square' : n.review ? 'i-lucide-gavel' : 'i-lucide-hand'
 const kindLabel = (n: NotificationItem) =>
   n.kind === 'permission' ? 'Tool permission' : n.review ? 'Review' : 'Gate'
-const rail = (n: NotificationItem) => n.kind === 'permission' ? 'var(--accent)' : 'var(--warning)'
+
+/** The ask without the title the row already leads with, cut to its first sentence. */
+const askLine = (n: NotificationItem) => {
+  let a = n.ask
+  if (a.startsWith(`${n.title}: `)) a = a.slice(n.title.length + 2)
+  const stop = a.search(/\.\s/)
+  return stop > 0 ? a.slice(0, stop + 1) : a
+}
+/** Ticket keys are data and read in mono; a prompt's first line is prose. */
+const isKey = (t: string) => /^[A-Z][A-Z0-9]+-\d+$/.test(t)
 
 // Ticks the wait figures and the prompt countdowns without refetching.
 const now = ref(Date.now())
@@ -80,56 +91,59 @@ const waitTier = (n: NotificationItem) => {
   <div class="h-full flex flex-col">
     <PageHeader title="Notifications">
       <template #trailing>
-        <span class="t-small text-meta">{{ mine.length }}</span>
-      </template>
-      <template #subtitle>
-        <p class="t-small text-label">Decisions waiting on you, with what you need to take them.</p>
+        <span class="t-small text-meta font-normal">{{ mine.length }}</span>
       </template>
     </PageHeader>
 
-    <div class="flex-1 min-h-0 w-full grid gap-4 page page--wide grid-cols-1 lg:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)]">
-      <!-- The list -->
-      <div class="min-h-0 overflow-y-auto space-y-4 pr-1">
+    <!-- A split view: a scannable list and the decision beside it. The list
+         used to sit in a padded column of bordered cards, each repeating its
+         ticket key twice above a three-line ask. -->
+    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[23rem_minmax(0,1fr)]">
+      <div class="min-h-0 overflow-y-auto inbox-pane" :class="{ 'hidden lg:block': selectedId }">
         <!-- A failed poll keeps the list it had: an empty inbox that is empty
              because the API is down must not read as an all-clear. -->
-        <div v-if="error" class="rounded-lg px-3 py-2 flex items-center gap-3 t-small" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
-          <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
-          <span style="color: var(--error);">Could not refresh, so this list may be out of date.</span>
-          <button class="ml-auto underline focus-ring shrink-0" style="color: var(--error);" @click="fetchAll">Retry</button>
+        <div v-if="error" class="inbox-row">
+          <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0 mt-0.5" style="color: var(--error);" />
+          <span class="flex-1 t-small" style="color: var(--error);">Could not refresh, so this list may be out of date.</span>
+          <button class="t-small underline focus-ring shrink-0" style="color: var(--error);" @click="fetchAll">Retry</button>
         </div>
 
-        <div v-if="!loaded" class="space-y-2"><SkeletonCard v-for="i in 3" :key="i" /></div>
+        <div v-if="!loaded" class="p-4 space-y-2"><SkeletonCard v-for="i in 3" :key="i" /></div>
         <div v-else-if="!items.length && !error" class="flex flex-col items-center justify-center py-16 space-y-3">
-          <UIcon name="i-lucide-bell-off" class="size-8 text-meta" />
+          <UIcon name="i-lucide-inbox" class="size-8 text-meta" />
           <p class="t-ui text-label">Nothing needs a decision from you.</p>
         </div>
 
         <template v-else>
           <section v-for="group in [{ key: 'mine', label: 'Yours to decide', list: mine }, { key: 'others', label: 'Someone else\'s', list: others }]" :key="group.key">
             <template v-if="group.list.length">
-              <h2 class="text-section-label mb-2">{{ group.label }} <span class="text-meta font-normal">{{ group.list.length }}</span></h2>
-              <ul class="attn-list">
-                <li
-                  v-for="n in group.list" :key="n.id"
-                  class="inbox-row t-ui"
-                  :class="[`attn-row--${waitTier(n)}`, { 'attn-row--mine': n.mine, 'inbox-row--selected': n.id === selectedId }]"
-                  :style="{ '--rail': rail(n) }"
-                >
-                  <span class="attn-rail" aria-hidden="true" />
+              <h2 class="inbox-heading">{{ group.label }} <span class="font-normal">{{ group.list.length }}</span></h2>
+              <ul>
+                <li v-for="n in group.list" :key="n.id">
                   <button
-                    class="inbox-body focus-ring"
+                    class="inbox-row inbox-row--button focus-ring"
+                    :class="{ 'inbox-row--selected': n.id === selectedId }"
                     :aria-current="n.id === selectedId ? 'true' : undefined"
                     :aria-label="`${kindLabel(n)} — ${n.title}: ${n.ask}`"
                     @click="select(n.id)"
                   >
-                    <span class="flex items-center gap-2 min-w-0">
-                      <UIcon :name="icon(n)" class="size-3.5 shrink-0" :style="{ color: rail(n) }" />
-                      <span class="attn-key">{{ n.title }}</span>
-                      <span class="t-label text-meta shrink-0">{{ kindLabel(n) }}</span>
-                      <span v-if="n.kind === 'gate' && n.role && !n.mine" class="t-label text-meta shrink-0">· {{ n.role }}</span>
-                      <span class="attn-wait tabular ml-auto shrink-0" :title="`Waiting ${shortWait(now - n.askedAt)}`">{{ shortWait(now - n.askedAt) }}</span>
+                    <UIcon
+                      :name="icon(n)" class="size-4 shrink-0 mt-0.5"
+                      :style="{ color: n.kind === 'permission' ? 'var(--accent)' : 'var(--warning)' }"
+                    />
+                    <span class="flex-1 min-w-0 flex flex-col gap-0.5">
+                      <span class="flex items-baseline gap-2 min-w-0">
+                        <span class="truncate font-medium" :class="{ 'font-mono': isKey(n.title) }">{{ n.title }}</span>
+                        <span
+                          class="t-small tabular-nums ml-auto shrink-0"
+                          :style="waitTier(n) === 'critical' ? { color: 'var(--warning)', fontWeight: 600 } : { color: 'var(--text-tertiary)' }"
+                          :title="`Waiting ${shortWait(now - n.askedAt)}`"
+                        >{{ shortWait(now - n.askedAt) }}</span>
+                      </span>
+                      <span class="t-small text-label line-clamp-2">
+                        {{ kindLabel(n) }}<template v-if="n.kind === 'gate' && n.role && !n.mine"> for {{ n.role }}</template> · {{ askLine(n) }}
+                      </span>
                     </span>
-                    <span class="attn-ask block text-left">{{ n.ask }}</span>
                   </button>
                 </li>
               </ul>
@@ -138,38 +152,52 @@ const waitTier = (n: NotificationItem) => {
         </template>
       </div>
 
-      <!-- The decision -->
-      <div class="min-h-0 overflow-y-auto pr-1">
-        <NotificationRunDetail v-if="selected?.kind === 'gate'" :key="selected.id" :item="selected" @decided="decided" />
-        <NotificationPermissionDetail v-else-if="selected?.kind === 'permission'" :key="selected.id" :item="selected" @decided="decided" />
-        <div v-else-if="vanished && loaded" class="rounded-lg p-4 space-y-2" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-          <p class="t-head" style="color: var(--text-primary);">No longer waiting</p>
-          <p class="t-ui text-label">That decision was taken, or the prompt timed out, before you got to it.</p>
-          <UButton v-if="mine[0]" size="sm" variant="soft" label="Next decision" @click="vanished = null; select(mine[0].id)" />
+      <!-- The decision. Below `lg` it replaces the list rather than stacking under it. -->
+      <div class="min-h-0 overflow-y-auto px-4 sm:px-6 py-5 flex flex-col" :class="{ 'hidden lg:flex': !selectedId }">
+        <UButton class="lg:hidden mb-3 self-start" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Notifications" @click="select(null)" />
+        <!-- A gate lays itself out across the pane, with its answer bar at the bottom. -->
+        <div :class="selected?.kind === 'gate' ? 'flex-1 flex flex-col' : 'max-w-4xl'">
+          <NotificationRunDetail v-if="selected?.kind === 'gate'" :key="selected.id" :item="selected" @decided="decided" />
+          <NotificationPermissionDetail v-else-if="selected?.kind === 'permission'" :key="selected.id" :item="selected" @decided="decided" />
+          <div v-else-if="vanished && loaded" class="group-card space-y-2">
+            <p class="t-head" style="color: var(--text-primary);">No longer waiting</p>
+            <p class="t-ui text-label">That decision was taken, or the prompt timed out, before you got to it.</p>
+            <UButton v-if="mine[0]" size="sm" variant="soft" label="Next decision" @click="vanished = null; select(mine[0].id)" />
+          </div>
+          <p v-else-if="loaded && items.length" class="t-ui text-label py-4">Choose a decision on the left.</p>
         </div>
-        <p v-else-if="loaded && items.length" class="t-ui text-label py-4">Choose a decision on the left.</p>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* The dashboard's attention row, stacked on two lines: this list sits in a
-   side column, where that row's eight tracks do not fit. */
+.inbox-pane {
+  border-right: 0.5px solid var(--border-default);
+  background: var(--surface-raised);
+}
+.inbox-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 16px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  background: color-mix(in srgb, var(--surface-raised) 90%, transparent);
+  backdrop-filter: blur(12px);
+}
 .inbox-row {
-  display: grid;
-  grid-template-columns: 3px minmax(0, 1fr);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.inbox-row:last-child { border-bottom: 0; }
-.inbox-row:hover { background: var(--surface-hover); }
-.inbox-row--selected { background: var(--surface-hover); }
-.inbox-body {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  padding: 8px 10px;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
   text-align: left;
+  font-size: 13px;
+  color: var(--text-primary);
+  border-bottom: 0.5px solid var(--border-default);
 }
+.inbox-row--button:hover { background: var(--surface-hover); }
+.inbox-row--selected, .inbox-row--selected:hover { background: var(--accent-muted); }
 </style>

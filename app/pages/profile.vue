@@ -94,13 +94,14 @@ async function testJira() {
           <div class="min-w-0 flex-1">
             <div class="t-ui font-medium">Labs pages</div>
             <p class="t-small text-label mt-0.5">
-              Show Graph, Explore and Output styles in your sidebar. They work, but are not part of the daily
-              set yet. This affects only your own view - nobody else's sidebar changes.
+              Show Graph beside Workflows, Explore beside Plugins, and Output Styles in Settings. They work, but are not part of the daily
+              set yet. This affects only your own view - nobody else's changes.
             </p>
           </div>
           <label class="field-toggle">
             <input
               type="checkbox"
+              aria-label="Labs features"
               :checked="me?.profile.labs === true"
               :disabled="savingLabs"
               @change="setLabs(($event.target as HTMLInputElement).checked)"

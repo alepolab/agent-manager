@@ -23,21 +23,21 @@ const enough = computed(() => brief.value?.estimateMinutes == null ? null : brie
 </script>
 
 <template>
-  <div class="rounded-lg t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
-    <div class="px-3 py-2 t-small font-mono uppercase tracking-wider text-label" style="border-bottom: 1px solid var(--border-subtle);">What granting more buys</div>
+  <div class="group-card p-0! t-small">
+    <div class="px-3 py-2 t-ui font-semibold text-strong" style="border-bottom: 0.5px solid var(--border-default);">What granting more buys</div>
     <p v-if="failed" class="px-3 py-2 m-0 text-label">Could not read this run's spend.</p>
     <p v-else-if="!brief" class="px-3 py-2 m-0 text-label">Reading this run's spend…</p>
     <div v-else class="px-3 py-2 space-y-3">
       <section>
-        <h4 class="t-label mb-1" style="color: var(--text-secondary);">Spent</h4>
-        <p class="m-0" style="color: var(--text-primary);">
+        <h4 class="t-ui font-semibold mb-1 text-strong">Spent</h4>
+        <p class="m-0 text-strong">
           <b :style="{ color: brief.over.includes('minutes') ? 'var(--warning)' : undefined }">{{ m(brief.minutesUsed) }}</b> of {{ m(brief.maxMinutes) }}
           · <b :style="{ color: brief.over.includes('tokens') ? 'var(--warning)' : undefined }">{{ t(brief.tokensUsed) }}</b> of {{ t(brief.maxTokens) }} tokens
           <template v-if="brief.costUsd != null"> · ${{ brief.costUsd.toFixed(2) }}</template>
         </p>
         <table class="mt-1 w-full t-small">
           <tr v-for="s in brief.spent" :key="s.label">
-            <td class="pr-3" style="color: var(--text-primary);">{{ s.label }}</td>
+            <td class="pr-3 text-strong">{{ s.label }}</td>
             <td class="pr-3 tabular-nums text-right">{{ m(s.minutes) }}</td>
             <td class="pr-3 tabular-nums text-right text-label">{{ s.tokens != null ? `${t(s.tokens)} tokens` : '' }}</td>
             <td class="text-label" :style="{ color: s.visits > 1 ? 'var(--warning)' : undefined }">{{ s.visits > 1 ? `ran ${s.visits}×` : '' }}</td>
@@ -46,11 +46,11 @@ const enough = computed(() => brief.value?.estimateMinutes == null ? null : brie
       </section>
 
       <section>
-        <h4 class="t-label mb-1" style="color: var(--text-secondary);">Still to run</h4>
+        <h4 class="t-ui font-semibold mb-1 text-strong">Still to run</h4>
         <p v-if="!brief.remaining.length" class="m-0 text-label">Nothing: every step has run.</p>
         <table v-else class="w-full t-small">
           <tr v-for="r in brief.remaining" :key="r.label">
-            <td class="pr-3" style="color: var(--text-primary);">{{ r.label }}</td>
+            <td class="pr-3 text-strong">{{ r.label }}</td>
             <td class="tabular-nums text-right text-label">
               {{ r.typicalMinutes != null ? `typically ${m(r.typicalMinutes)}` : 'no finished run to compare' }}
             </td>
@@ -65,7 +65,7 @@ const enough = computed(() => brief.value?.estimateMinutes == null ? null : brie
       </section>
 
       <section>
-        <h4 class="t-label mb-1" style="color: var(--text-secondary);">Your options</h4>
+        <h4 class="t-ui font-semibold mb-1 text-strong">Your options</h4>
         <dl class="m-0 grid gap-x-2 gap-y-1" style="grid-template-columns: max-content 1fr;">
           <dt class="text-label">Continue</dt>
           <dd class="m-0">

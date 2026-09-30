@@ -39,27 +39,16 @@ const filteredCount = computed(() =>
   <div>
     <PageHeader title="Commands">
       <template #trailing>
-        <span class="font-mono t-small text-meta">{{ commands.length }}</span>
+        <span class="t-small text-meta font-normal">{{ commands.length }}</span>
       </template>
       <template #right>
+        <input v-model="searchQuery" placeholder="Filter commands" class="field-input t-small w-52" aria-label="Filter commands" />
         <ReadOnlyBadge v-if="!can('configure')" reason="adding a command" />
         <UButton v-if="can('configure')" label="New Command" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
-    <div class="px-6 py-4">
-      <p class="t-ui mb-4 leading-relaxed text-label">
-        Reusable workflows you can trigger with a slash command (e.g., /deploy).
-      </p>
-
-      <!-- Search -->
-      <div class="mb-4">
-        <input
-          v-model="searchQuery"
-          placeholder="Search commands..."
-          class="field-search max-w-xs"
-        />
-      </div>
+    <div class="page">
 
       <div
         v-if="error"
@@ -86,17 +75,17 @@ const filteredCount = computed(() =>
               class="size-3.5 text-meta"
             />
             <UIcon name="i-lucide-folder" class="size-3.5 text-meta" />
-            <span class="font-mono t-ui font-medium">{{ dir }}</span>
-            <span class="font-mono t-small text-meta">{{ cmds.length }}</span>
+            <span class="t-ui font-semibold">{{ dir === 'root' ? 'Commands' : dir }}</span>
+            <span class="t-small text-meta">{{ cmds.length }}</span>
           </button>
 
           <!-- Commands in group -->
-          <div v-if="isExpanded(dir)" class="ml-5 border-l space-y-px pl-3" style="border-color: var(--border-subtle);">
+          <div v-if="isExpanded(dir)" class="inset-list inset-list--flush">
             <NuxtLink
               v-for="cmd in cmds"
               :key="cmd.slug"
               :to="`/commands/${cmd.slug}`"
-              class="flex items-center gap-3 px-3 py-2 rounded-lg group focus-ring hover-row"
+              class="inset-row inset-row--link group focus-ring"
             >
               <!-- Terminal icon -->
               <span class="font-mono t-small font-medium shrink-0 text-meta">&gt;_</span>

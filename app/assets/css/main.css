@@ -2,9 +2,13 @@
 @import "@nuxt/ui";
 
 @theme static {
-  --font-display: "Clash Display", "Geist Sans", system-ui, sans-serif;
-  --font-sans: "Geist Sans", "Geist", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "SF Mono", ui-monospace, monospace;
+  /* The platform's own type. Brand lives in the Alepo mark and the violet,
+     not in a display face: system type is what navigation and controls are
+     read in everywhere else on the machine. Mono is for data only — ticket
+     keys, hashes, token counts, logs. */
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Geist Mono", Menlo, Consolas, monospace;
 
   /* Alepo violet, built around the logo's #4f3be9. Nuxt UI's `primary` is
      pointed at this scale in app.config.ts. */
@@ -25,6 +29,18 @@
    Color System — Alepo
    ============================================ */
 
+/* Nuxt UI draws its own buttons and badges from primary-500 and red-500, which
+   read at 3.5-4.2:1 as text on their soft tints. Point them at the shades the
+   app's tokens use, so a soft button's label clears 4.5:1 like the rest. */
+:root:root {
+  --ui-primary: var(--ui-color-primary-600);
+  --ui-error: var(--ui-color-error-700);
+}
+:root:root.dark {
+  --ui-primary: var(--ui-color-primary-300);
+  --ui-error: var(--ui-color-error-400);
+}
+
 :root {
   /* ---- Light mode (default) ---- */
 
@@ -32,11 +48,13 @@
   color-scheme: light;
 
   /* Surfaces */
-  --surface-base: #f4f2f9;
+  /* Neutral, not tinted: the violet means "interactive or selected", and a
+     violet-grey page made every surface faintly say it. */
+  --surface-base: #f5f5f7;
   --surface-raised: #ffffff;
   --surface-overlay: #ffffff;
-  --surface-hover: #ebe8f3;
-  --surface-inset: #e9e6f1;
+  --surface-hover: rgba(0, 0, 0, 0.045);
+  --surface-inset: #ececf0;
 
   /* Borders */
   --border-subtle: rgba(0, 0, 0, 0.06);
@@ -44,21 +62,34 @@
   --border-emphasis: rgba(0, 0, 0, 0.18);
 
   /* Text */
-  --text-primary: #1d1729;
-  --text-secondary: #504a5e;
-  --text-tertiary: #686277;
-  --text-disabled: #aaa5b8;
+  /* Every text token clears 4.5:1 on every surface it sits on: base, raised,
+     inset, hover and the sidebar (#efeff2). --text-disabled was #aaa5b8 —
+     2.15:1 — and carries real content, not only disabled state: sidebar group
+     labels, counts, placeholders, "optional", shortcut hints. It is barely
+     lighter than tertiary; hierarchy comes from size and weight, not from
+     text people cannot read. Lowest ratio of each, on inset (#ececf0):
+       primary   #1d1d1f  14.3:1
+       secondary #3c3c43   9.3:1
+       tertiary  #636366   5.1:1
+       disabled  #69696e   4.6:1
+       indigo    #0b6b80   5.2:1 */
+  --text-primary: #1d1d1f;
+  --text-secondary: #3c3c43;
+  --text-tertiary: #636366;
+  --text-disabled: #69696e;
   --text-accent: #4f3be9;
-  --text-indigo: #0e7c93;
+  --text-indigo: #0b6b80;
 
   /* Accent — Alepo violet. --accent-rgb is the same colour as channels, for
      the translucent tints written as rgba(var(--accent-rgb), a). */
   --accent: #4f3be9;
+  --on-accent: #ffffff; /* text on an accent fill */
   --accent-rgb: 79, 59, 233;
   --accent-hover: #2d1d8f;
   --accent-glow: rgba(79, 59, 233, 0.14);
-  --accent-muted: rgba(79, 59, 233, 0.08);
-  --accent-gradient: linear-gradient(135deg, #5b47f0 0%, #2d1d8f 100%);
+  --accent-muted: rgba(79, 59, 233, 0.1);
+  /* Kept as a name so nothing breaks; no longer a gradient. */
+  --accent-gradient: #4f3be9;
 
   /* Secondary accent — Alepo cyan (#20a7c3, darkened to clear AA on white) */
   --accent-secondary: #0e7c93;
@@ -76,14 +107,15 @@
 
   /* Semantic */
   --success: #047857;
-  --warning: #a16207;
-  --error: #dc2626;
+  --warning: #8f5207; /* #a16207 fell to 4.2:1 on the selected-row tint */
+  --error: #c4291c;
   /* `running`, the most-scanned colour in a monitoring console, is written as
      `var(--info, #3b82f6)` in app/utils/runStatus.ts — and --info was defined
      in neither theme, so every live run has always rendered the fallback:
      #3b82f6 is 3.68:1 on white, below the 4.5:1 floor for the 11px text it is
      used as. Defined here in both modes, at ratios that clear AA. */
-  --info: #2563eb;
+  /* Running is "now", which is what the accent means — one colour, one meaning. */
+  --info: #4f3be9;
 
   /* Mode-dependent helpers */
   --input-bg: rgba(0, 0, 0, 0.025);
@@ -99,7 +131,7 @@
   --skeleton-to: rgba(0, 0, 0, 0.06);
   --graph-node-bg: rgba(255, 255, 255, 0.94);
   --graph-tooltip-bg: rgba(255, 255, 255, 0.95);
-  --sidebar-bg: linear-gradient(180deg, #ebe8f3 0%, #f4f2f9 100%);
+  --sidebar-bg: #efeff2;
 
   /* Editor (recessed, dark even in light mode) */
   --editor-bg: #1e1e2e;
@@ -107,9 +139,6 @@
   --editor-line-number: #585b70;
   --editor-line-highlight: rgba(255, 255, 255, 0.03);
   --editor-border: rgba(0, 0, 0, 0.12);
-
-  /* Noise texture overlay */
-  --noise: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
 .dark {
@@ -118,11 +147,11 @@
   color-scheme: dark;
 
   /* Surfaces — deep, tinted toward Alepo ink (#1d1729) */
-  --surface-base: #0b0a12;
-  --surface-raised: #14121c;
-  --surface-overlay: #1b1826;
-  --surface-hover: #242031;
-  --surface-inset: #0f0d17;
+  --surface-base: #111113;
+  --surface-raised: #1c1c1e;
+  --surface-overlay: #242426;
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-inset: #0b0b0c;
 
   /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.05);
@@ -130,20 +159,22 @@
   --border-emphasis: rgba(255, 255, 255, 0.16);
 
   /* Text */
-  --text-primary: #f4f2f9;
-  --text-secondary: #a29dae;
-  --text-tertiary: #8e889c;
-  --text-disabled: #4d4859;
-  --text-accent: #9d90fa;
+  /* primary 15.6:1, secondary 9.8:1, tertiary 6.6:1, disabled 5.2:1 on #1c1c1e */
+  --text-primary: #f5f5f7;
+  --text-secondary: #c7c7cc;
+  --text-tertiary: #a1a1a6;
+  --text-disabled: #98989d; /* 5.0:1 on the dark hover surface, the lowest it sits on */
+  --text-accent: #a598ff;
   --text-indigo: #3cc3de;
 
   /* Accent */
-  --accent: #8f80f4;
-  --accent-rgb: 143, 128, 244;
-  --accent-hover: #b3a8f8;
-  --accent-glow: rgba(143, 128, 244, 0.16);
-  --accent-muted: rgba(143, 128, 244, 0.1);
-  --accent-gradient: linear-gradient(135deg, #8f80f4 0%, #4f3be9 100%);
+  --accent: #a598ff;
+  --on-accent: #16104a; /* white on #a598ff is 2.5:1 */
+  --accent-rgb: 165, 152, 255;
+  --accent-hover: #c2b9ff;
+  --accent-glow: rgba(165, 152, 255, 0.16);
+  --accent-muted: rgba(165, 152, 255, 0.14);
+  --accent-gradient: #a598ff;
 
   /* Secondary accent */
   --accent-secondary: #3cc3de;
@@ -158,7 +189,7 @@
   --success: #34d399;
   --warning: #fbbf24;
   --error: #f87171;
-  --info: #60a5fa;
+  --info: #a598ff;
 
   /* Mode-dependent helpers */
   --input-bg: rgba(255, 255, 255, 0.03);
@@ -174,7 +205,7 @@
   --skeleton-to: rgba(255, 255, 255, 0.06);
   --graph-node-bg: rgba(20, 18, 28, 0.94);
   --graph-tooltip-bg: rgba(11, 10, 18, 0.95);
-  --sidebar-bg: linear-gradient(180deg, #100e19 0%, #0b0a12 100%);
+  --sidebar-bg: #19191b;
 
   /* Editor */
   --editor-bg: #0c0c10;
@@ -198,30 +229,277 @@ body {
   color: inherit;
 }
 
-/* Subtle noise texture on raised surfaces */
-.surface-noise::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--noise);
-  border-radius: inherit;
-  pointer-events: none;
-  opacity: 0.5;
-  mix-blend-mode: overlay;
-}
-
 /* ============================================
    Typography Scale — Precision Hierarchy
    ============================================ */
 
+/* Sheet and modal titles. Page titles live in the toolbar: .text-toolbar-title. */
 .text-page-title {
   font-family: var(--font-display);
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
   color: var(--text-primary);
 }
+
+.text-toolbar-title {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+/* ============================================
+   Window chrome: the page toolbar and the segmented control
+
+   One 52px row per page: title, the section's tabs, actions. Blur belongs
+   here, on the functional layer that content scrolls under, and nowhere on
+   content itself.
+   ============================================ */
+
+.page-toolbar {
+  position: sticky;
+  top: 0;
+  /* Above page content, below the ⌘J panel and modals (z-40/50): at 100 it
+     painted over the panel's own header. */
+  z-index: 30;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  /* Wraps rather than squeezing: at phone width the title was truncated to
+     four letters and the filter box to two. */
+  flex-wrap: wrap;
+  padding: 8px 20px 8px 24px;
+  flex-shrink: 0;
+  border-bottom: 0.5px solid var(--border-default);
+  background: color-mix(in srgb, var(--surface-base) 82%, transparent);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 8px;
+  background: rgba(120, 120, 128, 0.12);
+  overflow-x: auto;
+  max-width: 100%;
+}
+.dark .segmented { background: rgba(120, 120, 128, 0.24); }
+
+.segmented__item {
+  padding: 3px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.segmented__item:hover { color: var(--text-primary); }
+.segmented__item--on {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+}
+.dark .segmented__item--on { background: #636366; } /* light-mode tertiary, not dark's (#a1a1a6): a mid-grey pill the white label reads 5.5:1 on */
+
+/* ============================================
+   The pipeline track
+
+   The one signature element: a line of segments showing where a run is on
+   its way to a PR. Done is quiet grey; only now, waiting-on-a-person and
+   failed get colour, and only now moves.
+   ============================================ */
+
+.track { display: flex; gap: 2px; align-items: center; min-width: 0; }
+.track__seg {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(120, 120, 128, 0.16);
+}
+.dark .track__seg { background: rgba(120, 120, 128, 0.3); }
+.track--lg .track__seg { height: 8px; border-radius: 4px; }
+.track__seg--done { background: var(--text-disabled) !important; } /* at 55% opacity done read 2.2:1 against pending's 1.2:1 */
+.track__seg--wait { background: var(--warning) !important; }
+.track__seg--fail { background: var(--error) !important; }
+.track__seg--now { background: var(--accent) !important; position: relative; overflow: hidden; }
+.track__seg--now::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  transform: translateX(-100%);
+  animation: track-sweep 1.8s ease-in-out infinite;
+}
+@keyframes track-sweep { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .track__seg--now::after { animation: none; }
+}
+
+/* ============================================
+   Status: glyph + word, never colour alone
+   ============================================ */
+
+.status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.status-label__icon { width: 14px; height: 14px; flex-shrink: 0; }
+.status-label__icon--spin { animation: status-spin 1.6s linear infinite; }
+@keyframes status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .status-label__icon--spin { animation: none; } }
+.status-label--now { color: var(--accent); }
+.status-label--wait { color: var(--warning); }
+.status-label--fail { color: var(--error); }
+.status-label--done { color: var(--success); }
+.status-label--idle { color: var(--text-tertiary); }
+.status-label--skip { color: var(--text-tertiary); }
+
+/* ============================================
+   Inset grouped list
+
+   The one container shape for rows: a rounded group, hairline separators
+   inset past the leading glyph. Replaces a bordered card around each row.
+   ============================================ */
+
+.group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.group-head h2, .group-head h3 { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 0; }
+.group-head__count { font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.group-head__link { margin-left: auto; font-size: 12px; color: var(--accent); }
+.group-head__link:hover { text-decoration: underline; }
+
+.inset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface-raised);
+  border-radius: 10px;
+  box-shadow: 0 0 0 0.5px var(--border-default);
+  overflow: hidden;
+}
+.inset-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+a.inset-row:hover, .inset-row--link:hover { background: var(--surface-hover); }
+.inset-row + .inset-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 44px;
+  right: 0;
+  border-top: 0.5px solid var(--border-default);
+}
+.inset-list--flush .inset-row + .inset-row::before { left: 14px; }
+.inset-row__lead { width: 18px; flex-shrink: 0; display: flex; justify-content: center; }
+.inset-row__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.inset-row__title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inset-row__sub { font-size: 12px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inset-row__end { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Four figures in one quiet row, instead of four hero cards. */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5px;
+  background: var(--border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 0 0 0.5px var(--border-default);
+}
+.stat-row__cell { background: var(--surface-raised); padding: 12px 14px; min-width: 0; }
+.stat-row__key { font-size: 12px; color: var(--text-tertiary); }
+.stat-row__value { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; color: var(--text-primary); }
+.stat-row__value small { font-size: 12px; font-weight: 400; color: var(--text-tertiary); }
+.stat-row__note { font-size: 12px; color: var(--text-tertiary); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* A proportion as one bar, with a text legend so colour is never the only label. */
+.meter { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(120, 120, 128, 0.14); }
+.meter > span { display: block; min-width: 3px; }
+.meter-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12px; color: var(--text-tertiary); }
+.meter-legend b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.meter-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.meter-legend__item { color: inherit; border-radius: 6px; padding: 2px 6px; margin: -2px -6px; cursor: pointer; }
+.meter-legend__item:hover { background: var(--surface-hover); }
+.meter-legend__item--on { background: var(--accent-muted); color: var(--text-primary); }
+
+/* The lead sentence on an overview page. */
+.lead-sentence {
+  font-family: var(--font-display);
+  font-size: 24px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  max-width: 44rem;
+  margin: 0;
+}
+.lead-sentence em { font-style: normal; color: var(--accent); }
+
+/* A form or panel that sits in the page as a group, like an inset list. */
+.group-card {
+  background: var(--surface-raised);
+  border-radius: 10px;
+  box-shadow: 0 0 0 0.5px var(--border-default);
+  padding: 16px;
+}
+
+/* A folded group: the summary is the group heading, with a disclosure chevron. */
+.group-details > summary { list-style: none; }
+.group-details > summary::-webkit-details-marker { display: none; }
+.group-details > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--text-tertiary);
+  border-bottom: 1.5px solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+  align-self: center;
+}
+.group-details[open] > summary::before { transform: rotate(45deg); }
+
+/* A question waiting on a person: tinted with the waiting colour, no border. */
+.gate-card {
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--warning) 9%, var(--surface-raised));
+}
+
+/* A run's steps: a plain list divided by hairlines. Only the step running
+   now gets a fill, so the eye lands on it without a card around every row. */
+.step-list > .step-row { border-top: 0.5px solid var(--border-default); padding: 4px 0; }
+.step-list > .step-row:first-child { border-top: 0; }
+.step-row--now {
+  background: var(--accent-muted);
+  border-radius: 8px;
+  margin-inline: -10px;
+  padding-inline: 10px !important;
+  border-top-color: transparent !important;
+}
+.step-row--now + .step-row { border-top-color: transparent; }
 
 .text-section-title {
   font-family: var(--font-sans);
@@ -233,10 +511,8 @@ body {
 
 .text-section-label {
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--text-tertiary);
 }
 
@@ -294,94 +570,18 @@ body {
   line-height: 1.35;
 }
 
-/* Section labels, column heads, status pills. Nothing else. */
+/* Section labels, column heads, status pills. Nothing else. Sentence case:
+   tracked capitals were an eyebrow on everything, so none of them led. */
 .t-label {
   font-size: 11px;
   line-height: 1.3;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 /* Figures that line up in a column stop jittering as they tick. */
 .tabular {
   font-variant-numeric: tabular-nums;
 }
-
-/* ============================================
-   The attention queue
-
-   Status was a coloured WORD inside a fixed 5rem cell — encoding status twice
-   (the hue already said it) and costing that width on every row forever. It
-   moves to a 3px rail, which reads down a stack of rows in one glance where a
-   word does not. Fill carries ownership, weight and colour carry how long a
-   person has been waiting, and position carries both.
-   ============================================ */
-
-.attn-list {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--surface-raised);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.attn-row {
-  display: grid;
-  /* The last track holds an "Answer" button, not just an icon: at 1.75rem it
-     overflowed into the wait figure beside it. */
-  grid-template-columns: 3px 16px 7rem minmax(0, 1fr) auto 5rem 3.5rem 5rem;
-  align-items: center;
-  column-gap: 10px;
-  min-height: 34px;
-  padding-right: 8px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.attn-row:last-child { border-bottom: 0; }
-.attn-row:hover { background: var(--surface-hover); }
-
-/* Hue says what state it is in; fill says whether it is yours. */
-.attn-rail { align-self: stretch; background: color-mix(in srgb, var(--rail) 30%, transparent); }
-.attn-row--mine .attn-rail { background: var(--rail); }
-
-.attn-key {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.attn-ask { color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Ownership raises weight, not size: the row height stays constant. */
-.attn-row--mine .attn-ask { color: var(--text-primary); font-weight: 600; }
-
-.attn-wait { font-family: var(--font-mono); text-align: right; color: var(--text-tertiary); }
-.attn-row--warm .attn-wait { color: var(--text-secondary); }
-.attn-row--high .attn-wait { color: var(--warning); font-weight: 600; }
-.attn-row--critical .attn-wait { color: var(--error); font-weight: 700; }
-/* Past four hours the whole row changes ground, not just its clock. */
-.attn-row--critical { background: color-mix(in srgb, var(--error) 5%, var(--surface-raised)); }
-
-/* Rendered only when the tier changes what the reader must do, so the rows that
-   carry it are unmissable. Every row wearing a risk chip is no signal at all. */
-.attn-risk {
-  padding: 1px 5px;
-  border-radius: 4px;
-  color: var(--text-secondary);
-  background: var(--badge-subtle-bg);
-  white-space: nowrap;
-}
-.attn-risk--justify { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); }
-
-.attn-act { display: flex; justify-content: center; }
-/* "This is owed by you" must be visible across the room; "tidy this away" must
-   not compete with it. */
-.attn-dismiss { padding: 4px; border-radius: 4px; color: var(--text-disabled); opacity: 0; }
-.attn-row:hover .attn-dismiss,
-.attn-dismiss:focus-visible { opacity: 1; }
 
 /* ============================================
    One page-width rule
@@ -528,16 +728,9 @@ body {
 
 /* Column headers */
 .graph-col-header {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-disabled);
-  background: var(--graph-node-bg);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  color: var(--text-secondary);
   padding: 4px 10px;
   width: 220px;
   text-align: center;
@@ -601,7 +794,13 @@ body {
   background: var(--surface-raised) !important;
   border: 1px solid var(--border-default) !important;
   border-radius: 10px !important;
+  overflow: hidden;
 }
+/* The library's mask and nodes are hard-coded light greys, which turned the
+   minimap into a white card on the dark canvas. */
+.vue-flow__minimap svg { background: transparent !important; }
+.vue-flow__minimap-mask { fill: color-mix(in srgb, var(--surface-base) 65%, transparent) !important; }
+.vue-flow__minimap-node { fill: var(--border-default) !important; stroke: none !important; }
 
 /* ============================================
    Page Transitions — Enhanced
@@ -637,12 +836,12 @@ body {
 
 /* Label */
 .field-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--font-sans);
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .field-label[data-required]::after {
@@ -662,12 +861,11 @@ body {
 .field-textarea {
   width: 100%;
   background: var(--input-bg);
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 9px 13px;
-  font-family: var(--font-mono);
+  border: 0.5px solid var(--border-emphasis);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-family: var(--font-sans);
   font-size: 13px;
-  letter-spacing: -0.01em;
   color: var(--text-primary);
   outline: none;
   transition:
@@ -694,9 +892,7 @@ body {
 .field-select:focus,
 .field-textarea:focus {
   border-color: var(--accent);
-  box-shadow:
-    0 0 0 3px var(--accent-glow),
-    0 0 24px var(--accent-glow);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.35);
   background: var(--input-bg-focus);
 }
 
@@ -945,9 +1141,9 @@ optgroup {
 }
 
 .color-picker__swatch:focus-visible {
-  box-shadow:
-    0 0 0 2px var(--surface-base),
-    0 0 0 4px var(--accent);
+  /* An outline, like every other focus ring: forced-colors mode strips box-shadow. */
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---- Custom toggle switch ---- */
@@ -1026,6 +1222,11 @@ optgroup {
   color: var(--text-secondary);
 }
 
+/* Emphasis and an inline action, as classes: an inline style outranks every
+   class, so text written `style="color: …"` could not be restyled by context. */
+.text-strong { color: var(--text-primary); }
+.text-link { color: var(--accent); }
+
 /* ============================================
    Semantic Surfaces
    ============================================ */
@@ -1056,7 +1257,7 @@ optgroup {
 
 .badge-subtle {
   background: var(--badge-subtle-bg);
-  color: var(--text-disabled);
+  color: var(--text-tertiary);
 }
 
 .badge-accent {
@@ -1091,12 +1292,22 @@ optgroup {
   outline: none;
 }
 
+/* Solid accent, as an outline. At 50% opacity the ring was 2.4:1 against
+   white, under the 3:1 a focus indicator needs (WCAG 1.4.11); solid it is
+   6.7:1 in light and 6.9:1 in dark. An outline rather than a box-shadow
+   because forced-colors mode strips shadows and keeps outlines. */
 .focus-ring:focus-visible {
-  box-shadow:
-    0 0 0 2px var(--surface-base),
-    0 0 0 4px var(--accent),
-    0 0 16px var(--accent-glow);
-  border-radius: inherit;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Nuxt UI's ghost and link buttons mark keyboard focus with a background
+   shade alone, which on a grey toolbar is close to invisible. Give every
+   button and link the same ring; the doubled :root outranks their
+   focus:outline-none. */
+:root:root :is(button, a):focus-visible:not(.focus-ring) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Glow effect for accent elements */
@@ -1228,15 +1439,6 @@ button:not(:disabled),
 
 .hover-bg:hover {
   background: var(--surface-hover);
-}
-
-/* Haptic-like press for clickable elements */
-.press-scale {
-  transition: transform 0.1s ease;
-}
-
-.press-scale:active {
-  transform: scale(0.97);
 }
 
 /* ============================================

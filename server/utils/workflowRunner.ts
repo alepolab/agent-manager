@@ -359,7 +359,7 @@ function budgetExceeded(run: WorkflowRun): string | null {
   // has been in existence for hours and working for minutes, and charging it the
   // gap would pause it against its cap the instant it resumed.
   const minutes = runElapsedMinutes(run)
-  if (minutes > b.maxMinutes) return `Budget exceeded: ${Math.round(minutes)} min over the ${b.maxMinutes} min cap`
+  if (minutes > b.maxMinutes) return `Budget exceeded: ${Math.round(minutes)} min over the ${b.maxMinutes} min cap.`
   // Computed here, not read from run.usage: that field is refreshed by publish(),
   // and the wave loop recurses without publishing in between.
   // Cache reads are excluded: they cost a tenth and are what every long-context

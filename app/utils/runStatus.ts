@@ -45,6 +45,42 @@ export function runStatusColor(status: string): string {
   return RUN_STATUS_COLOR[status] ?? 'var(--text-disabled, #9ca3af)'
 }
 
+/**
+ * Which of five visual kinds a status is. Colour, glyph and the pipeline
+ * track all key off this, so "waiting on a person" looks the same wherever
+ * it appears.
+ */
+/** `skip` is settled without having run: the track draws it with done, the label says so in its own words. */
+export type StatusKind = 'now' | 'wait' | 'fail' | 'done' | 'skip' | 'idle'
+export function statusKind(status: string): StatusKind {
+  if (status === 'running' || status === 'joining') return 'now'
+  if (status === 'paused' || status === 'awaiting_review' || status === 'waiting') return 'wait'
+  if (status === 'failed' || status === 'interrupted') return 'fail'
+  if (status === 'completed') return 'done'
+  if (status === 'skipped') return 'skip'
+  return 'idle'
+}
+
+/** The runner's vocabulary is not a person's: `interrupted` is what the
+ *  codebase calls a process that died, and nobody outside it says that. */
+const STATUS_WORD: Record<string, string> = {
+  paused: 'Waiting',
+  awaiting_review: 'Deciding',
+  failed: 'Failed',
+  interrupted: 'Stopped',
+  running: 'Running',
+  queued: 'Queued',
+  joining: 'Joining',
+  completed: 'Done',
+  stopped: 'Stopped',
+  pending: 'Not started',
+  skipped: 'Skipped',
+  waiting: 'Waiting',
+}
+export function statusWord(status: string): string {
+  return STATUS_WORD[status] ?? runStatusLabel(status)
+}
+
 /** How a status reads to a person. The statuses are rendered uppercase all over
  *  this app, and a raw multi-word one arrives as AWAITING_REVIEW — an
  *  identifier, not a phrase. One transformation rather than a label table:
@@ -95,3 +131,10 @@ export function runElapsedLabel(run: RunClockRecord, now: number = Date.now()): 
 export const RUN_DURATION_HINT =
   'Time this run spent executing. Time it sat failed, stopped or paused waiting for a person is not counted, '
   + 'so a restarted run does not accumulate the gap. The Started column shows when it first began.'
+
+/** A gate decision as a status and a word, for StatusLabel. */
+export const GATE_VERDICT: Record<string, { status: string, word: string }> = {
+  approved: { status: 'completed', word: 'Approved' },
+  rejected: { status: 'failed', word: 'Rejected' },
+  'sent-back': { status: 'paused', word: 'Sent back' },
+}

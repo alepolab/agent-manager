@@ -25,7 +25,7 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
 </script>
 
 <template>
-  <div class="rounded-lg t-small" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+  <div class="group-card p-0! t-small">
     <div class="px-3 py-2 space-y-3">
       <section>
         <h4 class="t-label mb-1" style="color: var(--text-secondary);">The situation</h4>
@@ -70,7 +70,7 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
             <div class="flex items-start gap-2">
               <span class="font-mono font-medium shrink-0" style="color: var(--text-primary);">({{ o.key.replace(/[()]/g, '') }})</span>
               <span class="font-medium flex-1" style="color: var(--text-primary);">{{ o.label }}</span>
-              <span v-if="isRecommended(o.key)" class="t-small font-mono uppercase px-1.5 rounded shrink-0" style="background: var(--accent-muted); color: var(--accent);">Recommended</span>
+              <span v-if="isRecommended(o.key)" class="t-small font-medium px-1.5 rounded shrink-0" style="background: var(--accent-muted); color: var(--accent);">Recommended</span>
             </div>
             <dl class="m-0 grid gap-x-2 gap-y-0.5" style="grid-template-columns: max-content 1fr;">
               <dt class="text-label">Next</dt><dd class="m-0">{{ o.next }}</dd>

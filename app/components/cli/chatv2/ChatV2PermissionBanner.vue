@@ -45,7 +45,7 @@ function handleDeny() {
           <span
             v-if="permissions.length > 1"
             class="ml-2 px-1.5 py-0.5 rounded t-small inline-block"
-            style="background: var(--accent); color: white;"
+            style="background: var(--accent); color: var(--on-accent);"
           >
             +{{ permissions.length - 1 }} more
           </span>
@@ -59,7 +59,7 @@ function handleDeny() {
     <div class="flex items-center gap-2 shrink-0">
       <button
         class="px-3 py-1.5 rounded-lg t-small font-medium transition-all"
-        style="background: var(--accent); color: white;"
+        style="background: var(--accent); color: var(--on-accent);"
         @click="handleAllow"
       >
         Submit

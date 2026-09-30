@@ -391,13 +391,12 @@ const parallelHint = computed(() => graph.value.entries.length > 1
 
       <!-- Build | Run: the definition, or what a run of it did. -->
       <div class="flex items-center gap-2">
-        <div role="tablist" aria-label="Builder mode" class="flex rounded-lg p-0.5" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+        <div role="tablist" aria-label="Builder mode" class="segmented">
           <button
             role="tab"
             data-testid="mode-build"
             :aria-selected="mode === 'build'"
-            class="t-small px-2.5 py-1 rounded-md focus-ring"
-            :style="mode === 'build' ? 'background: var(--surface-base); color: var(--text-primary);' : 'color: var(--text-tertiary);'"
+            class="segmented__item focus-ring" :class="{ 'segmented__item--on': mode === 'build' }"
             @click="mode = 'build'"
           >
             Build
@@ -407,8 +406,7 @@ const parallelHint = computed(() => graph.value.entries.length > 1
             data-testid="mode-run"
             :aria-selected="mode === 'run'"
             :disabled="!runs.length"
-            class="t-small px-2.5 py-1 rounded-md focus-ring font-mono disabled:opacity-50"
-            :style="mode === 'run' ? 'background: var(--surface-base); color: var(--text-primary);' : 'color: var(--text-tertiary);'"
+            class="segmented__item focus-ring disabled:opacity-50" :class="{ 'segmented__item--on': mode === 'run' }"
             @click="showRunMode"
           >
             {{ run ? `Run #${run.id.slice(0, 6)}` : 'Run' }}

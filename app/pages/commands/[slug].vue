@@ -173,12 +173,8 @@ useUnsavedChanges(isDirty)
         </NuxtLink>
       </template>
       <template #trailing>
-        <span
-          v-if="command"
-          class="font-mono t-small font-medium px-1.5 py-px rounded-full badge badge-subtle"
-        >
-          {{ command.directory }}
-        </span>
+        <!-- A folder, when there is one: top-level commands rendered an empty pill here. -->
+        <span v-if="command?.directory" class="t-small font-normal text-label">{{ command.directory }}</span>
       </template>
       <template #right>
         <UButton
@@ -214,11 +210,11 @@ useUnsavedChanges(isDirty)
         />
         <UButton
           v-if="can('configure')"
-          label="Delete"
+          :aria-label="`Delete this command`"
           icon="i-lucide-trash-2"
           size="sm"
           variant="ghost"
-          color="error"
+          color="neutral"
           @click="() => { showDeleteConfirm = true }"
         />
         <UButton 

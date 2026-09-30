@@ -168,6 +168,7 @@ function seen(at: number) {
                   <select
                     v-if="can('configure')"
                     class="field-select"
+                    :aria-label="`Role for ${r.login}`"
                     :value="r.role ?? ''"
                     :disabled="saving === r.login"
                     @change="setRole(r.login, ($event.target as HTMLSelectElement).value)"
