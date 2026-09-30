@@ -129,14 +129,14 @@ const waitTier = (n: NotificationItem) => {
                   >
                     <UIcon
                       :name="icon(n)" class="size-4 shrink-0 mt-0.5"
-                      :style="{ color: n.kind === 'permission' ? 'var(--accent)' : 'var(--warning)' }"
+                      :style="{ color: 'var(--waiting)' }"
                     />
                     <span class="flex-1 min-w-0 flex flex-col gap-0.5">
                       <span class="flex items-baseline gap-2 min-w-0">
                         <span class="truncate font-medium" :class="{ 'font-mono': isKey(n.title) }">{{ n.title }}</span>
                         <span
                           class="t-small tabular-nums ml-auto shrink-0"
-                          :style="waitTier(n) === 'critical' ? { color: 'var(--warning)', fontWeight: 600 } : { color: 'var(--text-tertiary)' }"
+                          :style="waitTier(n) === 'critical' ? { color: 'var(--waiting)', fontWeight: 600 } : { color: 'var(--text-tertiary)' }"
                           :title="`Waiting ${shortWait(now - n.askedAt)}`"
                         >{{ shortWait(now - n.askedAt) }}</span>
                       </span>

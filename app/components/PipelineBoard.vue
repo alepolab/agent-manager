@@ -75,7 +75,7 @@ const settled = computed(() => runs.value.filter(r => r.endedAt))
 const OUTCOME_ORDER = ['completed', 'running', 'joining', 'paused', 'awaiting_review', 'failed', 'interrupted', 'stopped', 'queued']
 const OUTCOME_FILL: Record<string, string> = {
   completed: 'var(--success)', running: 'var(--accent)', joining: 'var(--accent)',
-  paused: 'var(--warning)', awaiting_review: 'var(--warning)',
+  paused: 'var(--waiting)', awaiting_review: 'var(--waiting)',
   failed: 'var(--error)', interrupted: 'var(--error)',
   stopped: 'var(--text-disabled)', queued: 'transparent',
 }
@@ -133,7 +133,7 @@ const withDecisions = computed(() => runs.value.filter(r => (r.decisions?.length
     <section class="stat-row" aria-label="This pipeline">
       <div class="stat-row__cell">
         <div class="stat-row__key">Waiting on a person</div>
-        <div class="stat-row__value" :style="{ color: waiting.length ? 'var(--warning)' : undefined }">{{ waiting.length }}</div>
+        <div class="stat-row__value" :style="{ color: waiting.length ? 'var(--waiting)' : undefined }">{{ waiting.length }}</div>
         <div class="stat-row__note">{{ waiting.length ? `longest ${fmt(waiting[0]!.waited)}` : 'no gate is open' }}</div>
       </div>
       <div class="stat-row__cell">
@@ -207,7 +207,7 @@ const withDecisions = computed(() => runs.value.filter(r => (r.decisions?.length
             <span class="inset-row__title">{{ w.run.ticketKey || (w.run.initialPrompt.split('\n')[0] ?? '') }}</span>
             <span class="inset-row__sub">{{ w.run.steps.find(s => s.stepId === w.run.question?.stepId)?.label ?? 'a step' }}</span>
           </span>
-          <span class="inset-row__end" style="color: var(--warning); font-weight: 600;">{{ fmt(w.waited) }}</span>
+          <span class="inset-row__end" style="color: var(--waiting); font-weight: 600;">{{ fmt(w.waited) }}</span>
         </NuxtLink>
       </div>
     </section>

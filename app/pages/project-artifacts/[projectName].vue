@@ -61,8 +61,8 @@ useHead({
         <!-- Local Skills -->
         <section>
           <div class="flex items-center gap-3 mb-6 border-b pb-3" style="border-color: var(--border-subtle);">
-            <div class="p-2 rounded-lg" style="background: rgba(251, 191, 36, 0.1);">
-              <UIcon name="i-lucide-sparkles" class="size-5" style="color: #fbbf24;" />
+            <div class="p-2 rounded-lg" style="background: var(--accent-muted);">
+              <UIcon name="i-lucide-sparkles" class="size-5" style="color: var(--accent);" />
             </div>
             <div>
               <h3 class="t-head font-semibold" style="color: var(--text-primary);">Local Skills</h3>
@@ -82,7 +82,7 @@ useHead({
               style="background: var(--surface-raised); border: 1px solid var(--border-subtle);"
             >
               <div class="flex items-center gap-3 mb-3">
-                <UIcon name="i-lucide-sparkles" class="size-4" style="color: #fbbf24;" />
+                <UIcon name="i-lucide-sparkles" class="size-4" style="color: var(--accent);" />
                 <div class="font-medium t-body" style="color: var(--text-primary);">{{ skill.frontmatter.name }}</div>
               </div>
               <p class="t-small line-clamp-3" style="color: var(--text-secondary);">
