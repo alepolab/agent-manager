@@ -451,6 +451,12 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
 .choice__head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 12px 14px; }
 .choice__radio { width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-emphasis, var(--border-default)); margin-top: 1px; }
 .choice--on .choice__radio { box-shadow: inset 0 0 0 5px var(--accent); }
+/* The radio is drawn with box-shadow, which forced-colors mode strips: give it
+   a border there, and fill the chosen one with the system highlight. */
+@media (forced-colors: active) {
+  .choice__radio { border: 1.5px solid CanvasText; box-shadow: none; }
+  .choice--on .choice__radio { background: Highlight; box-shadow: inset 0 0 0 3px Canvas; }
+}
 .choice__title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--text-primary); }
 .choice__sub { display: block; margin-top: 2px; font-size: 13px; color: var(--text-secondary); }
 .choice__rec { font-size: 11.5px; font-weight: 600; color: var(--accent); background: var(--accent-muted); border-radius: 5px; padding: 1px 6px; }

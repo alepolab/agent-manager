@@ -1141,9 +1141,9 @@ optgroup {
 }
 
 .color-picker__swatch:focus-visible {
-  box-shadow:
-    0 0 0 2px var(--surface-base),
-    0 0 0 4px var(--accent);
+  /* An outline, like every other focus ring: forced-colors mode strips box-shadow. */
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---- Custom toggle switch ---- */
