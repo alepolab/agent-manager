@@ -57,10 +57,11 @@ assert.equal(W.findCheckout(process.env.AGENT_WORKSPACE_ROOT), repo, 'and withou
 assert.equal((await W.listCheckouts()).find(c => c.name === 'ffm@fix-CSUP-1-abcdef12')?.branch, 'fix/CSUP-1-abcdef12', 'the worktree is listed as a checkout on the run branch')
 mkdirSync(join(wt, '.agent', 'evidence-run'), { recursive: true }); writeFileSync(join(wt, '.agent', 'plan.md'), '# plan\n'); writeFileSync(join(wt, '.agent', 'evidence-run', 'meta.json'), '{}')
 git(wt, ['add', '-A']); const staged = git(wt, ['diff', '--cached', '--name-only'])
-assert.ok(staged.includes('.agent/plan.md'), 'the plan the gate requires can still be committed')
+// Not the plan either: committed, every run rewrote .agent/plan.md and every open PR conflicted on it.
+assert.ok(!staged.includes('.agent/plan.md'), 'the plan the gate reads stays out of every commit')
 assert.ok(!staged.includes('evidence-run'), 'an evidence copy cannot be staged even with git add -A, in a worktree whose .git is a file')
 git(wt, ['reset', '-q'])
-{ const st = await W.checkoutState(wt); assert.equal(st.dirty, 1, 'uncommitted work and the plan the gate needs ride along, as git itself does: ' + st.dirtyFiles.join(',')) }
+{ const st = await W.checkoutState(wt); assert.equal(st.dirty, 0, 'the plan under .agent/ is not uncommitted work: ' + st.dirtyFiles.join(',')) }
 { const st = await W.checkoutState(repo); assert.equal(st.dirty, 2, 'the clone\'s own uncommitted work is untouched: ' + st.dirtyFiles.join(',')) }
 
 {

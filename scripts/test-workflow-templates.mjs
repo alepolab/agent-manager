@@ -458,10 +458,11 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     'the evidence step must be told explicitly where evidence does and does not go')
   // The two files that ARE the oracle still have to be committed, or the PR
   // ships a fix with nothing proving it.
-  assert.ok(evidence.body.includes('.agent/plan.md'),
-    'the plan file is still required in the repo by the plan gate')
+  // Not the plan any more: committed, every run rewrote .agent/plan.md and
+  // every open pull request conflicted with the others on it.
+  assert.match(evidence.body, /\.agent\/plan\.md` stays out/, 'the evidence step keeps the plan out of the pull request')
   for (const a of AGENT_TEMPLATES.filter(t => t.id.startsWith('sdlc-') && t.id !== 'sdlc-step-monitor')) {
-    assert.ok(a.body.includes('but `plan.md` is ever staged'), `${a.id} must carry the standing rule that only plan.md leaves .agent/`)
+    assert.ok(a.body.includes('Nothing under `.agent/` is ever staged, `plan.md` included'), `${a.id} must carry the standing rule that nothing leaves .agent/`)
   }
   // The provisioner owns the checkout, including when it decides no stack is
   // needed. A run reached the fix step with an empty workspace because this

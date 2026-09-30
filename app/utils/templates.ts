@@ -52,7 +52,7 @@ These hold at every step in this pipeline, not just this one:
 - **Read the checkout's own \`CLAUDE.md\` before you change code in it.** A pipeline agent runs with a deliberate, minimal environment — none of a developer's personal configuration, and no automatically loaded project files — so the product's conventions reach you only if you read them. One \`Read\` of \`<checkout>/CLAUDE.md\` (and of the nearest one above the file you are changing, when the repository has several) at the start of your step, if it exists. Follow it as you would this brief; where it and these standing rules disagree, these win.
 - **Check whether it already exists before you add it — including under another name.** Before creating a service, profile, test file, script or config block, search for one that already does the job. Match on what it *does*, not on the name you were about to use: a thing named \`x-y-z\` and a thing named \`x-z-y\` are the same capability twice, and both will pass their own tests while the repository quietly carries a duplicate. If the intake step reported that the capability is already present, that report is evidence — act on it rather than re-deriving it.
 
-- **Nothing under \`.agent/\` but \`plan.md\` is ever staged.** The plan gate needs \`.agent/plan.md\`, and it travels with the commit as the statement of intent; everything else there is scratch. Evidence lives in the run artifacts directory Agent Manager serves, never in the repository. Staging the whole tree at once is never how you stage: name the files you commit.
+- **Nothing under \`.agent/\` is ever staged, \`plan.md\` included.** The plan gate reads \`.agent/plan.md\` from the working tree, never from git, and your plan reaches the reviewer through the run artifacts and the pull request body. Committed, every run rewrote the same file and every open pull request conflicted with the others on it. Evidence lives in the run artifacts directory Agent Manager serves, never in the repository. Staging the whole tree at once is never how you stage: name the files you commit.
 - **Ask when only a person can answer.** If you reach a decision that is genuinely the developer's — two behaviours the ticket could mean, a credential or access you do not have, an action that cannot be undone — end your output with one line, \`PIPELINE-ASK: <one precise question>\`, and stop. The run pauses, the developer answers, and you run again with your previous output and their answer. Never ask what the ticket, the repository or the run artifacts can tell you; a question that a search would have answered wastes a person's time.
 
   The person answering has not read the ticket, the repository or your report, and sees your question in an inbox. So before the \`PIPELINE-ASK:\` line, write \`decision.json\` into the run artifacts directory - the inbox lays it out, and a question without it is sent back to you:
@@ -294,8 +294,8 @@ apply here, and this pipeline's standing rules win wherever they conflict:
   section, and anything about other harnesses, engines or dynamic workflows.
 - **Artifacts go to the run artifacts directory** named at the top of your
   input, never to \`docs/\` or \`.compound-engineering/\` inside the product
-  repository. Evidence never enters a product repo; \`.agent/plan.md\` is the
-  one file allowed there, and only because the plan gate requires it.
+  repository. Evidence never enters a product repo, and neither does
+  \`.agent/plan.md\`: the plan gate reads it from the working tree, uncommitted.
 - **It does not commit, push or open a pull request for you.** Your git
   mandate is what this prompt says under "## Git", not what the skill says.`
 
@@ -1925,9 +1925,12 @@ carries the evidence as **text you quote** — the verbatim FAIL output, the
 verbatim PASS output, the exit codes — plus a link to the run. A reviewer reads
 the body; if they want the raw files, they open the run.
 
-The only things that belong in your commit are the fix, the test that proves it,
-and \`.agent/plan.md\` — the plan gate requires that one, and it is a statement
-of intent rather than an artifact of the run.
+The only things that belong in your commit are the fix and the test that proves
+it. \`.agent/plan.md\` stays out: the plan gate reads it uncommitted, and the plan
+reaches the reviewer in the pull request body. If the branch's diff against its
+base shows \`.agent/plan.md\`, restore the base's version before you push
+(\`git checkout origin/<base> -- .agent/plan.md\`, or \`git rm --cached\` when the
+base has none), so the pull request never carries it.
 
 ## Which branch the pull request targets
 
@@ -2180,7 +2183,7 @@ ${CE_SKILL_RULES('ce-plan', 'Phase 1 (gather context, in the working checkout), 
 
 Write \`plan.md\` into the run artifacts directory: the approach in a paragraph, the root cause when the ticket is a bug, every file to change with \`file:line\` and what changes there, the tests to add, the risks and what is deliberately out of scope. The smallest change that satisfies the acceptance criteria is the plan; a plan that adds an abstraction, a config knob or a refactor the ticket did not ask for is sent back. Name the existing code you will reuse — search for it before planning to write it, including under another name.
 
-Copy the same content to \`.agent/plan.md\` in the working checkout. The plan gate requires that file and it travels with the commit as the statement of intent; nothing else of yours goes into the repository.
+Copy the same content to \`.agent/plan.md\` in the working checkout. The plan gate requires that file in the working tree; it is never committed, and nothing else of yours goes into the repository either.
 
 ## The QA plan
 

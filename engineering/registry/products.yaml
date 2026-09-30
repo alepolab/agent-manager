@@ -42,6 +42,8 @@ products:
     match:
       projects: [ASECRM]
     repos: [alepolab/ase-crm]
+    # Asked to review every pull request a run opens here (2026-09-30).
+    reviewers: [sandeep-patel-alepo-fifth]
     branches:
       # main is four months stale (last commit 24 Apr 2026); develop is where
       # work lands (7 Sep 2026). Read from the repo, not drafted.

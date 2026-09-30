@@ -83,6 +83,11 @@
             "pattern": "^[^/]+/[^/]+$"
           }
         },
+        "reviewers": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(/[A-Za-z0-9._-]+)?$" },
+          "description": "GitHub logins (or org/team slugs) asked to review every pull request a run opens on this product."
+        },
         "multi_repo": {
           "type": "boolean",
           "default": false,
