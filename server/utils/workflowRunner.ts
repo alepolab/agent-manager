@@ -3394,7 +3394,7 @@ const awaitingSlot = new Set<string>()
 let resumingWaiting: Promise<unknown> | null = null
 
 /** Resumes what `resumeInterruptedRuns` left waiting, one pass at a time. */
-function resumeAwaitingSlot(): Promise<unknown> {
+export function resumeAwaitingSlot(): Promise<unknown> {
   if (!awaitingSlot.size) return Promise.resolve()
   resumingWaiting ??= resumeInterruptedRuns(new Set(awaitingSlot)).finally(() => { resumingWaiting = null })
   return resumingWaiting

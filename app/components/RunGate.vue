@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { HOLD } from '~~/shared/types/workflowGroup'
 import type { WorkflowRun } from '~~/shared/types/run'
 import { needsJustification } from '~~/shared/utils/oversight'
 import { gateIsMine } from '~~/shared/utils/notifications'
@@ -115,7 +116,14 @@ const askingLabel = computed(() => `${props.run.steps.find(s => s.stepId === pro
     <!-- A decision taken while the group was full: recorded, and carried out
          by the queue when a slot frees - it is not lost and not re-asked. -->
     <div v-if="run.status === 'queued' && run.parked" class="rounded-lg p-3 t-small space-y-1" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);" role="status">
-      <template v-if="run.parked.gaveWayTo">
+      <template v-if="run.parked.gaveWayTo === HOLD">
+        <p class="t-head m-0" style="color: var(--text-primary);">Paused: its group is on hold</p>
+        <p class="m-0 text-label">
+          It finished the step it was on and stopped there. When the hold is lifted it carries on from the next
+          step, ahead of newer runs.
+        </p>
+      </template>
+      <template v-else-if="run.parked.gaveWayTo">
         <p class="t-head m-0" style="color: var(--text-primary);">Stepped aside while {{ run.parked.gaveWayTo }} runs are working</p>
         <p class="m-0 text-label">
           Its group gives way to {{ run.parked.gaveWayTo }} so they get the machine to themselves. The step it had

@@ -115,5 +115,34 @@ const status = async id => (await store.getRun(id)).status
   assert.equal((await listGroups()).find(g => g.id === 'default').yieldsTo, undefined, 'an empty value clears it')
 }
 
+// ── On hold: a working run pauses after its current step, and nothing starts ─
+{
+  const { replaceGroups, listGroups } = await import('../server/utils/workflowGroups.ts')
+  const working = (await runner.startOrQueue({ workflow: runbook, initialPrompt: 'held', watch: 'direct-invocation', autoRun: true, startedBy: 'devH' })).run
+  const h8 = working.id.slice(0, 8)
+  gate(`agent-a:${h8}`)
+  await until(() => gates[`agent-a:${h8}`] && calls.filter(c => c === 'agent-a').length > 0, 'the run to be in its first step')
+  await replaceGroups([{ id: 'default', name: 'Runbooks', maxConcurrent: 3, held: true }, { id: 'scans', name: 'Nightly scans', maxConcurrent: 2 }])
+  assert.equal(await queue.givingWayTo('default'), 'hold')
+  const late = await runner.startOrQueue({ workflow: runbook, initialPrompt: 'held late', watch: 'direct-invocation', autoRun: true, startedBy: 'devHL' })
+  assert.equal(late.queued, true, 'nothing starts in a held group')
+  assert.equal(await status(working.id), 'running', 'the step in flight is not cut off')
+  gates[`agent-a:${h8}`].open()
+  await until(async () => (await status(working.id)) === 'queued', 'the run to pause after its step')
+  const held = await store.getRun(working.id)
+  assert.equal(held.parked.gaveWayTo, 'hold')
+  assert.equal(held.steps.find(x => x.stepId === 'b').status, 'pending', 'nothing after the finished step started')
+  // A cap saved from the Groups editor does not lift it.
+  await replaceGroups([{ id: 'default', name: 'Runbooks', maxConcurrent: 3 }, { id: 'scans', name: 'Nightly scans', maxConcurrent: 2 }])
+  assert.equal((await listGroups()).find(g => g.id === 'default').held, true)
+  // Lifted: both carry on, the paused one from its next step.
+  await replaceGroups([{ id: 'default', name: 'Runbooks', maxConcurrent: 3, held: false }, { id: 'scans', name: 'Nightly scans', maxConcurrent: 2 }])
+  await queue.drainRunQueue(runner.launchQueuedRun)
+  const done = await runner.waitForSettled(working.id, TIMEOUT)
+  assert.equal(done.status, 'completed', done.error)
+  assert.equal(done.steps.find(x => x.stepId === 'a').visits, 1, 'the finished step did not run again')
+  assert.equal((await runner.waitForSettled(late.run.id, TIMEOUT)).status, 'completed')
+}
+
 console.log('ok - runbooks run four at once, and give way to scans at a step boundary')
 process.exit(0)

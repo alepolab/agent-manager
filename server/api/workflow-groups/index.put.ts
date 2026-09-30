@@ -1,5 +1,7 @@
 import { requireCapability } from '../../utils/session'
 import { replaceGroups } from '../../utils/workflowGroups.ts'
+import { drainRunQueue } from '../../utils/runQueue.ts'
+import { launchQueuedRun, resumeAwaitingSlot } from '../../utils/workflowRunner.ts'
 import type { WorkflowGroup } from '../../../shared/types/workflowGroup.ts'
 
 /**
@@ -23,7 +25,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'groups must be an array' })
   }
   try {
-    return await replaceGroups(body.groups)
+    const saved = await replaceGroups(body.groups)
+    // A hold lifted, or a cap raised, frees slots nothing else would notice:
+    // with every run held, no run settles to trigger the next drain.
+    void drainRunQueue(launchQueuedRun).catch(() => {})
+    void resumeAwaitingSlot().catch(() => {})
+    return saved
   } catch (err) {
     throw createError({ statusCode: 400, message: err instanceof Error ? err.message : String(err) })
   }
