@@ -77,8 +77,12 @@ export async function pollOnce(now = Date.now()): Promise<number> {
 }
 
 export type ReviewRequester = (prUrl: string, reviewers: string[]) => Promise<void>
+// The REST endpoint, not `gh pr edit --add-reviewer`: that one also queries
+// Projects (classic), which GitHub has retired, and fails on every PR.
 const realReviewRequester: ReviewRequester = async (prUrl, reviewers) => {
-  await execFileP('gh', ['pr', 'edit', prUrl, '--add-reviewer', reviewers.join(',')], { timeout: 30_000 })
+  const m = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
+  if (!m) throw new Error(`not a GitHub pull request URL: ${prUrl}`)
+  await execFileP('gh', ['api', '-X', 'POST', `repos/${m[1]}/${m[2]}/pulls/${m[3]}/requested_reviewers`, ...reviewers.flatMap(r => ['-f', `reviewers[]=${r}`])], { timeout: 30_000 })
 }
 let reviewRequester: ReviewRequester = realReviewRequester
 /** Test seam. */
