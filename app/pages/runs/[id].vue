@@ -44,7 +44,7 @@ const headline = computed(() => {
     </div>
     <div v-else-if="run" class="flex-1 min-h-0 overflow-y-auto page page--wide space-y-5">
       <header class="space-y-1.5">
-        <span v-if="run.ticketKey" class="t-small font-mono text-label">{{ run.ticketKey }}</span>
+        <TicketLink v-if="run.ticketKey" :ticket-key="run.ticketKey" class="t-small font-semibold" />
         <h2 class="text-page-title">{{ headline }}</h2>
         <p class="t-small text-label">
           {{ run.workflowName }}{{ run.product ? ` · ${run.product.name}` : '' }}{{ run.startedBy ? ` · started by ${run.startedBy}` : '' }}<template v-if="run.branch"> · <span class="font-mono">{{ run.branch }}</span></template>

@@ -153,9 +153,10 @@ const waitTier = (n: NotificationItem) => {
       </div>
 
       <!-- The decision. Below `lg` it replaces the list rather than stacking under it. -->
-      <div class="min-h-0 overflow-y-auto px-4 sm:px-6 py-5" :class="{ 'hidden lg:block': !selectedId }">
-        <UButton class="lg:hidden mb-3" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Notifications" @click="select(null)" />
-        <div class="max-w-4xl">
+      <div class="min-h-0 overflow-y-auto px-4 sm:px-6 py-5 flex flex-col" :class="{ 'hidden lg:flex': !selectedId }">
+        <UButton class="lg:hidden mb-3 self-start" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Notifications" @click="select(null)" />
+        <!-- A gate lays itself out across the pane, with its answer bar at the bottom. -->
+        <div :class="selected?.kind === 'gate' ? 'flex-1 flex flex-col' : 'max-w-4xl'">
           <NotificationRunDetail v-if="selected?.kind === 'gate'" :key="selected.id" :item="selected" @decided="decided" />
           <NotificationPermissionDetail v-else-if="selected?.kind === 'permission'" :key="selected.id" :item="selected" @decided="decided" />
           <div v-else-if="vanished && loaded" class="group-card space-y-2">

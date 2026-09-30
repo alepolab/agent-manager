@@ -329,6 +329,7 @@ async function deleteFailed() {
           <!-- The toolbar owns the run's actions; they were five buttons on every row. -->
           <div class="shrink-0 flex items-center gap-1 px-4 py-2" style="border-bottom: 0.5px solid var(--border-default);">
             <UButton class="lg:hidden" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Runs" @click="select(null)" />
+            <TicketLink v-if="selected.ticketKey" :ticket-key="selected.ticketKey" class="t-small font-semibold ml-1" />
             <span class="t-small text-label ml-1" :title="RUN_DURATION_HINT">{{ duration(selected) }} run time · started {{ new Date(selected.startedAt).toLocaleString() }}</span>
             <span class="flex-1" />
             <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-external-link" label="Open run page" :to="`/runs/${selected.id}`" />

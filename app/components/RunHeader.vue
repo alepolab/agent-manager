@@ -220,7 +220,7 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
       <UButton
         v-if="mayDrive && isLiveStatus(run.status)"
         size="xs" :variant="confirmingStop ? 'solid' : 'ghost'" :color="confirmingStop ? 'error' : 'neutral'"
-        icon="i-lucide-square" :label="confirmingStop ? 'Confirm stop' : 'Stop'" @click="handleStop"
+        icon="i-lucide-circle-stop" :label="confirmingStop ? 'Confirm stop' : 'Stop'" @click="handleStop"
       />
       <!-- Not for a test run: a clone is a REAL run, and would carry a test's config into real side effects. -->
       <UButton v-if="mayDrive && settledRun && !isTestRun(run)" size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" label="Clone run" @click="emit('clone')" />

@@ -201,7 +201,7 @@ watch(workflowState, (s) => { if (s === 'loaded') focusTarget() }, { once: true 
         <UIcon :name="run.watch && run.watch !== 'direct-invocation' ? 'i-lucide-radar' : 'i-lucide-play'" class="size-4 shrink-0" style="color: var(--warning);" />
         <span class="truncate">
           <span class="text-label">Started </span>
-          <template v-if="run.ticketKey">from <span class="font-mono">{{ run.ticketKey }}</span></template>
+          <template v-if="run.ticketKey">from <TicketLink :ticket-key="run.ticketKey" /></template>
           <template v-else>manually</template>
           <template v-if="run.startedBy"> by {{ run.startedBy }}</template>
           · {{ new Date(run.startedAt).toLocaleString() }}

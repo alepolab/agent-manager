@@ -2,6 +2,7 @@ import type { WorkflowRun } from '../types/run'
 import type { NotificationItem, PendingPermissionSummary } from '../types/notification'
 import { can, type Role } from '../types/role.ts'
 import { isWaitingOnAPerson } from '../types/run.ts'
+import { briefHeadline } from './decisionBrief.ts'
 
 /**
  * Every decision a person owes, in one list: the gates runs are stopped on and
@@ -18,6 +19,9 @@ export function gateAsk(run: Pick<WorkflowRun, 'status' | 'question'>): string {
   if (run.question?.reason === 'quota') return `Quota spent - resumes on its own at ${new Date(run.question.resumeAt ?? 0).toLocaleTimeString()}`
   if (run.question?.reason === 'auth') return 'Could not reach the model - fix the server\'s credentials, then retry'
   if (run.question?.reason === 'rework') return 'Out of send-backs - grant another, or stop it'
+  // The brief's headline when it has one: the full question is often four
+  // lines of identifiers, and the list shows its first sentence.
+  if (run.question?.brief) return briefHeadline(run.question.brief, run.question.text)
   return run.question?.text || 'Paused - open it to see why'
 }
 
