@@ -50,12 +50,14 @@ export function runStatusColor(status: string): string {
  * track all key off this, so "waiting on a person" looks the same wherever
  * it appears.
  */
-export type StatusKind = 'now' | 'wait' | 'fail' | 'done' | 'idle'
+/** `skip` is settled without having run: the track draws it with done, the label says so in its own words. */
+export type StatusKind = 'now' | 'wait' | 'fail' | 'done' | 'skip' | 'idle'
 export function statusKind(status: string): StatusKind {
   if (status === 'running' || status === 'joining') return 'now'
   if (status === 'paused' || status === 'awaiting_review' || status === 'waiting') return 'wait'
   if (status === 'failed' || status === 'interrupted') return 'fail'
   if (status === 'completed') return 'done'
+  if (status === 'skipped') return 'skip'
   return 'idle'
 }
 

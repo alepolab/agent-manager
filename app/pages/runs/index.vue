@@ -293,7 +293,7 @@ async function deleteFailed() {
           <UButton v-if="parent" size="xs" variant="soft" color="neutral" icon="i-lucide-x" :label="`Children of ${parent.slice(0, 8)}`" @click="() => { router.replace({ query: { ...route.query, parent: undefined } }) }" />
         </div>
 
-        <div class="flex-1 min-h-0 overflow-y-auto" aria-live="polite">
+        <div class="flex-1 min-h-0 overflow-y-auto" aria-live="polite" data-testid="run-list">
           <div v-if="loadError" class="run-row">
             <span class="t-small flex-1" style="color: var(--error);">{{ loadError }}</span>
             <UButton size="xs" variant="soft" label="Retry" @click="refresh" />
@@ -325,7 +325,7 @@ async function deleteFailed() {
       </div>
 
       <div class="min-h-0 flex flex-col" :class="{ 'hidden lg:flex': !selectedId }">
-        <template v-if="selected">
+        <section v-if="selected" class="contents" data-testid="run-detail" :aria-label="`Run ${selected.ticketKey ?? selected.workflowName}`">
           <!-- The toolbar owns the run's actions; they were five buttons on every row. -->
           <div class="shrink-0 flex items-center gap-1 px-4 py-2" style="border-bottom: 0.5px solid var(--border-default);">
             <UButton class="lg:hidden" size="xs" variant="ghost" color="neutral" icon="i-lucide-arrow-left" label="Runs" @click="select(null)" />
@@ -347,7 +347,7 @@ async function deleteFailed() {
           <div class="flex-1 min-h-0 overflow-y-auto px-6 py-5">
             <div class="max-w-4xl"><RunDetailPane :id="selected.id" :key="selected.id" @changed="refresh" /></div>
           </div>
-        </template>
+        </section>
         <p v-else-if="loaded && shown.length" class="p-6 t-ui text-label">Choose a run on the left.</p>
       </div>
     </div>

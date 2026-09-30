@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RunStep } from '~~/shared/types/run'
+import { statusKind, type StatusKind } from '~/utils/runStatus'
 
 const props = defineProps<{ steps: RunStep[] }>()
 
@@ -21,13 +22,13 @@ const summary = computed(() => {
  * look at. Only three things get colour — now (the accent, with a slow
  * sweep), waiting on a person, and failed.
  */
-function segment(status: string) {
-  if (status === 'running' || status === 'joining') return 'track__seg--now'
-  if (status === 'paused' || status === 'awaiting_review' || status === 'waiting') return 'track__seg--wait'
-  if (status === 'failed' || status === 'interrupted') return 'track__seg--fail'
-  if (status === 'completed' || status === 'skipped') return 'track__seg--done'
-  return ''
+// The same map StatusLabel reads, so a step's segment and its label never
+// disagree. Skipped is settled, so it draws with done.
+const SEGMENT: Record<StatusKind, string> = {
+  now: 'track__seg--now', wait: 'track__seg--wait', fail: 'track__seg--fail',
+  done: 'track__seg--done', skip: 'track__seg--done', idle: '',
 }
+const segment = (status: string) => SEGMENT[statusKind(status)]
 </script>
 
 <template>

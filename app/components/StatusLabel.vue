@@ -21,12 +21,13 @@ const ICON: Record<string, string> = {
   wait: 'i-lucide-hand',
   fail: 'i-lucide-circle-x',
   done: 'i-lucide-circle-check',
+  skip: 'i-lucide-circle-slash',
   idle: 'i-lucide-circle-dashed',
 }
 </script>
 
 <template>
-  <span class="status-label" :class="`status-label--${kind}`" :title="iconOnly ? word : undefined">
+  <span class="status-label" :class="`status-label--${kind}`" :data-status="status" :title="iconOnly ? word : undefined">
     <UIcon :name="ICON[kind]!" class="status-label__icon" :class="{ 'status-label__icon--spin': kind === 'now' }" aria-hidden="true" />
     <span :class="{ 'sr-only': iconOnly }">{{ word }}</span>
   </span>

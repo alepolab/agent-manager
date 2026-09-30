@@ -62,21 +62,23 @@
   --border-emphasis: rgba(0, 0, 0, 0.18);
 
   /* Text */
-  /* Every text token clears 4.5:1 on every surface it sits on, the sidebar
-     (#efeff2) included. --text-disabled was #aaa5b8 — 2.15:1 — and carried
-     real content in 117 places: sidebar group labels, counts, placeholders,
-     shortcut hints. It is now barely lighter than tertiary; hierarchy comes
-     from size and weight, not from text people cannot read.
-       primary   #1d1d1f  16.8:1 on white, 15.5:1 on base
-       secondary #3c3c43  10.9:1 / 10.1:1
-       tertiary  #636366   6.0:1 /  5.5:1 / 5.1:1 on the sidebar
-       disabled  #6e6e73   5.1:1 /  4.7:1 */
+  /* Every text token clears 4.5:1 on every surface it sits on: base, raised,
+     inset, hover and the sidebar (#efeff2). --text-disabled was #aaa5b8 —
+     2.15:1 — and carries real content, not only disabled state: sidebar group
+     labels, counts, placeholders, "optional", shortcut hints. It is barely
+     lighter than tertiary; hierarchy comes from size and weight, not from
+     text people cannot read. Lowest ratio of each, on inset (#ececf0):
+       primary   #1d1d1f  14.3:1
+       secondary #3c3c43   9.3:1
+       tertiary  #636366   5.1:1
+       disabled  #69696e   4.6:1
+       indigo    #0b6b80   5.2:1 */
   --text-primary: #1d1d1f;
   --text-secondary: #3c3c43;
   --text-tertiary: #636366;
-  --text-disabled: #6e6e73;
+  --text-disabled: #69696e;
   --text-accent: #4f3be9;
-  --text-indigo: #0e7c93;
+  --text-indigo: #0b6b80;
 
   /* Accent — Alepo violet. --accent-rgb is the same colour as channels, for
      the translucent tints written as rgba(var(--accent-rgb), a). */
@@ -161,7 +163,7 @@
   --text-primary: #f5f5f7;
   --text-secondary: #c7c7cc;
   --text-tertiary: #a1a1a6;
-  --text-disabled: #8e8e93;
+  --text-disabled: #98989d; /* 5.0:1 on the dark hover surface, the lowest it sits on */
   --text-accent: #a598ff;
   --text-indigo: #3cc3de;
 
@@ -304,7 +306,7 @@ body {
   background: var(--surface-raised);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
 }
-.dark .segmented__item--on { background: #636366; }
+.dark .segmented__item--on { background: #636366; } /* light-mode tertiary, not dark's (#a1a1a6): a mid-grey pill the white label reads 5.5:1 on */
 
 /* ============================================
    The pipeline track
@@ -323,7 +325,7 @@ body {
 }
 .dark .track__seg { background: rgba(120, 120, 128, 0.3); }
 .track--lg .track__seg { height: 8px; border-radius: 4px; }
-.track__seg--done { background: var(--text-disabled) !important; opacity: 0.55; }
+.track__seg--done { background: var(--text-disabled) !important; } /* at 55% opacity done read 2.2:1 against pending's 1.2:1 */
 .track__seg--wait { background: var(--warning) !important; }
 .track__seg--fail { background: var(--error) !important; }
 .track__seg--now { background: var(--accent) !important; position: relative; overflow: hidden; }
@@ -361,6 +363,7 @@ body {
 .status-label--fail { color: var(--error); }
 .status-label--done { color: var(--success); }
 .status-label--idle { color: var(--text-tertiary); }
+.status-label--skip { color: var(--text-tertiary); }
 
 /* ============================================
    Inset grouped list
@@ -1218,6 +1221,11 @@ optgroup {
 .text-body {
   color: var(--text-secondary);
 }
+
+/* Emphasis and an inline action, as classes: an inline style outranks every
+   class, so text written `style="color: …"` could not be restyled by context. */
+.text-strong { color: var(--text-primary); }
+.text-link { color: var(--accent); }
 
 /* ============================================
    Semantic Surfaces

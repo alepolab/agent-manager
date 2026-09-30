@@ -70,10 +70,17 @@ const gist = computed(() => {
   return text.startsWith(headline.value) ? text.slice(headline.value.length).trim() : text
 })
 const gistOpen = ref(false)
+// Per instance: two decisions on one page must not share ids.
+const uid = useId()
+const ids = { choices: `${uid}-choices`, gist: `${uid}-gist` }
 const fullQuestion = computed(() => {
-  // Without a brief the gist under the title already is the full question.
+  // The title is clamped at three lines, so a long one has its full text here
+  // (a title attribute reaches neither a keyboard nor a touch screen). Without
+  // a brief, a short title's rest is already the gist under it.
   const asked = (question.value?.text ?? '').trim()
-  return brief.value && asked && asked !== headline.value ? asked : ''
+  if (!asked) return ''
+  if (headline.value.length > 140) return asked
+  return brief.value && asked !== headline.value ? asked : ''
 })
 
 /** The asking step's own report, without its PIPELINE-ASK line. */
@@ -180,10 +187,10 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <StatusLabel :status="run.status" :label="mineToAnswer ? (isApproval && !runnerPause ? 'Your approval' : 'Your decision') : `${gateOwner ?? 'Someone else'}'s decision`" />
           <span class="text-label">· {{ gateLabel }}</span>
         </p>
-        <h2 class="decision__title" :title="headline.length > 160 ? headline : undefined">{{ headline }}</h2>
+        <h2 class="decision__title">{{ headline }}</h2>
         <template v-if="gist">
-          <p class="decision__gist" :class="{ 'decision__gist--open': gistOpen }">{{ gist }}</p>
-          <button v-if="gist.length > 220" class="t-small focus-ring rounded" style="color: var(--accent);" :aria-expanded="gistOpen" @click="gistOpen = !gistOpen">
+          <p :id="ids.gist" class="decision__gist" :class="{ 'decision__gist--open': gistOpen }">{{ gist }}</p>
+          <button v-if="gist.length > 220" class="t-small focus-ring rounded text-link" :aria-expanded="gistOpen" :aria-controls="ids.gist" @click="gistOpen = !gistOpen">
             {{ gistOpen ? 'Show less' : 'Show more' }}
           </button>
         </template>
@@ -195,11 +202,11 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
       <!-- A decision taken while the group was full: recorded, not lost, not re-asked. -->
       <div v-if="parked && run.parked" class="group-card t-small space-y-1" role="status">
         <template v-if="run.parked.gaveWayTo">
-          <p class="t-head m-0" style="color: var(--text-primary);">Stepped aside while {{ run.parked.gaveWayTo }} runs are working</p>
+          <p class="t-head m-0 text-strong">Stepped aside while {{ run.parked.gaveWayTo }} runs are working</p>
           <p class="m-0 text-label">It carries on from the next step when they are done, ahead of newer runs.</p>
         </template>
         <template v-else>
-          <p class="t-head m-0" style="color: var(--text-primary);">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
+          <p class="t-head m-0 text-strong">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
           <p class="m-0 text-label">
             Its group is running as many runs as it allows; this one goes ahead of newer ones.
             <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
@@ -211,19 +218,21 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
       <RunDecisionPanel v-else-if="reviewing" :run="run" />
 
       <!-- A question with a brief: the options to choose between. -->
-      <section v-else-if="options.length" aria-labelledby="choices-title">
+      <section v-else-if="options.length" :aria-labelledby="ids.choices">
         <div class="group-head">
-          <h3 id="choices-title">{{ mayAnswer && paused ? 'Choose one' : 'The options' }}</h3>
+          <h3 :id="ids.choices">{{ mayAnswer && paused ? 'Choose one' : 'The options' }}</h3>
           <span class="group-head__count">{{ options.length }}</span>
         </div>
-        <div class="choices" :role="mayAnswer && paused ? 'radiogroup' : 'list'" aria-labelledby="choices-title">
+        <!-- Radios either way: selecting one opens its detail, which is how an
+             option is read. Read-only when it is not this person's to answer. -->
+        <div class="choices" role="radiogroup" :aria-labelledby="ids.choices" :aria-readonly="mayAnswer && paused ? undefined : 'true'">
           <div
             v-for="(o, i) in options" :key="o.key"
             ref="optionEls"
             class="choice focus-ring"
             :class="{ 'choice--on': chosen === o.key }"
-            :role="mayAnswer && paused ? 'radio' : 'listitem'"
-            :aria-checked="mayAnswer && paused ? chosen === o.key : undefined"
+            role="radio"
+            :aria-checked="chosen === o.key"
             :tabindex="chosen === o.key || (!chosen && i === 0) ? 0 : -1"
             @click="chosen = o.key"
             @keydown="onOptionKey($event, i)"
@@ -248,8 +257,8 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           </div>
         </div>
         <p v-if="brief?.recommendation" class="decision__why">
-          <UIcon name="i-lucide-info" class="size-4 shrink-0 mt-0.5" style="color: var(--accent);" />
-          <span><b style="color: var(--text-primary);">Why it is recommended:</b> {{ brief.recommendation.why }}</span>
+          <UIcon name="i-lucide-info" class="size-4 shrink-0 mt-0.5 text-link" />
+          <span><b class="text-strong">Why it is recommended:</b> {{ brief.recommendation.why }}</span>
         </p>
       </section>
 
@@ -271,7 +280,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
         <details v-if="brief?.criteria?.length">
           <summary class="focus-ring"><UIcon name="i-lucide-chevron-right" class="chev" />What it is checked against<span class="end">{{ brief.criteria.length }} {{ brief.criteria.length === 1 ? 'criterion' : 'criteria' }}</span></summary>
           <div class="disclosures__body space-y-2">
-            <div v-for="c in brief.criteria" :key="c.ref"><b class="block font-semibold" style="color: var(--text-primary);">{{ c.ref }}</b>{{ c.text }}</div>
+            <div v-for="c in brief.criteria" :key="c.ref"><b class="block font-semibold text-strong">{{ c.ref }}</b>{{ c.text }}</div>
           </div>
         </details>
         <details v-if="fullQuestion">
@@ -320,7 +329,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <!-- A question -->
           <template v-if="isReply">
             <span class="t-small text-label min-w-0 truncate" style="flex: 1 1 12rem;">
-              <template v-if="chosenOption">Answer: <b style="color: var(--text-primary);">{{ chosenOption.name }}</b></template>
+              <template v-if="chosenOption">Answer: <b class="text-strong">{{ chosenOption.name }}</b></template>
               <template v-else-if="options.length">Answering in your own words</template>
             </span>
             <UButton v-if="options.length && chosenOption" size="sm" variant="link" color="primary" label="Answer in my own words" @click="ownWords" />
@@ -359,6 +368,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
               v-if="mayStop" size="sm" :variant="confirmingStop ? 'solid' : 'ghost'" :color="confirmingStop ? 'error' : 'neutral'"
               icon="i-lucide-circle-stop" :label="confirmingStop ? 'Confirm stop' : 'Stop the run'" @click="stopRun"
             />
+            <span class="sr-only" aria-live="polite">{{ confirmingStop ? 'Press Confirm stop again within four seconds to stop the run.' : '' }}</span>
             <UButton
               size="sm" icon="i-lucide-check" :label="approveLabel"
               :loading="sending === 'continue'" :disabled="!!sending || (!runnerPause && !canApprove)"
@@ -374,7 +384,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           </template>
         </div>
       </template>
-      <p v-if="sending" class="t-small flex items-center gap-1.5 m-0" style="color: var(--text-secondary);" role="status" aria-live="polite">
+      <p v-if="sending" class="t-small flex items-center gap-1.5 m-0 text-body" role="status" aria-live="polite">
         <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin" />
         {{ SENDING_LABEL[sending] }}
       </p>
@@ -416,11 +426,12 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
 .decision__pre { white-space: pre-wrap; font-family: var(--font-sans); font-size: 12.5px; color: var(--text-secondary); max-height: 24rem; overflow-y: auto; margin: 0; }
 
 .choices { background: var(--surface-raised); border-radius: 12px; box-shadow: 0 0 0 0.5px var(--border-default); overflow: hidden; }
-.choice { cursor: pointer; border-top: 0.5px solid var(--border-subtle); outline: none; }
+.choice { cursor: pointer; border-top: 0.5px solid var(--border-subtle); }
 .choice:first-child { border-top: 0; }
 .choice:hover { background: var(--surface-hover); }
 .choice--on, .choice--on:hover { background: var(--accent-muted); }
-.choice:focus-visible { box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), 0.6); }
+/* An outline, not a box-shadow: forced-colors mode strips shadows and keeps outlines. */
+.choice:focus-visible { outline: 2px solid rgba(var(--accent-rgb), 0.6); outline-offset: -2px; }
 .choice__head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 12px 14px; }
 .choice__radio { width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-emphasis, var(--border-default)); margin-top: 1px; }
 .choice--on .choice__radio { box-shadow: inset 0 0 0 5px var(--accent); }

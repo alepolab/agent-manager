@@ -68,7 +68,33 @@ const sortedGroups = computed(() => groupedAgents.value.map(([dir, list]) => [di
 const route = useRoute()
 const selectedSlug = computed(() => (typeof route.query.agent === 'string' ? route.query.agent : null))
 const selected = computed(() => agents.value.find(a => a.slug === selectedSlug.value) ?? null)
-function select(slug: string) { router.replace({ query: { ...route.query, agent: slug } }) }
+/**
+ * Wide screens select into the inspector beside the table; narrow ones have no
+ * inspector (it is `hidden lg:block`), so a tap opens the agent itself, the way
+ * a run row does on /runs. Keyboard selection always stays on the page.
+ */
+function select(slug: string, fromPointer = false) {
+  if (fromPointer && !window.matchMedia('(min-width: 1024px)').matches) { router.push(`/agents/${slug}`); return }
+  router.replace({ query: { ...route.query, agent: slug } })
+}
+
+/**
+ * One tab stop for the table, arrows to move within it: the selected row (or
+ * the first) is focusable, the rest are reached with Up and Down. It was one
+ * tab stop per agent, 36 of them before the inspector.
+ */
+const rowOrder = computed(() => sortedGroups.value.flatMap(([, list]) => list.map(a => a.slug)))
+const focusSlug = computed(() => (selectedSlug.value && rowOrder.value.includes(selectedSlug.value) ? selectedSlug.value : rowOrder.value[0]))
+function moveRow(e: KeyboardEvent, slug: string) {
+  const i = rowOrder.value.indexOf(slug)
+  const n = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? rowOrder.value.length - 1 : -2
+  if (n === -2) return
+  e.preventDefault()
+  const next = rowOrder.value[Math.max(0, Math.min(rowOrder.value.length - 1, n))]
+  if (!next) return
+  select(next)
+  nextTick(() => (document.querySelector(`[data-agent-row="${CSS.escape(next)}"]`) as HTMLElement | null)?.focus())
+}
 
 const hasGroups = computed(() =>
   groupedAgents.value.length > 1 ||
@@ -112,7 +138,7 @@ async function useTemplate(templateId: string) {
 
     <div v-else-if="filteredAgents.length" class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div class="min-h-0 overflow-y-auto" style="background: var(--surface-raised);">
-        <table class="agent-table">
+        <table class="agent-table" aria-label="Agents">
           <thead>
             <tr>
               <th scope="col"><button class="focus-ring" @click="sortBy('name')">Name<span v-if="sortKey === 'name'" aria-hidden="true"> {{ sortDir === 1 ? '▾' : '▴' }}</span></button></th>
@@ -127,11 +153,13 @@ async function useTemplate(templateId: string) {
             <tr
               v-for="agent in groupAgents" :key="agent.slug"
               :class="{ 'agent-table__row--on': agent.slug === selectedSlug }"
-              tabindex="0"
-              :aria-selected="agent.slug === selectedSlug"
-              @click="select(agent.slug)"
+              :data-agent-row="agent.slug"
+              :tabindex="agent.slug === focusSlug ? 0 : -1"
+              :aria-current="agent.slug === selectedSlug ? 'true' : undefined"
+              @click="select(agent.slug, true)"
               @keydown.enter="router.push(`/agents/${agent.slug}`)"
               @keydown.space.prevent="select(agent.slug)"
+              @keydown="moveRow($event, agent.slug)"
               @dblclick="router.push(`/agents/${agent.slug}`)"
             >
               <td class="font-medium"><div class="truncate">{{ agent.frontmatter.name }}</div></td>
@@ -145,7 +173,7 @@ async function useTemplate(templateId: string) {
 
       <aside class="min-h-0 overflow-y-auto agent-inspector hidden lg:block">
         <template v-if="selected">
-          <h2 class="t-head" style="color: var(--text-primary);">{{ selected.frontmatter.name }}</h2>
+          <h2 class="t-head text-strong">{{ selected.frontmatter.name }}</h2>
           <p class="t-small text-label mt-1">{{ selected.frontmatter.description }}</p>
           <div class="flex gap-2 mt-4">
             <UButton size="sm" label="Edit" :to="`/agents/${selected.slug}`" />
@@ -165,7 +193,7 @@ async function useTemplate(templateId: string) {
             <dt>File</dt><dd class="font-mono t-small break-all">{{ selected.filePath }}</dd>
           </dl>
         </template>
-        <p v-else class="t-small text-label">Select an agent to see its model, tools and skills. Double-click or press Enter to edit it.</p>
+        <p v-else class="t-small text-label">Select an agent to see its model, tools and skills. Double-click or press Enter to edit it; the arrow keys move between agents.</p>
       </aside>
     </div>
 
@@ -181,9 +209,9 @@ async function useTemplate(templateId: string) {
       </div>
 
       <ExampleBlock title="What does a good agent look like?" class="max-w-md mx-auto mb-6">
-        <div class="space-y-2 t-small" style="color: var(--text-secondary);">
+        <div class="space-y-2 t-small text-body">
           <div class="group-card">
-            <p><strong style="color: var(--text-primary);">code-reviewer</strong> <span class="t-small text-label">← This name is short and descriptive</span></p>
+            <p><strong class="text-strong">code-reviewer</strong> <span class="t-small text-label">← This name is short and descriptive</span></p>
             <p class="mt-1">"Reviews pull requests for bugs, style, and security." <span class="t-small text-label">← Explains what it does in one sentence</span></p>
             <p class="mt-1 t-small text-label">"Check for bugs, flag security issues, suggest improvements..." <span>← Instructions are specific</span></p>
           </div>
