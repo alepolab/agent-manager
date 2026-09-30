@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isLiveStatus, isTestRun, type WorkflowRun, type RunCostSummary } from '~~/shared/types/run'
-import { CHANGE_BRIEF_FILE, openQuestionsIn, parseDecisionBrief } from '~~/shared/utils/decisionBrief'
+import { CHANGE_BRIEF_FILE, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '~~/shared/utils/decisionBrief'
 import { RUN_STATUS_COLOR as STATUS_COLOR, SETTLED_STATUSES, runElapsedLabel, RUN_DURATION_HINT, runStatusLabel } from '~/utils/runStatus'
 
 /**
@@ -82,8 +82,7 @@ async function loadFacts() {
   // to decide, and ASECRM-297's two were resolved before anyone saw them.
   try {
     const parsed = parseDecisionBrief(await $fetch<string>(`/api/runs/${id}/artifacts/${CHANGE_BRIEF_FILE}`, { responseType: 'text' }))
-    const answered = 'brief' in parsed ? parsed.brief.open_questions?.length ?? 0 : 0
-    if (intake.value?.open_questions?.length && answered >= intake.value.open_questions.length) intake.value = { ...intake.value, open_questions: [] }
+    if (intake.value?.open_questions?.length && 'brief' in parsed && !unansweredQuestions(intake.value.open_questions, parsed.brief).length) intake.value = { ...intake.value, open_questions: [] }
   } catch {}
   try {
     const meta = JSON.parse(await $fetch<string>(`/api/runs/${id}/artifacts/meta.json`, { responseType: 'text' }))

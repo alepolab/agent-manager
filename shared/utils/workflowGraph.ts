@@ -332,7 +332,11 @@ export function parseHalt(text: string | undefined | null): string | null {
   const reason = last ? last[1]!.trim() : null
   return reason && !NOT_A_HALT.test(reason) ? reason : null
 }
-const NOT_A_HALT = /^[`*_"'(\[]*(none|n\/a|no halt|nothing|not needed|not required|no blocker)s?\b[`*_"')\].]*([^\S\n]*$|[^\S\n]*[—–:;,.(-])/i
+// Only a bare acknowledgement, or one that goes on to say it is proceeding.
+// Anything else is a halt: "Nothing - the migration would drop the
+// subscribers table" and "None: all three services crashed" are agents
+// refusing, and an earlier, looser pattern let both through.
+const NOT_A_HALT = /^[`*_"'(\[]*(none|n\/a|no halt)[`*_"')\].]*[^\S\n]*(?:$|[—–-][^\S\n]*(?:stack is up|proceeding|all checks passed).*)$/i
 
 /**
  * The last `PIPELINE-SKIP: <reason>` a step declared, or null.

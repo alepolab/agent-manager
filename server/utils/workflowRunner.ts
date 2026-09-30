@@ -35,7 +35,7 @@ import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -292,7 +292,7 @@ export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => 
  *  them keeps every write for a given run strictly ordered, one at a time. */
 const publishChains = new Map<string, Promise<void>>()
 
-function computeUsage(run: WorkflowRun): RunUsage {
+export function computeUsage(run: WorkflowRun): RunUsage {
   let input = 0, output = 0, cached = 0, usd = 0
   for (const s of run.steps) {
     if (!s.usage) continue
@@ -982,7 +982,7 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
   const pending = resolveRunArtifact(run.id, CHANGE_BRIEF_PENDING)
   if (!file || !pending) return 'none'
   const asked = openQuestionsIn(await readFile(resolveRunArtifact(run.id, 'intent.md') ?? '', 'utf8').catch(() => null))
-  const answersAll = (b: ReturnType<typeof parseDecisionBrief>) => 'brief' in b && (b.brief.open_questions?.length ?? 0) >= asked.length
+  const answersAll = (b: ReturnType<typeof parseDecisionBrief>) => 'brief' in b && !unansweredQuestions(asked, b.brief).length
   if (answersAll(parseDecisionBrief(await readFile(file, 'utf8').catch(() => null)))) return 'present'
   if (briefsWriting.has(run.id)) return 'none'
   briefsWriting.add(run.id)
@@ -1006,7 +1006,7 @@ That file is the whole of this task. Do not edit, stage or commit anything in th
         return 'written'
       }
       feedback = 'brief' in parsed
-        ? `The brief you wrote answers ${parsed.brief.open_questions?.length ?? 0} of the ${asked.length} open questions. Write it again with an answer for each.\n\n`
+        ? `The brief you wrote has no answer for ${unansweredQuestions(asked, parsed.brief).map(q => `"${q}"`).join(' or ')}. Write it again with one \`open_questions\` entry per question, its \`question\` copied from the list below.\n\n`
         : `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
       log.warn('change brief unusable', { runId: run.id, attempt, error: 'error' in parsed ? parsed.error : 'open questions unanswered' })
     }

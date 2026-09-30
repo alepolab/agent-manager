@@ -111,6 +111,16 @@ const settle = async (id) => {
   assert.match(asks.at(-1), /Intake left 2 question\(s\) open/)
   assert.match(asks.at(-1), /- Are the other generators in scope\?/, 'each question is named in the ask')
   assert.equal(await runner.ensureChangeBrief(run), 'present', 'answered, it is not asked for again')
+  // One of them answered twice is not both answered: asked again, naming the missing one.
+  BRIEF.open_questions = [BRIEF.open_questions[0], BRIEF.open_questions[0]]
+  writeFileSync(join(dirOf, 'change-brief.json'), JSON.stringify(BRIEF))
+  const good = [{ question: 'Which branch row applies to security?', answer: 'develop, as every row' }, { question: 'Are the other generators in scope?', answer: 'No: send back to add them' }]
+  const fixed = { ...BRIEF, open_questions: good }
+  const prev = asks.length
+  BRIEF.open_questions = good
+  writeFileSync(join(dirOf, 'change-brief.json'), JSON.stringify({ ...fixed, open_questions: [good[0], good[0]] }))
+  assert.equal(await runner.ensureChangeBrief(run), 'written', 'a duplicated answer is not complete')
+  assert.equal(asks.length, prev + 1)
   delete BRIEF.open_questions
 }
 

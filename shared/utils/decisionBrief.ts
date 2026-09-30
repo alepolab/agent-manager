@@ -25,6 +25,33 @@ function isResolved(q: any): boolean {
   return /^\W*resolved\b(?!\s+(by|on)\s+(an\s+)?assum)/i.test(String(q?.answer ?? ''))
 }
 
+const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter(w => w.length > 2))
+
+/**
+ * The asked questions no answer in the brief is for. Matched, not counted: a
+ * brief with as many answers as questions used to pass even when one answered
+ * a question nobody asked. An answer is for a question when its wording is the
+ * same, or shares most of the question's words - briefs restate a question in
+ * plain words - and each answer covers one question only.
+ */
+export function unansweredQuestions(asked: string[], brief: DecisionBrief | null | undefined): string[] {
+  const answers = (brief?.open_questions ?? []).map(a => words(a.question))
+  const used = new Set<number>()
+  return asked.filter((q) => {
+    const want = words(q)
+    let best = -1
+    let bestScore = 0
+    answers.forEach((a, i) => {
+      if (used.has(i) || !want.size) return
+      const shared = [...want].filter(w => a.has(w)).length
+      const score = shared / want.size
+      if (score > bestScore) { best = i; bestScore = score }
+    })
+    if (best >= 0 && bestScore >= 0.5) { used.add(best); return false }
+    return true
+  })
+}
+
 /** The questions a person still has to weigh: those not settled on evidence. */
 export function unresolvedQuestions(brief: DecisionBrief | null | undefined): { question: string, answer: string }[] {
   return (brief?.open_questions ?? []).filter(q => !q.resolved)

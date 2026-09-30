@@ -122,4 +122,15 @@ console.log('ok - a step question carries a brief a person can decide from')
   assert.deepEqual(unresolvedQuestions(b).map(q => q.question), ['Other generators?', 'Old assumed', 'Still open'], 'only what evidence did not settle')
   assert.deepEqual(unresolvedQuestions(parseDecisionBrief(JSON.stringify({ ...base, open_questions: [{ question: 'x', answer: 'y', resolved: true }] })).brief), [], 'all settled: nothing to show')
 }
+// ── Answers are matched to the questions, not counted ──────────────────────
+{
+  const { parseDecisionBrief, unansweredQuestions } = await import('../shared/utils/decisionBrief.ts')
+  const base = { question: 'q?', situation: 's', options: [{ key: 'a', label: 'A', next: 'n', delivers: 'd', leaves: 'l' }, { key: 'b', label: 'B', next: 'n', delivers: 'd', leaves: 'l' }] }
+  const asked = ['Which branch policy row applies to a security ticket?', 'Are the other Math.random generators in scope?']
+  const brief = (qs) => parseDecisionBrief(JSON.stringify({ ...base, open_questions: qs.map(q => ({ question: q, answer: 'x', resolved: true })) })).brief
+  assert.deepEqual(unansweredQuestions(asked, brief(asked)), [], 'verbatim')
+  assert.deepEqual(unansweredQuestions(asked, brief(['Which branch policy row does a security ticket follow?', 'Are other Math.random generators in scope, or just this one?'])), [], 'restated in plain words')
+  assert.deepEqual(unansweredQuestions(asked, brief([asked[0], asked[0]])), [asked[1]], 'a duplicate does not answer the other question')
+  assert.deepEqual(unansweredQuestions(asked, brief([asked[0], 'Should the README be updated?'])), [asked[1]], 'an answer to a question nobody asked does not count')
+}
 console.log('ok - settled intake questions are not shown')
