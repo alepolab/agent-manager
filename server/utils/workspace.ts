@@ -329,7 +329,7 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
     // "already used by worktree", and the run with it.
     const onBranch = existsSync(join(wt, '.git')) ? undefined : await worktreeOnBranch(r, branch)
     if (onBranch) {
-      await excludeFromGit(onBranch, '.agent/evidence-run/')
+      await keepAgentDirOutOfGit(onBranch)
       out.push(onBranch)
       continue
     }
@@ -339,7 +339,7 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
     } else {
       await git(r, ['worktree', 'add', '--quiet', '-B', branch, wt, ...(start ? [start] : [])])
     }
-    await excludeFromGit(wt, '.agent/evidence-run/')
+    await keepAgentDirOutOfGit(wt)
     out.push(wt)
   }
   return out
@@ -389,7 +389,7 @@ export async function ensureTestWorktrees(path: string, branch: string, rootStar
       // branch another test just made; a restart re-makes its own with -B.
       await git(r, ['worktree', 'add', '--quiet', opts.fresh ? '-b' : '-B', branch, wt, r === path ? rootStart : nestedStart])
       made.push({ repo: r, wt })
-      await excludeFromGit(wt, '.agent/evidence-run/')
+      await keepAgentDirOutOfGit(wt)
       out.push(wt)
     }
   } catch (err) {
@@ -457,6 +457,23 @@ export function nestedRepos(path: string): string[] {
 }
 
 /** Evidence copies never reach a commit, whatever an agent stages: the path is excluded in the checkout itself. */
+/**
+ * Keeps a run's scratch under `.agent/` out of every commit, the plan
+ * included. The plan gate reads `.agent/plan.md` from the working tree and
+ * never from git, and the plan is kept in the run's artifacts; committed, it
+ * made every PR rewrite the same file. ASECRM-292's plan reached develop, and
+ * every branch cut after it carried the file and replaced it with its own.
+ *
+ * Where the branch still tracks the file, local changes to it are hidden from
+ * git (skip-worktree), so the agent can write its plan without it being staged.
+ */
+export async function keepAgentDirOutOfGit(path: string): Promise<void> {
+  await excludeFromGit(path, '.agent/')
+  const tracked = await git(path, ['ls-files', '--', '.agent']).catch(() => '')
+  const files = tracked.split('\n').map(f => f.trim()).filter(Boolean)
+  if (files.length) await git(path, ['update-index', '--skip-worktree', '--', ...files]).catch(() => {})
+}
+
 export async function excludeFromGit(path: string, pattern: string): Promise<void> {
   // In a linked worktree `.git` is a file: info/exclude lives in the common dir, shared by every worktree of the clone.
   const gitDir = await git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => join(path, '.git'))

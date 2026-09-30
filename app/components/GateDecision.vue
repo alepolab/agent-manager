@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
-import { briefHeadline, riskDetail, riskLevel } from '~~/shared/utils/decisionBrief'
+import { briefHeadline, riskDetail, riskLevel, unresolvedQuestions } from '~~/shared/utils/decisionBrief'
+import { HOLD } from '~~/shared/types/workflowGroup'
 import { SETTLED_STATUSES } from '~/utils/runStatus'
 
 /**
@@ -104,6 +105,8 @@ const chosen = ref<string | null>(null)
 watch(() => [run.value.id, question.value?.askedAt], () => {
   chosen.value = options.value.find(o => isRecommended(o.key))?.key ?? null
 }, { immediate: true })
+/** Only what the step could not settle: a resolved intake question is not the reviewer's to decide. */
+const openQuestions = computed(() => unresolvedQuestions(brief.value))
 const chosenOption = computed(() => options.value.find(o => o.key === chosen.value))
 const RISK_WORD = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' } as const
 
@@ -201,7 +204,11 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
 
       <!-- A decision taken while the group was full: recorded, not lost, not re-asked. -->
       <div v-if="parked && run.parked" class="group-card t-small space-y-1" role="status">
-        <template v-if="run.parked.gaveWayTo">
+        <template v-if="run.parked.gaveWayTo === HOLD">
+          <p class="t-head m-0 text-strong">Paused: its group is on hold</p>
+          <p class="m-0 text-label">It finished the step it was on and stopped there. When the hold is lifted it carries on from the next step, ahead of newer runs.</p>
+        </template>
+        <template v-else-if="run.parked.gaveWayTo">
           <p class="t-head m-0 text-strong">Stepped aside while {{ run.parked.gaveWayTo }} runs are working</p>
           <p class="m-0 text-label">It carries on from the next step when they are done, ahead of newer runs.</p>
         </template>
@@ -262,6 +269,9 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
         </p>
       </section>
 
+      <!-- A budget pause: what granting more buys, and what stopping keeps. -->
+      <RunBudgetBrief v-else-if="question?.reason === 'budget'" :run="run" />
+
       <!-- An approval: what it lets happen, measured. -->
       <RunVerdictCard v-else-if="question?.kind === 'approval' && !runnerPause && question.reason !== 'rework'" :run="run" />
 
@@ -276,6 +286,12 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
         <details v-if="brief?.findings?.length">
           <summary class="focus-ring"><UIcon name="i-lucide-chevron-right" class="chev" />What the step found<span class="end">{{ brief.findings.length }}</span></summary>
           <ul class="disclosures__body list-disc pl-9 space-y-1"><li v-for="(f, i) in brief.findings" :key="i">{{ f }}</li></ul>
+        </details>
+        <details v-if="openQuestions.length" open>
+          <summary class="focus-ring"><UIcon name="i-lucide-chevron-right" class="chev" />Intake questions still open<span class="end">{{ openQuestions.length }}</span></summary>
+          <dl class="disclosures__body space-y-2 m-0">
+            <div v-for="(q, i) in openQuestions" :key="i"><dt class="font-semibold text-strong">{{ q.question }}</dt><dd class="m-0 whitespace-pre-wrap">{{ q.answer }}</dd></div>
+          </dl>
         </details>
         <details v-if="brief?.criteria?.length">
           <summary class="focus-ring"><UIcon name="i-lucide-chevron-right" class="chev" />What it is checked against<span class="end">{{ brief.criteria.length }} {{ brief.criteria.length === 1 ? 'criterion' : 'criteria' }}</span></summary>

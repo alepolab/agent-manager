@@ -2,7 +2,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { oversightReason, needsJustification } from '~~/shared/utils/oversight'
 import { parseJunit, junitLabel, junitPassed } from '~/utils/junit'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, riskDetail, riskLevel, type DecisionBrief } from '~~/shared/utils/decisionBrief'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, riskDetail, riskLevel, unresolvedQuestions, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 
 /**
  * What a reviewer is actually approving.
@@ -150,6 +150,8 @@ const pipelineNotes = computed(() => [
 /** The change brief's options, read as what approving and sending back each lead to. */
 const RISK_WORD = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' } as const
 const situationOpen = ref(false)
+/** Intake's questions the change could not settle: the only ones that are the reviewer's to weigh. */
+const openQuestions = computed(() => unresolvedQuestions(brief.value))
 const briefOptions = computed(() => (brief.value?.options ?? []).map(o => ({ ...o, name: o.title ?? o.label, level: riskLevel(o.risk), riskText: riskDetail(o.risk) })))
 const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 </script>
@@ -208,6 +210,12 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
         <button v-if="brief.situation.length > 260" class="t-small focus-ring rounded" style="color: var(--accent);" :aria-expanded="situationOpen" @click="situationOpen = !situationOpen">
           {{ situationOpen ? 'Show less' : 'Show more' }}
         </button>
+        <div v-if="openQuestions.length" class="group-card p-3! space-y-2">
+          <h3 class="t-ui font-semibold m-0 text-strong">Intake questions still open</h3>
+          <dl class="m-0 space-y-2">
+            <div v-for="(q, i) in openQuestions" :key="i"><dt class="font-medium text-strong">{{ q.question }}</dt><dd class="m-0 text-label whitespace-pre-wrap">{{ q.answer }}</dd></div>
+          </dl>
+        </div>
         <div class="verdict-options">
           <details v-for="o in briefOptions" :key="o.key">
             <summary class="focus-ring">

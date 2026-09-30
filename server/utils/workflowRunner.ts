@@ -21,7 +21,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
-import { claimableStack, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
+import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
 /**
  * Preflight, overridable the way the agent caller is. A runner check is about
@@ -35,7 +35,7 @@ import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 
 import { join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, parseDecisionBrief } from '../../shared/utils/decisionBrief.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -182,6 +182,8 @@ interface Live {
   authFailure?: { stepId: string, message: string }
   /** A step hit the model's quota; the run pauses until `until`. */
   quotaFailure?: { stepId: string, message: string, until: number }
+  /** Steps whose session the API refused to continue, already retried cold once. */
+  coldRetried?: Set<string>
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
   /** Steps whose `runWhen` condition is waived for one evaluation, because an
@@ -290,7 +292,7 @@ export function subscribe(runId: string, fn: (run: WorkflowRun) => void): () => 
  *  them keeps every write for a given run strictly ordered, one at a time. */
 const publishChains = new Map<string, Promise<void>>()
 
-function computeUsage(run: WorkflowRun): RunUsage {
+export function computeUsage(run: WorkflowRun): RunUsage {
   let input = 0, output = 0, cached = 0, usd = 0
   for (const s of run.steps) {
     if (!s.usage) continue
@@ -894,16 +896,65 @@ export function isAuthFailure(message: string): boolean {
 }
 
 /**
+ * The API refused to continue a session, not the work: a transcript cut off
+ * mid-tool by a server reload can hold a tool call with no result, and every
+ * resume of it is rejected the same way. ASECRM-290's Failing Test failed on
+ * "API Error: 400 due to tool use concurrency issues" after a reload, and a
+ * restart would have resumed the same transcript into the same error.
+ */
+const UNRESUMABLE = /tool use concurrency|tool_use.{0,40}without.{0,20}tool_result|tool_result.{0,60}(does not|must) (correspond|have a corresponding)/i
+export function isUnresumable(message: string): boolean {
+  return UNRESUMABLE.test(message)
+}
+
+/**
  * The model's quota or rate limit is spent, and when it resets. The provider
  * says so in the error: "Request rejected (429) · … Quota resets in 3551s".
  * Retrying before then fails the same way, so the reset time is the retry
  * time. With no time stated, `fallbackMs` stands in and the run says so.
  */
 export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
-  if (!/\b429\b|rate[ -]?limit|quota|usage limit/i.test(message) || isAuthFailure(message)) return null
+  if (!/\b429\b|rate[ -]?limit|quota|usage limit|hit your .{0,30}limit/i.test(message) || isAuthFailure(message)) return null
   const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
   // A minute's margin: a request exactly at the reset time is often still refused.
-  return s ? now + Number(s[1]) * 1000 + 60_000 : now + fallbackMs
+  if (s) return now + Number(s[1]) * 1000 + 60_000
+  const at = resetsAtClock(message, now)
+  return at ? at + 60_000 : now + fallbackMs
+}
+
+/**
+ * A subscription's limit names a wall-clock time and a zone, not a delay:
+ * "You've hit your session limit · resets 6:40pm (Asia/Kolkata)". The next
+ * time that clock reads so, as epoch ms, or null when the text says no time
+ * this can read.
+ */
+export function resetsAtClock(message: string, now = Date.now()): number | null {
+  const m = message.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b(?:\s*\(([A-Za-z_]+\/[A-Za-z_\/]+|UTC)\))?/i)
+  if (!m) return null
+  let hour = Number(m[1]) % 12
+  if (m[3]!.toLowerCase() === 'pm') hour += 12
+  const minute = Number(m[2] ?? 0)
+  const zone = m[4] ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  let parts: Record<string, number>
+  try {
+    parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+      .formatToParts(new Date(now)).filter(p => p.type !== 'literal').map(p => [p.type, Number(p.value)]))
+  } catch { return null }
+  const nowMin = parts.hour! * 60 + parts.minute! + parts.second! / 60
+  let wait = hour * 60 + minute - nowMin
+  if (wait < 0) wait += 24 * 60
+  return now + Math.round(wait * 60_000)
+}
+
+/**
+ * Whether a step's last words say it stopped to wait for something still
+ * running: "I'll wait for the background notification that the regression
+ * build container has finished", "I'll pause here and pick up as soon as it
+ * completes". No notification reaches a pipeline step.
+ */
+export function endedToWait(output: string): boolean {
+  const tail = output.slice(-600)
+  return /\b(wait(ing)? for (the )?(background|notification)|background notification|(still )?running in the background|pick (it )?up (again )?(as soon as|once|when) it (completes|finishes)|(once|when) (it|the (build|job|task|container)) (finishes|completes)[^.]{0,40}(I'll|I will))/i.test(tail)
 }
 
 /** The steps that make a run's change, and so know what approving it gains and risks. */
@@ -930,26 +981,34 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
   const file = resolveRunArtifact(run.id, CHANGE_BRIEF_FILE)
   const pending = resolveRunArtifact(run.id, CHANGE_BRIEF_PENDING)
   if (!file || !pending) return 'none'
-  if ('brief' in parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))) return 'present'
+  const asked = openQuestionsIn(await readFile(resolveRunArtifact(run.id, 'intent.md') ?? '', 'utf8').catch(() => null))
+  const answersAll = (b: ReturnType<typeof parseDecisionBrief>) => 'brief' in b && !unansweredQuestions(asked, b.brief).length
+  if (answersAll(parseDecisionBrief(await readFile(file, 'utf8').catch(() => null)))) return 'present'
   if (briefsWriting.has(run.id)) return 'none'
   briefsWriting.add(run.id)
   await writeFile(pending, new Date().toISOString()).catch(() => {})
   try {
     const env = await envResolver(run.startedBy).catch(() => ({}))
     let feedback = ''
+    // ASECRM-297's gate listed intake's two open questions above a brief that answered neither.
+    const questions = asked.length
+      ? `\n\nIntake left ${asked.length} question(s) open in intent.md. \`open_questions\` must answer every one of them:\n${asked.map(q => `- ${q}`).join('\n')}`
+      : ''
     for (let attempt = 1; attempt <= 2; attempt++) {
       const resume = resumableSession(maker)
-      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.
+      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
 
 That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
       await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
       const parsed = parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))
-      if ('brief' in parsed) {
+      if (answersAll(parsed)) {
         log.info('change brief written for a gate', { runId: run.id, by: maker.agentSlug, resumed: !!resume })
         return 'written'
       }
-      feedback = `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
-      log.warn('change brief unusable', { runId: run.id, attempt, error: parsed.error })
+      feedback = 'brief' in parsed
+        ? `The brief you wrote has no answer for ${unansweredQuestions(asked, parsed.brief).map(q => `"${q}"`).join(' or ')}. Write it again with one \`open_questions\` entry per question, its \`question\` copied from the list below.\n\n`
+        : `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+      log.warn('change brief unusable', { runId: run.id, attempt, error: 'error' in parsed ? parsed.error : 'open questions unanswered' })
     }
     return 'failed'
   } catch (err) {
@@ -992,9 +1051,21 @@ export async function backfillChangeBriefs(): Promise<string[]> {
 let claiming: Promise<unknown> = Promise.resolve()
 function claimStack(run: WorkflowRun, provisioning: boolean): Promise<'up' | 'claimed' | 'gone'> {
   const next = claiming.then(async () => {
-    if (!provisioning && await stackIsUp(stackProjectOf(run))) return 'up'
-    const found = await claimableStack(run, await listRuns()).catch(() => null)
-    if (!found) return provisioning ? 'up' : 'gone'
+    const runs = await listRuns()
+    const busy = !provisioning && !!run.stackProject && stackBusyElsewhere(run.stackProject, runs, run.id)
+    if (!provisioning && !busy && await stackIsUp(stackProjectOf(run))) return 'up'
+    const found = await claimableStack(run, runs).catch(() => null)
+    if (!found) {
+      // Another run works in the stack this one had: it stands up its own,
+      // under its own name, and never shares that one.
+      if (busy) {
+        log.info('run\'s stack is in use by another run; it will stand up its own', { runId: run.id, project: run.stackProject })
+        run.stackProject = undefined
+        run.stackClaimedFrom = undefined
+        await saveRun(run)
+      }
+      return provisioning ? 'up' : 'gone'
+    }
     const from = run.stackProject
     run.stackProject = found.project
     run.stackClaimedFrom = found.from
@@ -1502,7 +1573,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
           // in the same session rather than paying to redo it.
           const session = resumableSession(rec)
           if (session) l.resumeFrom[id] = session
-          l.retryFeedback[id] = `${why} Write each missing file into the run artifacts directory from the work you have already done - do not start over - then end with the directory listing.`
+          // A step that ended its turn to wait on a background job is told why
+          // the wait never ends, or it waits again: ASECRM-293's verifier did,
+          // on all three visits, with its build still running.
+          const waited = endedToWait(rec.output ?? '')
+          l.retryFeedback[id] = waited
+            ? `${why} Your turn ended while you waited for a background job, and in this pipeline no notification ever arrives: ending your turn ends the step. Wait for the job in the foreground, a bounded wait at a time (\`timeout 540 docker wait <container>\`, or \`timeout 540 bash -c 'until <done>; do sleep 15; done'\`), repeated until it has exited; then write each missing file from its result and end with the directory listing. Do not start the job again if it is still running.`
+            : `${why} Write each missing file into the run artifacts directory from the work you have already done - do not start over - then end with the directory listing.`
           l.state.status[id] = 'completed'
           armNode(l.state, id)
           return true
@@ -1571,6 +1648,17 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       scheduleQuotaResume(until)
       logLine(l, run, rec, `the model's quota is spent until ${new Date(until).toLocaleTimeString()}: ${message}`)
       log.warn('step hit the model quota; the run will wait for the reset', { runId: run.id, stepId: id, until: new Date(until).toISOString() })
+      return true
+    }
+    // A session the API will not continue: the same visit again, cold, once.
+    if (resume && !l.stopped && isUnresumable(message) && !l.coldRetried?.has(id)) {
+      (l.coldRetried ??= new Set()).add(id)
+      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.status[id] = 'pending'
+      armNode(l.state, id)
+      Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined, sessionId: undefined, sessionProject: undefined })
+      logLine(l, run, rec, `the API would not continue this step's session (${message}); starting it again fresh`)
+      log.warn('step session could not be resumed; retrying cold', { runId: run.id, stepId: id, error: message })
       return true
     }
     // Whatever the agent left running outlives the agent: `docker run` is a
@@ -2688,13 +2776,24 @@ async function ensureBranchWorktree(run: WorkflowRun, base: string): Promise<voi
  * its source run's projectDir, which is that run's worktree, so it is read
  * as a recorded worktree too: the test's own goes beside the clone, never
  * inside the source's.
+ *
+ * Last, the product's own clone. A dispatched run is given a directory of its
+ * own named for its ticket, which startRun creates empty, and nothing in it is
+ * a checkout: with no fallback the run got no worktree and no branch at all.
+ * ASECRM-331 to 337 each had an empty directory, and their agents cut
+ * branches into it by hand with `git worktree add`. Only for a run on a
+ * ticket: a scan or a plain product run with nothing to fix is not given a
+ * fix branch it never asked for.
  */
 function runCheckout(run: WorkflowRun): string | undefined {
-  const repoName = run.product?.repos?.[0]?.split('/').pop()
+  const repo = run.product?.repos?.[0]
+  const repoName = repo?.split('/').pop()
   const recordedClone = (run.branch || run.testOf) && run.projectDir ? run.projectDir.replace(/@[^/]+$/, '') : undefined
+  const productClone = repo && run.ticketKey && !run.testOf ? checkoutDirFor(repo, run.startedBy) : undefined
   return (recordedClone && existsSync(join(recordedClone, '.git'))) ? recordedClone
     : (run.projectDir && existsSync(join(run.projectDir, '.git'))) ? run.projectDir
       : findCheckout(runWorkspace(run), repoName)
+        ?? (productClone && existsSync(join(productClone, '.git')) ? productClone : undefined)
 }
 
 /**
@@ -3295,7 +3394,7 @@ const awaitingSlot = new Set<string>()
 let resumingWaiting: Promise<unknown> | null = null
 
 /** Resumes what `resumeInterruptedRuns` left waiting, one pass at a time. */
-function resumeAwaitingSlot(): Promise<unknown> {
+export function resumeAwaitingSlot(): Promise<unknown> {
   if (!awaitingSlot.size) return Promise.resolve()
   resumingWaiting ??= resumeInterruptedRuns(new Set(awaitingSlot)).finally(() => { resumingWaiting = null })
   return resumingWaiting

@@ -13,6 +13,62 @@
  * shape makes it say so for a person, and lets the runner check that it did.
  */
 
+/**
+ * Whether the step settled an intake question on evidence. A reviewer has
+ * nothing to decide about one that was, and the gate used to lay each of them
+ * out with its resolution anyway. `resolved` when the step says so; for a
+ * brief written before the field, an answer that begins "Resolved" is.
+ * An assumption is not a resolution: the reviewer is the one to accept it.
+ */
+function isResolved(q: any): boolean {
+  if (typeof q?.resolved === 'boolean') return q.resolved
+  return /^\W*resolved\b(?!\s+(by|on)\s+(an\s+)?assum)/i.test(String(q?.answer ?? ''))
+}
+
+const words = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter(w => w.length > 2))
+
+/**
+ * The asked questions no answer in the brief is for. Matched, not counted: a
+ * brief with as many answers as questions used to pass even when one answered
+ * a question nobody asked. An answer is for a question when its wording is the
+ * same, or shares most of the question's words - briefs restate a question in
+ * plain words - and each answer covers one question only.
+ */
+export function unansweredQuestions(asked: string[], brief: DecisionBrief | null | undefined): string[] {
+  const answers = (brief?.open_questions ?? []).map(a => words(a.question))
+  const used = new Set<number>()
+  return asked.filter((q) => {
+    const want = words(q)
+    let best = -1
+    let bestScore = 0
+    answers.forEach((a, i) => {
+      if (used.has(i) || !want.size) return
+      const shared = [...want].filter(w => a.has(w)).length
+      const score = shared / want.size
+      if (score > bestScore) { best = i; bestScore = score }
+    })
+    if (best >= 0 && bestScore >= 0.5) { used.add(best); return false }
+    return true
+  })
+}
+
+/** The questions a person still has to weigh: those not settled on evidence. */
+export function unresolvedQuestions(brief: DecisionBrief | null | undefined): { question: string, answer: string }[] {
+  return (brief?.open_questions ?? []).filter(q => !q.resolved)
+}
+
+/**
+ * The questions intake left open, read from intent.md's "## Open questions"
+ * bullets. Not from the context packet: its copy of ASECRM-297's first
+ * question was a placeholder (`<<ccr:…>>`), never the text.
+ */
+export function openQuestionsIn(intentMd: string | null | undefined): string[] {
+  const section = intentMd?.split(/^## Open questions\s*$/m)[1]?.split(/^## /m)[0] ?? ''
+  const items = section.split('\n').filter(l => /^\s*[-*]\s+\S/.test(l)).map(l => l.replace(/^\s*[-*]\s+/, '').trim())
+  // "None stated" and the like are not questions.
+  return items.filter(q => !/^(none|n\/a|no open questions)\b/i.test(q))
+}
+
 /** The file a step writes into its run artifacts directory before `PIPELINE-ASK:`. */
 export const DECISION_FILE = 'decision.json'
 
@@ -80,6 +136,12 @@ export interface DecisionBrief {
   findings?: string[]
   options: DecisionOption[]
   recommendation?: { option: string, why: string }
+  /**
+   * Each question intake left open, and how the step answered it: resolved,
+   * assumed, or still open and which option decides it. ASECRM-297's gate
+   * listed intake's two questions above a brief that answered neither.
+   */
+  open_questions?: { question: string, answer: string, resolved: boolean }[]
 }
 
 const str = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0
@@ -122,6 +184,9 @@ export function parseDecisionBrief(raw: string | null | undefined): { brief: Dec
         ...(str(o.risk) ? { risk: o.risk.trim() } : {}),
       })),
       ...(str(d.recommendation?.option) && str(d.recommendation?.why) ? { recommendation: { option: d.recommendation.option.trim(), why: d.recommendation.why.trim() } } : {}),
+      ...(Array.isArray(d.open_questions) && d.open_questions.some((q: any) => str(q?.question) && str(q?.answer))
+        ? { open_questions: d.open_questions.filter((q: any) => str(q?.question) && str(q?.answer)).map((q: any) => ({ question: q.question.trim(), answer: q.answer.trim(), resolved: isResolved(q) })) }
+        : {}),
     },
   }
 }

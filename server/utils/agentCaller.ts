@@ -510,7 +510,7 @@ export async function callAgent(
           }
           // Lines are never throttled: a watcher wants every command, not a sample.
           const line = describeBlock(block)
-          if (line && /\bAPI Error\b/i.test(line)) lastApiError = line.trim().slice(0, 300)
+          if (line && isApiErrorLine(message, line)) lastApiError = line.trim().slice(0, 300)
           if (line && onProgress) onProgress({ turn, lastTool, lastActivityAt: Date.now(), line })
         }
       }
@@ -691,6 +691,19 @@ export function isResumeReplay(opts: { resuming: boolean, resultsSoFar: number, 
  */
 export function isReplayOnly(opts: { accepted: boolean, replayed: number }): boolean {
   return !opts.accepted && opts.replayed > 0
+}
+
+/**
+ * Whether an assistant line is the API's account of a failure. A
+ * subscription's limit arrives as plain assistant text flagged as an API
+ * error - "You've hit your session limit · resets 6:40pm (Asia/Kolkata)" -
+ * with no "API Error" in it. Missed, the run record read "no further detail"
+ * and 77 runs failed in an hour instead of pausing until the reset.
+ */
+export function isApiErrorLine(message: unknown, line: string): boolean {
+  const m = message as { isApiErrorMessage?: unknown, error?: unknown } | null
+  return m?.isApiErrorMessage === true || typeof m?.error === 'string'
+    || /\bAPI Error\b|hit your .{0,30}limit|usage limit reached/i.test(line)
 }
 
 export class AgentResultError extends Error {

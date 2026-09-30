@@ -91,8 +91,18 @@ export async function stackIsUp(project: string, exec: Exec = realExec): Promise
   } catch { return false }
 }
 
+/**
+ * Whether another run is working in `project` right now. A run's recorded
+ * stack stops being its own once another run takes it over at a gate: ASECRM-
+ * 318 came back from its gate to the stack ASECRM-304 had taken, found it up,
+ * and redeployed its own build into it by hand while 304 worked there.
+ */
+export function stackBusyElsewhere(project: string, runs: StackRun[], runId: string): boolean {
+  return stackUsers(project, runs, runId).some(u => u.status === 'running')
+}
+
 /** Steps that work in the run's stack after the provisioner stood it up. */
-export const STACK_USING_AGENTS = /^sdlc-(stack-update|qa-|trace-capture$)/
+export const STACK_USING_AGENTS = /^sdlc-(stack-update|qa-|trace-capture$|pr-follow-up$)/
 
 /** Steps that can leave a compose stack running. A run with none of them has
  *  no stack to look for, which keeps docker out of every other run's ending. */

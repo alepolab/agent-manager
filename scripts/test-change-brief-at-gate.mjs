@@ -96,5 +96,33 @@ const settle = async (id) => {
   assert.ok(!existsSync(join(runArtifactsDir(stale.id), 'change-brief.pending')), 'a stale marker is cleared at boot')
 }
 
+// ── Intake left questions open: the brief answers each, or is asked for again ─
+{
+  let run = (await runner.startOrQueue({ workflow: wf, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev4' })).run
+  dirOf = runArtifactsDir(run.id)
+  run = await runner.waitForSettled(run.id, 8000)
+  await settle(run.id)
+  // ASECRM-297: two questions above a brief that answered neither.
+  writeFileSync(join(dirOf, 'intent.md'), '# Intent\n\n## Open questions\n\n- Which branch row applies to security?\n- Are the other generators in scope?\n\n## Scope\n\n- one file\n')
+  const before = asks.length
+  BRIEF.open_questions = [{ question: 'Which branch row applies to security?', answer: 'develop, as every row' }, { question: 'Are the other generators in scope?', answer: 'No: send back to add them' }]
+  assert.equal(await runner.ensureChangeBrief(run), 'written', 'a brief that answers none of them is not present')
+  assert.equal(asks.length, before + 1)
+  assert.match(asks.at(-1), /Intake left 2 question\(s\) open/)
+  assert.match(asks.at(-1), /- Are the other generators in scope\?/, 'each question is named in the ask')
+  assert.equal(await runner.ensureChangeBrief(run), 'present', 'answered, it is not asked for again')
+  // One of them answered twice is not both answered: asked again, naming the missing one.
+  BRIEF.open_questions = [BRIEF.open_questions[0], BRIEF.open_questions[0]]
+  writeFileSync(join(dirOf, 'change-brief.json'), JSON.stringify(BRIEF))
+  const good = [{ question: 'Which branch row applies to security?', answer: 'develop, as every row' }, { question: 'Are the other generators in scope?', answer: 'No: send back to add them' }]
+  const fixed = { ...BRIEF, open_questions: good }
+  const prev = asks.length
+  BRIEF.open_questions = good
+  writeFileSync(join(dirOf, 'change-brief.json'), JSON.stringify({ ...fixed, open_questions: [good[0], good[0]] }))
+  assert.equal(await runner.ensureChangeBrief(run), 'written', 'a duplicated answer is not complete')
+  assert.equal(asks.length, prev + 1)
+  delete BRIEF.open_questions
+}
+
 console.log('ok - a change waiting at a gate gets a brief of its advantages and disadvantages from the step that made it')
 process.exit(0)
