@@ -267,6 +267,15 @@ export function drainRunQueue(launch: Launcher): Promise<number> {
   return serialised(async () => {
     if (quotaBlocked()) return 0
     const runs = await listRuns()
+    // The block is held in memory, so a restart forgets it - and the boot sweep
+    // runs before the quota-paused runs are looked at. A restart at 05:09
+    // started four runs into a spent quota that way, each paused at its first
+    // request. The paused runs record when they try again; that is the block.
+    const spentUntil = Math.max(0, ...runs.filter(r => r.status === 'paused' && r.question?.reason === 'quota').map(r => r.question?.resumeAt ?? 0))
+    if (spentUntil > Date.now()) {
+      blockForQuota(spentUntil)
+      return 0
+    }
     const queued = runs.filter(r => r.status === 'queued')
     if (!queued.length) {
       // Nothing waiting anywhere: the timer can go quiet until something queues.
