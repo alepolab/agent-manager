@@ -1160,7 +1160,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   delete l.resumeFrom[id]
   // A resumed session was told its stack once; if that stack went while the
   // run waited, it is told again.
-  const input = resume ? (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+  // A resumed session was told its paths once, when it started - and a run can
+  // move instances while it waits (a preview instance's runs were adopted with
+  // their sessions), so those paths can be stale. ASECRM-270's test author
+  // resumed a 25 Sep session, wrote its oracle to the old artifacts directory,
+  // and the step failed for a file it had written. Every resumed visit is told
+  // where things are now.
+  const whereNow = `Artifacts directory for this run: ${runArtifactsDir(run.id)}${run.projectDir ? `\nCheckout: ${run.projectDir}` : ''}\nWrite every artifact there, even if earlier in this session you were given a different path.\n\n`
+  const input = resume ? whereNow + (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined, run.parameters, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
