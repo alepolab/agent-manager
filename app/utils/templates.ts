@@ -888,6 +888,16 @@ A container that is running is not a service that is serving. Confirm health thr
 
 If the context packet names a customer or specific records, seed representative data for them — including a second subscriber or account where the bug involves interaction between two. A single-record environment hides exactly the class of bug that matters.
 
+## Build once per commit
+
+Most runs on a product start from the same few commits, and an image build is
+the slowest thing this step does. Before building, look for an image of the
+checkout's HEAD: \`docker images --filter label=org.opencontainers.image.revision=<full HEAD sha>\`,
+and GHCR as the recipe says. Deploy one if it exists. When you do build, pass
+\`--label org.opencontainers.image.revision=<full HEAD sha>\`: the next run at
+that commit then deploys yours, and a run handed a healthy stack already running
+its commit is reused by the runner without this step running at all.
+
 ## Name the stack for this run, and leave it up
 
 Bring the product's stack up under the compose project \`sdlc-<run id>\` — pass

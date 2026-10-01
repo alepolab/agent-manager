@@ -21,6 +21,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+import { inspectStack, reuseVerdict, tryStackFastPath } from './stackFastPath.ts'
 import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
 /**
@@ -1054,7 +1055,8 @@ function claimStack(run: WorkflowRun, provisioning: boolean): Promise<'up' | 'cl
     const runs = await listRuns()
     const busy = !provisioning && !!run.stackProject && stackBusyElsewhere(run.stackProject, runs, run.id)
     if (!provisioning && !busy && await stackIsUp(stackProjectOf(run))) return 'up'
-    const found = await claimableStack(run, runs).catch(() => null)
+    const head = provisioning && run.projectDir ? await captureBaseline(run.projectDir).catch(() => undefined) : undefined
+    const found = await claimableStack(run, runs, undefined, head ? async p => reuseVerdict(await inspectStack(p), head).ok : undefined).catch(() => null)
     if (!found) {
       // Another run works in the stack this one had: it stands up its own,
       // under its own name, and never shares that one.
@@ -1305,12 +1307,39 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return true
   }
 
+  // A stack the runner claimed for this run needs no agent when it is healthy
+  // and already runs this checkout's commit: the runner checks that and writes
+  // the report itself, in seconds. Anything else is the agent's, told which
+  // image of this commit to deploy when one exists. See stackFastPath.ts.
+  let agentInput = input
+  if (step.agentSlug === 'sdlc-stack-provisioner' && run.stackProject && run.stackClaimedFrom && run.projectDir) {
+    const reuse = await tryStackFastPath({
+      project: run.stackProject, claimedFrom: run.stackClaimedFrom, projectDir: run.projectDir, branch: run.branch,
+      artifactsDir: runArtifactsDir(run.id), sourceArtifactsDir: runArtifactsDir(run.stackClaimedFrom),
+    }, { readFile: p => readFile(p, 'utf8'), writeFile: (p, c) => writeFile(p, c) })
+      .catch(err => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err), image: null }))
+    if (reuse.ok) {
+      logLine(l, run, rec, `step started, visit ${rec.visits}`)
+      for (const line of reuse.output.split('\n')) logLine(l, run, rec, line)
+      l.outputs[id] = reuse.output
+      Object.assign(rec, { status: 'completed', output: reuse.output, model: null, usage: null, completedAt: Date.now() })
+      log.info('stack reused without a model call', { runId: run.id, stepId: id, project: run.stackProject, from: run.stackClaimedFrom })
+      markCompleted(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    }
+    logLine(l, run, rec, `Stack ${run.stackProject} not reused as it is: ${reuse.reason}.`)
+    if (reuse.image) {
+      agentInput += `\n\n---\nAn image built from this checkout's commit already exists: \`${reuse.image}\`. Deploy that one into the stack; do not build another.`
+    }
+  }
+
   const ac = new AbortController()
   l.aborts.set(id, ac)
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric

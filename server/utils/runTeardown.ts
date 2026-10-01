@@ -68,19 +68,26 @@ export function stackUsers(project: string, runs: StackRun[], except?: string): 
  * Never one a run is working in right now: two runs deploying different
  * builds into one stack at the same time would each test the other's code.
  */
-export async function claimableStack(run: Pick<WorkflowRun, 'id' | 'product'>, runs: StackRun[], exec: Exec = realExec): Promise<{ project: string, from: string } | null> {
+export async function claimableStack(
+  run: Pick<WorkflowRun, 'id' | 'product'>, runs: StackRun[], exec: Exec = realExec,
+  /** Among several free stacks, the first this accepts wins: one already running the run's own commit needs nothing deployed. */
+  prefer?: (project: string) => Promise<boolean>,
+): Promise<{ project: string, from: string } | null> {
   const product = run.product?.name
   if (!product) return null
   let listed: { Name?: string, Status?: string }[] = []
   try { listed = JSON.parse(await exec('docker', ['compose', 'ls', '--format', 'json']) || '[]') } catch { return null }
+  const free: { project: string, from: string }[] = []
   for (const { Name: name, Status: status } of listed) {
     if (!name || !/^sdlc-[0-9a-f-]+$/.test(name) || name.endsWith('-verify') || !/running/i.test(status ?? '')) continue
     const owner = runs.find(r => runProjectNames(r.id).includes(name))
     if (!owner || owner.id === run.id || owner.product?.name !== product) continue
     if (stackUsers(name, runs, run.id).some(u => u.status === 'running')) continue
-    return { project: name, from: owner.id }
+    if (!prefer) return { project: name, from: owner.id }
+    free.push({ project: name, from: owner.id })
   }
-  return null
+  for (const f of free) if (await prefer!(f.project).catch(() => false)) return f
+  return free[0] ?? null
 }
 
 /** Whether a compose project has anything running. False when docker cannot be asked. */
