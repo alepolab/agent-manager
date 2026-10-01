@@ -1,4 +1,5 @@
 import { isTestRun } from '../../../shared/types/run.ts'
+import { summariseRun } from '../../../shared/utils/runSummary.ts'
 import { listRuns } from '../../utils/workflowRunStore'
 
 /**
@@ -12,8 +13,14 @@ import { listRuns } from '../../utils/workflowRunStore'
  *
  * Test runs (see TestOf) are hidden by default — they are not real work and
  * would otherwise clutter run history — unless `?tests=1` asks for them.
+ *
+ * `?summary=1` drops what only a run's own page shows (summariseRun): the list
+ * pages use it, and the full record is GET /api/runs/:id. Without it the
+ * response is unchanged, for scripts that read step outputs from the list.
  */
 export default defineEventHandler(async (event) => {
+  const q = getQuery(event)
   const runs = await listRuns()
-  return getQuery(event).tests === '1' ? runs : runs.filter(r => !isTestRun(r))
+  const list = q.tests === '1' ? runs : runs.filter(r => !isTestRun(r))
+  return q.summary === '1' ? list.map(summariseRun) : list
 })

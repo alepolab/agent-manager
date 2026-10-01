@@ -329,8 +329,9 @@ const initials = computed(() => (me.value?.name || me.value?.login || '?')
         <div v-show="initialized && claudeDirExists" class="flex-1 min-h-0 overflow-y-auto custom-scrollbar" style="scrollbar-gutter: stable;">
           <NuxtPage />
         </div>
-        <div v-if="!initialized" class="flex-1 flex items-center justify-center">
-          <UIcon name="i-lucide-loader-2" class="size-5 animate-spin" style="color: var(--text-disabled);" />
+        <div v-if="!initialized" class="flex-1 flex items-center justify-center gap-2 t-small text-label" role="status">
+          <UIcon name="i-lucide-loader-circle" class="size-5 animate-spin" style="color: var(--accent);" />
+          Loading…
         </div>
       </main>
     </div>
