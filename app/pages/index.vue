@@ -35,7 +35,7 @@ const loaded = ref(false)
 const loadError = ref<string | null>(null)
 
 async function refresh() {
-  const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs')])
+  const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs?summary=1')])
   // A rejected fetch used to leave the previous list in place and say nothing,
   // so "Nothing waiting on you" was shown for both an all-clear and an API that
   // was down. On the one screen whose job is to say what needs a person, those

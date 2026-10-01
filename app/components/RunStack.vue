@@ -115,7 +115,7 @@ const arrows = computed(() => sendBackArrows(props.run).map((a, i) => ({ ...a, n
 const children = ref<WorkflowRun[]>([])
 watch(() => props.run.steps.some(s => s.childRunIds?.length), async (has) => {
   if (!has) return
-  try { children.value = await $fetch<WorkflowRun[]>('/api/runs') }
+  try { children.value = await $fetch<WorkflowRun[]>('/api/runs?summary=1') }
   catch { children.value = [] }
 }, { immediate: true })
 function childSummary(id: string): string {

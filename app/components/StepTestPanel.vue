@@ -26,7 +26,7 @@ const selected = ref('')
 /** Keeps the picked run while it is still offered; otherwise picks the newest. */
 async function loadSources() {
   try {
-    const all = await $fetch<WorkflowRun[]>('/api/runs')
+    const all = await $fetch<WorkflowRun[]>('/api/runs?summary=1')
     sources.value = all
       .filter(r => r.workflowSlug === props.workflowSlug && !isLiveStatus(r.status) && r.steps.some(s => s.stepId === props.step.id))
       .sort((a, b) => b.startedAt - a.startedAt)
