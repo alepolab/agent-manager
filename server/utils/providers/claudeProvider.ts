@@ -13,6 +13,7 @@ import { MODEL_ALIAS_KEY } from '../models'
 import { DEFAULT_OUTPUT_STYLES } from '../defaultOutputStyles'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { workingDirProblem } from './workingDir'
 
 async function getOutputStyleContent(id: string, projectDir?: string): Promise<{ content: string; keepCodingInstructions: boolean } | null> {
   // 1. Check built-in
@@ -148,6 +149,9 @@ export const claudeProvider: ProviderAdapter = {
     let hasTextMessageFromResult = false
 
     try {
+      const problem = workingDirProblem(options.workingDir)
+      if (problem) throw new Error(problem)
+
       // Prepare SDK options
       const sdkOptions: any = {
         cwd: options.workingDir || process.cwd(),
