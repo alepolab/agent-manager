@@ -169,13 +169,6 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
       <h3 class="t-ui font-semibold m-0" style="color: var(--text-primary);">What approving does</h3>
       <p class="m-0 text-label">{{ effect }}</p>
     </div>
-    <div v-if="run.blastRadius" class="group-card space-y-1">
-      <h3 class="t-ui font-semibold m-0" style="color: var(--text-primary);">Why this stopped for you</h3>
-      <p class="m-0 text-label">
-        Classed <b class="font-mono" style="color: var(--text-primary);" :title="oversightReason(run.blastRadius)">{{ run.blastRadius }}</b><template v-if="meta?.blast_radius_reason">: {{ meta.blast_radius_reason }}</template><template v-else-if="!loading">. Intake recorded no reason for the class.</template>
-      </p>
-      <p v-if="mustJustify" class="m-0" style="color: var(--warning);">Owner-gated: approving needs a written reason.</p>
-    </div>
 
     <p v-if="loading" class="m-0 text-label">Reading the evidence bundle…</p>
 
@@ -290,6 +283,19 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
             >{{ r.label }}</button>
           </div>
         </details>
+        <!-- Why it stopped: context for the decision, read after what the change is. -->
+        <details v-if="run.blastRadius" data-testid="why-stopped">
+          <summary class="focus-ring">
+            <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">Why this stopped for you</span>
+            <span class="text-label font-mono">{{ run.blastRadius }}</span>
+          </summary>
+          <div class="verdict-body space-y-1">
+            <p class="m-0">
+              Classed <b class="font-mono" style="color: var(--text-primary);" :title="oversightReason(run.blastRadius)">{{ run.blastRadius }}</b><template v-if="meta?.blast_radius_reason">: {{ meta.blast_radius_reason }}</template><template v-else-if="!loading">. Intake recorded no reason for the class.</template>
+            </p>
+            <p v-if="mustJustify" class="m-0" style="color: var(--warning);">Owner-gated: approving needs a written reason.</p>
+          </div>
+        </details>
         <details v-if="pipelineNotes.length">
           <summary class="focus-ring">
             <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">What the pipeline noted on the way</span>
@@ -299,6 +305,19 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
         </details>
       </div>
     </template>
+    <!-- No bundle: the class is still on the run, so the reason is still worth a look. -->
+    <div v-if="metaMissing && run.blastRadius" class="verdict-options">
+      <details data-testid="why-stopped">
+        <summary class="focus-ring">
+          <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">Why this stopped for you</span>
+          <span class="text-label font-mono">{{ run.blastRadius }}</span>
+        </summary>
+        <div class="verdict-body space-y-1">
+          <p class="m-0">Classed <b class="font-mono" style="color: var(--text-primary);" :title="oversightReason(run.blastRadius)">{{ run.blastRadius }}</b>. The reason is in the evidence bundle, which is not written yet.</p>
+          <p v-if="mustJustify" class="m-0" style="color: var(--warning);">Owner-gated: approving needs a written reason.</p>
+        </div>
+      </details>
+    </div>
     <RunFileDiffModal v-model:path="openDiff" :run-id="run.id" :files="changedPaths" />
     <USlideover v-model:open="reportOpen" :title="openReport?.label ?? 'Report'" :ui="{ content: 'max-w-3xl' }">
       <template #body><RunArtifacts v-if="openReport" :run-id="run.id" :initial="openReport.file" only /></template>
