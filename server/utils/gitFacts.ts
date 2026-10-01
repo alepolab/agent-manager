@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { currentPath } from '../../shared/utils/unifiedDiff.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -225,6 +226,34 @@ export async function computeChangeSummary(
     return { commits, files }
   } catch {
     return null // not a repo, baseline gone or not an ancestor: say nothing rather than guess
+  }
+}
+
+/** Above this, a file's diff is cut and says so: a lockfile or a generated bundle is not read line by line. */
+export const FILE_DIFF_MAX = 512 * 1024
+
+/**
+ * One file's diff since the run's baseline, for the reviewer who clicked it in
+ * the change list. Only a path that `computeChangeSummary` reported is diffed -
+ * the request names a file, and nothing else about the repository is reachable
+ * through it. Null when the change cannot be measured (the same rules), or the
+ * path is not one the run changed.
+ */
+export async function computeFileDiff(
+  projectDir: string | undefined,
+  baseCommit: string | undefined,
+  path: string,
+): Promise<{ path: string, diff: string, truncated: boolean } | null> {
+  const summary = await computeChangeSummary(projectDir, baseCommit)
+  if (!summary || !summary.files.some(f => f.path === path)) return null
+  try {
+    const target = currentPath(path)
+    const diff = await gitRaw(projectDir!, ['diff', '--no-color', '--no-ext-diff', '-M', `${baseCommit}..HEAD`, '--', target])
+    return diff.length > FILE_DIFF_MAX
+      ? { path, diff: diff.slice(0, diff.lastIndexOf('\n', FILE_DIFF_MAX)), truncated: true }
+      : { path, diff, truncated: false }
+  } catch {
+    return null
   }
 }
 
