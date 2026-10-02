@@ -918,8 +918,21 @@ export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 
   const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
   // A minute's margin: a request exactly at the reset time is often still refused.
   if (s) return now + Number(s[1]) * 1000 + 60_000
+  // A proxy in front of several accounts says when the first of them frees up:
+  // TeamClaude's "Quota resets in 1h15m." / "in 32m". Read as a 15-minute guess,
+  // that wait became a retry every quarter-hour, each one starting queued runs
+  // straight into the spent quota.
+  const hm = message.match(/resets? in (?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?\b/i)
+  if (hm && (hm[1] || hm[2])) return now + (Number(hm[1] ?? 0) * 60 + Number(hm[2] ?? 0)) * 60_000 + 60_000
   const at = resetsAtClock(message, now)
   return at ? at + 60_000 : now + fallbackMs
+}
+
+/** Whether a quota message names when it resets, so quotaResetAt did not have to guess. */
+export function quotaResetStated(message: string, now = Date.now()): boolean {
+  return /resets? in \d+\s*s\b|retry[- ]after/i.test(message)
+    || /resets? in (?:\d+\s*h)?\s*(?:\d+\s*m(?:in)?)?\b/i.test(message) && /resets? in \d/i.test(message)
+    || resetsAtClock(message, now) !== null
 }
 
 /**
@@ -1096,6 +1109,9 @@ export function scheduleQuotaResume(at: number): void {
  * group cap like any decision, so a burst of them waits its turn. Also called
  * at boot, which is what keeps a restart from stranding them.
  */
+/** How long the queue stays shut while runs paused without a known reset time retry. */
+const QUOTA_PROBE_MS = 15 * 60_000
+
 export async function resumeQuotaPaused(now = Date.now()): Promise<string[]> {
   releaseQuota(now)
   const resumed: string[] = []
@@ -1106,6 +1122,14 @@ export async function resumeQuotaPaused(now = Date.now()): Promise<string[]> {
     if (at > now) { scheduleQuotaResume(at); continue }
     await continueRun(r.id).catch(err => log.warn('could not resume a run after the quota reset', { runId: r.id, error: err instanceof Error ? err.message : String(err) }))
     resumed.push(r.id)
+  }
+  // A retry is a probe when no reset time was known: the resumed runs find out
+  // whether the quota is back. The queue waits one more window rather than
+  // starting runs on the guess - each of which would only pause at its first
+  // request. A real reset time has passed only when the provider named it.
+  if (resumed.length && paused.some(r => resumed.includes(r.id) && !r.question?.resetStated)) {
+    blockForQuota(now + QUOTA_PROBE_MS)
+    return resumed
   }
   if (mightHaveWaiting()) await drainRunQueue(launchQueuedRun)
   return resumed
@@ -2537,10 +2561,11 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.quotaFailure) {
     const { stepId, message, until } = l.quotaFailure
     l.quotaFailure = undefined
-    const stated = /resets? in \d+\s*s\b|retry[- ]after/i.test(message)
+    // Whether `until` is the provider's own reset time or the 15-minute guess.
+    const stated = quotaResetStated(message)
     run.status = 'paused'
     run.question = {
-      stepId, kind: 'approval', reason: 'quota', resumeAt: until, askedAt: Date.now(),
+      stepId, kind: 'approval', reason: 'quota', resumeAt: until, resetStated: stated, askedAt: Date.now(),
       text: `"${stepOf(l, stepId)?.label ?? stepId}" hit the model's quota: ${message}. The run resumes on its own at ${new Date(until).toLocaleString()}${stated ? ', when the provider said it resets' : ' - the provider gave no reset time, so it tries again in 15 minutes'}. Nothing new starts before then. Nothing was lost.`,
     }
     run.currentStepIds = []
