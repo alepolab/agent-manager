@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
-import { briefHeadline, riskDetail, riskLevel, unresolvedQuestions } from '~~/shared/utils/decisionBrief'
+import { briefHeadline, riskDetail, riskLevel, suggestSendBack, unresolvedQuestions, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 import { HOLD } from '~~/shared/types/workflowGroup'
 import { SETTLED_STATUSES } from '~/utils/runStatus'
 
@@ -159,7 +159,25 @@ onBeforeUnmount(() => clearTimeout(stopTimer))
 
 // ---- Approvals ------------------------------------------------------------
 const sendingBack = ref(false)
-watch(() => run.value.id, () => { sendingBack.value = false })
+/** The change brief RunVerdictCard read: its options say which step each send-back is for. */
+const changeBrief = ref<DecisionBrief | null>(null)
+watch(() => run.value.id, () => { sendingBack.value = false; changeBrief.value = null })
+/** Each send-back option with the step it would go back to (ASECRM-295 (b): "the fix step" is Implement Fix). */
+const sendBackFor = computed(() => (changeBrief.value?.options ?? []).flatMap((o) => {
+  const step = suggestSendBack(o, reworkCandidates.value)
+  return step ? [{ key: o.key.replace(/[()]/g, ''), name: o.title ?? o.label, step }] : []
+}))
+/** "suggested for (b)" beside a step in the list, for every option that points at it. */
+const suggestedFor = (stepId: string) => sendBackFor.value.filter(s => s.step.stepId === stepId).map(s => `(${s.key})`).join(', ')
+/** Opening Send back starts on the step the brief points at: the recommended option's, or the only one named. */
+function openSendBack() {
+  sendingBack.value = true
+  if (reworkTarget.value) return
+  const rec = (changeBrief.value?.recommendation?.option ?? '').replace(/[()]/g, '').trim().toLowerCase()
+  const steps = new Set(sendBackFor.value.map(s => s.step.stepId))
+  reworkTarget.value = sendBackFor.value.find(s => s.key.toLowerCase() === rec)?.step.stepId
+    ?? (steps.size === 1 ? [...steps][0]! : '')
+}
 const notePlaceholder = computed(() => {
   if (isReply.value) return brief.value ? 'Add a note for the run (optional)' : 'Your answer to the agent'
   if (runnerPause.value) return 'Optional note for the step about to run'
@@ -273,7 +291,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
       <RunBudgetBrief v-else-if="question?.reason === 'budget'" :run="run" />
 
       <!-- An approval: what it lets happen, measured. -->
-      <RunVerdictCard v-else-if="question?.kind === 'approval' && !runnerPause && question.reason !== 'rework'" :run="run" />
+      <RunVerdictCard v-else-if="question?.kind === 'approval' && !runnerPause && question.reason !== 'rework'" :run="run" @brief="b => { changeBrief = b }" />
 
       <!-- A question without a brief: the step's report is all there is to go on. -->
       <details v-else-if="report" class="group-details" open>
@@ -356,6 +374,10 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <template v-else-if="isApproval">
             <span class="t-small text-label mr-auto">
               <template v-if="canSendBack">Can be sent back {{ reworksLeft }} more {{ reworksLeft === 1 ? 'time' : 'times' }}</template>
+              <span v-if="sendingBack && sendBackFor.length" class="block" data-testid="send-back-suggestion">
+                Suggested:
+                <template v-for="(s, i) in sendBackFor" :key="s.key">{{ i ? ' · ' : '' }}<span :title="s.name">({{ s.key }}) <b class="text-strong">{{ s.step.label }}</b></span></template>
+              </span>
             </span>
             <template v-if="!runnerPause">
               <UButton
@@ -366,11 +388,11 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
               <template v-if="canSendBack">
                 <select v-if="sendingBack" v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to">
                   <option value="">Send back to…</option>
-                  <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}</option>
+                  <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}{{ suggestedFor(s.stepId) ? ` — suggested for ${suggestedFor(s.stepId)}` : '' }}</option>
                 </select>
                 <UButton
                   v-if="!sendingBack" size="sm" variant="soft" color="neutral" icon="i-lucide-corner-up-left" label="Send back…"
-                  @click="() => { sendingBack = true }"
+                  @click="openSendBack"
                 />
                 <UButton
                   v-else size="sm" icon="i-lucide-corner-up-left" label="Send back"
