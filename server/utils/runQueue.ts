@@ -282,6 +282,11 @@ export function drainRunQueue(launch: Launcher): Promise<number> {
 
       for (const candidate of candidates) {
         if (free <= 0) break
+        // Asked again before every launch, not once per group: a launch that
+        // fails in preflight costs no slot, so a drain under way when the
+        // network went walked the whole queue, failing a run a minute, through
+        // the hold put on to stop exactly that.
+        if (quotaBlocked() || await givingWayTo(group)) break
         let outcome: LaunchOutcome
         try {
           outcome = await launch(candidate)

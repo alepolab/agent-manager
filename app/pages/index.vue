@@ -35,7 +35,7 @@ const loaded = ref(false)
 const loadError = ref<string | null>(null)
 
 async function refresh() {
-  const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs')])
+  const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs?summary=1')])
   // A rejected fetch used to leave the previous list in place and say nothing,
   // so "Nothing waiting on you" was shown for both an all-clear and an API that
   // was down. On the one screen whose job is to say what needs a person, those
@@ -384,7 +384,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
             >{{ riskOf(r) === 'justify' ? 'Owner-gated' : r.blastRadius }}</span>
             <span
               class="inset-row__end"
-              :style="waitTier(r) === 'critical' ? { color: 'var(--warning)', fontWeight: 600 } : undefined"
+              :style="waitTier(r) === 'critical' ? { color: 'var(--waiting)', fontWeight: 600 } : undefined"
               :title="`Waiting ${shortWait(waitedMs(r))}`"
             >{{ shortWait(waitedMs(r)) }}</span>
             <span class="w-16 flex justify-end shrink-0">

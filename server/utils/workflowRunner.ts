@@ -19,7 +19,7 @@ import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type Agent
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 import { fastPathApplies, inspectStack, reuseVerdict, tryStackFastPath } from './stackFastPath.ts'
 import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
@@ -2894,7 +2894,10 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // the run) gets it back from the clone: without this, agentCaller fell back
   // to the Claude config directory as cwd and every step ran in the wrong
   // place while the header still named the deleted path.
-  if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
+  // It still gets the .agent/ guard, every step: one made before the guard
+  // existed never had it, and a base that tracks .agent/plan.md (develop did,
+  // 25-30 Sep) has every Failing Test and Implement Fix commit rewrite it.
+  if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return keepAgentDirOutOfGit(run.projectDir)
   if (run.parameters?.branch?.trim() && !run.branch && !run.testOf) return ensureBranchWorktree(run, run.parameters.branch.trim())
   const checkout = runCheckout(run)
   // A test run with a directory but no clone to make its worktree beside
