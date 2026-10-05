@@ -88,6 +88,26 @@ async function interrupted(over = {}) {
     'the frozen step is settled as pending so continuing can schedule it')
 }
 
+// ── 3b. "try once more" on a step frozen in its last visit runs it ──
+{
+  const r = await interrupted({ interruptions: 3 })
+  // Frozen in its third visit, the default cap: ASECRM-296's Browser Trace.
+  const saved = await store.getRun(r.id)
+  saved.steps.find(s => s.stepId === 'a').visits = 3
+  await store.saveRun(saved)
+  const calls = []
+  runner.setAgentCaller(async (slug) => { calls.push(slug); return `out ${slug}` })
+  const out = await runner.resumeInterruptedRuns()
+  assert.deepEqual(out.paused, [r.id], 'it asks first, as above')
+  assert.equal((await store.getRun(r.id)).steps.find(s => s.stepId === 'a').visits, 2,
+    'the attempt it froze in is not counted')
+  await runner.continueRun(r.id)
+  const after = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(after.status, 'completed',
+    `THE REGRESSION: approving "try once more" left a step at its cap with nothing to schedule: ${after.error}`)
+  assert.ok(calls.includes('agent-a'), 'the step really ran once more')
+}
+
 // ── 4. progress clears the count: only consecutive interruptions with nothing achieved matter ──
 {
   const r = await interrupted({ interruptions: 2 })

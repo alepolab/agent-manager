@@ -3450,6 +3450,11 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
     run.interruptions = (run.interruptions ?? 0) + 1
     if (frozen && run.interruptions > MAX_INTERRUPTIONS) {
       frozen.status = 'pending'
+      // The attempt it froze in never reached an outcome, so it is not a visit
+      // (as in restartRun). Left counted, "try once more" on a step frozen in its
+      // last visit had nothing it could schedule: ASECRM-296's Browser Trace sat
+      // at 3 of 3, and approving it ended the run as stuck.
+      frozen.visits = Math.max(0, (frozen.visits ?? 1) - 1)
       run.status = 'paused'
       run.question = {
         stepId: frozen.stepId, kind: 'approval', askedAt: Date.now(),
