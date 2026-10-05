@@ -18,6 +18,20 @@ import { promisify } from 'node:util'
  * commit land here instead of building again.
  */
 
+/**
+ * Whether the fast path may take this visit of the provisioning step at all:
+ * only its first, on a stack the runner claimed, in a fresh session. A
+ * revisit means something downstream rejected this stack - QA's
+ * `PIPELINE-REWORK: Stand Up Stack — the stack is not serving` arrives as the
+ * revisit's input - and only the agent can act on that. Taken by the fast
+ * path, the instruction was consumed, the step reported the stack fine, and
+ * the run burned its send-backs on the same complaint.
+ */
+export function fastPathApplies(a: { agentSlug: string, visits: number, resume?: string, stackProject?: string, stackClaimedFrom?: string, projectDir?: string }): boolean {
+  return a.agentSlug === 'sdlc-stack-provisioner' && a.visits <= 1 && !a.resume
+    && !!a.stackProject && !!a.stackClaimedFrom && !!a.projectDir
+}
+
 export type Exec = (cmd: string, args: string[], cwd?: string) => Promise<string>
 export const realExec: Exec = async (cmd, args, cwd) =>
   (await promisify(execFile)(cmd, args, { cwd, maxBuffer: 4 * 1024 * 1024, timeout: 30_000 })).stdout.trim()
@@ -68,8 +82,9 @@ export type ReuseVerdict = { ok: true, app: StackContainer } | { ok: false, reas
 
 /**
  * Whether a stack can be reused exactly as it is, for a checkout at `head`.
- * Strict on purpose: anything short of "every service up and healthy, running
- * this commit" goes to the agent, which can fix what this can only notice.
+ * Strict on purpose: anything short of "every container up, every healthcheck
+ * green, and the app on this commit reporting healthy" goes to the agent,
+ * which can fix what this can only notice.
  */
 export function reuseVerdict(containers: StackContainer[], head: string | undefined): ReuseVerdict {
   if (!head) return { ok: false, reason: 'the checkout has no HEAD to compare with' }
@@ -88,6 +103,9 @@ export function reuseVerdict(containers: StackContainer[], head: string | undefi
     const revs = [...new Set(running.map(c => c.revision?.slice(0, 9) ?? 'unlabelled'))].join(', ')
     return { ok: false, reason: `it runs ${revs}, not this checkout's ${head.slice(0, 9)}` }
   }
+  // Running is not serving: the app has to say so through its own healthcheck.
+  // One that declares none goes to the agent, which can make a request.
+  if (app.health !== 'healthy') return { ok: false, reason: `${app.name} declares no healthcheck, so nothing here shows it is serving` }
   return { ok: true, app }
 }
 
@@ -98,13 +116,17 @@ export function inheritedStackMeta(sourceMeta: unknown): { profile: string, topo
   return { profile: s.profile, topology: s.topology, liquibase_tag: typeof s.liquibase_tag === 'string' ? s.liquibase_tag : null }
 }
 
-/** A locally present image built from `commit`, by its revision label. */
-export async function imageForCommit(commit: string | undefined, exec: Exec = realExec): Promise<string | null> {
-  if (!commit || commit.length < 40) return null
+/**
+ * Every locally present image built from `commit`, by its revision label. All
+ * of them: one commit can build app, worker and migrator images, and naming
+ * the first would tell the agent to deploy whichever docker listed first.
+ */
+export async function imagesForCommit(commit: string | undefined, exec: Exec = realExec): Promise<string[]> {
+  if (!commit || commit.length < 40) return []
   try {
     const tags = (await exec('docker', ['images', '--filter', `label=${REVISION_LABEL}=${commit}`, '--format', '{{.Repository}}:{{.Tag}}'])).split('\n')
-    return tags.find(t => t && !t.includes('<none>')) ?? null
-  } catch { return null }
+    return [...new Set(tags.filter(t => t && !t.includes('<none>')))]
+  } catch { return [] }
 }
 
 export interface FastPathEvidence {
@@ -123,7 +145,7 @@ export function fastPathReport(e: FastPathEvidence): string {
   return [
     '# Stack report',
     '',
-    'Reused by the runner, without a model call: the stack was already up and healthy and its app runs this checkout\'s commit, so there was nothing to stand up, build or deploy.',
+    'Reused by the runner, without a model call: every container is running, every healthcheck reports healthy, and the app runs this checkout\'s commit and reports healthy itself, so there was nothing to stand up, build or deploy.',
     '',
     '## Checkout',
     '',
@@ -153,7 +175,9 @@ export function fastPathReport(e: FastPathEvidence): string {
     '',
     `\`${e.app.name}\` runs \`${e.app.image}\`, whose \`${REVISION_LABEL}\` is \`${e.app.revision}\`: the commit this checkout is at.`,
     '',
-    `Health is Docker's own healthcheck for each service, as \`docker inspect\` reported it at ${new Date().toISOString()}.${e.claimedFrom ? ` The authenticated request that proves the auth wiring is in run ${e.claimedFrom}'s stack report; nothing about the stack has changed since but which run uses it.` : ''}`,
+    `Health is Docker's own healthcheck for each service that declares one, as \`docker inspect\` reported it at ${new Date().toISOString()}; a service marked "no healthcheck" was checked only for running.`,
+    '',
+    `Not checked here: an authenticated request, and anything outside this compose project - a shared Keycloak/URM stack among them, which other products' stacks can change without touching this one.${e.claimedFrom ? ` Run ${e.claimedFrom} made the authenticated request when it stood the stack up.` : ''} A later step that finds the stack not serving sends the run back here, and that visit goes to the agent.`,
     '',
     '## Stack facts',
     '',
@@ -177,7 +201,7 @@ export interface FastPathRun {
 
 export type FastPathResult =
   | { ok: true, output: string, report: string }
-  | { ok: false, reason: string, /** An image already built from this checkout's commit, for the agent to deploy rather than build. */ image?: string | null }
+  | { ok: false, reason: string, /** Images already built from this checkout's commit, for the agent to deploy rather than build. */ images?: string[] }
 
 /**
  * Reuses the claimed stack when reuseVerdict allows it: writes stack-report.md,
@@ -190,18 +214,20 @@ export async function tryStackFastPath(r: FastPathRun, fs: {
   writeFile: (p: string, s: string) => Promise<void>
 }, exec: Exec = realExec): Promise<FastPathResult> {
   const head = await exec('git', ['rev-parse', 'HEAD'], r.projectDir).catch(() => '')
+  const status = await exec('git', ['status', '--short'], r.projectDir).catch(() => '')
+  // What runs is a build of HEAD; uncommitted changes are not in it.
+  if (status) return { ok: false, reason: 'the checkout has uncommitted changes, so no running image is this checkout', images: await imagesForCommit(head, exec) }
   const containers = await inspectStack(r.project, exec).catch(() => [] as StackContainer[])
   const verdict = reuseVerdict(containers, head || undefined)
-  if (!verdict.ok) return { ok: false, reason: verdict.reason, image: await imageForCommit(head, exec) }
+  if (!verdict.ok) return { ok: false, reason: verdict.reason, images: await imagesForCommit(head, exec) }
   const source = r.sourceArtifactsDir ? await fs.readFile(`${r.sourceArtifactsDir}/meta.json`).then(JSON.parse).catch(() => null) : null
   const stack = inheritedStackMeta(source)
-  if (!stack) return { ok: false, reason: 'the run that stood the stack up recorded no stack profile and topology to carry over', image: null }
+  if (!stack) return { ok: false, reason: 'the run that stood the stack up recorded no stack profile and topology to carry over', images: [] }
   const meta = await fs.readFile(`${r.artifactsDir}/meta.json`).then(JSON.parse).catch(() => null) as Record<string, unknown> | null
-  if (!meta) return { ok: false, reason: 'this run has no meta.json to merge the stack into', image: null }
+  if (!meta) return { ok: false, reason: 'this run has no meta.json to merge the stack into', images: [] }
 
-  const [remote, status, ps] = await Promise.all([
+  const [remote, ps] = await Promise.all([
     exec('git', ['remote', '-v'], r.projectDir).catch(() => ''),
-    exec('git', ['status', '--short'], r.projectDir).catch(() => ''),
     exec('docker', ['ps', '-a', '--filter', `label=${COMPOSE_PROJECT_LABEL}=${r.project}`, '--format', '{{.Names}} {{.Status}}']).catch(() => ''),
   ])
   const report = fastPathReport({
@@ -213,7 +239,8 @@ export async function tryStackFastPath(r: FastPathRun, fs: {
   await fs.writeFile(`${r.artifactsDir}/meta.json`, `${JSON.stringify({ ...meta, stack }, null, 2)}\n`)
   const output = [
     `Reused stack ${r.project}${r.claimedFrom ? ` (stood up by run ${r.claimedFrom})` : ''} without a model call:`,
-    `every service is up and healthy, and ${verdict.app.name} runs ${verdict.app.revision?.slice(0, 12)}, this checkout's HEAD.`,
+    `every container is running, every healthcheck is green, and ${verdict.app.name} (healthy) runs ${verdict.app.revision?.slice(0, 12)}, this checkout's HEAD.`,
+    'Not checked: an authenticated request, or anything outside this compose project.',
     `Wrote stack-report.md and merged stack ${JSON.stringify(stack)} into meta.json.`,
   ].join('\n')
   return { ok: true, output, report }

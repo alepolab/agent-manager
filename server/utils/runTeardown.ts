@@ -59,6 +59,9 @@ export function stackUsers(project: string, runs: StackRun[], except?: string): 
     && (stackProjectOf(r) === project || runProjectNames(r.id).includes(project)))
 }
 
+/** How many free stacks claimableStack inspects for one already on the run's commit. */
+export const PREFER_PROBES = 3
+
 /**
  * An up stack of this run's product that it can take over rather than stand
  * up its own: one whose runs are all stopped on a person, or finished. Each
@@ -86,7 +89,10 @@ export async function claimableStack(
     if (!prefer) return { project: name, from: owner.id }
     free.push({ project: name, from: owner.id })
   }
-  for (const f of free) if (await prefer!(f.project).catch(() => false)) return f
+  // Each probe is a docker inspect per container, under the claim lock every
+  // other launch waits behind: three free stacks are enough to find one on the
+  // run's commit, and the first free one serves when none is.
+  for (const f of free.slice(0, PREFER_PROBES)) if (await prefer!(f.project).catch(() => false)) return f
   return free[0] ?? null
 }
 

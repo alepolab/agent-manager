@@ -33,6 +33,21 @@ for (const [containers, why] of [
   [[c('p-app', { state: 'exited', revision: HEAD })], /nothing in the stack is running/],
 ]) assert.match(m.reuseVerdict(containers, HEAD).reason, why)
 assert.match(m.reuseVerdict([app], undefined).reason, /no HEAD/)
+// Running is not serving: the app on this commit has to report healthy itself.
+assert.match(m.reuseVerdict([c('p-app', { revision: HEAD, health: null })], HEAD).reason, /declares no healthcheck/,
+  'an app with no healthcheck is not called healthy')
+assert.equal(m.reuseVerdict([app, c('p-minio', { health: null })], HEAD).ok, true, 'a side service without one is checked for running, as the report says')
+
+// ── fastPathApplies: the first visit only ───────────────────────────────────
+const visit = (o = {}) => m.fastPathApplies({ agentSlug: 'sdlc-stack-provisioner', visits: 1, stackProject: 'sdlc-src', stackClaimedFrom: 'src-run', projectDir: '/co', ...o })
+assert.equal(visit(), true, 'a first visit on a claimed stack')
+assert.equal(visit({ visits: 2 }), false,
+  'THE BLOCKER: a revisit carries why a later step rejected the stack (PIPELINE-REWORK: Stand Up Stack), and only the agent can act on it')
+assert.equal(visit({ visits: 3 }), false)
+assert.equal(visit({ resume: 'ses-1' }), false, 'nor a resumed session, which is mid-way through its own work')
+assert.equal(visit({ agentSlug: 'sdlc-stack-update' }), false, 'only the provisioner')
+assert.equal(visit({ stackClaimedFrom: undefined }), false, 'only a stack the runner claimed')
+assert.equal(visit({ projectDir: undefined }), false)
 
 // ── inheritedStackMeta ───────────────────────────────────────────────────────
 assert.deepEqual(m.inheritedStackMeta({ stack: { profile: 'ase-crm-stack', topology: 'single' } }), { profile: 'ase-crm-stack', topology: 'single', liquibase_tag: null })
@@ -40,7 +55,7 @@ assert.equal(m.inheritedStackMeta({ stack: null }), null)
 assert.equal(m.inheritedStackMeta({ stack: { profile: 'p' } }), null)
 
 // ── tryStackFastPath, end to end on fakes ────────────────────────────────────
-function fakes({ appRevision = HEAD, image = '' } = {}) {
+function fakes({ appRevision = HEAD, image = '', status = '' } = {}) {
   const files = {
     '/src/meta.json': JSON.stringify({ stack: { profile: 'ase-crm-stack', topology: 'single', liquibase_tag: null } }),
     '/me/meta.json': JSON.stringify({ ticket: 'X-1', stack_required: true }),
@@ -50,7 +65,7 @@ function fakes({ appRevision = HEAD, image = '' } = {}) {
     const a = args.join(' ')
     if (cmd === 'git' && a === 'rev-parse HEAD') return HEAD
     if (cmd === 'git' && a === 'remote -v') return 'origin https://github.com/o/r.git (fetch)'
-    if (cmd === 'git' && a === 'status --short') return ''
+    if (cmd === 'git' && a === 'status --short') return status
     if (cmd === 'docker' && args[0] === 'ps' && a.includes('{{.Names}} {{.Status}}')) return 'p-app Up 2 hours (healthy)'
     if (cmd === 'docker' && args[0] === 'ps') return 'p-app'
     if (cmd === 'docker' && args[0] === 'inspect') return JSON.stringify(inspect[args.at(-1)])
@@ -72,13 +87,25 @@ const r = { project: 'sdlc-src', claimedFrom: 'src-run', projectDir: '/co', bran
   const report = f.files['/me/stack-report.md']
   for (const must of ['$ git rev-parse HEAD', HEAD, '$ docker ps -a --filter label=com.docker.compose.project=sdlc-src', 'p-app Up 2 hours (healthy)', 'run src-run', 'Nothing was seeded'])
     assert.ok(report.includes(must), `report quotes ${must}`)
+  assert.match(report, /Not checked here: an authenticated request, and anything outside this compose project/, 'the report says what it did not check')
+  assert.doesNotMatch(report, /nothing about the stack has changed/, 'and claims nothing it cannot see')
+  assert.match(res.output, /Not checked: an authenticated request/)
 }
 {
-  const f = fakes({ appRevision: '19fc7573a6773c7032722a683080bc110a9dd67d', image: 'localhost/agent-sdlc/app:base-a35b08490d4b' })
+  // A revisit with uncommitted work: the running image is a build of HEAD, not of this checkout.
+  const f = fakes({ status: ' M src/App.java' })
+  const res = await m.tryStackFastPath(r, f.fs, f.exec)
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /uncommitted changes/)
+  assert.equal(f.files['/me/stack-report.md'], undefined, 'and no report claims otherwise')
+}
+{
+  const f = fakes({ appRevision: '19fc7573a6773c7032722a683080bc110a9dd67d', image: 'localhost/agent-sdlc/app:base-a35b08490d4b\nlocalhost/agent-sdlc/worker:base-a35b08490d4b\nlocalhost/agent-sdlc/app:base-a35b08490d4b' })
   const res = await m.tryStackFastPath(r, f.fs, f.exec)
   assert.equal(res.ok, false)
   assert.match(res.reason, /not this checkout's/)
-  assert.equal(res.image, 'localhost/agent-sdlc/app:base-a35b08490d4b', 'the agent is told which image of this commit to deploy')
+  assert.deepEqual(res.images, ['localhost/agent-sdlc/app:base-a35b08490d4b', 'localhost/agent-sdlc/worker:base-a35b08490d4b'],
+    'every image of this commit, once each: one commit can build several, and the first listed is not necessarily the app')
   assert.equal(f.files['/me/stack-report.md'], undefined, 'nothing written when the agent takes over')
 }
 {
@@ -99,12 +126,24 @@ const r = { project: 'sdlc-src', claimedFrom: 'src-run', projectDir: '/co', bran
   assert.equal((await claimableStack(me, runs, exec, async p => p === 'sdlc-bbbb')).project, 'sdlc-bbbb', 'the one on the right commit when asked')
   assert.equal((await claimableStack(me, runs, exec, async () => false)).project, 'sdlc-aaaa', 'still a stack when none matches')
 }
+{
+  // Probing runs under the claim lock every launch waits behind: bounded.
+  const names = ['a1', 'b2', 'c3', 'd4', 'e5'].map(x => `sdlc-${x}${x}`)
+  const exec = async () => JSON.stringify(names.map(Name => ({ Name, Status: 'running(3)' })))
+  const runs = names.map(n => ({ id: n.slice(5), status: 'paused', product: { name: 'p' } }))
+  const probed = []
+  const got = await claimableStack({ id: 'zzzz', product: { name: 'p' } }, runs, exec, async p => { probed.push(p); return p === names[4] })
+  const { PREFER_PROBES } = await import('../server/utils/runTeardown.ts')
+  assert.equal(probed.length, PREFER_PROBES, `at most ${PREFER_PROBES} stacks inspected`)
+  assert.equal(got.project, names[0], 'and the first free one when none of those matches')
+}
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
 const runner = readFileSync(new URL('../server/utils/workflowRunner.ts', import.meta.url), 'utf8')
 const fast = runner.indexOf('tryStackFastPath({')
 assert.ok(fast > 0 && fast < runner.indexOf('agentCaller(step.agentSlug, agentInput'), 'tried before the agent is called')
 assert.match(runner, /agentCaller\(step\.agentSlug, agentInput,/, 'the agent gets the image hint')
+assert.match(runner.slice(runner.lastIndexOf('\n', fast - 400), fast), /if \(fastPathApplies\(\{ agentSlug: step\.agentSlug, visits: rec\.visits, resume,/, 'and the runner asks fastPathApplies, with the visit and the session, first')
 const tpl = readFileSync(new URL('../app/utils/templates.ts', import.meta.url), 'utf8')
 assert.match(tpl, /## Build once per commit[\s\S]*--label org\.opencontainers\.image\.revision=<full HEAD sha>/)
 
