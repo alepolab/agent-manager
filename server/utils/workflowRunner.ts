@@ -911,28 +911,38 @@ export function isUnresumable(message: string): boolean {
  * The model's quota or rate limit is spent, and when it resets. The provider
  * says so in the error: "Request rejected (429) · … Quota resets in 3551s".
  * Retrying before then fails the same way, so the reset time is the retry
- * time. With no time stated, `fallbackMs` stands in and the run says so.
+ * time. With no time stated, `fallbackMs` stands in, and `stated` is false.
+ *
+ * One parse answers both questions. They were two regexes, and they
+ * disagreed: "resets in 30 minutes" read as stated while its time fell
+ * through to the guess, so the probe guard keyed on `stated` stood down and
+ * the queue drained into a quota spent for hours.
  */
-export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
+export function quotaReset(message: string, now = Date.now(), fallbackMs = 15 * 60_000): { at: number, stated: boolean } | null {
   if (!/\b429\b|rate[ -]?limit|quota|usage limit|hit your .{0,30}limit/i.test(message) || isAuthFailure(message)) return null
-  const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
-  // A minute's margin: a request exactly at the reset time is often still refused.
-  if (s) return now + Number(s[1]) * 1000 + 60_000
-  // A proxy in front of several accounts says when the first of them frees up:
-  // TeamClaude's "Quota resets in 1h15m." / "in 32m". Read as a 15-minute guess,
-  // that wait became a retry every quarter-hour, each one starting queued runs
-  // straight into the spent quota.
-  const hm = message.match(/resets? in (?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?\b/i)
-  if (hm && (hm[1] || hm[2])) return now + (Number(hm[1] ?? 0) * 60 + Number(hm[2] ?? 0)) * 60_000 + 60_000
-  const at = resetsAtClock(message, now)
-  return at ? at + 60_000 : now + fallbackMs
+  // A minute's margin on every stated time: a request exactly at the reset is often still refused.
+  const stated = (ms: number) => ({ at: now + ms + 60_000, stated: true })
+  const s = message.match(/resets? in (\d+)\s*s(?:ec(?:ond)?s?)?\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
+  if (s) return stated(Number(s[1]) * 1000)
+  // A proxy in front of several accounts says when the first of them frees
+  // up: TeamClaude's "Quota resets in 1h15m." / "in 32m"; others spell the
+  // units out. Read as a 15-minute guess, that wait became a retry every
+  // quarter-hour, each one starting queued runs straight into the spent quota.
+  const hm = message.match(/resets? in (?:(\d+)\s*h(?:ours?|rs?)?)?[\s,]*(?:and\s+)?(?:(\d+)\s*m(?:in(?:ute)?s?)?)?(?![a-z])/i)
+  if (hm && (hm[1] || hm[2])) return stated((Number(hm[1] ?? 0) * 60 + Number(hm[2] ?? 0)) * 60_000)
+  const clock = resetsAtClock(message, now)
+  if (clock) return { at: clock + 60_000, stated: true }
+  return { at: now + fallbackMs, stated: false }
 }
 
-/** Whether a quota message names when it resets, so quotaResetAt did not have to guess. */
+/** When a quota message says the quota resets, or a guess; null when it is not a quota message. */
+export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
+  return quotaReset(message, now, fallbackMs)?.at ?? null
+}
+
+/** Whether quotaResetAt read the reset from the message rather than guessing it. */
 export function quotaResetStated(message: string, now = Date.now()): boolean {
-  return /resets? in \d+\s*s\b|retry[- ]after/i.test(message)
-    || /resets? in (?:\d+\s*h)?\s*(?:\d+\s*m(?:in)?)?\b/i.test(message) && /resets? in \d/i.test(message)
-    || resetsAtClock(message, now) !== null
+  return quotaReset(message, now)?.stated ?? false
 }
 
 /**
