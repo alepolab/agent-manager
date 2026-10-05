@@ -65,6 +65,29 @@ git(wt, ['reset', '-q'])
 { const st = await W.checkoutState(repo); assert.equal(st.dirty, 2, 'the clone\'s own uncommitted work is untouched: ' + st.dirtyFiles.join(',')) }
 
 {
+  // A worktree made before the guard, on a base that tracks the plan: develop
+  // carried ASECRM-292's .agent/plan.md from 25 to 30 Sep, and the runs cut
+  // from it committed their own plan over it at Failing Test and Implement Fix.
+  const tracked = W.checkoutDirFor('alepolab/crm'); mkdirSync(join(tracked, '.agent'), { recursive: true })
+  git(tracked, ['init', '--quiet', '-b', 'develop']); git(tracked, ['config', 'user.email', 't@x']); git(tracked, ['config', 'user.name', 't'])
+  writeFileSync(join(tracked, 'a.txt'), 'a\n'); writeFileSync(join(tracked, '.agent', 'plan.md'), '# someone else\'s plan\n')
+  git(tracked, ['add', '-A']); git(tracked, ['commit', '--quiet', '-m', 'a plan reached develop'])
+  const old = W.worktreeDirFor(tracked, 'fix/ASECRM-293-3129ee1c')
+  git(tracked, ['worktree', 'add', '--quiet', '-B', 'fix/ASECRM-293-3129ee1c', old])
+  writeFileSync(join(old, '.agent', 'plan.md'), '# this run\'s plan\n'); writeFileSync(join(old, 'a.txt'), 'fixed\n')
+  git(old, ['add', '-A'])
+  assert.ok(git(old, ['diff', '--cached', '--name-only']).includes('.agent/plan.md'), 'unguarded, the rewritten plan is staged with the fix: the bug')
+  git(old, ['reset', '-q'])
+  await W.keepAgentDirOutOfGit(old)
+  git(old, ['add', '-A'])
+  assert.deepEqual(git(old, ['diff', '--cached', '--name-only']).split('\n'), ['a.txt'], 'guarded, the fix is staged and the tracked plan is not')
+  git(old, ['commit', '--quiet', '-am', 'fix'])
+  assert.equal(git(old, ['diff', '--name-only', 'develop', 'HEAD']), 'a.txt', 'and the branch carries the fix alone, even through commit -a')
+  await W.keepAgentDirOutOfGit(old)
+  assert.match(git(old, ['ls-files', '-v', '.agent/plan.md']), /^S /, 'applying it again, as every step does, is harmless')
+}
+
+{
   // A superproject with a real submodule: its worktree materialises the module as an EMPTY directory that answers git commands for the parent.
   const sup = W.checkoutDirFor('alepolab/billing_cpp14'); mkdirSync(sup, { recursive: true }); git(sup, ['init', '--quiet', '-b', 'main']); git(sup, ['config', 'user.email', 't@x']); git(sup, ['config', 'user.name', 't'])
   const subSrc = join(root, 'sub-src'); mkdirSync(subSrc); git(subSrc, ['init', '--quiet', '-b', 'main']); git(subSrc, ['config', 'user.email', 't@x']); git(subSrc, ['config', 'user.name', 't']); writeFileSync(join(subSrc, 's.txt'), 's\n'); git(subSrc, ['add', '.']); git(subSrc, ['commit', '--quiet', '-m', 'sub'])
