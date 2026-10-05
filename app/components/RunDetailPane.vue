@@ -17,5 +17,11 @@ useAutoRefresh(refresh)
     @continue="onContinue" @respond="onRespond" @reject="onReject" @rework="onRework"
     @note="onNote" @stop="onStop" @restart="onRestart" @clone="navigateTo(`/workflows/${run.workflowSlug}?clone=${id}`)"
   />
-  <SkeletonCard v-else />
+  <div v-else class="space-y-2" aria-busy="true">
+    <p class="t-small text-label flex items-center gap-2" role="status">
+      <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" style="color: var(--accent);" />
+      Loading run…
+    </p>
+    <SkeletonCard />
+  </div>
 </template>

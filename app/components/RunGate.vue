@@ -93,7 +93,7 @@ function chooseOption(text: string) {
       <!-- Whose decision this is. Said out loud when it is not yours, because a
            panel with the controls quietly removed is indistinguishable from a
            broken one. -->
-      <p v-if="gateOwner" class="t-small" :style="{ color: mineToAnswer ? 'var(--text-tertiary)' : 'var(--warning)' }">
+      <p v-if="gateOwner" class="t-small" :style="{ color: mineToAnswer ? 'var(--text-tertiary)' : 'var(--text-secondary)' }">
         <template v-if="mineToAnswer">This gate is <span class="font-mono">{{ gateOwner }}</span>'s decision — yours to answer.</template>
         <template v-else>This gate is <span class="font-mono">{{ gateOwner }}</span>'s decision, not yours. You are {{ role }}.</template>
       </p>

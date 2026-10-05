@@ -286,6 +286,39 @@ await groups.replaceGroups([
   await reset()
 }
 
+// ══ 8b. a hold put on mid-drain stops the drain at the next launch ════════
+{
+  const ids = []
+  for (let i = 0; i < 3; i++) {
+    const r = await mk({ status: 'queued', group: 'scans' })
+    await setQueuedAt(r.id, 1_700_000_000_000 + i)
+    ids.push(r.id)
+  }
+  const tried = []
+  // Every launch fails as preflight does with the network gone, and the first
+  // one is where the operator puts the hold on.
+  const launch = async (run) => {
+    tried.push(run.id)
+    if (tried.length === 1) await groups.replaceGroups([
+      { id: 'sdlc', name: 'SDLC pipelines', maxConcurrent: 2 },
+      { id: 'scans', name: 'Nightly scans', maxConcurrent: 1, held: true },
+    ])
+    run.status = 'failed'
+    run.error = 'Preflight: fetch failed'
+    await store.saveRun(run)
+    return 'failed'
+  }
+  await queue.drainRunQueue(launch)
+  assert.deepEqual(tried, [ids[0]],
+    'THE REGRESSION: the drain checked the hold once per group, so failing launches walked the whole queue through it')
+  assert.equal((await store.getRun(ids[1])).status, 'queued', 'and the rest are still queued')
+  await groups.replaceGroups([
+    { id: 'sdlc', name: 'SDLC pipelines', maxConcurrent: 2 },
+    { id: 'scans', name: 'Nightly scans', maxConcurrent: 1, held: false },
+  ])
+  await reset()
+}
+
 // ══ 9. two concurrent drains launch each run exactly once ═════════════════
 {
   const ids = []
