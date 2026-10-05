@@ -373,7 +373,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
                   @click="() => { sendingBack = true }"
                 />
                 <UButton
-                  v-else size="sm" variant="soft" color="neutral" icon="i-lucide-corner-up-left" label="Send back"
+                  v-else size="sm" icon="i-lucide-corner-up-left" label="Send back"
                   :loading="sending === 'rework'" :disabled="!!sending || !reworkTarget || !note.trim()"
                   :title="!reworkTarget ? 'Choose the step it goes back to' : !note.trim() ? 'Say what needs to change' : 'That step runs again with your instruction'"
                   @click="send('rework')"
@@ -385,8 +385,11 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
               icon="i-lucide-circle-stop" :label="confirmingStop ? 'Confirm stop' : 'Stop the run'" @click="stopRun"
             />
             <span class="sr-only" aria-live="polite">{{ confirmingStop ? 'Press Confirm stop again within four seconds to stop the run.' : '' }}</span>
+            <!-- Once "Send back…" is chosen, sending back is what the person is doing:
+                 it takes the primary look, and approving steps down beside it. -->
             <UButton
               size="sm" icon="i-lucide-check" :label="approveLabel"
+              :variant="sendingBack ? 'soft' : 'solid'" :color="sendingBack ? 'neutral' : 'primary'"
               :loading="sending === 'continue'" :disabled="!!sending || (!runnerPause && !canApprove)"
               :title="!runnerPause && !canApprove ? 'Say why this is right before approving' : ''"
               @click="send('continue')"
