@@ -666,13 +666,23 @@ assert.equal(rst.steps.find(s => s.stepId === 'b').visits, 2, 'visits keep count
 const stepFiles = readdirSync(join(process.env.AGENT_RUNS_DIR, rst.id, 'artifacts', 'steps'))
 assert.ok(stepFiles.some(f => /step-02-.*-restart-1\.json$/.test(f)), 'the failed attempt is snapshotted before the restart')
 
-// A genuinely different workflow (extra step) is refused, not guessed at.
+// A genuinely different workflow (a step gone, the rest renamed) is refused, not guessed at.
+writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
+  name: workflow.name, description: '',
+  steps: workflow.steps.filter(s => s.id !== 'd').map(s => ({ ...s, id: `x-${s.id}`, next: s.next.filter(n => n !== 'd').map(n => `x-${n}`) })),
+}))
+runner._dropLive(rst.id)
+await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/, 'a reshaped workflow refuses restart')
+// One that only gained a step is not a different workflow: the run records it
+// (scripts/test-workflow-gains-step.mjs has the cases).
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
   name: workflow.name, description: '',
   steps: [...workflow.steps, { id: 'e', agentSlug: 'agent-e', label: 'E', next: [] }],
 }))
 runner._dropLive(rst.id)
-await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/, 'a reshaped workflow refuses restart')
+rst = await runner.restartRun(rst.id, 'b')
+rst = await runner.waitForSettled(rst.id, TIMEOUT)
+assert.equal(rst.steps.find(s => s.stepId === 'e')?.status, 'skipped', 'a step gained after the run got going is recorded, as passed')
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'),
   JSON.stringify({ name: workflow.name, description: '', steps: workflow.steps }))
 

@@ -93,10 +93,11 @@ export function materializeTemplateSteps(
   //
   // What this protects is the operator's canvas layout. teamSync carries step
   // positions over keyed by step id, so regenerating the ids snaps every node
-  // back to its default position. It does NOT make an older run restartable
-  // across a step-count change - alignStepIds (workflowRunner.ts) refuses that
-  // on the step count alone, whatever the ids say. Callers that pass bare id
-  // strings have no labels to match on and still regenerate, as before.
+  // back to its default position. Kept ids are also what lets a run in flight
+  // take up a step the team added (adoptAddedSteps in workflowRunner.ts): the
+  // run's ids still name its steps, and only the new one is unknown to it.
+  // Callers that pass bare id strings have no labels to match on and still
+  // regenerate, as before.
   const keptByLabel = new Map<string, string>()
   if (!byPosition) for (const s of saved) if (s.label && !keptByLabel.has(s.label)) keptByLabel.set(s.label, s.id)
 
@@ -240,10 +241,14 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'sdlc-stack-provisioner', label: 'Stand Up Stack', produces: ['stack-report.md'],
         next: ['sdlc-test-author'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-test-author', label: 'Failing Test', produces: ['oracle-before.xml'], next: ['sdlc-fix-implementer'], monitorSlug: 'sdlc-step-monitor' },
-      // The fix hands straight to Jira rather than to verification: the board reads
-      // DEV DONE and then READY FOR QA as soon as the code is written, which is what
+      // The fix is reviewed before Jira hears it is done: the board reads DEV DONE
+      // and then READY FOR QA once the code is written and reviewed, which is what
       // a developer does by hand before asking anyone to test it.
-      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['jira-dev-done'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['code-review'], monitorSlug: 'sdlc-step-monitor' },
+      // The change reviewed the way ce-code-review does, before anyone approves it
+      // at Dev Done: verified P1/P2 findings fixed and committed here, a design
+      // that is wrong sent back to Implement Fix.
+      { agentTemplateId: 'sdlc-ce-review', id: 'code-review', label: 'Code Review', produces: ['review.md'], next: ['jira-dev-done'], monitorSlug: 'sdlc-step-monitor' },
       // The outcome comment rides this step, not the last one: this is the moment the
       // code work is finished, which is what that comment describes.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-dev-done', label: 'Jira: Dev Done', next: ['jira-ready-for-qa'], jira: { transition: 'Dev Done', comment: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
@@ -349,7 +354,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'sdlc-stack-provisioner', id: 'stand-up-stack', label: 'Stand Up Stack', next: ['technical-design'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-feature-designer', id: 'technical-design', label: 'Technical Design', next: ['acceptance-tests'], approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
       { agentTemplateId: 'sdlc-feature-test-author', id: 'acceptance-tests', label: 'Acceptance Tests', next: ['implement-feature'], monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-feature-implementer', id: 'implement-feature', label: 'Implement Feature', next: ['verify-regression', 'browser-trace', 'security-review'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-feature-implementer', id: 'implement-feature', label: 'Implement Feature', next: ['code-review'], monitorSlug: 'sdlc-step-monitor' },
+      // Reviewed before verification, as in Runbook A: what the verifier, the trace and the security review see is the reviewed change.
+      { agentTemplateId: 'sdlc-ce-review', id: 'code-review', label: 'Code Review', produces: ['review.md'], next: ['verify-regression', 'browser-trace', 'security-review'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-verifier', id: 'verify-regression', label: 'Verify + Regression', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-trace-capture', id: 'browser-trace', label: 'Browser Trace', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-security-review', id: 'security-review', label: 'Security Review', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },

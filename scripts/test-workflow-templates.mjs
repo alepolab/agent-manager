@@ -770,7 +770,9 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.equal(trackers.length, 5, 'In Progress, Dev Done, Ready for QA, QA In Progress, QA Done')
   assert.equal(new Set(trackers.map(s => s.id)).size, 5, 'five steps sharing one agent template are still five distinct steps')
 
-  assert.deepEqual(byLabel['Implement Fix'].next, [id('Jira: Dev Done')], 'the fix hands to Jira, not straight to verification')
+  assert.deepEqual(byLabel['Implement Fix'].next, [id('Code Review')], 'the fix is reviewed before anything else')
+  assert.equal(byLabel['Code Review'].agentSlug, 'sdlc-ce-review')
+  assert.deepEqual(byLabel['Code Review'].next, [id('Jira: Dev Done')], 'and the reviewed fix hands to Jira, not straight to verification')
   assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
   assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Jira: QA In Progress')])
   assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
@@ -794,8 +796,8 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 
   // Adding a step must not regenerate the ids of the steps that did not change:
   // teamSync carries the operator's canvas positions over keyed by step id, so a
-  // regenerated id loses that step's layout. It does not rescue an older run's
-  // restartability - alignStepIds refuses a step-count change outright.
+  // regenerated id loses that step's layout. Kept ids are also what lets a run
+  // in flight take up a step the workflow gained (adoptAddedSteps).
   const unchanged = s => s.label !== 'Jira: Ready for QA'
   const saved = steps.filter(unchanged).map(s => ({ id: s.id, label: s.label }))
   const resynced = materializeTemplateSteps(runbook, slugs, saved)
@@ -804,7 +806,23 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.notEqual(resynced.find(s => !unchanged(s)).id, byLabel['Jira: Ready for QA'].id,
     'and only the step it never had gets a new one')
   const rByLabel = Object.fromEntries(resynced.map(s => [s.label, s]))
-  assert.deepEqual(rByLabel['Implement Fix'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
+  assert.deepEqual(rByLabel['Code Review'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
 }
+
+// Runbook B reviews the feature the same way, before verification fans out.
+{
+  const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-b-feature-request-to-pr')
+  const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
+  const steps = materializeTemplateSteps(runbook, slugs)
+  const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
+  const id = label => byLabel[label].id
+  assert.deepEqual(byLabel['Implement Feature'].next, [id('Code Review')], 'the feature is reviewed first')
+  assert.equal(byLabel['Code Review'].agentSlug, 'sdlc-ce-review')
+  assert.deepEqual([...byLabel['Code Review'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
+    'and verification, the trace and the security review see the reviewed change')
+}
+
+// The reviewer sends a design it cannot fix back to whichever step implemented it.
+assert.match(AGENT_TEMPLATES.find(a => a.id === 'sdlc-ce-review').body, /Implement Fix, or Implement Feature/)
 
 console.log('workflowTemplates: all assertions passed')

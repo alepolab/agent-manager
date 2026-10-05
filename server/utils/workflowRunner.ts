@@ -958,7 +958,8 @@ export function endedToWait(output: string): boolean {
 }
 
 /** The steps that make a run's change, and so know what approving it gains and risks. */
-const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work)$/
+// The reviewer too: once it has fixed findings it holds the latest picture of the change.
+const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work|ce-review)$/
 
 /**
  * Asks the step that made the change for its reviewer's brief, when a gate
@@ -3775,6 +3776,7 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   // Overridden before alignment too: a test run's record carries the tested
   // step's overridden agent, and must align with the list it was built from.
   const steps = withTestOverride(alignStepIds(withTestOverride(workflow.steps, run), run), run)
+  if (adoptAddedSteps(steps, run)) await saveRun(run)
   const aligned = { ...workflow, steps }
   const graph = buildGraph(steps)
   const state = initRunState(graph)
@@ -3809,6 +3811,37 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
 }
 
 /**
+ * Records on the run every step its workflow gained after it started. Code
+ * Review was added after Implement Fix while 139 Runbook A runs were in
+ * flight; refused as "a different workflow", every one of them would have
+ * failed at its next approval or restart. A run that has not got that far
+ * yet takes the new step like any other. One already past it - every step
+ * feeding it settled - records it as skipped with the reason, and is not
+ * sent back to run it. True when the record changed and needs saving.
+ */
+function adoptAddedSteps(steps: any[], run: WorkflowRun): boolean {
+  const recorded = new Set(run.steps.map(s => s.stepId))
+  const added = steps.filter(s => !recorded.has(s.id))
+  const settled = (r?: RunStep) => !!r && (r.status === 'completed' || (r.status === 'skipped' && !!r.skipReason))
+  for (const step of added) {
+    const feeders = steps.filter(p => (p.next ?? []).includes(step.id))
+    // A new first step has nothing feeding it: passed once the run has settled anything.
+    const passed = feeders.length ? feeders.every(p => settled(run.steps.find(r => r.stepId === p.id))) : run.steps.some(r => settled(r))
+    const rec: RunStep = {
+      stepId: step.id, label: step.label, agentSlug: step.agentSlug, input: '', output: '', visits: 0,
+      ...(passed
+        ? { status: 'skipped' as const, skipReason: `Added to the workflow after this run had passed this point.` }
+        : { status: 'pending' as const }),
+    }
+    // In the run's own order: after the last step that feeds it.
+    const at = Math.max(-1, ...feeders.map(p => run.steps.findIndex(r => r.stepId === p.id)))
+    run.steps.splice(at + 1, 0, rec)
+  }
+  if (added.length) log.info('run took up steps its workflow gained', { runId: run.id, steps: added.map(s => s.label), skipped: run.steps.filter(r => added.some(a => a.id === r.stepId) && r.status === 'skipped').map(r => r.label) })
+  return added.length > 0
+}
+
+/**
  * A workflow file re-saved since the run began (the template sync regenerates
  * every step id) no longer shares ids with the run. When the agent sequence
  * still matches position for position, the run's ids are authoritative and the
@@ -3816,12 +3849,10 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
  */
 function alignStepIds(steps: any[], run: WorkflowRun): any[] {
   const known = new Set(steps.map(s => s.id))
-  const recorded = new Set(run.steps.map(s => s.stepId))
-  if (run.steps.every(s => known.has(s.stepId))) {
-    // Ids match, but a node the run never recorded would fail its wave silently.
-    if (steps.every(s => recorded.has(s.id))) return steps
-    throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
-  }
+  // Ids match. A step the run never recorded is one the workflow gained since
+  // the run started: rehydrate records it (adoptAddedSteps) before its graph
+  // runs, so it cannot fail a wave silently.
+  if (run.steps.every(s => known.has(s.stepId))) return steps
   const sameShape = steps.length === run.steps.length
     && steps.every((s, i) => s.agentSlug === run.steps[i]?.agentSlug)
   if (!sameShape) {
