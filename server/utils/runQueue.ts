@@ -307,8 +307,11 @@ export function drainRunQueue(launch: Launcher): Promise<number> {
         // Asked again before every launch, not once per group: a launch that
         // fails in preflight costs no slot, so a drain under way when the
         // network went walked the whole queue, failing a run a minute, through
-        // the hold put on to stop exactly that.
-        if (quotaBlocked() || await givingWayTo(group)) break
+        // the hold put on to stop exactly that. A quota block that lands
+        // mid-drain holds the rest as it would at the start: only a run
+        // returning from a quota pause still goes.
+        if (await givingWayTo(group)) break
+        if (quotaBlocked() && !returnsFromQuota(candidate)) continue
         let outcome: LaunchOutcome
         try {
           outcome = await launch(candidate)
