@@ -1,6 +1,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { needsJustification } from '~~/shared/utils/oversight'
 import { gateIsMine } from '~~/shared/utils/notifications'
+import { sendBackCandidates } from '~~/shared/utils/decisionBrief'
 
 export type GateAction = 'respond' | 'continue' | 'reject' | 'rework'
 export interface GateEmits {
@@ -34,9 +35,8 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   const canApprove = computed(() => !mustJustify.value || !!note.value.trim())
 
   /** Where a send-back goes. The reviewer picks; the run never guesses. Candidates are steps that have run. */
-  const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
   const reworkTarget = ref('')
-  const reworkCandidates = computed(() => run.value.steps.filter(s => stepSettled(s) && s.stepId !== run.value.question?.stepId))
+  const reworkCandidates = computed(() => sendBackCandidates(run.value.steps, run.value.question?.stepId))
   const reworksLeft = computed(() => 2 - (run.value.reworks ?? 0))
   const canSendBack = computed(() => isApproval.value && !runnerPause.value && reworkCandidates.value.length > 0 && reworksLeft.value > 0)
   watch(() => run.value.id, () => { reworkTarget.value = ''; note.value = '' })
