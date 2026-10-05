@@ -707,6 +707,20 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
  * has a different project folder, and the CLI would find nothing to resume.
  * Undefined means "start fresh", which is always correct, only more expensive.
  */
+/**
+ * What a resumed session is told before anything else: where this run's
+ * artifacts and checkout are now. The header naming them goes only to a fresh
+ * session, and a session started under another instance remembers that one's
+ * paths: ASECRM-270 wrote its oracle there and failed for a file it had
+ * written. The directory is made here too, so the path it is given exists
+ * whatever happened to it in between.
+ */
+async function whereArtifactsAre(run: WorkflowRun): Promise<string> {
+  const dir = runArtifactsDir(run.id)
+  await mkdir(dir, { recursive: true })
+  return `Artifacts directory for this run: ${dir}${run.projectDir ? `\nCheckout: ${run.projectDir}` : ''}\nWrite every artifact there, even if earlier in this session you were given a different path.\n\n`
+}
+
 function resumableSession(rec: RunStep): string | undefined {
   if (!rec.sessionId || !rec.sessionProject) return undefined
   // Asked of every place the SDK might have written it, not just this app's
@@ -996,7 +1010,7 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
       : ''
     for (let attempt = 1; attempt <= 2; attempt++) {
       const resume = resumableSession(maker)
-      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
+      const input = `${resume ? await whereArtifactsAre(run) : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
 
 That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
       await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
@@ -1166,8 +1180,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // resumed a 25 Sep session, wrote its oracle to the old artifacts directory,
   // and the step failed for a file it had written. Every resumed visit is told
   // where things are now.
-  const whereNow = `Artifacts directory for this run: ${runArtifactsDir(run.id)}${run.projectDir ? `\nCheckout: ${run.projectDir}` : ''}\nWrite every artifact there, even if earlier in this session you were given a different path.\n\n`
-  const input = resume ? whereNow + (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+  const input = resume ? await whereArtifactsAre(run) + (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined, run.parameters, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
