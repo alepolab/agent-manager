@@ -384,7 +384,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
             >{{ riskOf(r) === 'justify' ? 'Owner-gated' : r.blastRadius }}</span>
             <span
               class="inset-row__end"
-              :style="waitTier(r) === 'critical' ? { color: 'var(--warning)', fontWeight: 600 } : undefined"
+              :style="waitTier(r) === 'critical' ? { color: 'var(--waiting)', fontWeight: 600 } : undefined"
               :title="`Waiting ${shortWait(waitedMs(r))}`"
             >{{ shortWait(waitedMs(r)) }}</span>
             <span class="w-16 flex justify-end shrink-0">

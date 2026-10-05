@@ -51,7 +51,7 @@ function replay() {
   <div class="w-full space-y-1">
     <p
       v-for="a in arrivals" :key="`${a.at}-${a.n}`"
-      class="t-small flex items-center gap-1" style="color: var(--warning);" :data-sendback-to="stepId"
+      class="t-small flex items-center gap-1" style="color: var(--accent);" :data-sendback-to="stepId"
     >
       <UIcon name="i-lucide-corner-left-up" class="size-3.5 shrink-0" />
       Sent back here by {{ a.by.startsWith('agent:') ? a.by.slice(6) : a.by }} from {{ ctx.stepOf(a.from)?.label ?? a.from }}<template v-if="a.note">: {{ a.note }}</template>

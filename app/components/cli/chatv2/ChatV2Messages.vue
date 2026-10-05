@@ -135,7 +135,7 @@ function handleOpenFile(filePath: string) {
         <!-- Claude Avatar -->
         <div
           class="size-7 md:size-8 rounded-full shrink-0 flex items-center justify-center"
-          style="background: linear-gradient(135deg, #d97706 0%, #ea580c 100%);"
+          style="background: var(--accent);"
         >
           <svg class="size-3.5 md:size-4" viewBox="0 0 24 24" fill="white">
             <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/>
@@ -176,7 +176,7 @@ function handleOpenFile(filePath: string) {
       <!-- Claude Avatar -->
       <div
         class="size-8 rounded-full shrink-0 flex items-center justify-center"
-        style="background: linear-gradient(135deg, #d97706 0%, #ea580c 100%);"
+        style="background: var(--accent);"
       >
         <svg class="size-4" viewBox="0 0 24 24" fill="white">
           <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/>

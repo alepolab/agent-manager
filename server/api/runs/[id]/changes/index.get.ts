@@ -1,5 +1,5 @@
-import { getRun } from '../../../utils/workflowRunStore.ts'
-import { computeChangeSummary } from '../../../utils/gitFacts.ts'
+import { getRun } from '../../../../utils/workflowRunStore.ts'
+import { computeChangeSummary } from '../../../../utils/gitFacts.ts'
 
 /** The files and commits a run made since its own baseline, measured from git.
  *  `null` when nothing is measurable - see computeChangeSummary. */
