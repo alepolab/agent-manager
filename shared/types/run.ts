@@ -575,6 +575,8 @@ export interface WorkflowRun {
     stepId?: string
     startedBy?: string
     grantApproval?: boolean
+    /** A send-back from a gate: carried out as the runner's own hand-over (the whole brief, no resumed session), not as an operator's restart. */
+    handOver?: boolean
     /** Nobody decided anything: the run stepped aside for this group (WorkflowGroup.yieldsTo). */
     gaveWayTo?: string
     at: number

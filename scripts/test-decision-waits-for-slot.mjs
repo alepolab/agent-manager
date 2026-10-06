@@ -131,6 +131,44 @@ const occupy = async (who) => {
   assert.equal((await finishesWithoutReverting(f.id, 'failed')).status, 'completed')
 }
 
+// ── A send-back from a gate ──────────────────────────────────────────────────
+// Sent as rework.post.ts sends it: the runner's own hand-over (fromRunner). It
+// used to start at once, because a hand-over keeps the slot a working run
+// holds - and a run at a gate holds none. ASECRM-268 ran as a fifth of four.
+{
+  let g = (await runner.startOrQueue({ workflow: gated, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev9' })).run
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.status, 'paused'); assert.equal(g.question.kind, 'approval')
+  const workVisits = g.steps.find(s => s.stepId === 'a').visits
+  const b = await occupy('dev10')
+
+  const sent = await runner.restartRun(g.id, 'a', 'Sent back from "Ship" by dev9 (rework 1 of 2): narrow it', g.startedBy, { fromRunner: true })
+  assert.equal(sent.status, 'queued', 'THE REGRESSION: a send-back with the group full started without a slot')
+  assert.equal(sent.parked.action, 'restart')
+  assert.equal(sent.parked.handOver, true, 'recorded as a hand-over, to be carried out as one')
+  assert.match(sent.parked.note, /narrow it/, 'with the reviewer\'s note')
+  assert.equal((await store.getRun(g.id)).steps.find(s => s.stepId === 'a').visits, workVisits, 'nothing ran')
+
+  release()
+  const back = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(back.status, 'paused', 'the step was redone and the run is back at its gate')
+  assert.equal(back.steps.find(s => s.stepId === 'a').visits, workVisits + 1, 'the sent-back step ran once more')
+  assert.equal(back.parked, undefined)
+}
+
+// ── The runner's own hand-over keeps its slot ───────────────────────────────
+// A working run handing itself to another step (widen, a monitor's rework)
+// already holds a slot, and must not queue behind its own group.
+{
+  const b = await occupy('dev11')
+  const live = await store.getRun(b.id)
+  assert.equal(live.status, 'running')
+  const handed = await runner.restartRun(b.id, 'b', 'the runner hands over', live.startedBy, { fromRunner: true })
+  assert.notEqual(handed.status, 'queued', 'a running run is not parked by its own hand-over')
+  release()
+  await runner.waitForSettled(b.id, TIMEOUT)
+}
+
 // ── A question paused by an earlier server ──────────────────────────────────
 {
   let q = (await runner.startOrQueue({ workflow: asking, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev8' })).run

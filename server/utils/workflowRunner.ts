@@ -3241,7 +3241,7 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
   try {
     if (p.action === 'continue') await continueRun(run.id, p.note, { grantApproval: p.grantApproval, admitted: true })
     else if (p.action === 'respond') await respondToRun(run.id, p.reply ?? '', { admitted: true })
-    else await restartRun(run.id, p.stepId!, p.note, p.startedBy, { admitted: true })
+    else await restartRun(run.id, p.stepId!, p.note, p.startedBy, { admitted: true, ...(p.handOver ? { fromRunner: true } : {}) })
     return 'launched'
   } catch (err) {
     // Back where the person left it, with the reason: a refused restart is
@@ -3878,9 +3878,12 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (run.testOf && stepId !== run.testOf.stepId) throw new RestartError(409, 'A test run only re-runs the step it tests.')
   // A person's restart waits for a slot like any start. The runner's own
   // hand-overs (widen, rework) keep the slot the run already holds, and an
-  // interrupted run is counted against its group already.
-  if (!opts.fromRunner && !opts.admitted && run.status !== 'interrupted' && !run.testOf) {
-    const parked = await parkUnlessSlot(run, { action: 'restart', stepId, note, startedBy })
+  // interrupted run is counted against its group already. A send-back from a
+  // gate is a hand-over too, but from a run that holds no slot: waiting on a
+  // person gave it up. It waits like any other decision. ASECRM-268 was sent
+  // back with all four of its group's slots taken and ran as a fifth.
+  if (!opts.admitted && run.status !== 'interrupted' && !run.testOf && (!opts.fromRunner || !holdsGroupSlot(run.status))) {
+    const parked = await parkUnlessSlot(run, { action: 'restart', stepId, note, startedBy, ...(opts.fromRunner ? { handOver: true } : {}) })
     if (parked) return parked
   }
   // Same scope as starting a run: what conflicts is a shared working directory.
