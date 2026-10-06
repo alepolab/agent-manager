@@ -51,7 +51,7 @@ async function refresh() {
   try {
     // Test runs are only fetched for the Tests view: everywhere else they would
     // sit beside the real runs they test, and be counted with them.
-    const list = await $fetch<WorkflowRun[]>(forView === 'tests' ? '/api/runs?tests=1' : '/api/runs')
+    const list = await $fetch<WorkflowRun[]>(forView === 'tests' ? '/api/runs?tests=1&summary=1' : '/api/runs?summary=1')
     if (view.value !== forView) return
     runs.value = list
     // Best-effort: a queued row without its group's numbers still says it is
@@ -161,6 +161,16 @@ const shown = computed(() => runs.value.filter(r =>
   // Working runs lead: "what is happening right now" is the question this
   // page is opened with. Otherwise newest first, as the API returns them.
   .sort((a, b) => Number(isLiveStatus(b.status)) - Number(isLiveStatus(a.status))))
+
+/**
+ * The list is drawn a page at a time. All of it is fetched - the views, the
+ * filter box and the counts read every run - but drawing 200-odd rows, each
+ * re-rendered by the 1 s clock, is work nobody scrolling the top ten needs.
+ */
+const PAGE = 50
+const limit = ref(PAGE)
+watch([view, filter, mine, status, parent], () => { limit.value = PAGE })
+const page = computed(() => shown.value.slice(0, limit.value))
 
 const selected = computed(() => runs.value.find(r => r.id === selectedId.value) ?? null)
 // Open the first run when none is chosen, on a screen wide enough for both panes.
@@ -298,13 +308,19 @@ async function deleteFailed() {
             <span class="t-small flex-1" style="color: var(--error);">{{ loadError }}</span>
             <UButton size="xs" variant="soft" label="Retry" @click="refresh" />
           </div>
-          <div v-else-if="!loaded" class="p-3 space-y-2" aria-busy="true"><SkeletonCard v-for="i in 3" :key="i" /></div>
+          <div v-else-if="!loaded" class="p-3 space-y-2" aria-busy="true" data-testid="runs-loading">
+            <p class="t-small text-label flex items-center gap-2 px-1 py-1" role="status">
+              <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" style="color: var(--accent);" />
+              Loading runs…
+            </p>
+            <SkeletonCard v-for="i in 3" :key="i" />
+          </div>
           <p v-else-if="!runs.length" class="p-4 t-ui text-label">
             No runs yet. Start one from <NuxtLink to="/" class="underline">Home</NuxtLink> or a <NuxtLink to="/workflows" class="underline">workflow</NuxtLink>.
           </p>
           <p v-else-if="!shown.length" class="p-4 t-ui text-label">No runs match these filters.</p>
           <button
-            v-for="r in shown" v-else :key="r.id"
+            v-for="r in page" v-else :key="r.id"
             class="run-row focus-ring" :class="{ 'run-row--on': r.id === selectedId }"
             data-testid="run-history-row"
             :aria-current="r.id === selectedId ? 'true' : undefined"
@@ -321,6 +337,10 @@ async function deleteFailed() {
             </span>
             <RunProgressBar :steps="r.steps" class="mt-1.5" data-testid="run-history-bar" />
           </button>
+          <div v-if="loaded && shown.length > page.length" class="p-3 flex items-center gap-2">
+            <UButton size="xs" variant="soft" color="neutral" :label="`Show ${Math.min(PAGE, shown.length - page.length)} more`" data-testid="runs-more" @click="() => { limit += PAGE }" />
+            <span class="t-small text-label">{{ page.length }} of {{ shown.length }}</span>
+          </div>
         </div>
       </div>
 

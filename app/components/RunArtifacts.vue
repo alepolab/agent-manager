@@ -11,7 +11,14 @@ const clean = (html: string) => DOMPurify.sanitize(html, { USE_PROFILES: { html:
  * code highlighted with line numbers, logs coloured. Search, wrap and copy on
  * every file; raw is always one click away.
  */
-const props = defineProps<{ runId: string, live?: boolean }>()
+const props = defineProps<{
+  runId: string
+  live?: boolean
+  /** A file to open first: a report linked from a gate. */
+  initial?: string
+  /** Show just `initial`, without the file list: a report opened from a gate. */
+  only?: boolean
+}>()
 const files = ref<{ name: string, size: number }[]>([])
 const selected = ref<string | null>(null)
 const raw = ref('')
@@ -165,16 +172,17 @@ const groups = computed(() => {
 })
 const size = (n: number) => n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`
 let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => { refresh(); timer = setInterval(() => { if (props.live) refresh() }, 10_000) })
+onMounted(() => { if (!props.only) refresh(); if (props.initial) void open(props.initial); timer = setInterval(() => { if (props.live && !props.only) refresh() }, 10_000) })
 onUnmounted(() => { if (timer) clearInterval(timer) })
-watch(() => props.runId, () => { selected.value = null; raw.value = ''; rendered.value = ''; refresh() })
+watch(() => props.runId, () => { selected.value = null; raw.value = ''; rendered.value = ''; if (!props.only) refresh(); if (props.initial) void open(props.initial) })
+watch(() => props.initial, (f) => { if (f && f !== selected.value) void open(f) })
 watch(mode, () => { if (mode.value === 'rendered' && !rendered.value) render() })
 defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="grid gap-3 h-full min-h-0" style="grid-template-columns: 15rem minmax(0, 1fr);">
-    <div class="overflow-y-auto t-small space-y-2 pr-1 min-h-0">
+  <div class="grid gap-3 h-full min-h-0" :style="{ gridTemplateColumns: only ? 'minmax(0, 1fr)' : '15rem minmax(0, 1fr)' }">
+    <div v-if="!only" class="overflow-y-auto t-small space-y-2 pr-1 min-h-0">
       <div class="flex items-center justify-between"><span class="text-section-label">Evidence files</span><button class="text-label underline focus-ring" @click="refresh">Refresh</button></div>
       <div v-if="listError" class="rounded p-2 space-y-1" style="background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.12);">
         <p style="color: var(--error);">Could not load the evidence.</p>

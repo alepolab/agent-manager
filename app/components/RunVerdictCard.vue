@@ -68,6 +68,12 @@ const REPORTS: { file: string, label: string }[] = [
   { file: 'pr-body.md', label: 'PR body' },
 ]
 const presentReports = computed(() => REPORTS.filter(r => files.value.includes(r.file)))
+/** The changed file whose diff is open. */
+const openDiff = ref<string | null>(null)
+const changedPaths = computed(() => changes.value?.files.map(f => f.path) ?? [])
+/** The report open in the drawer: read beside the decision, not in another tab. */
+const openReport = ref<{ file: string, label: string } | null>(null)
+const reportOpen = computed({ get: () => !!openReport.value, set: (v) => { if (!v) openReport.value = null } })
 
 /** `quiet`: re-read for a brief being written, without blanking the card meanwhile. */
 async function load(quiet = false) {
@@ -169,13 +175,6 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
       <h3 class="t-ui font-semibold m-0" style="color: var(--text-primary);">What approving does</h3>
       <p class="m-0 text-label">{{ effect }}</p>
     </div>
-    <div v-if="run.blastRadius" class="group-card space-y-1">
-      <h3 class="t-ui font-semibold m-0" style="color: var(--text-primary);">Why this stopped for you</h3>
-      <p class="m-0 text-label">
-        Classed <b class="font-mono" style="color: var(--text-primary);" :title="oversightReason(run.blastRadius)">{{ run.blastRadius }}</b><template v-if="meta?.blast_radius_reason">: {{ meta.blast_radius_reason }}</template><template v-else-if="!loading">. Intake recorded no reason for the class.</template>
-      </p>
-      <p v-if="mustJustify" class="m-0" style="color: var(--warning);">Owner-gated: approving needs a written reason.</p>
-    </div>
 
     <p v-if="loading" class="m-0 text-label">Reading the evidence bundle…</p>
 
@@ -268,11 +267,15 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
               <span class="font-mono text-label shrink-0">{{ c.sha.slice(0, 9) }}</span>
               <span style="color: var(--text-primary);">{{ c.subject }}</span>
             </div>
-            <div v-for="f in changes?.files ?? []" :key="f.path" class="flex gap-2 font-mono">
+            <button
+              v-for="f in changes?.files ?? []" :key="f.path" type="button"
+              class="change-file focus-ring flex gap-2 font-mono w-full text-left" :title="`Show the diff of ${f.path}`"
+              data-testid="change-file" @click="openDiff = f.path"
+            >
               <span class="tabular-nums shrink-0" style="color: var(--success);">+{{ f.added ?? '?' }}</span>
               <span class="tabular-nums shrink-0" style="color: var(--error);">−{{ f.removed ?? '?' }}</span>
-              <span class="truncate" :title="f.path">{{ f.path }}</span>
-            </div>
+              <span class="truncate underline decoration-dotted underline-offset-2">{{ f.path }}</span>
+            </button>
           </div>
         </details>
         <details v-if="presentReports.length">
@@ -281,10 +284,23 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
             <span class="text-label">{{ presentReports.length }}</span>
           </summary>
           <div class="verdict-body flex flex-wrap gap-x-3 gap-y-1">
-            <a
-              v-for="r in presentReports" :key="r.file" :href="`/api/runs/${run.id}/artifacts/${r.file}`"
-              target="_blank" rel="noopener" class="underline" style="color: var(--accent);"
-            >{{ r.label }}</a>
+            <button
+              v-for="r in presentReports" :key="r.file" type="button"
+              class="underline focus-ring" style="color: var(--accent);" @click="openReport = r"
+            >{{ r.label }}</button>
+          </div>
+        </details>
+        <!-- Why it stopped: context for the decision, read after what the change is. -->
+        <details v-if="run.blastRadius" data-testid="why-stopped">
+          <summary class="focus-ring">
+            <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">Why this stopped for you</span>
+            <span class="text-label font-mono">{{ run.blastRadius }}</span>
+          </summary>
+          <div class="verdict-body space-y-1">
+            <p class="m-0">
+              Classed <b class="font-mono" style="color: var(--text-primary);" :title="oversightReason(run.blastRadius)">{{ run.blastRadius }}</b><template v-if="meta?.blast_radius_reason">: {{ meta.blast_radius_reason }}</template><template v-else-if="!loading">. Intake recorded no reason for the class.</template>
+            </p>
+            <p v-if="mustJustify" class="m-0" style="color: var(--warning);">Owner-gated: approving needs a written reason.</p>
           </div>
         </details>
         <details v-if="pipelineNotes.length">
@@ -296,10 +312,29 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
         </details>
       </div>
     </template>
+    <!-- No bundle: the class is still on the run, so the reason is still worth a look. -->
+    <div v-if="metaMissing && run.blastRadius" class="verdict-options">
+      <details data-testid="why-stopped">
+        <summary class="focus-ring">
+          <UIcon name="i-lucide-chevron-right" class="chev" /><span class="flex-1" style="color: var(--text-primary);">Why this stopped for you</span>
+          <span class="text-label font-mono">{{ run.blastRadius }}</span>
+        </summary>
+        <div class="verdict-body space-y-1">
+          <p class="m-0">Classed <b class="font-mono" style="color: var(--text-primary);" :title="oversightReason(run.blastRadius)">{{ run.blastRadius }}</b>. The reason is in the evidence bundle, which is not written yet.</p>
+          <p v-if="mustJustify" class="m-0" style="color: var(--warning);">Owner-gated: approving needs a written reason.</p>
+        </div>
+      </details>
+    </div>
+    <RunFileDiffModal v-model:path="openDiff" :run-id="run.id" :files="changedPaths" />
+    <USlideover v-model:open="reportOpen" :title="openReport?.label ?? 'Report'" :ui="{ content: 'max-w-3xl' }">
+      <template #body><RunArtifacts v-if="openReport" :run-id="run.id" :initial="openReport.file" only /></template>
+    </USlideover>
   </div>
 </template>
 
 <style scoped>
+.change-file { border-radius: 4px; padding: 1px 4px; margin: 0 -4px; }
+.change-file:hover { background: var(--surface-hover); }
 .verdict-gist { margin: 0; font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .verdict-gist--open { display: block; }
 .verdict-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); background: var(--surface-raised); border-radius: 12px; box-shadow: 0 0 0 0.5px var(--border-default); overflow: hidden; }

@@ -835,7 +835,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
         <!-- Left border indicator -->
         <div
           class="w-0.5 self-stretch rounded-full shrink-0"
-          style="background: #f59e0b;"
+          style="background: var(--accent-secondary);"
         />
 
         <div class="flex-1 min-w-0">
@@ -852,7 +852,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
             <span>Agent</span>
             <template v-if="agentSubtype">
               <span style="color: var(--text-tertiary);">/</span>
-              <span style="color: #f59e0b;">{{ agentSubtype }}</span>
+              <span style="color: var(--accent-secondary);">{{ agentSubtype }}</span>
             </template>
             <template v-if="agentDescription">
               <span style="color: var(--text-tertiary);">/</span>
@@ -864,7 +864,7 @@ function getTodoStatusBadge(status: string): { bg: string; color: string; label:
           <div
             v-if="showAgentPrompt && renderedAgentPrompt"
             class="mt-2 p-3 rounded-lg t-small break-words"
-            style="background: var(--surface-raised); border-left: 2px solid #f59e0b;"
+            style="background: var(--surface-raised); border-left: 2px solid var(--accent-secondary);"
           >
             <div
               class="prose prose-sm max-w-none leading-relaxed"
