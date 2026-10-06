@@ -82,4 +82,28 @@ assert.equal(at({ label: 'Approve, the implementer\'s fix is right' }), undefine
 assert.equal(suggestSendBack(opt({ label: 'Send back to the fix step' }), candidates.filter(s => s.agentSlug !== 'sdlc-fix-implementer')), undefined,
   'a role this run has no step for suggests nothing')
 
+// ── review of #129/#130 ──────────────────────────────────────────────────
+// An approve option that mentions a re-run is not a send-back: taken for one,
+// its step was pre-selected and a send-back spent on a step nobody asked to redo.
+assert.equal(at({ label: 'Approve - merge the fix as it stands', next: 'The pull request opens; the full suite is re-run on the PR by CI, and Verify + Regression already passed.' }), undefined,
+  'THE REVIEW FINDING: "re-run" in an approve option is not a send-back')
+assert.equal(at({ label: 'Approve, then redo the docs in a follow-up' }), undefined, 'nor is "redo"')
+// The step named first wins, not the longest label.
+assert.equal(at({ label: 'Send back so Implement Fix narrows it after Security Review signs off' }), 'Implement Fix', 'the step named first')
+// The guard before a label, alone: "docs/Plan" is a path, not the step called Plan.
+assert.equal(suggestSendBack(opt({ label: 'Send back; docs/Plan has the outline' }), withPlan), undefined, 'a label inside a path is not the step')
+// The gate's own step is never a target, even when it ran before (a gate re-raised on a revisit).
+const regated = sendBackCandidates([...RUNBOOK_A.slice(0, 8), { ...RUNBOOK_A[8], status: 'completed' }], 'evidence-bundle-pr')
+assert.ok(!regated.some(s => s.stepId === 'evidence-bundle-pr'), 'the step the gate waits on is not offered, settled or not')
+
+// ── Cmd/Ctrl+Enter follows the primary action ───────────────────────────
+const { noteSubmitAction } = await import('../app/utils/gateSubmit.ts')
+const key = o => noteSubmitAction({ isReply: false, sendingBack: false, canRework: false, canApprove: true, ...o })
+assert.equal(key({}), 'continue', 'at a plain gate it approves')
+assert.equal(key({ sendingBack: true, canRework: true }), 'rework',
+  'THE REVIEW FINDING: with Send back open, the shortcut sends back - it approved, the note typed for the send-back having satisfied approval')
+assert.equal(key({ sendingBack: true, canRework: false }), null, 'and does nothing until a step and a note are chosen, never approving instead')
+assert.equal(key({ canApprove: false }), null, 'an approval that needs a reason first is not sent by the shortcut either')
+assert.equal(key({ isReply: true, sendingBack: true }), 'respond', 'a question is answered')
+
 console.log('send-back suggestion: all assertions passed')

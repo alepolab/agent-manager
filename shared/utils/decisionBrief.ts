@@ -202,8 +202,14 @@ export function sendBackCandidates<T extends SendBackStep>(steps: T[], gateStepI
   return steps.filter(s => ['completed', 'failed', 'skipped'].includes(s.status) && s.stepId !== gateStepId)
 }
 
-/** Whether an option sends the change back rather than letting it through. */
-const SENDS_BACK = /\bsend(?:s|ing)?\b.{0,24}?\bback\b|\bre-?runs?\b|\bredo(?:es|ne)?\b/i
+/**
+ * Whether an option sends the change back rather than letting it through: it
+ * says "send back", in whatever words. Not "re-run" or "redo" - an approve
+ * option whose next step reads "the full suite is re-run on the PR by CI"
+ * was taken for a send-back, its step pre-selected, and one of the run's two
+ * send-backs spent on a step nobody asked to redo.
+ */
+const SENDS_BACK = /\bsend(?:s|ing)?\b.{0,24}?\bback\b/i
 
 /**
  * The work each kind of step does, as a brief's prose names it, and the agents
@@ -237,8 +243,13 @@ export function suggestSendBack<T extends SendBackStep>(option: DecisionOption, 
   const text = [option.title, option.label, option.next].filter(Boolean).join(' ')
   if (!named && !SENDS_BACK.test(text)) return undefined
   // As a phrase on its own: a step called "Plan" is not named by ".agent/plan.md".
-  const says = (label: string) => new RegExp(`(?<![\\w./-])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w]|[./-]\\w)`, 'i').test(text)
-  const byLabel = [...steps].sort((a, b) => b.label.length - a.label.length).find(s => says(s.label))
+  const where = (label: string) => text.search(new RegExp(`(?<![\\w./-])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w]|[./-]\\w)`, 'i'))
+  // The step named first, as with roles below; the longer label on a tie
+  // ("Implement Fix" over a step called "Implement" at the same place).
+  const byLabel = steps
+    .map(s => ({ s, at: where(s.label) }))
+    .filter(x => x.at >= 0)
+    .sort((a, b) => a.at - b.at || b.s.label.length - a.s.label.length)[0]?.s
   if (byLabel) return byLabel
   const roles = STEP_ROLES
     .map(r => ({ r, at: text.search(r.says) }))

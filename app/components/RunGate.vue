@@ -14,7 +14,8 @@ const emit = defineEmits<{ respond: [reply: string], continue: [note?: string], 
 
 const {
   role, gateOwner, mineToAnswer, mayAnswer, mustJustify, reviewing, isReply, runnerPause,
-  note, canApprove, reworkTarget, reworkCandidates, reworksLeft,
+  note, canApprove, reworkTarget, reworkCandidates, reworksLeft, canSendBack,
+  sendingBack, sendBackSelect, changeBrief, sendBackFor, suggestedFor, openSendBack, cancelSendBack, submitNote,
   sending, SENDING_LABEL, send, waitingLabel, gateLabel, approveLabel,
 } = useGateAnswer(toRef(props, 'run'), {
   respond: r => emit('respond', r), continue: n => emit('continue', n),
@@ -109,7 +110,7 @@ function chooseOption(text: string) {
     <RunBudgetBrief v-else-if="run.question?.reason === 'budget' && !run.parked" :run="run" />
     <RunVerdictCard
       v-else-if="run.question?.kind === 'approval' && !runnerPause && !run.parked"
-      :run="run"
+      :run="run" @brief="b => { changeBrief = b }"
     />
     <!-- A step's question: its brief, laid out for someone who has not read
          the ticket or the report. The banner above carries the question once. -->
@@ -134,13 +135,14 @@ function chooseOption(text: string) {
       class="field-input w-full resize-none t-small"
       :placeholder="placeholder"
       :aria-label="placeholder"
-      @keydown.meta.enter="isReply ? send('respond') : send('continue')"
+      @keydown.meta.enter="submitNote()" @keydown.ctrl.enter="submitNote()"
     />
     <div class="flex flex-wrap gap-2">
       <UButton v-if="mayAnswer && !reviewing && isReply" size="xs" icon="i-lucide-send" label="Reply" :loading="sending === 'respond'" :disabled="!!sending || !note.trim()" @click="send('respond')" />
       <UButton
         v-else-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval'"
         size="xs" icon="i-lucide-check"
+        :variant="sendingBack ? 'soft' : 'solid'" :color="sendingBack ? 'neutral' : 'primary'"
         :label="approveLabel"
         :loading="sending === 'continue'"
         :disabled="!!sending || (!runnerPause && !canApprove)"
@@ -153,19 +155,33 @@ function chooseOption(text: string) {
            The runner has always been able to do this; only an agent could ask
            for it. "Reject run" beside it ends the run - they were previously the
            same button, labelled as this one and behaving as that one. -->
-      <template v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && !runnerPause && reworkCandidates.length && reworksLeft > 0">
-        <select v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to">
-          <option value="">Send back to…</option>
-          <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}</option>
-        </select>
+      <!-- Sending back is a mode the person opens, as in the inbox (GateDecision):
+           until then Approve is primary; once open, Send back is, the list
+           starts on the step the brief suggests, and Esc or Cancel closes it. -->
+      <template v-if="mayAnswer && canSendBack">
         <UButton
-          size="xs" variant="soft" color="warning" icon="i-lucide-corner-up-left"
-          :label="`Send back (${reworksLeft} left)`"
-          :loading="sending === 'rework'"
-          :disabled="!!sending || !reworkTarget || !note.trim()"
-          :title="!reworkTarget ? 'Choose the step it goes back to' : !note.trim() ? 'Say what needs to change' : 'That step runs again with your instruction'"
-          @click="send('rework')"
+          v-if="!sendingBack" size="xs" variant="soft" color="neutral" icon="i-lucide-corner-up-left"
+          :label="`Send back… (${reworksLeft} left)`" @click="openSendBack"
         />
+        <template v-else>
+          <select ref="sendBackSelect" v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to" @keydown.esc.prevent="cancelSendBack">
+            <option value="">Send back to…</option>
+            <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}{{ suggestedFor(s.stepId) ? ` — suggested for ${suggestedFor(s.stepId)}` : '' }}</option>
+          </select>
+          <UButton
+            size="xs" icon="i-lucide-corner-up-left"
+            :label="`Send back (${reworksLeft} left)`"
+            :loading="sending === 'rework'"
+            :disabled="!!sending || !reworkTarget || !note.trim()"
+            :title="!reworkTarget ? 'Choose the step it goes back to' : !note.trim() ? 'Say what needs to change' : 'That step runs again with your instruction'"
+            @click="send('rework')"
+          />
+          <UButton size="xs" variant="ghost" color="neutral" label="Cancel" title="Close the send-back and keep the gate as it was (Esc)" @click="cancelSendBack" />
+          <span v-if="sendBackFor.length" class="t-small text-label w-full" role="status">
+            Suggested:
+            <template v-for="(s, i) in sendBackFor" :key="s.key">{{ i ? ' · ' : '' }}<span :title="s.name">({{ s.key }}) <b class="text-strong">{{ s.step.label }}</b></span></template>
+          </span>
+        </template>
       </template>
       <UButton
         v-if="mayAnswer && run.status === 'paused' && run.question?.kind === 'approval' && !runnerPause"

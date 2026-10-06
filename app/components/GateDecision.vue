@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowRun } from '~~/shared/types/run'
-import { briefHeadline, riskDetail, riskLevel, suggestSendBack, unresolvedQuestions, type DecisionBrief } from '~~/shared/utils/decisionBrief'
+import { briefHeadline, riskDetail, riskLevel, unresolvedQuestions } from '~~/shared/utils/decisionBrief'
 import { HOLD } from '~~/shared/types/workflowGroup'
 import { SETTLED_STATUSES } from '~/utils/runStatus'
 
@@ -21,6 +21,7 @@ const run = toRef(props, 'run')
 const {
   role, gateOwner, mineToAnswer, mayAnswer, mustJustify, reviewing, isReply, isApproval, runnerPause,
   note, canApprove, reworkTarget, reworkCandidates, reworksLeft, canSendBack,
+  sendingBack, sendBackSelect, changeBrief, sendBackFor, suggestedFor, openSendBack, cancelSendBack, submitNote,
   sending, SENDING_LABEL, send, waitingLabel, askingStep, approveLabel, gateLabel,
 } = useGateAnswer(run, {
   respond: r => emit('respond', r), continue: n => emit('continue', n),
@@ -158,26 +159,6 @@ function stopRun() {
 onBeforeUnmount(() => clearTimeout(stopTimer))
 
 // ---- Approvals ------------------------------------------------------------
-const sendingBack = ref(false)
-/** The change brief RunVerdictCard read: its options say which step each send-back is for. */
-const changeBrief = ref<DecisionBrief | null>(null)
-watch(() => run.value.id, () => { sendingBack.value = false; changeBrief.value = null })
-/** Each send-back option with the step it would go back to (ASECRM-295 (b): "the fix step" is Implement Fix). */
-const sendBackFor = computed(() => (changeBrief.value?.options ?? []).flatMap((o) => {
-  const step = suggestSendBack(o, reworkCandidates.value)
-  return step ? [{ key: o.key.replace(/[()]/g, ''), name: o.title ?? o.label, step }] : []
-}))
-/** "suggested for (b)" beside a step in the list, for every option that points at it. */
-const suggestedFor = (stepId: string) => sendBackFor.value.filter(s => s.step.stepId === stepId).map(s => `(${s.key})`).join(', ')
-/** Opening Send back starts on the step the brief points at: the recommended option's, or the only one named. */
-function openSendBack() {
-  sendingBack.value = true
-  if (reworkTarget.value) return
-  const rec = (changeBrief.value?.recommendation?.option ?? '').replace(/[()]/g, '').trim().toLowerCase()
-  const steps = new Set(sendBackFor.value.map(s => s.step.stepId))
-  reworkTarget.value = sendBackFor.value.find(s => s.key.toLowerCase() === rec)?.step.stepId
-    ?? (steps.size === 1 ? [...steps][0]! : '')
-}
 const notePlaceholder = computed(() => {
   if (isReply.value) return brief.value ? 'Add a note for the run (optional)' : 'Your answer to the agent'
   if (runnerPause.value) return 'Optional note for the step about to run'
@@ -357,7 +338,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
         <textarea
           ref="noteBox" v-model="note" rows="1" class="field-input w-full resize-none t-small decision__note"
           :placeholder="notePlaceholder" :aria-label="notePlaceholder"
-          @keydown.meta.enter="isReply ? sendReply() : send('continue')"
+          @keydown.meta.enter="submitNote(sendReply)" @keydown.ctrl.enter="submitNote(sendReply)"
         />
         <div class="flex flex-wrap items-center gap-2">
           <!-- A question -->
@@ -374,7 +355,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <template v-else-if="isApproval">
             <span class="t-small text-label mr-auto">
               <template v-if="canSendBack">Can be sent back {{ reworksLeft }} more {{ reworksLeft === 1 ? 'time' : 'times' }}</template>
-              <span v-if="sendingBack && sendBackFor.length" class="block" data-testid="send-back-suggestion">
+              <span v-if="sendingBack && sendBackFor.length" class="block" role="status" data-testid="send-back-suggestion">
                 Suggested:
                 <template v-for="(s, i) in sendBackFor" :key="s.key">{{ i ? ' · ' : '' }}<span :title="s.name">({{ s.key }}) <b class="text-strong">{{ s.step.label }}</b></span></template>
               </span>
@@ -386,7 +367,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
                 :title="note.trim() ? 'End the run and record why' : 'Say why first'" @click="send('reject')"
               />
               <template v-if="canSendBack">
-                <select v-if="sendingBack" v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to">
+                <select v-if="sendingBack" ref="sendBackSelect" v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to" @keydown.esc.prevent="cancelSendBack">
                   <option value="">Send back to…</option>
                   <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}{{ suggestedFor(s.stepId) ? ` — suggested for ${suggestedFor(s.stepId)}` : '' }}</option>
                 </select>
@@ -400,6 +381,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
                   :title="!reworkTarget ? 'Choose the step it goes back to' : !note.trim() ? 'Say what needs to change' : 'That step runs again with your instruction'"
                   @click="send('rework')"
                 />
+                <UButton v-if="sendingBack" size="sm" variant="ghost" color="neutral" label="Cancel" title="Close the send-back and keep the gate as it was (Esc)" @click="cancelSendBack" />
               </template>
             </template>
             <UButton
