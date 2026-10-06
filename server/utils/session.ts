@@ -1,5 +1,5 @@
 import type { H3Event } from 'h3'
-import { getRequestHeader, useSession } from 'h3'
+import { getRequestHeader, parseCookies, unsealSession, useSession } from 'h3'
 import { timingSafeEqual } from 'node:crypto'
 import { roleFor, effectiveRole } from './roles.ts'
 import { can, rolesWith, type Capabilities, type Role } from '../../shared/types/role.ts'
@@ -24,13 +24,32 @@ function password(): string {
   throw new Error('AGENT_MANAGER_SECRET must be set (32+ characters) when authentication is enabled')
 }
 
+const SESSION_NAME = 'am'
+const SESSION_MAX_AGE = 60 * 60 * 24 * 14
+
 export async function authSession(event: H3Event) {
   return useSession<{ user?: SessionUser, viewAs?: Role }>(event, {
     password: password(),
-    name: 'am',
-    maxAge: 60 * 60 * 24 * 14,
+    name: SESSION_NAME,
+    maxAge: SESSION_MAX_AGE,
     cookie: { sameSite: 'lax', httpOnly: true, secure: false, path: '/' },
   })
+}
+
+/**
+ * The signed-in developer from a raw Cookie header, for a WebSocket upgrade,
+ * which has headers but no H3Event to hand useSession. Same seal, same expiry.
+ */
+export async function userFromCookieHeader(cookie: string | null | undefined): Promise<SessionUser | null> {
+  if (authDisabled()) return { login: process.env.DEV_USER || 'local', name: 'Local developer' }
+  const sealed = parseCookies({ node: { req: { headers: { cookie: cookie ?? '' } } } } as unknown as H3Event)[SESSION_NAME]
+  if (!sealed) return null
+  try {
+    const data = await unsealSession(undefined as unknown as H3Event, { password: password(), maxAge: SESSION_MAX_AGE }, sealed) as { data?: { user?: SessionUser } }
+    return data?.data?.user ?? null
+  } catch {
+    return null
+  }
 }
 
 /**

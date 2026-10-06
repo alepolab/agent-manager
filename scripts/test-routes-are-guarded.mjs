@@ -51,6 +51,7 @@ const TAKES_A_PATH = /query\.path|query\.projectDir|getRouterParam\(event, 'path
 const ALLOWED = new Map([
   ['auth/logout.post.ts', 'Public auth path; clears the caller\'s own session.'],
   ['auth/token.post.ts', 'Public auth path; authenticates by bearer token and refuses anything else.'],
+  ['auth/password.post.ts', 'Public auth path; signs in by username and password, throttled per address, and refuses anything else.'],
   ['view-as.post.ts', 'Enforces something stricter itself: refuses anyone whose REAL role is not operator, and only ever narrows.'],
   ['me.put.ts', 'The caller\'s own profile. Every role must be able to set their own Jira credentials.'],
   ['me/jira-test.post.ts', 'Tests the caller\'s own stored credentials; reads nothing else.'],
