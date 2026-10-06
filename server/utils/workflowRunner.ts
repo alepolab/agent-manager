@@ -706,9 +706,15 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
  * same working directory: a run whose worktree was made (or removed) since
  * has a different project folder, and the CLI would find nothing to resume.
  * Undefined means "start fresh", which is always correct, only more expensive.
+ *
+ * A session that ended because its context was full is not continued either:
+ * resuming it starts at the limit it failed at. ASECRM-372's Failing Test
+ * failed on "Autocompact is thrashing" after 94 turns, and restarting that
+ * step would have handed the same transcript straight back.
  */
 function resumableSession(rec: RunStep): string | undefined {
   if (!rec.sessionId || !rec.sessionProject) return undefined
+  if (rec.status === 'failed' && rec.error && isContextExhausted(rec.error)) return undefined
   // Asked of every place the SDK might have written it, not just this app's
   // config directory: in a container those are different directories, and
   // looking only in ours made every resume a silent cold start.
@@ -905,6 +911,16 @@ export function isAuthFailure(message: string): boolean {
 const UNRESUMABLE = /tool use concurrency|tool_use.{0,40}without.{0,20}tool_result|tool_result.{0,60}(does not|must) (correspond|have a corresponding)/i
 export function isUnresumable(message: string): boolean {
   return UNRESUMABLE.test(message)
+}
+
+/**
+ * The session's context is full: the SDK's compaction could not keep it under
+ * the window, or the request itself was over it. Not a fault of the work, but
+ * one a resume of the same session cannot get past.
+ */
+const CONTEXT_EXHAUSTED = /autocompact is thrashing|prompt is too long|exceeds? the (model's )?context (window|limit)/i
+export function isContextExhausted(message: string): boolean {
+  return CONTEXT_EXHAUSTED.test(message)
 }
 
 /**
