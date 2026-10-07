@@ -17,7 +17,7 @@ const isExpanded = ref(false)
       <span v-if="toolCalls.length" class="t-small px-1.5 py-px rounded-full tabular-nums" style="background: var(--badge-subtle-bg); color: var(--text-disabled);">
         {{ toolCalls.length }} tool{{ toolCalls.length !== 1 ? 's' : '' }}
       </span>
-      <div v-if="isStreaming" class="ml-auto size-1.5 rounded-full bg-amber-400 animate-pulse" />
+      <div v-if="isStreaming" class="ml-auto size-1.5 rounded-full animate-pulse" style="background: var(--accent);" />
     </button>
 
     <div v-if="isExpanded" class="px-4 pb-3 space-y-1.5 max-h-[200px] overflow-y-auto">

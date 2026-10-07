@@ -33,7 +33,7 @@ const approvalHere = (id: string) => ctx.gateAt(id) === 'approval'
       <template v-if="ctx.workflowStepOf(b.stepId)?.approval">
         <section
           class="w-full rounded-lg px-3 py-2 space-y-2"
-          :style="{ background: approvalHere(b.stepId) ? 'var(--accent-muted)' : 'var(--surface-raised)', border: `1px ${approvalHere(b.stepId) ? 'solid var(--warning)' : 'dashed var(--border-default)'}` }"
+          :style="{ background: approvalHere(b.stepId) ? 'var(--accent-muted)' : 'var(--surface-raised)', border: `1px ${approvalHere(b.stepId) ? 'solid var(--waiting)' : 'dashed var(--border-default)'}` }"
           :aria-label="`Approval before ${ctx.stepOf(b.stepId)?.label}`"
         >
           <p class="t-small flex items-center gap-1.5" style="color: var(--text-secondary);">

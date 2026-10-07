@@ -110,7 +110,7 @@ const rest = computed(() => {
       </template>
     </div>
 
-    <p v-if="gone" class="t-small" style="color: var(--warning);">No longer waiting: it was answered in the chat, or it timed out.</p>
+    <p v-if="gone" class="t-small" style="color: var(--text-tertiary);">No longer waiting: it was answered in the chat, or it timed out.</p>
     <div class="flex flex-wrap items-center gap-2">
       <template v-if="!isQuestion">
         <UButton size="sm" label="Allow" icon="i-lucide-shield-check" :loading="answering" :disabled="answering || gone" @click="answer('allow')" />

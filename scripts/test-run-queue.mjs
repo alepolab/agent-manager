@@ -286,6 +286,39 @@ await groups.replaceGroups([
   await reset()
 }
 
+// ══ 8b. a hold put on mid-drain stops the drain at the next launch ════════
+{
+  const ids = []
+  for (let i = 0; i < 3; i++) {
+    const r = await mk({ status: 'queued', group: 'scans' })
+    await setQueuedAt(r.id, 1_700_000_000_000 + i)
+    ids.push(r.id)
+  }
+  const tried = []
+  // Every launch fails as preflight does with the network gone, and the first
+  // one is where the operator puts the hold on.
+  const launch = async (run) => {
+    tried.push(run.id)
+    if (tried.length === 1) await groups.replaceGroups([
+      { id: 'sdlc', name: 'SDLC pipelines', maxConcurrent: 2 },
+      { id: 'scans', name: 'Nightly scans', maxConcurrent: 1, held: true },
+    ])
+    run.status = 'failed'
+    run.error = 'Preflight: fetch failed'
+    await store.saveRun(run)
+    return 'failed'
+  }
+  await queue.drainRunQueue(launch)
+  assert.deepEqual(tried, [ids[0]],
+    'THE REGRESSION: the drain checked the hold once per group, so failing launches walked the whole queue through it')
+  assert.equal((await store.getRun(ids[1])).status, 'queued', 'and the rest are still queued')
+  await groups.replaceGroups([
+    { id: 'sdlc', name: 'SDLC pipelines', maxConcurrent: 2 },
+    { id: 'scans', name: 'Nightly scans', maxConcurrent: 1, held: false },
+  ])
+  await reset()
+}
+
 // ══ 9. two concurrent drains launch each run exactly once ═════════════════
 {
   const ids = []
@@ -426,6 +459,63 @@ await groups.replaceGroups([
     enqueue: () => mk({ status: 'queued', group: 'scans' }),
   }), 2000, 'a start whose slow half threw wedged the admission chain')
   assert.equal(after.queued, false, 'the next admission is unaffected by the previous one failing late')
+  await reset()
+}
+
+// ══ 13. the quota block survives a restart ═════════════════════════════════
+// The block lives in memory; this process has never set one, as a server just
+// restarted has not. A restart at 05:09 started four runs straight into a spent
+// quota: the runs paused on it are the record of when it resets. Last in this
+// file, because a block once set holds for the rest of the process.
+{
+  const quotaPause = async (resumeAt) => {
+    const r = await mk({ status: 'paused', group: 'scans' })
+    r.question = { stepId: 's1', kind: 'approval', askedAt: Date.now(), text: 'quota', reason: 'quota', resumeAt }
+    await store.saveRun(r)
+    return r
+  }
+  const launched = []
+  const launch = async (run) => { launched.push(run.id); run.status = 'running'; await store.saveRun(run); return 'launched' }
+
+  // A pause whose reset has passed holds nothing back.
+  await quotaPause(Date.now() - 60_000)
+  await mk({ status: 'queued', group: 'sdlc' })
+  assert.equal(queue.quotaBlocked(), null, 'no block in memory, as after a restart')
+  assert.equal(await queue.drainRunQueue(launch), 1, 'a reset already passed is no block: the queue opens')
+  await reset()
+
+  // One still spent holds the drain...
+  await quotaPause(Date.now() + 3_600_000)
+  const waiting = await mk({ status: 'queued', group: 'sdlc' })
+  launched.length = 0
+  assert.equal(await queue.drainRunQueue(launch), 0,
+    'THE REGRESSION: a restart forgot the block and the drain started runs into a quota spent for another hour')
+  assert.deepEqual(launched, [], 'nothing was launched')
+  assert.equal((await store.getRun(waiting.id)).status, 'queued')
+  assert.equal(queue.mightHaveWaiting(), true, 'and the sweep keeps looking: a held queue is not an empty one')
+  // A run coming back from its quota pause is the probe: it goes, fresh ones do not.
+  const back = await mk({ status: 'queued', group: 'sdlc' })
+  back.parked = { action: 'continue', from: 'paused', at: Date.now() }
+  back.question = { stepId: 's1', kind: 'approval', askedAt: Date.now(), text: 'quota', reason: 'quota', resumeAt: Date.now() - 1 }
+  await store.saveRun(back)
+  assert.equal(await queue.drainRunQueue(launch), 1, 'one run started under the block')
+  assert.deepEqual(launched, [back.id], 'the one returning from its quota pause, not the fresh one queued before it')
+  await reset()
+}
+{
+  // ...and admission, which a cron fire or a manual start reaches before any
+  // drain has run. A fresh import is a process that has never set the block.
+  const fresh = await import(`../server/utils/runQueue.ts?restart=${Date.now()}`)
+  const r = await mk({ status: 'paused', group: 'sdlc' })
+  r.question = { stepId: 's1', kind: 'approval', askedAt: Date.now(), text: 'quota', reason: 'quota', resumeAt: Date.now() + 3_600_000 }
+  await store.saveRun(r)
+  assert.equal(fresh.quotaBlocked(), null, 'a process that never set the block')
+  const admitted = await fresh.admit({
+    group: 'scans',
+    start: () => mk({ status: 'running', group: 'scans' }),
+    enqueue: () => mk({ status: 'queued', group: 'scans' }),
+  })
+  assert.equal(admitted.queued, true, 'a start while the quota is spent waits, though its group has a free slot')
   await reset()
 }
 

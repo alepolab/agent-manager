@@ -88,7 +88,7 @@ provide(BUILD_STACK_KEY, {
       :style="{ background: 'var(--surface-raised)', border: `1px solid ${selected?.kind === 'trigger' ? 'var(--accent)' : 'var(--border-subtle)'}` }"
       data-testid="trigger-card" @click="emit('update:selected', { kind: 'trigger' })"
     >
-      <UIcon name="i-lucide-radar" class="size-4 shrink-0" style="color: var(--warning);" />
+      <UIcon name="i-lucide-radar" class="size-4 shrink-0" style="color: var(--accent-secondary);" />
       <span class="min-w-0">
         <span class="block t-label text-label">Trigger</span>
         <span class="block truncate" style="color: var(--text-primary);">{{ triggerSummary }}</span>

@@ -19,8 +19,9 @@ import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type Agent
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+import { fastPathApplies, inspectStack, reuseVerdict, tryStackFastPath } from './stackFastPath.ts'
 import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
 /**
@@ -707,6 +708,20 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
  * has a different project folder, and the CLI would find nothing to resume.
  * Undefined means "start fresh", which is always correct, only more expensive.
  */
+/**
+ * What a resumed session is told before anything else: where this run's
+ * artifacts and checkout are now. The header naming them goes only to a fresh
+ * session, and a session started under another instance remembers that one's
+ * paths: ASECRM-270 wrote its oracle there and failed for a file it had
+ * written. The directory is made here too, so the path it is given exists
+ * whatever happened to it in between.
+ */
+async function whereArtifactsAre(run: WorkflowRun): Promise<string> {
+  const dir = runArtifactsDir(run.id)
+  await mkdir(dir, { recursive: true })
+  return `Artifacts directory for this run: ${dir}${run.projectDir ? `\nCheckout: ${run.projectDir}` : ''}\nWrite every artifact there, even if earlier in this session you were given a different path.\n\n`
+}
+
 function resumableSession(rec: RunStep): string | undefined {
   if (!rec.sessionId || !rec.sessionProject) return undefined
   // Asked of every place the SDK might have written it, not just this app's
@@ -911,15 +926,38 @@ export function isUnresumable(message: string): boolean {
  * The model's quota or rate limit is spent, and when it resets. The provider
  * says so in the error: "Request rejected (429) · … Quota resets in 3551s".
  * Retrying before then fails the same way, so the reset time is the retry
- * time. With no time stated, `fallbackMs` stands in and the run says so.
+ * time. With no time stated, `fallbackMs` stands in, and `stated` is false.
+ *
+ * One parse answers both questions. They were two regexes, and they
+ * disagreed: "resets in 30 minutes" read as stated while its time fell
+ * through to the guess, so the probe guard keyed on `stated` stood down and
+ * the queue drained into a quota spent for hours.
  */
-export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
+export function quotaReset(message: string, now = Date.now(), fallbackMs = 15 * 60_000): { at: number, stated: boolean } | null {
   if (!/\b429\b|rate[ -]?limit|quota|usage limit|hit your .{0,30}limit/i.test(message) || isAuthFailure(message)) return null
-  const s = message.match(/resets? in (\d+)\s*s\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
-  // A minute's margin: a request exactly at the reset time is often still refused.
-  if (s) return now + Number(s[1]) * 1000 + 60_000
-  const at = resetsAtClock(message, now)
-  return at ? at + 60_000 : now + fallbackMs
+  // A minute's margin on every stated time: a request exactly at the reset is often still refused.
+  const stated = (ms: number) => ({ at: now + ms + 60_000, stated: true })
+  const s = message.match(/resets? in (\d+)\s*s(?:ec(?:ond)?s?)?\b/i) ?? message.match(/retry[- ]after[:= ]\s*(\d+)/i)
+  if (s) return stated(Number(s[1]) * 1000)
+  // A proxy in front of several accounts says when the first of them frees
+  // up: TeamClaude's "Quota resets in 1h15m." / "in 32m"; others spell the
+  // units out. Read as a 15-minute guess, that wait became a retry every
+  // quarter-hour, each one starting queued runs straight into the spent quota.
+  const hm = message.match(/resets? in (?:(\d+)\s*h(?:ours?|rs?)?)?[\s,]*(?:and\s+)?(?:(\d+)\s*m(?:in(?:ute)?s?)?)?(?![a-z])/i)
+  if (hm && (hm[1] || hm[2])) return stated((Number(hm[1] ?? 0) * 60 + Number(hm[2] ?? 0)) * 60_000)
+  const clock = resetsAtClock(message, now)
+  if (clock) return { at: clock + 60_000, stated: true }
+  return { at: now + fallbackMs, stated: false }
+}
+
+/** When a quota message says the quota resets, or a guess; null when it is not a quota message. */
+export function quotaResetAt(message: string, now = Date.now(), fallbackMs = 15 * 60_000): number | null {
+  return quotaReset(message, now, fallbackMs)?.at ?? null
+}
+
+/** Whether quotaResetAt read the reset from the message rather than guessing it. */
+export function quotaResetStated(message: string, now = Date.now()): boolean {
+  return quotaReset(message, now)?.stated ?? false
 }
 
 /**
@@ -996,7 +1034,7 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
       : ''
     for (let attempt = 1; attempt <= 2; attempt++) {
       const resume = resumableSession(maker)
-      const input = `${resume ? '' : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
+      const input = `${resume ? await whereArtifactsAre(run) : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
 
 That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
       await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
@@ -1050,11 +1088,14 @@ export async function backfillChangeBriefs(): Promise<string[]> {
  */
 let claiming: Promise<unknown> = Promise.resolve()
 function claimStack(run: WorkflowRun, provisioning: boolean): Promise<'up' | 'claimed' | 'gone'> {
+  // Read before taking the lock: every other launch waits behind it.
+  const heading = provisioning && run.projectDir ? captureBaseline(run.projectDir).catch(() => undefined) : Promise.resolve(undefined)
   const next = claiming.then(async () => {
     const runs = await listRuns()
     const busy = !provisioning && !!run.stackProject && stackBusyElsewhere(run.stackProject, runs, run.id)
     if (!provisioning && !busy && await stackIsUp(stackProjectOf(run))) return 'up'
-    const found = await claimableStack(run, runs).catch(() => null)
+    const head = await heading
+    const found = await claimableStack(run, runs, undefined, head ? async p => reuseVerdict(await inspectStack(p), head).ok : undefined).catch(() => null)
     if (!found) {
       // Another run works in the stack this one had: it stands up its own,
       // under its own name, and never shares that one.
@@ -1096,6 +1137,9 @@ export function scheduleQuotaResume(at: number): void {
  * group cap like any decision, so a burst of them waits its turn. Also called
  * at boot, which is what keeps a restart from stranding them.
  */
+/** How long the queue stays shut while runs paused without a known reset time retry. */
+const QUOTA_PROBE_MS = 15 * 60_000
+
 export async function resumeQuotaPaused(now = Date.now()): Promise<string[]> {
   releaseQuota(now)
   const resumed: string[] = []
@@ -1106,6 +1150,14 @@ export async function resumeQuotaPaused(now = Date.now()): Promise<string[]> {
     if (at > now) { scheduleQuotaResume(at); continue }
     await continueRun(r.id).catch(err => log.warn('could not resume a run after the quota reset', { runId: r.id, error: err instanceof Error ? err.message : String(err) }))
     resumed.push(r.id)
+  }
+  // A retry is a probe when no reset time was known: the resumed runs find out
+  // whether the quota is back. The queue waits one more window rather than
+  // starting runs on the guess - each of which would only pause at its first
+  // request. A real reset time has passed only when the provider named it.
+  if (resumed.length && paused.some(r => resumed.includes(r.id) && !r.question?.resetStated)) {
+    blockForQuota(now + QUOTA_PROBE_MS)
+    return resumed
   }
   if (mightHaveWaiting()) await drainRunQueue(launchQueuedRun)
   return resumed
@@ -1160,7 +1212,13 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   delete l.resumeFrom[id]
   // A resumed session was told its stack once; if that stack went while the
   // run waited, it is told again.
-  const input = resume ? (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+  // A resumed session was told its paths once, when it started - and a run can
+  // move instances while it waits (a preview instance's runs were adopted with
+  // their sessions), so those paths can be stale. ASECRM-270's test author
+  // resumed a 25 Sep session, wrote its oracle to the old artifacts directory,
+  // and the step failed for a file it had written. Every resumed visit is told
+  // where things are now.
+  const input = resume ? await whereArtifactsAre(run) + (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
   } : undefined, run.parameters, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
@@ -1305,12 +1363,40 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return true
   }
 
+  // A stack the runner claimed for this run needs no agent when it is healthy
+  // and already runs this checkout's commit: the runner checks that and writes
+  // the report itself, in seconds. Anything else is the agent's, told which
+  // images of this commit to deploy when any exist - and so is every revisit,
+  // which carries the reason a later step rejected the stack (fastPathApplies).
+  let agentInput = input
+  if (fastPathApplies({ agentSlug: step.agentSlug, visits: rec.visits, resume, stackProject: run.stackProject, stackClaimedFrom: run.stackClaimedFrom, projectDir: run.projectDir }) && run.stackProject && run.stackClaimedFrom && run.projectDir) {
+    const reuse = await tryStackFastPath({
+      project: run.stackProject, claimedFrom: run.stackClaimedFrom, projectDir: run.projectDir, branch: run.branch,
+      artifactsDir: runArtifactsDir(run.id), sourceArtifactsDir: runArtifactsDir(run.stackClaimedFrom),
+    }, { readFile: p => readFile(p, 'utf8'), writeFile: (p, c) => writeFile(p, c) })
+      .catch(err => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err), images: [] as string[] }))
+    if (reuse.ok) {
+      logLine(l, run, rec, `step started, visit ${rec.visits}`)
+      for (const line of reuse.output.split('\n')) logLine(l, run, rec, line)
+      l.outputs[id] = reuse.output
+      Object.assign(rec, { status: 'completed', output: reuse.output, model: null, usage: null, completedAt: Date.now() })
+      log.info('stack reused without a model call', { runId: run.id, stepId: id, project: run.stackProject, from: run.stackClaimedFrom })
+      markCompleted(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    }
+    logLine(l, run, rec, `Stack ${run.stackProject} not reused as it is: ${reuse.reason}.`)
+    if (reuse.images?.length) {
+      agentInput += `\n\n---\nImages built from this checkout's commit already exist: ${reuse.images.map(i => `\`${i}\``).join(', ')}. Deploy the one for the service the stack runs it as; do not build another.`
+    }
+  }
+
   const ac = new AbortController()
   l.aborts.set(id, ac)
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
@@ -2537,10 +2623,11 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.quotaFailure) {
     const { stepId, message, until } = l.quotaFailure
     l.quotaFailure = undefined
-    const stated = /resets? in \d+\s*s\b|retry[- ]after/i.test(message)
+    // Whether `until` is the provider's own reset time or the 15-minute guess.
+    const stated = quotaResetStated(message)
     run.status = 'paused'
     run.question = {
-      stepId, kind: 'approval', reason: 'quota', resumeAt: until, askedAt: Date.now(),
+      stepId, kind: 'approval', reason: 'quota', resumeAt: until, resetStated: stated, askedAt: Date.now(),
       text: `"${stepOf(l, stepId)?.label ?? stepId}" hit the model's quota: ${message}. The run resumes on its own at ${new Date(until).toLocaleString()}${stated ? ', when the provider said it resets' : ' - the provider gave no reset time, so it tries again in 15 minutes'}. Nothing new starts before then. Nothing was lost.`,
     }
     run.currentStepIds = []
@@ -2862,7 +2949,10 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // the run) gets it back from the clone: without this, agentCaller fell back
   // to the Claude config directory as cwd and every step ran in the wrong
   // place while the header still named the deleted path.
-  if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return
+  // It still gets the .agent/ guard, every step: one made before the guard
+  // existed never had it, and a base that tracks .agent/plan.md (develop did,
+  // 25-30 Sep) has every Failing Test and Implement Fix commit rewrite it.
+  if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return keepAgentDirOutOfGit(run.projectDir)
   if (run.parameters?.branch?.trim() && !run.branch && !run.testOf) return ensureBranchWorktree(run, run.parameters.branch.trim())
   const checkout = runCheckout(run)
   // A test run with a directory but no clone to make its worktree beside
