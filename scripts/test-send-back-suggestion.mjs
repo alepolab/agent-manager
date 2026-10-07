@@ -100,6 +100,22 @@ for (const label of [
 // The negation belongs to its own clause: a later, plain send-back still counts.
 assert.equal(at({ label: 'Do not approve; send it back to Implement Fix' }), 'Implement Fix', 'a negation in another clause does not cancel the send-back')
 assert.equal(at({ label: 'Not ready - send back so Implement Fix narrows the change' }), 'Implement Fix', 'nor does one before a spaced dash')
+// Review of 4cca7e4: a comma or an unspaced dash starts a clause too, and the
+// title, label and next are separate sentences. Each of these returned
+// undefined, the negation before the comma or in the title cancelling the
+// send-back after it.
+for (const [o, want] of [
+  [{ label: 'Do not merge, send it back to Implement Fix' }, 'Implement Fix'],
+  [{ label: 'Not ready yet, so send it back to the implementer' }, 'Implement Fix'],
+  [{ label: 'The test is not enough, send it back to the test author' }, 'Failing Test'],
+  [{ label: 'Not yet—send it back to Implement Fix' }, 'Implement Fix'],
+  [{ label: 'Not yet–send it back to Implement Fix' }, 'Implement Fix'],
+  [{ title: 'Not ready', label: 'Send back so the implementer reverts the second commit' }, 'Implement Fix'],
+  [{ label: 'Approve as is', next: 'Nothing is redone. Send it back to Implement Fix only if CI fails' }, 'Implement Fix'],
+]) assert.equal(at(o), want, `THE REVIEW FINDING: a negation in an earlier clause cancelled the send-back: ${JSON.stringify(o)}`)
+// Still negated within the clause after a comma.
+assert.equal(at({ label: 'Approve as it stands, no need to send it back' }), undefined, 'a negation after the comma, in the send-back\'s own clause, still counts')
+
 // The step named first wins, not the longest label.
 assert.equal(at({ label: 'Send back so Implement Fix narrows it after Security Review signs off' }), 'Implement Fix', 'the step named first')
 // The guard before a label, alone: "docs/Plan" is a path, not the step called Plan.
@@ -107,6 +123,27 @@ assert.equal(suggestSendBack(opt({ label: 'Send back; docs/Plan has the outline'
 // The gate's own step is never a target, even when it ran before (a gate re-raised on a revisit).
 const regated = sendBackCandidates([...RUNBOOK_A.slice(0, 8), { ...RUNBOOK_A[8], status: 'completed' }], 'evidence-bundle-pr')
 assert.ok(!regated.some(s => s.stepId === 'evidence-bundle-pr'), 'the step the gate waits on is not offered, settled or not')
+
+// ── when the brief names its send-back steps ────────────────────────────
+// A brief whose options carry `sendBackTo` has said which ones send back; the
+// others are not read for it. Each of these approve options said "send it
+// back" only to say it was not needed, and was shown as a send-back.
+{
+  const named = opt({ key: 'b', label: 'Send back', sendBackTo: 'Implement Fix' })
+  for (const label of [
+    'Approve - sending it back to the implementer is not needed',
+    'Approve; a send-back to Implement Fix is not warranted',
+    'Approve; it is unnecessary to send it back to the implementer',
+    'Approve as is; we could send it back to the implementer, but the fix is right',
+  ]) {
+    const a = opt({ key: 'a', label })
+    assert.equal(suggestSendBack(a, candidates, [a, named]), undefined, `THE REVIEW FINDING: an option without \`sendBackTo\` in a brief that uses it is not a send-back: "${label}"`)
+  }
+  assert.equal(suggestSendBack(named, candidates, [named])?.label, 'Implement Fix', 'the option that names its step still does')
+  // A brief that never uses `sendBackTo` is read from its prose, as before.
+  const prose = opt({ key: 'b', label: 'Send back to Implement Fix' })
+  assert.equal(suggestSendBack(prose, candidates, [opt({ key: 'a', label: 'Approve' }), prose])?.label, 'Implement Fix', 'no option names a step: the prose decides')
+}
 
 // ── Cmd/Ctrl+Enter follows the primary action ───────────────────────────
 const { noteSubmitAction, sendBackPreselect } = await import('../app/utils/gateSubmit.ts')
@@ -126,5 +163,18 @@ assert.equal(sendBackPreselect('(a)', [fix]), 'fix', 'an approve recommendation 
 assert.equal(sendBackPreselect('(a)', [fix, verify]), '', 'an approve recommendation with two send-backs naming different steps: no guess')
 assert.equal(sendBackPreselect(undefined, [fix, { key: 'd', stepId: 'fix' }]), 'fix', 'two options naming the same step: that step')
 assert.equal(sendBackPreselect('(b)', []), '', 'no send-back option: nothing')
+
+// The reviewer's scenario: (a) approve, (b) a "Not ready" send-back recommended,
+// (c) a test-author send-back. With (b) read as no send-back, Send back opened
+// on Failing Test, (c)'s step - the wrong one.
+{
+  const brief = { options: [
+    opt({ key: 'a', label: 'Approve as it stands' }),
+    opt({ key: 'b', title: 'Not ready', label: 'Send back so the implementer reverts the second commit' }),
+    opt({ key: 'c', label: 'Send back so the test author rewrites the oracle' }),
+  ], recommendation: { option: 'b', why: 'w' } }
+  const targets = brief.options.flatMap(o => { const s = suggestSendBack(o, candidates, brief.options); return s ? [{ key: o.key, stepId: s.stepId }] : [] })
+  assert.equal(sendBackPreselect(brief.recommendation.option, targets), 'implement-fix', 'THE REVIEW FINDING: Send back opens on the recommended option\'s step, Implement Fix')
+}
 
 console.log('send-back suggestion: all assertions passed')

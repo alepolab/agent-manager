@@ -219,8 +219,12 @@ const SENDS_BACK = /\bsend(?:s|ing)?\b.{0,24}?\bback\b/gi
  * pre-selected when that option was the recommendation.
  */
 const NEGATES = /\b(?:no|not|nothing|never|without|rather\s+than|instead\s+of|don'?t|doesn'?t|needn'?t|no\s+need\s+to)\b/i
-/** Where a clause starts: a sentence or clause mark, or a spaced dash. */
-const CLAUSE_START = /[.;:!?()]|\s[-–—]\s/g
+/**
+ * Where a clause starts: a sentence or clause mark, a comma, a spaced hyphen,
+ * or an en or em dash spaced or not ("Not yet—send it back"). Without the
+ * comma, "Do not merge, send it back to Implement Fix" read as negated.
+ */
+const CLAUSE_START = /[.,;:!?()]|\s-\s|[–—]/g
 
 /** True when some "send back" in `text` is not negated within its own clause. */
 function sendsBack(text: string): boolean {
@@ -254,15 +258,22 @@ const STEP_ROLES: { says: RegExp, agent: RegExp }[] = [
  * else a step the option names by its label; else the step doing the work the
  * option describes, the role mentioned first winning. Undefined for an option
  * that does not send the change back, or when nothing points at one step.
+ * `siblings` are the brief's other options: when any names `sendBackTo`, an
+ * option that does not is not a send-back.
  */
-export function suggestSendBack<T extends SendBackStep>(option: DecisionOption, steps: T[]): T | undefined {
+export function suggestSendBack<T extends SendBackStep>(option: DecisionOption, steps: T[], siblings: DecisionOption[] = []): T | undefined {
   const last = (match: (s: T) => boolean) => steps.filter(match).at(-1)
   const named = option.sendBackTo?.trim().toLowerCase()
   if (named) {
     const hit = last(s => s.label.toLowerCase() === named || s.stepId === option.sendBackTo || s.agentSlug === option.sendBackTo)
     if (hit) return hit
   }
-  const text = [option.title, option.label, option.next].filter(Boolean).join(' ')
+  // A brief that names its send-back steps has said which options send back:
+  // the rest are not read from their prose, where "sending it back is not
+  // needed" would otherwise count.
+  if (!named && siblings.some(o => o.sendBackTo?.trim())) return undefined
+  // Separate sentences: a "Not ready" title does not negate the label's send-back.
+  const text = [option.title, option.label, option.next].filter(Boolean).join('. ')
   if (!named && !sendsBack(text)) return undefined
   // As a phrase on its own: a step called "Plan" is not named by ".agent/plan.md".
   const where = (label: string) => text.search(new RegExp(`(?<![\\w./-])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w]|[./-]\\w)`, 'i'))

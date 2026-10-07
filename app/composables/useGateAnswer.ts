@@ -54,7 +54,7 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   const changeBrief = ref<DecisionBrief | null>(null)
   /** Each send-back option with the step it would go back to (ASECRM-295 (b): "the fix step" is Implement Fix). */
   const sendBackFor = computed(() => (changeBrief.value?.options ?? []).flatMap((o) => {
-    const step = suggestSendBack(o, reworkCandidates.value)
+    const step = suggestSendBack(o, reworkCandidates.value, changeBrief.value?.options)
     return step ? [{ key: o.key.replace(/[()]/g, ''), name: o.title ?? o.label, step }] : []
   }))
   /** "suggested for (b)" beside a step in the list, for every option that points at it. */

@@ -163,7 +163,7 @@ const situationOpen = ref(false)
 const openQuestions = computed(() => unresolvedQuestions(brief.value))
 const briefOptions = computed(() => {
   const steps = sendBackCandidates(props.run.steps, props.run.question?.stepId)
-  return (brief.value?.options ?? []).map(o => ({ ...o, name: o.title ?? o.label, level: riskLevel(o.risk), riskText: riskDetail(o.risk), sendsBackTo: suggestSendBack(o, steps)?.label }))
+  return (brief.value?.options ?? []).map(o => ({ ...o, name: o.title ?? o.label, level: riskLevel(o.risk), riskText: riskDetail(o.risk), sendsBackTo: suggestSendBack(o, steps, brief.value?.options)?.label }))
 })
 const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 </script>
