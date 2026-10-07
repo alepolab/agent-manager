@@ -449,6 +449,8 @@ export interface WorkflowRun {
     reason?: 'budget' | 'rework' | 'auth' | 'quota'
     /** For a `quota` pause: when the provider said the quota resets. The run resumes on its own then. */
     resumeAt?: number
+    /** The provider named the reset time; false when resumeAt is the 15-minute guess, and its retry is a probe. */
+    resetStated?: boolean
     /** For a step's question: what a person needs to answer it (shared/utils/decisionBrief.ts). */
     brief?: DecisionBrief
     /**

@@ -208,7 +208,7 @@ export async function admit<T extends WorkflowRun>(opts: {
     const free = cap - await inFlightForGroup(opts.group, runs)
     const ahead = (await waiting(opts.group, runs)).length
 
-    if (free > 0 && ahead === 0 && !quotaBlocked() && !await givingWayTo(opts.group, runs)) {
+    if (free > 0 && ahead === 0 && !quotaBlockFromRuns(runs) && !await givingWayTo(opts.group, runs)) {
       const started = await opts.start()
       const staged = typeof (started as { rest?: unknown }).rest === 'function'
         ? started as { run: T, rest: () => Promise<unknown> }
@@ -251,6 +251,23 @@ export function blockForQuota(until: number) { quotaBlockedUntil = Math.max(quot
 export function quotaBlocked(now = Date.now()): number | null { return quotaBlockedUntil > now ? quotaBlockedUntil : null }
 /** The reset has come: lift the hold, if `now` is past it. */
 export function releaseQuota(now = Date.now()) { if (quotaBlockedUntil <= now) quotaBlockedUntil = 0 }
+
+/** A queued run carrying a decision on a quota pause: the question stays on the record until the decision is carried out. */
+const returnsFromQuota = (r: Pick<WorkflowRun, 'parked' | 'question'>) => !!r.parked && r.question?.reason === 'quota'
+
+/**
+ * The quota block, rebuilt from the runs paused on it when this process has
+ * none. The block is held in memory, so a restart forgets it - and the boot
+ * sweep runs before the quota-paused runs are looked at. A restart at 05:09
+ * started four runs into a spent quota that way, each paused at its first
+ * request. The paused runs record when they try again; that is the block.
+ * Both admission and the drain ask it, from the runs they already hold.
+ */
+export function quotaBlockFromRuns(runs: Pick<WorkflowRun, 'status' | 'question'>[], now = Date.now()): number | null {
+  const spentUntil = Math.max(0, ...runs.filter(r => r.status === 'paused' && r.question?.reason === 'quota').map(r => r.question?.resumeAt ?? 0))
+  if (spentUntil > now) blockForQuota(spentUntil)
+  return quotaBlocked(now)
+}
 export function mightHaveWaiting() { return mayHaveWaiting }
 
 /**
@@ -265,8 +282,13 @@ export function mightHaveWaiting() { return mayHaveWaiting }
  */
 export function drainRunQueue(launch: Launcher): Promise<number> {
   return serialised(async () => {
-    if (quotaBlocked()) return 0
     const runs = await listRuns()
+    // While the quota is spent nothing new starts - but a run coming back from
+    // a quota pause still does, within its group's cap. That return is the
+    // probe that finds out whether the quota is back; queued behind newer runs
+    // and then held by the very block it was meant to test, it never ran, and
+    // the window ended by starting it and the fresh runs together.
+    const blocked = quotaBlockFromRuns(runs) !== null
     const queued = runs.filter(r => r.status === 'queued')
     if (!queued.length) {
       // Nothing waiting anywhere: the timer can go quiet until something queues.
@@ -275,18 +297,21 @@ export function drainRunQueue(launch: Launcher): Promise<number> {
     }
 
     let started = 0
-    for (const group of [...new Set(queued.map(groupOf))]) {
+    for (const group of [...new Set(queued.filter(r => !blocked || returnsFromQuota(r)).map(groupOf))]) {
       if (await givingWayTo(group, runs)) continue
       let free = await capFor(group) - await inFlightForGroup(group, runs)
-      const candidates = await waiting(group, runs)
+      const candidates = (await waiting(group, runs)).filter(r => !blocked || returnsFromQuota(r))
 
       for (const candidate of candidates) {
         if (free <= 0) break
         // Asked again before every launch, not once per group: a launch that
         // fails in preflight costs no slot, so a drain under way when the
         // network went walked the whole queue, failing a run a minute, through
-        // the hold put on to stop exactly that.
-        if (quotaBlocked() || await givingWayTo(group)) break
+        // the hold put on to stop exactly that. A quota block that lands
+        // mid-drain holds the rest as it would at the start: only a run
+        // returning from a quota pause still goes.
+        if (await givingWayTo(group)) break
+        if (quotaBlocked() && !returnsFromQuota(candidate)) continue
         let outcome: LaunchOutcome
         try {
           outcome = await launch(candidate)
