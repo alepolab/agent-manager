@@ -21,6 +21,7 @@ import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
+import { fastPathApplies, inspectStack, reuseVerdict, tryStackFastPath } from './stackFastPath.ts'
 import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
 
 /**
@@ -1050,11 +1051,14 @@ export async function backfillChangeBriefs(): Promise<string[]> {
  */
 let claiming: Promise<unknown> = Promise.resolve()
 function claimStack(run: WorkflowRun, provisioning: boolean): Promise<'up' | 'claimed' | 'gone'> {
+  // Read before taking the lock: every other launch waits behind it.
+  const heading = provisioning && run.projectDir ? captureBaseline(run.projectDir).catch(() => undefined) : Promise.resolve(undefined)
   const next = claiming.then(async () => {
     const runs = await listRuns()
     const busy = !provisioning && !!run.stackProject && stackBusyElsewhere(run.stackProject, runs, run.id)
     if (!provisioning && !busy && await stackIsUp(stackProjectOf(run))) return 'up'
-    const found = await claimableStack(run, runs).catch(() => null)
+    const head = await heading
+    const found = await claimableStack(run, runs, undefined, head ? async p => reuseVerdict(await inspectStack(p), head).ok : undefined).catch(() => null)
     if (!found) {
       // Another run works in the stack this one had: it stands up its own,
       // under its own name, and never shares that one.
@@ -1305,12 +1309,40 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return true
   }
 
+  // A stack the runner claimed for this run needs no agent when it is healthy
+  // and already runs this checkout's commit: the runner checks that and writes
+  // the report itself, in seconds. Anything else is the agent's, told which
+  // images of this commit to deploy when any exist - and so is every revisit,
+  // which carries the reason a later step rejected the stack (fastPathApplies).
+  let agentInput = input
+  if (fastPathApplies({ agentSlug: step.agentSlug, visits: rec.visits, resume, stackProject: run.stackProject, stackClaimedFrom: run.stackClaimedFrom, projectDir: run.projectDir }) && run.stackProject && run.stackClaimedFrom && run.projectDir) {
+    const reuse = await tryStackFastPath({
+      project: run.stackProject, claimedFrom: run.stackClaimedFrom, projectDir: run.projectDir, branch: run.branch,
+      artifactsDir: runArtifactsDir(run.id), sourceArtifactsDir: runArtifactsDir(run.stackClaimedFrom),
+    }, { readFile: p => readFile(p, 'utf8'), writeFile: (p, c) => writeFile(p, c) })
+      .catch(err => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err), images: [] as string[] }))
+    if (reuse.ok) {
+      logLine(l, run, rec, `step started, visit ${rec.visits}`)
+      for (const line of reuse.output.split('\n')) logLine(l, run, rec, line)
+      l.outputs[id] = reuse.output
+      Object.assign(rec, { status: 'completed', output: reuse.output, model: null, usage: null, completedAt: Date.now() })
+      log.info('stack reused without a model call', { runId: run.id, stepId: id, project: run.stackProject, from: run.stackClaimedFrom })
+      markCompleted(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    }
+    logLine(l, run, rec, `Stack ${run.stackProject} not reused as it is: ${reuse.reason}.`)
+    if (reuse.images?.length) {
+      agentInput += `\n\n---\nImages built from this checkout's commit already exist: ${reuse.images.map(i => `\`${i}\``).join(', ')}. Deploy the one for the service the stack runs it as; do not build another.`
+    }
+  }
+
   const ac = new AbortController()
   l.aborts.set(id, ac)
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
-    const raw = await agentCaller(step.agentSlug, input, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
