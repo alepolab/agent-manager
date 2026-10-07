@@ -16,7 +16,9 @@
  * - the run's own worktree (`<clone>@<branch>`), and only if git agrees it is
  *   clean - an uncommitted change is kept and reported, never discarded. A
  *   fix branch is kept, since a pull request may be built on it; a scan's
- *   branch holds nothing and goes with its worktree.
+ *   branch holds nothing and goes with its worktree. A failed run keeps its
+ *   worktree: failing is where a run is restarted from, and the restart runs
+ *   in that directory. It goes when the run ends any other way.
  *
  * Best effort and never thrown: a teardown that fails must not change how the
  * run ended. RUN_TEARDOWN_DISABLED=1 turns it off, to inspect a run's stack.
@@ -59,6 +61,9 @@ export function stackUsers(project: string, runs: StackRun[], except?: string): 
     && (stackProjectOf(r) === project || runProjectNames(r.id).includes(project)))
 }
 
+/** How many free stacks claimableStack inspects for one already on the run's commit. */
+export const PREFER_PROBES = 3
+
 /**
  * An up stack of this run's product that it can take over rather than stand
  * up its own: one whose runs are all stopped on a person, or finished. Each
@@ -68,19 +73,29 @@ export function stackUsers(project: string, runs: StackRun[], except?: string): 
  * Never one a run is working in right now: two runs deploying different
  * builds into one stack at the same time would each test the other's code.
  */
-export async function claimableStack(run: Pick<WorkflowRun, 'id' | 'product'>, runs: StackRun[], exec: Exec = realExec): Promise<{ project: string, from: string } | null> {
+export async function claimableStack(
+  run: Pick<WorkflowRun, 'id' | 'product'>, runs: StackRun[], exec: Exec = realExec,
+  /** Among several free stacks, the first this accepts wins: one already running the run's own commit needs nothing deployed. */
+  prefer?: (project: string) => Promise<boolean>,
+): Promise<{ project: string, from: string } | null> {
   const product = run.product?.name
   if (!product) return null
   let listed: { Name?: string, Status?: string }[] = []
   try { listed = JSON.parse(await exec('docker', ['compose', 'ls', '--format', 'json']) || '[]') } catch { return null }
+  const free: { project: string, from: string }[] = []
   for (const { Name: name, Status: status } of listed) {
     if (!name || !/^sdlc-[0-9a-f-]+$/.test(name) || name.endsWith('-verify') || !/running/i.test(status ?? '')) continue
     const owner = runs.find(r => runProjectNames(r.id).includes(name))
     if (!owner || owner.id === run.id || owner.product?.name !== product) continue
     if (stackUsers(name, runs, run.id).some(u => u.status === 'running')) continue
-    return { project: name, from: owner.id }
+    if (!prefer) return { project: name, from: owner.id }
+    free.push({ project: name, from: owner.id })
   }
-  return null
+  // Each probe is a docker inspect per container, under the claim lock every
+  // other launch waits behind: three free stacks are enough to find one on the
+  // run's commit, and the first free one serves when none is.
+  for (const f of free.slice(0, PREFER_PROBES)) if (await prefer!(f.project).catch(() => false)) return f
+  return free[0] ?? null
 }
 
 /** Whether a compose project has anything running. False when docker cannot be asked. */
@@ -109,7 +124,7 @@ export const STACK_USING_AGENTS = /^sdlc-(stack-update|qa-|trace-capture$|pr-fol
 const STACK_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-ui$)/
 
 export async function teardownRun(
-  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'>,
+  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status'>>,
   exec: Exec = realExec,
   /** Every run, to see who else uses a stack. Read from the store when not given. */
   runs?: StackRun[],
@@ -149,23 +164,47 @@ export async function teardownRun(
   }
 
   // ── the run's own worktree ──
-  const dir = run.projectDir
-  if (run.branch && dir && /@[^/]+$/.test(dir) && existsSync(dir)) {
-    const clone = dir.replace(/@[^/]+$/, '')
-    try {
-      const dirty = (await exec('git', ['status', '--porcelain'], { cwd: dir })).trim()
-      if (dirty) {
-        report.worktree = { path: dir, removed: false, reason: `kept: ${dirty.split('\n').length} uncommitted change(s)` }
-      } else {
-        await exec('git', ['worktree', 'remove', dir], { cwd: clone })
-        if (run.branch.startsWith('scan/')) await exec('git', ['branch', '-D', run.branch], { cwd: clone }).catch(() => '')
-        report.worktree = { path: dir, removed: true }
-      }
-    } catch (err) {
-      report.worktree = { path: dir, removed: false, reason: String(err instanceof Error ? err.message : err).slice(0, 300) }
-    }
+  // ASECRM-357: removed after its Verify step halted, `git worktree remove`
+  // stopped part-way at files a container had written as another user. Half
+  // the tree and git's record of it were gone, and the restart that would
+  // have rerun the step was refused by a preflight that could not find a
+  // repository there.
+  if (run.status === 'failed' && ownsWorktree(run)) {
+    report.worktree = { path: run.projectDir!, removed: false, reason: 'kept: a failed run is restarted from here' }
+  } else {
+    report.worktree = await removeRunWorktree(run, exec)
   }
 
   if (report.stacks.length || report.worktree) log.info('run torn down', { runId: run.id, ...report })
   return report
+}
+
+/** A run works in a worktree of its own: `<clone>@<branch>`, still on disk. */
+function ownsWorktree(run: Pick<WorkflowRun, 'branch' | 'projectDir'>): boolean {
+  return !!(run.branch && run.projectDir && /@[^/]+$/.test(run.projectDir) && existsSync(run.projectDir))
+}
+
+/**
+ * Removes a run's own worktree, only if git agrees it is clean: an uncommitted
+ * change is kept and reported, never discarded. A fix branch is kept, since a
+ * pull request may be built on it; a scan's branch holds nothing and goes with
+ * its worktree. Undefined when the run owns no worktree. Never throws.
+ *
+ * The ending's teardown uses it, and so does deleting a run: a failed run keeps
+ * its worktree to be restarted from, and deleting it is the last chance to give
+ * that checkout back.
+ */
+export async function removeRunWorktree(run: Pick<WorkflowRun, 'branch' | 'projectDir'>, exec: Exec = realExec): Promise<TeardownReport['worktree']> {
+  if (!ownsWorktree(run)) return undefined
+  const dir = run.projectDir!
+  const clone = dir.replace(/@[^/]+$/, '')
+  try {
+    const dirty = (await exec('git', ['status', '--porcelain'], { cwd: dir })).trim()
+    if (dirty) return { path: dir, removed: false, reason: `kept: ${dirty.split('\n').length} uncommitted change(s)` }
+    await exec('git', ['worktree', 'remove', dir], { cwd: clone })
+    if (run.branch!.startsWith('scan/')) await exec('git', ['branch', '-D', run.branch!], { cwd: clone }).catch(() => '')
+    return { path: dir, removed: true }
+  } catch (err) {
+    return { path: dir, removed: false, reason: String(err instanceof Error ? err.message : err).slice(0, 300) }
+  }
 }

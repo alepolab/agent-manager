@@ -19,7 +19,7 @@
  * start a second run over their own checkout.
  */
 
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir as osHomedir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { getClaudeDir } from './claudeDir.ts'
@@ -343,6 +343,44 @@ export async function ensureRunBranch(path: string, branch: string, base?: strin
     out.push(wt)
   }
   return out
+}
+
+/**
+ * Is `dir` a working checkout of its own? A worktree whose `.git` file points
+ * at a gitdir that has been deleted still has the file, so existsSync says
+ * yes; git says "not a git repository". Asked of git, and of the top level:
+ * a directory with no `.git` inside some other repository is not this one.
+ */
+export async function isWorkingCheckout(dir: string): Promise<boolean> {
+  if (!existsSync(join(dir, '.git'))) return false
+  try {
+    const top = await git(dir, ['rev-parse', '--show-toplevel'])
+    return realpathSync(top) === realpathSync(dir)
+  } catch { return false }
+}
+
+/**
+ * Puts a run's worktrees back on the branch they were on, beside the clone,
+ * for a run whose worktree directory is gone. Unlike ensureRunBranch this never
+ * passes `-B`: the branch holds the run's commits, and resetting it to its base
+ * is how a missing worktree used to lose them. The caller has checked that the
+ * clone has the branch; a nested repository without it is left out and named.
+ */
+export async function restoreRunWorktrees(path: string, branch: string): Promise<{ worktrees: string[], skipped: string[] }> {
+  const root = worktreeDirFor(path, branch)
+  const worktrees: string[] = []
+  const skipped: string[] = []
+  for (const r of [path, ...nestedRepos(path)]) {
+    const wt = join(root, relative(path, r))
+    await git(r, ['worktree', 'prune'])
+    if (!existsSync(join(wt, '.git'))) {
+      if (!await branchExists(r, branch)) { skipped.push(r); continue }
+      await git(r, ['worktree', 'add', '--quiet', wt, branch])
+    }
+    await keepAgentDirOutOfGit(wt)
+    worktrees.push(wt)
+  }
+  return { worktrees, skipped }
 }
 
 /** The path of an existing worktree of `repo` checked out on `branch`, if there is one. */

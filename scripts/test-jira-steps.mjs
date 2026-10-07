@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'jira-steps-runs-'))
+// A config directory of its own: the instance's settings.json can switch Jira
+// posting on (agentManager.jira.postEnabled), and read from the developer's
+// real ~/.claude this test then asserted "posting is off" against a machine
+// where it was on.
+process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'jira-steps-claude-'))
 process.env.AGENT_USERS_DIR = mkdtempSync(join(tmpdir(), 'jira-steps-users-'))
 process.env.JIRA_BASE_URL = 'https://jira.test'
 process.env.JIRA_EMAIL = 'dev@example.test'
