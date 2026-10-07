@@ -13,7 +13,7 @@ export default defineEventHandler(async (event) => {
   const result = await checkPasswordLogin(username, password, getRequestIP(event) ?? 'unknown')
   if (!result.ok) {
     if (result.retryAfter) {
-      setResponseHeader(event, 'Retry-After', String(result.retryAfter))
+      setResponseHeader(event, 'Retry-After', result.retryAfter)
       throw createError({ statusCode: 429, message: `Too many failed attempts. Try again in ${Math.ceil(result.retryAfter / 60)} minute(s).` })
     }
     throw createError({ statusCode: 401, message: 'Wrong username or password' })
