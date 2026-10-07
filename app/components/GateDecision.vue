@@ -339,6 +339,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           ref="noteBox" v-model="note" rows="1" class="field-input w-full resize-none t-small decision__note"
           :placeholder="notePlaceholder" :aria-label="notePlaceholder"
           @keydown.meta.enter="submitNote(sendReply)" @keydown.ctrl.enter="submitNote(sendReply)"
+          @keydown.esc="sendingBack && cancelSendBack()"
         />
         <div class="flex flex-wrap items-center gap-2">
           <!-- A question -->

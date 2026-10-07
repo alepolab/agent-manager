@@ -88,6 +88,18 @@ assert.equal(suggestSendBack(opt({ label: 'Send back to the fix step' }), candid
 assert.equal(at({ label: 'Approve - merge the fix as it stands', next: 'The pull request opens; the full suite is re-run on the PR by CI, and Verify + Regression already passed.' }), undefined,
   'THE REVIEW FINDING: "re-run" in an approve option is not a send-back')
 assert.equal(at({ label: 'Approve, then redo the docs in a follow-up' }), undefined, 'nor is "redo"')
+// A send-back the option says it is not doing (review of d43131c): each was shown
+// under the approve option as "Send back to: Implement Fix", and pre-selected.
+for (const label of [
+  'Approve as it stands - no need to send it back to the implementer',
+  'Approve: nothing to send back; the implementer\'s fix is right',
+  'Approve rather than sending it back to Implement Fix',
+  'Approve - do not send it back',
+  'Approve without sending anything back',
+]) assert.equal(at({ label }), undefined, `THE REGRESSION: a negated send-back was taken for one: "${label}"`)
+// The negation belongs to its own clause: a later, plain send-back still counts.
+assert.equal(at({ label: 'Do not approve; send it back to Implement Fix' }), 'Implement Fix', 'a negation in another clause does not cancel the send-back')
+assert.equal(at({ label: 'Not ready - send back so Implement Fix narrows the change' }), 'Implement Fix', 'nor does one before a spaced dash')
 // The step named first wins, not the longest label.
 assert.equal(at({ label: 'Send back so Implement Fix narrows it after Security Review signs off' }), 'Implement Fix', 'the step named first')
 // The guard before a label, alone: "docs/Plan" is a path, not the step called Plan.
@@ -97,7 +109,7 @@ const regated = sendBackCandidates([...RUNBOOK_A.slice(0, 8), { ...RUNBOOK_A[8],
 assert.ok(!regated.some(s => s.stepId === 'evidence-bundle-pr'), 'the step the gate waits on is not offered, settled or not')
 
 // ── Cmd/Ctrl+Enter follows the primary action ───────────────────────────
-const { noteSubmitAction } = await import('../app/utils/gateSubmit.ts')
+const { noteSubmitAction, sendBackPreselect } = await import('../app/utils/gateSubmit.ts')
 const key = o => noteSubmitAction({ isReply: false, sendingBack: false, canRework: false, canApprove: true, ...o })
 assert.equal(key({}), 'continue', 'at a plain gate it approves')
 assert.equal(key({ sendingBack: true, canRework: true }), 'rework',
@@ -105,5 +117,14 @@ assert.equal(key({ sendingBack: true, canRework: true }), 'rework',
 assert.equal(key({ sendingBack: true, canRework: false }), null, 'and does nothing until a step and a note are chosen, never approving instead')
 assert.equal(key({ canApprove: false }), null, 'an approval that needs a reason first is not sent by the shortcut either')
 assert.equal(key({ isReply: true, sendingBack: true }), 'respond', 'a question is answered')
+
+// ── which step "Send back…" opens on ──
+const fix = { key: 'b', stepId: 'fix' }, verify = { key: 'c', stepId: 'verify' }
+assert.equal(sendBackPreselect('(b)', [fix, verify]), 'fix', 'the recommended send-back option\'s step')
+assert.equal(sendBackPreselect('B', [fix]), 'fix', 'matched however the brief spells the key')
+assert.equal(sendBackPreselect('(a)', [fix]), 'fix', 'an approve recommendation with one send-back option: that option\'s step, the only one there is')
+assert.equal(sendBackPreselect('(a)', [fix, verify]), '', 'an approve recommendation with two send-backs naming different steps: no guess')
+assert.equal(sendBackPreselect(undefined, [fix, { key: 'd', stepId: 'fix' }]), 'fix', 'two options naming the same step: that step')
+assert.equal(sendBackPreselect('(b)', []), '', 'no send-back option: nothing')
 
 console.log('send-back suggestion: all assertions passed')

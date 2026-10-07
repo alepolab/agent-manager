@@ -136,6 +136,7 @@ function chooseOption(text: string) {
       :placeholder="placeholder"
       :aria-label="placeholder"
       @keydown.meta.enter="submitNote()" @keydown.ctrl.enter="submitNote()"
+      @keydown.esc="sendingBack && cancelSendBack()"
     />
     <div class="flex flex-wrap gap-2">
       <UButton v-if="mayAnswer && !reviewing && isReply" size="xs" icon="i-lucide-send" label="Reply" :loading="sending === 'respond'" :disabled="!!sending || !note.trim()" @click="send('respond')" />

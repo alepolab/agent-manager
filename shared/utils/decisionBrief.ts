@@ -209,7 +209,29 @@ export function sendBackCandidates<T extends SendBackStep>(steps: T[], gateStepI
  * was taken for a send-back, its step pre-selected, and one of the run's two
  * send-backs spent on a step nobody asked to redo.
  */
-const SENDS_BACK = /\bsend(?:s|ing)?\b.{0,24}?\bback\b/i
+const SENDS_BACK = /\bsend(?:s|ing)?\b.{0,24}?\bback\b/gi
+
+/**
+ * Words that, earlier in the same clause, turn "send back" into the thing the
+ * option is not doing: "Approve as it stands - no need to send it back",
+ * "nothing to send back", "Approve rather than sending it back". Each of those
+ * was read as a send-back, its step shown under the approve option and
+ * pre-selected when that option was the recommendation.
+ */
+const NEGATES = /\b(?:no|not|nothing|never|without|rather\s+than|instead\s+of|don'?t|doesn'?t|needn'?t|no\s+need\s+to)\b/i
+/** Where a clause starts: a sentence or clause mark, or a spaced dash. */
+const CLAUSE_START = /[.;:!?()]|\s[-–—]\s/g
+
+/** True when some "send back" in `text` is not negated within its own clause. */
+function sendsBack(text: string): boolean {
+  for (const m of text.matchAll(SENDS_BACK)) {
+    const before = text.slice(0, m.index)
+    const starts = [...before.matchAll(CLAUSE_START)]
+    const clause = starts.length ? before.slice(starts.at(-1)!.index! + starts.at(-1)![0].length) : before
+    if (!NEGATES.test(clause)) return true
+  }
+  return false
+}
 
 /**
  * The work each kind of step does, as a brief's prose names it, and the agents
@@ -241,7 +263,7 @@ export function suggestSendBack<T extends SendBackStep>(option: DecisionOption, 
     if (hit) return hit
   }
   const text = [option.title, option.label, option.next].filter(Boolean).join(' ')
-  if (!named && !SENDS_BACK.test(text)) return undefined
+  if (!named && !sendsBack(text)) return undefined
   // As a phrase on its own: a step called "Plan" is not named by ".agent/plan.md".
   const where = (label: string) => text.search(new RegExp(`(?<![\\w./-])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w]|[./-]\\w)`, 'i'))
   // The step named first, as with roles below; the longer label on a tie

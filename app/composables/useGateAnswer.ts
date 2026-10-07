@@ -2,7 +2,7 @@ import type { WorkflowRun } from '~~/shared/types/run'
 import { needsJustification } from '~~/shared/utils/oversight'
 import { gateIsMine } from '~~/shared/utils/notifications'
 import { sendBackCandidates, suggestSendBack, type DecisionBrief } from '~~/shared/utils/decisionBrief'
-import { noteSubmitAction } from '~/utils/gateSubmit'
+import { noteSubmitAction, sendBackPreselect } from '~/utils/gateSubmit'
 
 export type GateAction = 'respond' | 'continue' | 'reject' | 'rework'
 export interface GateEmits {
@@ -63,10 +63,8 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   function openSendBack() {
     sendingBack.value = true
     if (!reworkTarget.value) {
-      const rec = (changeBrief.value?.recommendation?.option ?? '').replace(/[()]/g, '').trim().toLowerCase()
-      const steps = new Set(sendBackFor.value.map(s => s.step.stepId))
-      reworkTarget.value = sendBackFor.value.find(s => s.key.toLowerCase() === rec)?.step.stepId
-        ?? (steps.size === 1 ? [...steps][0]! : '')
+      reworkTarget.value = sendBackPreselect(changeBrief.value?.recommendation?.option,
+        sendBackFor.value.map(s => ({ key: s.key, stepId: s.step.stepId })))
     }
     void nextTick(() => sendBackSelect.value?.focus())
   }
