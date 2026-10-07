@@ -1,6 +1,8 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { needsJustification } from '~~/shared/utils/oversight'
 import { gateIsMine } from '~~/shared/utils/notifications'
+import { sendBackCandidates, suggestSendBack, type DecisionBrief } from '~~/shared/utils/decisionBrief'
+import { noteSubmitAction, sendBackPreselect } from '~/utils/gateSubmit'
 
 export type GateAction = 'respond' | 'continue' | 'reject' | 'rework'
 export interface GateEmits {
@@ -34,12 +36,56 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   const canApprove = computed(() => !mustJustify.value || !!note.value.trim())
 
   /** Where a send-back goes. The reviewer picks; the run never guesses. Candidates are steps that have run. */
-  const stepSettled = (s: { status: string }) => ['completed', 'failed', 'skipped'].includes(s.status)
   const reworkTarget = ref('')
-  const reworkCandidates = computed(() => run.value.steps.filter(s => stepSettled(s) && s.stepId !== run.value.question?.stepId))
+  const reworkCandidates = computed(() => sendBackCandidates(run.value.steps, run.value.question?.stepId))
   const reworksLeft = computed(() => 2 - (run.value.reworks ?? 0))
   const canSendBack = computed(() => isApproval.value && !runnerPause.value && reworkCandidates.value.length > 0 && reworksLeft.value > 0)
-  watch(() => run.value.id, () => { reworkTarget.value = ''; note.value = '' })
+
+  /**
+   * Sending back is a mode the person opens: until then Approve is the primary
+   * action, and once open Send back is - and Cmd/Ctrl+Enter follows it. Closed
+   * by Cancel, by Escape, and by any decision being sent, so it never outlives
+   * what the person chose.
+   */
+  const sendingBack = ref(false)
+  /** The list of steps, focused when the mode opens: the button that opened it leaves the DOM. */
+  const sendBackSelect = ref<HTMLSelectElement | null>(null)
+  /** The change brief RunVerdictCard read: its options say which step each send-back is for. */
+  const changeBrief = ref<DecisionBrief | null>(null)
+  /** Each send-back option with the step it would go back to (ASECRM-295 (b): "the fix step" is Implement Fix). */
+  const sendBackFor = computed(() => (changeBrief.value?.options ?? []).flatMap((o) => {
+    const step = suggestSendBack(o, reworkCandidates.value, changeBrief.value?.options)
+    return step ? [{ key: o.key.replace(/[()]/g, ''), name: o.title ?? o.label, step }] : []
+  }))
+  /** "suggested for (b)" beside a step in the list, for every option that points at it. */
+  const suggestedFor = (stepId: string) => sendBackFor.value.filter(s => s.step.stepId === stepId).map(s => `(${s.key})`).join(', ')
+  /** Opens on the step the brief points at: the recommended option's, or the only one named. */
+  function openSendBack() {
+    sendingBack.value = true
+    if (!reworkTarget.value) {
+      reworkTarget.value = sendBackPreselect(changeBrief.value?.recommendation?.option,
+        sendBackFor.value.map(s => ({ key: s.key, stepId: s.step.stepId })))
+    }
+    void nextTick(() => sendBackSelect.value?.focus())
+  }
+  function cancelSendBack() {
+    sendingBack.value = false
+    reworkTarget.value = ''
+  }
+  watch(() => run.value.id, () => { reworkTarget.value = ''; note.value = ''; sendingBack.value = false; changeBrief.value = null })
+
+  /** Cmd/Ctrl+Enter in the note: the primary action on screen (see noteSubmitAction). */
+  function submitNote(onReply = () => send('respond')) {
+    if (sending.value) return
+    const action = noteSubmitAction({
+      isReply: isReply.value,
+      sendingBack: sendingBack.value,
+      canRework: !!reworkTarget.value && !!note.value.trim(),
+      canApprove: runnerPause.value || canApprove.value,
+    })
+    if (action === 'respond') onReply()
+    else if (action) send(action)
+  }
 
   /**
    * A decision this person has just sent and the run has not yet acted on.
@@ -75,6 +121,7 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
     else emit.continue(text || undefined)
     note.value = ''
     reworkTarget.value = ''
+    sendingBack.value = false
   }
 
   /** How long this gate has waited on a person, ticking. */
@@ -111,6 +158,7 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   return {
     role, gateOwner, mineToAnswer, mayAnswer, mustJustify, reviewing, isReply, isApproval, runnerPause,
     note, canApprove, reworkTarget, reworkCandidates, reworksLeft, canSendBack,
+    sendingBack, sendBackSelect, changeBrief, sendBackFor, suggestedFor, openSendBack, cancelSendBack, submitNote,
     sending, SENDING_LABEL, send, waitingLabel, askingStep, approveLabel, gateLabel,
   }
 }
