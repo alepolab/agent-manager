@@ -19,7 +19,7 @@ import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type Agent
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, worktreeDirFor } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, isWorkingCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, restoreRunWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 import { fastPathApplies, inspectStack, reuseVerdict, tryStackFastPath } from './stackFastPath.ts'
 import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
@@ -33,7 +33,7 @@ let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightR
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
 import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
 import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
@@ -704,12 +704,24 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
 }
 
 /**
+ * A visit given back: an attempt that never reached an outcome (an
+ * interruption, a quota stop) is not counted against maxVisits. One place, so
+ * the copies that each path used to carry cannot drift.
+ */
+const refundVisit = (visits: number | undefined): number => Math.max(0, (visits ?? 1) - 1)
+
+/**
  * The SDK session a step can continue, or undefined.
  *
  * Requires the recorded session AND its transcript still on disk under the
  * same working directory: a run whose worktree was made (or removed) since
  * has a different project folder, and the CLI would find nothing to resume.
  * Undefined means "start fresh", which is always correct, only more expensive.
+ *
+ * A session that ended because its context was full is not continued either:
+ * resuming it starts at the limit it failed at. ASECRM-372's Failing Test
+ * failed on "Autocompact is thrashing" after 94 turns, and restarting that
+ * step would have handed the same transcript straight back.
  */
 /**
  * What a resumed session is told before anything else: where this run's
@@ -727,6 +739,7 @@ async function whereArtifactsAre(run: WorkflowRun): Promise<string> {
 
 function resumableSession(rec: RunStep): string | undefined {
   if (!rec.sessionId || !rec.sessionProject) return undefined
+  if (rec.status === 'failed' && rec.error && isContextExhausted(rec.error)) return undefined
   // Asked of every place the SDK might have written it, not just this app's
   // config directory: in a container those are different directories, and
   // looking only in ours made every resume a silent cold start.
@@ -923,6 +936,16 @@ export function isAuthFailure(message: string): boolean {
 const UNRESUMABLE = /tool use concurrency|tool_use.{0,40}without.{0,20}tool_result|tool_result.{0,60}(does not|must) (correspond|have a corresponding)/i
 export function isUnresumable(message: string): boolean {
   return UNRESUMABLE.test(message)
+}
+
+/**
+ * The session's context is full: the SDK's compaction could not keep it under
+ * the window, or the request itself was over it. Not a fault of the work, but
+ * one a resume of the same session cannot get past.
+ */
+const CONTEXT_EXHAUSTED = /autocompact is thrashing|prompt is too long|exceeds? the (model's )?context (window|limit)/i
+export function isContextExhausted(message: string): boolean {
+  return CONTEXT_EXHAUSTED.test(message)
 }
 
 /**
@@ -1718,7 +1741,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // returned, and the run pauses once the wave settles (see runWave).
     const message = err instanceof Error ? err.message : String(err)
     if (!l.stopped && isAuthFailure(message)) {
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id])
       l.state.status[id] = 'pending'
       armNode(l.state, id)
       Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
@@ -1730,7 +1753,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // The quota, not the work: the same, and the run waits for the reset time.
     const until = l.stopped ? null : quotaResetAt(message)
     if (until) {
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id])
       l.state.status[id] = 'pending'
       armNode(l.state, id)
       Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
@@ -1743,7 +1766,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // A session the API will not continue: the same visit again, cold, once.
     if (resume && !l.stopped && isUnresumable(message) && !l.coldRetried?.has(id)) {
       (l.coldRetried ??= new Set()).add(id)
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id])
       l.state.status[id] = 'pending'
       armNode(l.state, id)
       Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined, sessionId: undefined, sessionProject: undefined })
@@ -2947,6 +2970,60 @@ async function ensureTestCheckout(run: WorkflowRun, testOf: TestOf, checkout: st
   log.info('test worktree ready', { runId: run.id, sourceRunId: testOf.sourceRunId, checkout, worktree: run.projectDir, branch, startPoint: rootStart, repos: worktrees.length })
 }
 
+/**
+ * A run whose worktree was removed out from under it gets the worktree back,
+ * on its own branch, before anything reads it. `git worktree remove` stops
+ * part-way on files it cannot delete (a container's ignored output, owned by
+ * root), and what it leaves behind has a `.git` file pointing at a gitdir that
+ * is already gone: every git command in it says "not a git repository", and
+ * a restart of ASECRM-357 failed preflight on exactly that. A worktree removed
+ * cleanly was worse, quietly: ensureRunBranch made it again with `-B`, which
+ * reset the run's branch to its base and dropped its commits.
+ *
+ * Only for a worktree the run owns, `<clone>@<branch>` beside the clone. What
+ * is left of the old one is moved aside, never deleted, and its `.agent/`
+ * scratch is carried over. With the branch gone there is no work to put back:
+ * a restart from the first step goes on and cuts a new one (`freshBranchOk`),
+ * anything later is refused with the reason.
+ *
+ * Returns what it did, for the operator, or nothing when the worktree was fine.
+ */
+async function rebuildRunWorktree(run: WorkflowRun, opts: { freshBranchOk?: boolean } = {}): Promise<string | undefined> {
+  const dir = run.projectDir
+  if (!run.branch || !dir || run.testOf) return
+  const clone = dir.replace(/@[^/]+$/, '')
+  if (clone === dir || dir !== worktreeDirFor(clone, run.branch) || !existsSync(join(clone, '.git'))) return
+  if (await isWorkingCheckout(dir)) return
+  const branchKept = await branchExists(clone, run.branch)
+  if (!branchKept && !opts.freshBranchOk) {
+    throw new Error(`the run's worktree ${dir} is gone, and so is its branch ${run.branch} in ${clone}: there is no work left to restart from. Restart the run from its first step, which cuts a new branch from ${run.baseBranch ?? 'its base'}.`)
+  }
+  let movedAside: string | undefined
+  if (existsSync(dir)) {
+    movedAside = join(dirname(dir), `.broken-${basename(dir)}-${Date.now()}`)
+    await rename(dir, movedAside)
+  }
+  // Nothing to restore: the first step's ensureRunBranch cuts the branch anew.
+  if (!branchKept && !movedAside) return
+  const restored = branchKept ? await restoreRunWorktrees(clone, run.branch) : undefined
+  let agentCarried = false
+  if (restored && movedAside && existsSync(join(movedAside, '.agent'))) {
+    await cp(join(movedAside, '.agent'), join(dir, '.agent'), { recursive: true, force: false, errorOnExist: false })
+    agentCarried = true
+  }
+  const what = [
+    movedAside ? `The run's worktree ${dir} was no longer a git checkout (removed part-way); what was left of it is at ${movedAside}.` : `The run's worktree ${dir} was missing.`,
+    restored ? `It was made again from the clone on ${run.branch}${agentCarried ? ', with the old .agent/ carried over' : ''}.` : `Its branch ${run.branch} is gone too, so the first step cuts a new one from ${run.baseBranch ?? 'its base'}.`,
+    restored?.skipped.length ? `Not restored, no ${run.branch} branch there: ${restored.skipped.join(', ')}.` : '',
+  ].filter(Boolean).join(' ')
+  await writeArtifactJson(run.id, 'worktree-rebuilt.json', {
+    at: new Date().toISOString(), worktree: dir, clone, branch: run.branch, movedAside, branchKept,
+    worktrees: restored?.worktrees, skipped: restored?.skipped, agentCarried, note: what,
+  }).catch(err => log.warn('could not record the worktree rebuild', { runId: run.id, error: String(err) }))
+  log.warn('run worktree rebuilt', { runId: run.id, worktree: dir, branch: run.branch, movedAside, branchKept, agentCarried })
+  return what
+}
+
 async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // A run that has its worktree is left alone. One whose worktree is gone (a
   // developer ran `git worktree remove` after the PR merged, then restarted
@@ -2956,6 +3033,9 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // It still gets the .agent/ guard, every step: one made before the guard
   // existed never had it, and a base that tracks .agent/plan.md (develop did,
   // 25-30 Sep) has every Failing Test and Implement Fix commit rewrite it.
+  // One whose worktree was removed, whole or in part, gets it back on its own
+  // branch first: never through ensureRunBranch's `-B`, which would reset it.
+  await rebuildRunWorktree(run, { freshBranchOk: true })
   if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return keepAgentDirOutOfGit(run.projectDir)
   if (run.parameters?.branch?.trim() && !run.branch && !run.testOf) return ensureBranchWorktree(run, run.parameters.branch.trim())
   const checkout = runCheckout(run)
@@ -3531,7 +3611,10 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
   for (const run of interrupted) {
     if (only && !only.has(run.id)) continue
     awaitingSlot.delete(run.id)
-    const frozen = run.steps.find(s => s.status === 'running')
+    // Every step left at 'running': a wave runs up to MAX_CONCURRENCY at once,
+    // and one restart freezes all of them.
+    const frozenSteps = run.steps.filter(s => s.status === 'running')
+    const frozen = frozenSteps[0]
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
     // One that died between steps has nothing frozen and nothing to reset: it
     // is resumed as it is. Left alone it stayed interrupted for good, and now
@@ -3543,18 +3626,30 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
     if (inFlight.get(group)! >= await capFor(group) || await givingWayTo(group, all)) { out.waiting.push(run.id); awaitingSlot.add(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
     if (frozen && run.interruptions > MAX_INTERRUPTIONS) {
-      frozen.status = 'pending'
+      // Every frozen step, not the first: a fan-out wave froze together, and
+      // one left at 'running' was never scheduled again while the graph,
+      // which reads only its own state, could call the run finished.
+      for (const rec of frozenSteps) {
+        // The attempt it froze in never reached an outcome, so it is not a visit
+        // (as in restartRun). Left counted, "try once more" on a step frozen in
+        // its last visit had nothing it could schedule: ASECRM-296's Browser
+        // Trace sat at 3 of 3, and approving it ended the run as stuck.
+        rec.visits = refundVisit(rec.visits)
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `interrupted-${rec.visits + 1}`) } catch { /* best effort */ }
+        rec.status = 'pending'
+      }
+      const where = frozenSteps.map(f => `"${f.label}"`).join(', ')
       run.status = 'paused'
       run.question = {
         stepId: frozen.stepId, kind: 'approval', askedAt: Date.now(),
-        text: `This run has been interrupted ${run.interruptions} times in a row at "${frozen.label}" without finishing it. Continue to try once more, or stop the run.`,
+        text: `This run has been interrupted ${run.interruptions} times in a row at ${where} without finishing it. Continue to try once more, or stop the run.`,
       }
       run.interruptions = 0
       run.pid = process.pid
       run.bootId = BOOT_ID
       await saveRun(run)
       out.paused.push(run.id)
-      log.warn('run interrupted repeatedly; asking rather than resuming', { runId: run.id, stepId: frozen.stepId })
+      log.warn('run interrupted repeatedly; asking rather than resuming', { runId: run.id, stepIds: frozenSteps.map(f => f.stepId) })
       continue
     }
     await saveRun(run)
@@ -4037,6 +4132,17 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
     && (l.graph.forwardPreds[id] ?? []).every(p => l.state.status[p] === 'completed'))
   for (const id of readyFailed) for (const d of [id, ...forwardDescendants(l.graph, id)]) if (!reset.includes(d)) reset.push(d)
 
+  // A worktree removed out from under the run is put back before anything
+  // reads it: preflight's git checks fail in a half-removed one with "not a
+  // git repository", whatever the run's status - a stopped or completed run's
+  // worktree goes through `git worktree remove` too (ASECRM-357).
+  let rebuilt: string | undefined
+  try {
+    rebuilt = await rebuildRunWorktree(run, { freshBranchOk: ancestorsOf(l.graph, stepId).length === 0 })
+  } catch (err) {
+    throw new RestartError(409, `Worktree: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
   // A restart re-runs steps; it does not re-create what earlier steps left on
   // disk. Restarting a downstream step into a workspace with no checkout is how
   // one run spent 3.26M tokens - $50 - searching a directory with no code in
@@ -4078,6 +4184,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // throwaway worktree, made again before the tested step runs.
   if (!run.testOf) {
     run.preflight = await preflight(run, l.workflow.steps)
+    if (rebuilt) run.preflight.checks.unshift({ name: 'run worktree', level: 'warn', detail: rebuilt })
     const blocked = preflightFailure(run.preflight)
     if (blocked) {
       await saveRun(run)
@@ -4107,7 +4214,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
     // how three container rebuilds exhausted a step's three visits without it
     // ever failing at anything.
     if (rec.status === 'running') {
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? rec.visits ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id] ?? rec.visits)
       rec.visits = l.state.visits[id]
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `interrupted-${rec.visits + 1}`) } catch { /* best effort */ }
     }

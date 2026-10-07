@@ -92,6 +92,27 @@ const root = mkdtempSync(join(tmpdir(), 'teardown-'))
   assert.ok(!exec.calls.some(c => c.args[0] === 'worktree'), 'and nothing is removed')
 }
 {
+  // ASECRM-357: a failed run is restarted in its worktree. Removing it - which
+  // stopped part-way at a container's files - left nothing a restart could use.
+  const wt = join(root, 'ase-crm@fix-ASECRM-3-abcdef12')
+  mkdirSync(wt, { recursive: true })
+  const exec = fakeExec({ projects: [`sdlc-${id}`] })
+  const r = await teardownRun({ id: ID, status: 'failed', steps: stackSteps, branch: 'fix/ASECRM-3-abcdef12', projectDir: wt }, exec, [])
+  assert.equal(r.worktree.removed, false, 'THE REGRESSION: a failed run\'s worktree was removed')
+  assert.match(r.worktree.reason, /restarted from here/)
+  assert.ok(!exec.calls.some(c => c.cmd === 'git'), 'git is not asked to remove it')
+  assert.deepEqual(exec.downed(), [`sdlc-${id}`], 'its stack still comes down')
+}
+{
+  const wt = join(root, 'ase-crm@fix-ASECRM-4-abcdef12')
+  mkdirSync(wt, { recursive: true })
+  for (const status of ['completed', 'stopped']) {
+    const exec = fakeExec()
+    const r = await teardownRun({ id: ID, status, steps: [], branch: 'fix/ASECRM-4-abcdef12', projectDir: wt }, exec)
+    assert.equal(r.worktree.removed, true, `a ${status} run's clean worktree still goes`)
+  }
+}
+{
   // A run that works in the shared clone, or a directory it was handed, owns no worktree.
   const exec = fakeExec()
   const r = await teardownRun({ id: ID, steps: [], branch: 'fix/x', projectDir: join(root, 'ase-crm') }, exec)

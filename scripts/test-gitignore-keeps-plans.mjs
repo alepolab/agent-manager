@@ -61,8 +61,11 @@ function isIgnored(path) {
 
 // Sanity: the check must be capable of reporting "ignored" at all. Without
 // this, a `git check-ignore` that always exited 1 would make every assertion
-// below pass while testing nothing.
-assert.ok(isIgnored('node_modules/anything.js'),
+// below pass while testing nothing. A node_modules a level down, not the
+// top-level one: a worktree that symlinks its node_modules to another checkout
+// makes git refuse any path through it ("beyond a symbolic link", exit 128),
+// and the same `node_modules` rule ignores both.
+assert.ok(isIgnored('scripts/node_modules/anything.js'),
   'sanity: node_modules is ignored by this repo, so check-ignore must report it as ignored — '
   + 'if this fails, the check itself is broken and the rest of this test proves nothing')
 

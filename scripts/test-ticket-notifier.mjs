@@ -14,6 +14,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.AGENT_RUNS_DIR = mkdtempSync(join(tmpdir(), 'notifier-runs-'))
+// A config directory of its own: the instance's settings.json can switch Jira
+// posting on (agentManager.jira.postEnabled), and read from the developer's
+// real ~/.claude this test then asserted "posting is off" against a machine
+// where it was on.
+process.env.CLAUDE_DIR = mkdtempSync(join(tmpdir(), 'notifier-claude-'))
 delete process.env.JIRA_POST_ENABLED
 delete process.env.JIRA_COMMENT_FOR_VIS_NAME
 
