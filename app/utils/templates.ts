@@ -202,7 +202,7 @@ A person may have to approve this change at a gate before it goes further, and t
 - \`situation\` - two or three sentences: what the ticket asked, what was actually wrong (or that nothing was), and what you changed.
 - \`criteria\` - \`{ ref, text }\` with the full text of every acceptance criterion you mention.
 - \`findings\` - one fact per entry: the test results before and after with counts, what else was run, who calls the changed code and whether any of them now behaves differently, and anything you could not verify.
-- \`options\` - at least approve and send back, each \`{ key, title, label, next, delivers, leaves, risk }\`: \`title\` is two to six words, \`next\` is what the pipeline does if it is chosen, \`delivers\` the advantages (what the ticket and the product gain), \`leaves\` the disadvantages (what stays open or could go wrong), \`risk\` the worst plausible outcome, starting with Low, Medium or High, if there is one worth naming.
+- \`options\` - at least approve and send back, each \`{ key, title, label, next, delivers, leaves, risk }\`: \`title\` is two to six words, \`next\` is what the pipeline does if it is chosen, \`delivers\` the advantages (what the ticket and the product gain), \`leaves\` the disadvantages (what stays open or could go wrong), \`risk\` the worst plausible outcome, starting with Low, Medium or High, if there is one worth naming. An option that sends the change back also carries \`sendBackTo\`: the label of the step that should redo the work, exactly as the run shows it ("Implement Fix"), so the reviewer is not left to work out which step "the fix step" is.
 - \`recommendation\` - \`{ option, why }\`.
 - \`open_questions\` - when intent.md or the context packet lists open questions, one \`{ question, answer, resolved }\` for every one of them, \`question\` copied from the list: how it was resolved and on what evidence, what you assumed and why, or that it is still open and which option above decides it. \`resolved\` is true only when evidence settled it; an assumption or a question still open is false. The reviewer sees only the unresolved ones. A question the brief leaves unanswered is one the reviewer has to answer blind.
 
@@ -2289,7 +2289,7 @@ ${CHANGE_BRIEF}`,
 
 ## Read the run artifacts before you touch the filesystem
 
-The run artifacts directory named at the top of your input holds \`plan.md\` and \`context-packet.json\` (the intent to review against) and \`implementation.md\` (what the implementer says they did). The scope is the run branch against its base, in the working checkout: \`git diff <base>...HEAD\` and \`git log <base>..HEAD\`, with the base branch named in your header.
+The run artifacts directory named at the top of your input holds \`plan.md\` and \`context-packet.json\` (the intent to review against) and what the implementer says they did: \`implementation.md\` where the run has one, otherwise the \`fix\` key of \`meta.json\` and the implementer's commits. The scope is the run branch against its base, in the working checkout: \`git diff <base>...HEAD\` and \`git log <base>..HEAD\`, with the base branch named in your header.
 
 ${CE_SKILL_RULES('ce-code-review', 'Stage 1 (scope: the run branch against its base), Stage 2 (intent: the plan and the context packet), Stage 3 (select the reviewers the diff calls for, then play each selected persona yourself, one after the other), Stage 5 (finish: merge, deduplicate, verify), and then the apply stage as if invoked with `apply:local`')}
 
@@ -2299,7 +2299,9 @@ Every finding names \`file:line\`, states the defect in one sentence, and says h
 
 ## Fixing
 
-Fix every P1 and P2 you verified, one commit each, \`fix(<ticket>): review — <what>\`, named files only, then rerun the tests the change touches in the product's container and quote the output. Never edit a test to make a finding go away: if the test is what is wrong, that is a finding against the Implement step. A P1 you cannot fix within the ticket — a design that is wrong, an approach the plan should not have taken — ends your output with \`PIPELINE-REWORK: Implement Fix — <file:line and exactly what to change>\` instead of a fix you are not sure of.
+Fix every P1 and P2 you verified, one commit each, \`fix(<ticket>): review — <what>\`, named files only, then rerun the tests the change touches in the product's container and quote the output. Never edit a test to make a finding go away: if the test is what is wrong, that is a finding against the Implement step. A P1 you cannot fix within the ticket — a design that is wrong, an approach the plan should not have taken — ends your output with \`PIPELINE-REWORK: <the step that implemented the change, by its label in this run: Implement Fix, or Implement Feature> — <file:line and exactly what to change>\` instead of a fix you are not sure of.
+
+A fix you commit changes the change the implementer described. Once your fixes are in and their tests pass, rewrite \`change-brief.json\` as "The reviewer's brief" below describes, so the person approving reads the code as it now is: the findings you fixed, the test counts after your fixes, and what remains. A review that fixed nothing leaves the implementer's brief as it is.
 
 ## Git
 
@@ -2322,7 +2324,9 @@ ${CE_SKILL_MENU([['ce-simplify-code', 'the diff works but carries duplication, d
 
 ${SDLC_STANDING_RULES}
 
-${SDLC_STOPPING}`,
+${SDLC_STOPPING}
+
+${CHANGE_BRIEF}`,
   },
   {
     id: 'sdlc-stack-update',

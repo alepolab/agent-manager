@@ -17,7 +17,7 @@ import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
-import { captureBaseline } from './gitFacts.ts'
+import { captureBaseline, headCommitTime } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, isWorkingCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, restoreRunWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
@@ -32,11 +32,11 @@ import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_US
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, CHANGE_MAKERS, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -587,10 +587,13 @@ const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stop
  * PR follow-up is the only step that reports on CI. The verifier and the
  * security review share one allowance because they are answering the same
  * question about the same commit, so two send-backs from them are two attempts
- * at one problem, not two problems.
+ * at one problem, not two problems. Code review has its own: it runs earlier
+ * and judges the approach and the standards, not whether the commit passes,
+ * so two "the approach is wrong" from it must not leave a proven regression
+ * found later with no automatic send-back at all.
  */
-const reworkBucket = (agentSlug?: string): 'ci' | 'verification' =>
-  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : 'verification'
+const reworkBucket = (agentSlug?: string): 'ci' | 'verification' | 'review' =>
+  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' ? 'review' : 'verification'
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
@@ -1018,9 +1021,6 @@ export function endedToWait(output: string): boolean {
   return /\b(wait(ing)? for (the )?(background|notification)|background notification|(still )?running in the background|pick (it )?up (again )?(as soon as|once|when) it (completes|finishes)|(once|when) (it|the (build|job|task|container)) (finishes|completes)[^.]{0,40}(I'll|I will))/i.test(tail)
 }
 
-/** The steps that make a run's change, and so know what approving it gains and risks. */
-const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work)$/
-
 /**
  * Asks the step that made the change for its reviewer's brief, when a gate
  * holds that change and the brief is missing: ASECRM-288's approval showed
@@ -1036,6 +1036,23 @@ const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work)$/
  * well-informed way; otherwise the same agent starts cold from the artifacts.
  */
 const briefsWriting = new Set<string>()
+
+/**
+ * The brief was written before the latest change maker committed. Code Review
+ * runs after the implementer has written its brief, and a P1 it fixes changes
+ * the change: without this the person at the gate approved from a brief that
+ * described the code before the review touched it. A review that committed
+ * nothing leaves the implementer's brief standing.
+ */
+async function briefOutdated(run: WorkflowRun, maker: RunStep, file: string): Promise<boolean> {
+  if (!maker.startedAt) return false
+  const written = (await stat(file).catch(() => null))?.mtimeMs
+  if (written === undefined || written >= maker.startedAt) return false
+  const head = await headCommitTime(run.projectDir)
+  // git keeps whole seconds: a commit in the second the step started counts.
+  return head !== undefined && head >= Math.floor(maker.startedAt / 1000) * 1000
+}
+
 export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | 'written' | 'none' | 'failed'> {
   const maker = [...run.steps].reverse().find(s => CHANGE_MAKERS.test(s.agentSlug) && s.status === 'completed')
   if (!maker || run.question?.kind !== 'approval' || run.question.reason || run.question.artifact) return 'none'
@@ -1044,7 +1061,8 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
   if (!file || !pending) return 'none'
   const asked = openQuestionsIn(await readFile(resolveRunArtifact(run.id, 'intent.md') ?? '', 'utf8').catch(() => null))
   const answersAll = (b: ReturnType<typeof parseDecisionBrief>) => 'brief' in b && !unansweredQuestions(asked, b.brief).length
-  if (answersAll(parseDecisionBrief(await readFile(file, 'utf8').catch(() => null)))) return 'present'
+  const outdated = await briefOutdated(run, maker, file)
+  if (!outdated && answersAll(parseDecisionBrief(await readFile(file, 'utf8').catch(() => null)))) return 'present'
   if (briefsWriting.has(run.id)) return 'none'
   briefsWriting.add(run.id)
   await writeFile(pending, new Date().toISOString()).catch(() => {})
@@ -1057,18 +1075,20 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
       : ''
     for (let attempt = 1; attempt <= 2; attempt++) {
       const resume = resumableSession(maker)
-      const input = `${resume ? await whereArtifactsAre(run) : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
+      const input = `${resume ? await whereArtifactsAre(run) : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, ${outdated ? `and the reviewer's brief was written before your commits changed it. Rewrite \`${CHANGE_BRIEF_FILE}\` in the run artifacts directory now, so it describes the change as it now is,` : `and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now,`} exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
 
 That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
       await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
       const parsed = parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))
-      if (answersAll(parsed)) {
+      if (answersAll(parsed) && !await briefOutdated(run, maker, file)) {
         log.info('change brief written for a gate', { runId: run.id, by: maker.agentSlug, resumed: !!resume })
         return 'written'
       }
-      feedback = 'brief' in parsed
-        ? `The brief you wrote has no answer for ${unansweredQuestions(asked, parsed.brief).map(q => `"${q}"`).join(' or ')}. Write it again with one \`open_questions\` entry per question, its \`question\` copied from the list below.\n\n`
-        : `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+      feedback = !('brief' in parsed)
+        ? `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+        : await briefOutdated(run, maker, file)
+          ? `\`${CHANGE_BRIEF_FILE}\` was not rewritten: it still describes the change before your commits. Write it again.\n\n`
+          : `The brief you wrote has no answer for ${unansweredQuestions(asked, parsed.brief).map(q => `"${q}"`).join(' or ')}. Write it again with one \`open_questions\` entry per question, its \`question\` copied from the list below.\n\n`
       log.warn('change brief unusable', { runId: run.id, attempt, error: 'error' in parsed ? parsed.error : 'open questions unanswered' })
     }
     return 'failed'
@@ -3408,7 +3428,7 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
   try {
     if (p.action === 'continue') await continueRun(run.id, p.note, { grantApproval: p.grantApproval, admitted: true })
     else if (p.action === 'respond') await respondToRun(run.id, p.reply ?? '', { admitted: true })
-    else await restartRun(run.id, p.stepId!, p.note, p.startedBy, { admitted: true })
+    else await restartRun(run.id, p.stepId!, p.note, p.startedBy, { admitted: true, ...(p.handOver ? { fromRunner: true } : {}) })
     return 'launched'
   } catch (err) {
     // Back where the person left it, with the reason: a refused restart is
@@ -3418,6 +3438,10 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
       // One that stepped aside was working, not waiting on anybody: interrupted
       // is what the resume brings back, where `running` would be a lie.
       if (back.status === 'queued') back.status = p.gaveWayTo ? 'interrupted' : p.from
+      // A person's send-back counted itself before it was parked (rework.post.ts),
+      // and rolls the count back when the restart refuses at once. Refused here,
+      // later, it never happened either, and must not spend one of the two.
+      if (p.handOver && back.reworks) back.reworks -= 1
       back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
       await publish(back)
     }
@@ -3720,7 +3744,11 @@ export async function continueRun(
   // tells the agent so in words, and it decides.
   if (run.question?.kind === 'question') {
     l.running = false
-    return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.')
+    // Admitted for the same reason as the send-back grant below. From the queue
+    // the run is still `queued`, which respondToRun answers only when told so:
+    // without it the answer was dropped and the run left queued with nothing
+    // parked on it.
+    return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.', { admitted: true })
   }
   if (run.question?.kind === 'approval') {
     if (run.question.reason === 'rework' && run.question.rework) {
@@ -3740,7 +3768,11 @@ export async function continueRun(
       // back again, the operator is asked again rather than silently given
       // another two.
       const added = note?.trim() ? ` The operator added: ${note.trim()}` : ''
-      return restartRun(run.id, w.target, `Sent back by "${from}", granted by the operator after the automatic attempts were spent.${added} ${w.instruction}`, run.startedBy, { fromRunner: true })
+      // Admitted either way: the slot check at the top of this function let it
+      // through, or the queue is carrying this out. Asking again from the queue
+      // waited on the very drain that was carrying it out, and every later
+      // admission behind that.
+      return restartRun(run.id, w.target, `Sent back by "${from}", granted by the operator after the automatic attempts were spent.${added} ${w.instruction}`, run.startedBy, { fromRunner: true, admitted: true })
     }
     // An owner-gated change is approved with a reason or not at all. Writing one
     // sentence is the cheapest defence against a gate decaying into a reflex:
@@ -3960,6 +3992,10 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   // Overridden before alignment too: a test run's record carries the tested
   // step's overridden agent, and must align with the list it was built from.
   const steps = withTestOverride(alignStepIds(withTestOverride(workflow.steps, run), run), run)
+  // Rehydrating is otherwise a read, but this can write: a step the workflow
+  // gained since the run started is recorded on the run and saved here, once
+  // (adoptAddedSteps is idempotent - a recorded step is not added again).
+  if (adoptAddedSteps(steps, run)) await saveRun(run)
   const aligned = { ...workflow, steps }
   const graph = buildGraph(steps)
   const state = initRunState(graph)
@@ -3994,6 +4030,37 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
 }
 
 /**
+ * Records on the run every step its workflow gained after it started. Code
+ * Review was added after Implement Fix while 139 Runbook A runs were in
+ * flight; refused as "a different workflow", every one of them would have
+ * failed at its next approval or restart. A run that has not got that far
+ * yet takes the new step like any other. One already past it - every step
+ * feeding it settled - records it as skipped with the reason, and is not
+ * sent back to run it. True when the record changed and needs saving.
+ */
+function adoptAddedSteps(steps: any[], run: WorkflowRun): boolean {
+  const recorded = new Set(run.steps.map(s => s.stepId))
+  const added = steps.filter(s => !recorded.has(s.id))
+  const settled = (r?: RunStep) => !!r && (r.status === 'completed' || (r.status === 'skipped' && !!r.skipReason))
+  for (const step of added) {
+    const feeders = steps.filter(p => (p.next ?? []).includes(step.id))
+    // A new first step has nothing feeding it: passed once the run has settled anything.
+    const passed = feeders.length ? feeders.every(p => settled(run.steps.find(r => r.stepId === p.id))) : run.steps.some(r => settled(r))
+    const rec: RunStep = {
+      stepId: step.id, label: step.label, agentSlug: step.agentSlug, input: '', output: '', visits: 0,
+      ...(passed
+        ? { status: 'skipped' as const, skipReason: `Added to the workflow after this run had passed this point.` }
+        : { status: 'pending' as const }),
+    }
+    // In the run's own order: after the last step that feeds it.
+    const at = Math.max(-1, ...feeders.map(p => run.steps.findIndex(r => r.stepId === p.id)))
+    run.steps.splice(at + 1, 0, rec)
+  }
+  if (added.length) log.info('run took up steps its workflow gained', { runId: run.id, steps: added.map(s => s.label), skipped: run.steps.filter(r => added.some(a => a.id === r.stepId) && r.status === 'skipped').map(r => r.label) })
+  return added.length > 0
+}
+
+/**
  * A workflow file re-saved since the run began (the template sync regenerates
  * every step id) no longer shares ids with the run. When the agent sequence
  * still matches position for position, the run's ids are authoritative and the
@@ -4001,12 +4068,10 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
  */
 function alignStepIds(steps: any[], run: WorkflowRun): any[] {
   const known = new Set(steps.map(s => s.id))
-  const recorded = new Set(run.steps.map(s => s.stepId))
-  if (run.steps.every(s => known.has(s.stepId))) {
-    // Ids match, but a node the run never recorded would fail its wave silently.
-    if (steps.every(s => recorded.has(s.id))) return steps
-    throw new RestartError(409, `Workflow "${run.workflowSlug}" changed since this run started; start a new run instead`)
-  }
+  // Ids match. A step the run never recorded is one the workflow gained since
+  // the run started: rehydrate records it (adoptAddedSteps) before its graph
+  // runs, so it cannot fail a wave silently.
+  if (run.steps.every(s => known.has(s.stepId))) return steps
   const sameShape = steps.length === run.steps.length
     && steps.every((s, i) => s.agentSlug === run.steps[i]?.agentSlug)
   if (!sameShape) {
@@ -4060,9 +4125,12 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (run.testOf && stepId !== run.testOf.stepId) throw new RestartError(409, 'A test run only re-runs the step it tests.')
   // A person's restart waits for a slot like any start. The runner's own
   // hand-overs (widen, rework) keep the slot the run already holds, and an
-  // interrupted run is counted against its group already.
-  if (!opts.fromRunner && !opts.admitted && run.status !== 'interrupted' && !run.testOf) {
-    const parked = await parkUnlessSlot(run, { action: 'restart', stepId, note, startedBy })
+  // interrupted run is counted against its group already. A send-back from a
+  // gate is a hand-over too, but from a run that holds no slot: waiting on a
+  // person gave it up. It waits like any other decision. ASECRM-268 was sent
+  // back with all four of its group's slots taken and ran as a fifth.
+  if (!opts.admitted && run.status !== 'interrupted' && !run.testOf && (!opts.fromRunner || !holdsGroupSlot(run.status))) {
+    const parked = await parkUnlessSlot(run, { action: 'restart', stepId, note, startedBy, ...(opts.fromRunner ? { handOver: true } : {}) })
     if (parked) return parked
   }
   // Same scope as starting a run: what conflicts is a shared working directory.

@@ -2,7 +2,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { oversightReason, needsJustification } from '~~/shared/utils/oversight'
 import { parseJunit, junitLabel, junitPassed } from '~/utils/junit'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, riskDetail, riskLevel, unresolvedQuestions, type DecisionBrief } from '~~/shared/utils/decisionBrief'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, riskDetail, riskLevel, sendBackCandidates, suggestSendBack, unresolvedQuestions, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 
 /**
  * What a reviewer is actually approving.
@@ -23,6 +23,8 @@ import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, parseDecisionBrief, riskDetail
  *   written yet says so; it does not render "0 files changed".
  */
 const props = defineProps<{ run: WorkflowRun }>()
+/** The change brief once read, so the gate's Send back can offer the step each option names. */
+const emit = defineEmits<{ brief: [DecisionBrief | null] }>()
 
 interface FixRepo { repo?: string, commits?: string[], pr?: string }
 interface Meta {
@@ -45,6 +47,7 @@ const tests = ref<{ label: string, passed: boolean, from: string } | null>(null)
 /** Which files and commits, measured from git - see server/utils/gitFacts.ts computeChangeSummary. */
 /** The implementer's brief for whoever approves the change: what it gains and what it risks. */
 const brief = ref<DecisionBrief | null>(null)
+watch(brief, b => emit('brief', b), { immediate: true })
 /** The runner is having the brief written (workflowRunner ensureChangeBrief); checked again until it lands. */
 const briefPending = ref(false)
 let briefPoll: ReturnType<typeof setTimeout> | null = null
@@ -158,7 +161,10 @@ const RISK_WORD = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' } 
 const situationOpen = ref(false)
 /** Intake's questions the change could not settle: the only ones that are the reviewer's to weigh. */
 const openQuestions = computed(() => unresolvedQuestions(brief.value))
-const briefOptions = computed(() => (brief.value?.options ?? []).map(o => ({ ...o, name: o.title ?? o.label, level: riskLevel(o.risk), riskText: riskDetail(o.risk) })))
+const briefOptions = computed(() => {
+  const steps = sendBackCandidates(props.run.steps, props.run.question?.stepId)
+  return (brief.value?.options ?? []).map(o => ({ ...o, name: o.title ?? o.label, level: riskLevel(o.risk), riskText: riskDetail(o.risk), sendsBackTo: suggestSendBack(o, steps, brief.value?.options)?.label }))
+})
 const mustJustify = computed(() => needsJustification(props.run.blastRadius))
 </script>
 
@@ -227,6 +233,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
             </summary>
             <dl class="verdict-facts">
               <dt>What happens</dt><dd>{{ o.next }}</dd>
+              <template v-if="o.sendsBackTo"><dt>Send back to</dt><dd><b class="text-strong">{{ o.sendsBackTo }}</b></dd></template>
               <dt>Left open</dt><dd>{{ o.leaves }}</dd>
               <template v-if="o.riskText"><dt>Risk</dt><dd>{{ o.riskText }}</dd></template>
             </dl>

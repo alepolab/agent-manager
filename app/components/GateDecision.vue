@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { WorkflowRun } from '~~/shared/types/run'
+import { parkedDecision, type WorkflowRun } from '~~/shared/types/run'
 import { briefHeadline, riskDetail, riskLevel, unresolvedQuestions } from '~~/shared/utils/decisionBrief'
 import { HOLD } from '~~/shared/types/workflowGroup'
 import { SETTLED_STATUSES } from '~/utils/runStatus'
@@ -21,6 +21,7 @@ const run = toRef(props, 'run')
 const {
   role, gateOwner, mineToAnswer, mayAnswer, mustJustify, reviewing, isReply, isApproval, runnerPause,
   note, canApprove, reworkTarget, reworkCandidates, reworksLeft, canSendBack,
+  sendingBack, sendBackSelect, changeBrief, sendBackFor, suggestedFor, openSendBack, cancelSendBack, submitNote,
   sending, SENDING_LABEL, send, waitingLabel, askingStep, approveLabel, gateLabel,
 } = useGateAnswer(run, {
   respond: r => emit('respond', r), continue: n => emit('continue', n),
@@ -31,7 +32,6 @@ const question = computed(() => run.value.question)
 const brief = computed(() => (question.value?.kind === 'question' ? question.value.brief : undefined))
 const paused = computed(() => run.value.status === 'paused')
 const parked = computed(() => run.value.status === 'queued' && !!run.value.parked)
-const PARKED_LABEL = { continue: 'Your decision is', respond: 'Your answer is', restart: 'The restart is' } as const
 
 /** A budget pause's two sentences, with the full stop older records lack between them. */
 const sentenced = (t: string) => t.replace(/([^.\s])\s+(Continue to grant )/, '$1. $2')
@@ -158,8 +158,6 @@ function stopRun() {
 onBeforeUnmount(() => clearTimeout(stopTimer))
 
 // ---- Approvals ------------------------------------------------------------
-const sendingBack = ref(false)
-watch(() => run.value.id, () => { sendingBack.value = false })
 const notePlaceholder = computed(() => {
   if (isReply.value) return brief.value ? 'Add a note for the run (optional)' : 'Your answer to the agent'
   if (runnerPause.value) return 'Optional note for the step about to run'
@@ -213,7 +211,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <p class="m-0 text-label">It carries on from the next step when they are done, ahead of newer runs.</p>
         </template>
         <template v-else>
-          <p class="t-head m-0 text-strong">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
+          <p class="t-head m-0 text-strong">{{ parkedDecision(run.parked).recorded }} recorded - waiting for a free slot</p>
           <p class="m-0 text-label">
             Its group is running as many runs as it allows; this one goes ahead of newer ones.
             <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
@@ -273,7 +271,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
       <RunBudgetBrief v-else-if="question?.reason === 'budget'" :run="run" />
 
       <!-- An approval: what it lets happen, measured. -->
-      <RunVerdictCard v-else-if="question?.kind === 'approval' && !runnerPause && question.reason !== 'rework'" :run="run" />
+      <RunVerdictCard v-else-if="question?.kind === 'approval' && !runnerPause && question.reason !== 'rework'" :run="run" @brief="b => { changeBrief = b }" />
 
       <!-- A question without a brief: the step's report is all there is to go on. -->
       <details v-else-if="report" class="group-details" open>
@@ -339,7 +337,8 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
         <textarea
           ref="noteBox" v-model="note" rows="1" class="field-input w-full resize-none t-small decision__note"
           :placeholder="notePlaceholder" :aria-label="notePlaceholder"
-          @keydown.meta.enter="isReply ? sendReply() : send('continue')"
+          @keydown.meta.enter="submitNote(sendReply)" @keydown.ctrl.enter="submitNote(sendReply)"
+          @keydown.esc="sendingBack && cancelSendBack()"
         />
         <div class="flex flex-wrap items-center gap-2">
           <!-- A question -->
@@ -356,6 +355,10 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <template v-else-if="isApproval">
             <span class="t-small text-label mr-auto">
               <template v-if="canSendBack">Can be sent back {{ reworksLeft }} more {{ reworksLeft === 1 ? 'time' : 'times' }}</template>
+              <span v-if="sendingBack && sendBackFor.length" class="block" role="status" data-testid="send-back-suggestion">
+                Suggested:
+                <template v-for="(s, i) in sendBackFor" :key="s.key">{{ i ? ' · ' : '' }}<span :title="s.name">({{ s.key }}) <b class="text-strong">{{ s.step.label }}</b></span></template>
+              </span>
             </span>
             <template v-if="!runnerPause">
               <UButton
@@ -364,20 +367,21 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
                 :title="note.trim() ? 'End the run and record why' : 'Say why first'" @click="send('reject')"
               />
               <template v-if="canSendBack">
-                <select v-if="sendingBack" v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to">
+                <select v-if="sendingBack" ref="sendBackSelect" v-model="reworkTarget" class="field-input t-small w-44" aria-label="Step to send this back to" @keydown.esc.prevent="cancelSendBack">
                   <option value="">Send back to…</option>
-                  <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}</option>
+                  <option v-for="s in reworkCandidates" :key="s.stepId" :value="s.stepId">{{ s.label }}{{ suggestedFor(s.stepId) ? ` — suggested for ${suggestedFor(s.stepId)}` : '' }}</option>
                 </select>
                 <UButton
                   v-if="!sendingBack" size="sm" variant="soft" color="neutral" icon="i-lucide-corner-up-left" label="Send back…"
-                  @click="() => { sendingBack = true }"
+                  @click="openSendBack"
                 />
                 <UButton
-                  v-else size="sm" variant="soft" color="neutral" icon="i-lucide-corner-up-left" label="Send back"
+                  v-else size="sm" icon="i-lucide-corner-up-left" label="Send back"
                   :loading="sending === 'rework'" :disabled="!!sending || !reworkTarget || !note.trim()"
                   :title="!reworkTarget ? 'Choose the step it goes back to' : !note.trim() ? 'Say what needs to change' : 'That step runs again with your instruction'"
                   @click="send('rework')"
                 />
+                <UButton v-if="sendingBack" size="sm" variant="ghost" color="neutral" label="Cancel" title="Close the send-back and keep the gate as it was (Esc)" @click="cancelSendBack" />
               </template>
             </template>
             <UButton
@@ -385,8 +389,11 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
               icon="i-lucide-circle-stop" :label="confirmingStop ? 'Confirm stop' : 'Stop the run'" @click="stopRun"
             />
             <span class="sr-only" aria-live="polite">{{ confirmingStop ? 'Press Confirm stop again within four seconds to stop the run.' : '' }}</span>
+            <!-- Once "Send back…" is chosen, sending back is what the person is doing:
+                 it takes the primary look, and approving steps down beside it. -->
             <UButton
               size="sm" icon="i-lucide-check" :label="approveLabel"
+              :variant="sendingBack ? 'soft' : 'solid'" :color="sendingBack ? 'neutral' : 'primary'"
               :loading="sending === 'continue'" :disabled="!!sending || (!runnerPause && !canApprove)"
               :title="!runnerPause && !canApprove ? 'Say why this is right before approving' : ''"
               @click="send('continue')"

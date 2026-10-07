@@ -77,6 +77,14 @@ export const CHANGE_BRIEF_FILE = 'change-brief.json'
 /** Present while the runner is having that brief written; the approval card says so. */
 export const CHANGE_BRIEF_PENDING = 'change-brief.pending'
 
+/**
+ * The agents whose steps make a run's change, and so are asked for that brief
+ * when a gate finds it missing or written before their commits. The reviewer
+ * too: once it has fixed findings it holds the latest picture of the change.
+ * Each must carry "The reviewer's brief" in its instructions.
+ */
+export const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work|ce-review)$/
+
 export interface DecisionOption {
   /** "a", "b", … - what the person answers with. */
   key: string
@@ -92,6 +100,8 @@ export interface DecisionOption {
   leaves: string
   /** Cost or risk, when there is one worth naming. Leads with its level: "Low - …", "Medium - …", "High - …". */
   risk?: string
+  /** For an option that sends the change back: the step that should redo the work, by its label as the run shows it ("Implement Fix"). */
+  sendBackTo?: string
 }
 
 export type RiskLevel = 'low' | 'medium' | 'high'
@@ -182,6 +192,7 @@ export function parseDecisionBrief(raw: string | null | undefined): { brief: Dec
       options: options.map((o: any) => ({
         key: o.key.trim(), ...(str(o.title) ? { title: o.title.trim() } : {}), label: o.label.trim(), next: o.next.trim(), delivers: o.delivers.trim(), leaves: o.leaves.trim(),
         ...(str(o.risk) ? { risk: o.risk.trim() } : {}),
+        ...(str(o.sendBackTo) ? { sendBackTo: o.sendBackTo.trim() } : {}),
       })),
       ...(str(d.recommendation?.option) && str(d.recommendation?.why) ? { recommendation: { option: d.recommendation.option.trim(), why: d.recommendation.why.trim() } } : {}),
       ...(Array.isArray(d.open_questions) && d.open_questions.some((q: any) => str(q?.question) && str(q?.answer))
@@ -189,6 +200,107 @@ export function parseDecisionBrief(raw: string | null | undefined): { brief: Dec
         : {}),
     },
   }
+}
+
+/** A step a gate can send the change back to. */
+export interface SendBackStep { stepId: string, label: string, agentSlug?: string, status: string }
+
+/** The steps a gate may send its change back to: the settled ones, bar the one it waits on. */
+export function sendBackCandidates<T extends SendBackStep>(steps: T[], gateStepId?: string): T[] {
+  return steps.filter(s => ['completed', 'failed', 'skipped'].includes(s.status) && s.stepId !== gateStepId)
+}
+
+/**
+ * Whether an option sends the change back rather than letting it through: it
+ * says "send back", in whatever words. Not "re-run" or "redo" - an approve
+ * option whose next step reads "the full suite is re-run on the PR by CI"
+ * was taken for a send-back, its step pre-selected, and one of the run's two
+ * send-backs spent on a step nobody asked to redo.
+ */
+const SENDS_BACK = /\bsend(?:s|ing)?\b.{0,24}?\bback\b/gi
+
+/**
+ * Words that, earlier in the same clause, turn "send back" into the thing the
+ * option is not doing: "Approve as it stands - no need to send it back",
+ * "nothing to send back", "Approve rather than sending it back". Each of those
+ * was read as a send-back, its step shown under the approve option and
+ * pre-selected when that option was the recommendation.
+ */
+const NEGATES = /\b(?:no|not|nothing|never|without|rather\s+than|instead\s+of|don'?t|doesn'?t|needn'?t|no\s+need\s+to)\b/i
+/**
+ * Where a clause starts: a sentence or clause mark, a comma, a spaced hyphen,
+ * or an en or em dash spaced or not ("Not yet—send it back"). Without the
+ * comma, "Do not merge, send it back to Implement Fix" read as negated.
+ */
+const CLAUSE_START = /[.,;:!?()]|\s-\s|[–—]/g
+
+/** True when some "send back" in `text` is not negated within its own clause. */
+function sendsBack(text: string): boolean {
+  for (const m of text.matchAll(SENDS_BACK)) {
+    const before = text.slice(0, m.index)
+    const starts = [...before.matchAll(CLAUSE_START)]
+    const clause = starts.length ? before.slice(starts.at(-1)!.index! + starts.at(-1)![0].length) : before
+    if (!NEGATES.test(clause)) return true
+  }
+  return false
+}
+
+/**
+ * The work each kind of step does, as a brief's prose names it, and the agents
+ * that do it. Briefs written before `sendBackTo` existed say "the fix step
+ * re-runs and removes …" (ASECRM-295 (b)); the person still has to pick the
+ * step from a list of fourteen, and Implement Fix is not a phrase the brief used.
+ */
+const STEP_ROLES: { says: RegExp, agent: RegExp }[] = [
+  { says: /\b(?:fix|implement(?:ation|er)?|developer)\s+step\b|\bimplement(?:er|s)?\b|\bre-?implement/i, agent: /fix-implementer|feature-implementer|ce-work/ },
+  { says: /\b(?:test|oracle)[- ](?:author|step|writer)\b|\bfailing test\b|\brewrite the test\b/i, agent: /test-author/ },
+  { says: /\bplan(?:ning)? step\b|\bre-?plan\b|\bdesign step\b/i, agent: /ce-plan|feature-designer/ },
+  { says: /\bintake\b/i, agent: /intake/ },
+  { says: /\bverif(?:y|ier|ication) step\b|\bregression step\b/i, agent: /verifier|qa-automated/ },
+  { says: /\bsecurity review\b/i, agent: /security-review/ },
+]
+
+/**
+ * The step an option would send the change back to, among `steps` (see
+ * sendBackCandidates). The brief's own `sendBackTo` when it names one of them;
+ * else a step the option names by its label; else the step doing the work the
+ * option describes, the role mentioned first winning. Undefined for an option
+ * that does not send the change back, or when nothing points at one step.
+ * `siblings` are the brief's other options: when any names `sendBackTo`, an
+ * option that does not is not a send-back.
+ */
+export function suggestSendBack<T extends SendBackStep>(option: DecisionOption, steps: T[], siblings: DecisionOption[] = []): T | undefined {
+  const last = (match: (s: T) => boolean) => steps.filter(match).at(-1)
+  const named = option.sendBackTo?.trim().toLowerCase()
+  if (named) {
+    const hit = last(s => s.label.toLowerCase() === named || s.stepId === option.sendBackTo || s.agentSlug === option.sendBackTo)
+    if (hit) return hit
+  }
+  // A brief that names its send-back steps has said which options send back:
+  // the rest are not read from their prose, where "sending it back is not
+  // needed" would otherwise count.
+  if (!named && siblings.some(o => o.sendBackTo?.trim())) return undefined
+  // Separate sentences: a "Not ready" title does not negate the label's send-back.
+  const text = [option.title, option.label, option.next].filter(Boolean).join('. ')
+  if (!named && !sendsBack(text)) return undefined
+  // As a phrase on its own: a step called "Plan" is not named by ".agent/plan.md".
+  const where = (label: string) => text.search(new RegExp(`(?<![\\w./-])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w]|[./-]\\w)`, 'i'))
+  // The step named first, as with roles below; the longer label on a tie
+  // ("Implement Fix" over a step called "Implement" at the same place).
+  const byLabel = steps
+    .map(s => ({ s, at: where(s.label) }))
+    .filter(x => x.at >= 0)
+    .sort((a, b) => a.at - b.at || b.s.label.length - a.s.label.length)[0]?.s
+  if (byLabel) return byLabel
+  const roles = STEP_ROLES
+    .map(r => ({ r, at: text.search(r.says) }))
+    .filter(x => x.at >= 0)
+    .sort((a, b) => a.at - b.at)
+  for (const { r } of roles) {
+    const hit = last(s => r.agent.test(s.agentSlug ?? ''))
+    if (hit) return hit
+  }
+  return undefined
 }
 
 /** Criterion numbers named in prose: "criterion 4", "criteria 2-3", "criteria 2 and 3", "criteria 1, 3". */
