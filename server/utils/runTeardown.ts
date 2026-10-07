@@ -16,7 +16,9 @@
  * - the run's own worktree (`<clone>@<branch>`), and only if git agrees it is
  *   clean - an uncommitted change is kept and reported, never discarded. A
  *   fix branch is kept, since a pull request may be built on it; a scan's
- *   branch holds nothing and goes with its worktree.
+ *   branch holds nothing and goes with its worktree. A failed run keeps its
+ *   worktree: failing is where a run is restarted from, and the restart runs
+ *   in that directory. It goes when the run ends any other way.
  *
  * Best effort and never thrown: a teardown that fails must not change how the
  * run ended. RUN_TEARDOWN_DISABLED=1 turns it off, to inspect a run's stack.
@@ -122,7 +124,7 @@ export const STACK_USING_AGENTS = /^sdlc-(stack-update|qa-|trace-capture$|pr-fol
 const STACK_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-ui$)/
 
 export async function teardownRun(
-  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'>,
+  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status'>>,
   exec: Exec = realExec,
   /** Every run, to see who else uses a stack. Read from the store when not given. */
   runs?: StackRun[],
@@ -162,23 +164,47 @@ export async function teardownRun(
   }
 
   // ── the run's own worktree ──
-  const dir = run.projectDir
-  if (run.branch && dir && /@[^/]+$/.test(dir) && existsSync(dir)) {
-    const clone = dir.replace(/@[^/]+$/, '')
-    try {
-      const dirty = (await exec('git', ['status', '--porcelain'], { cwd: dir })).trim()
-      if (dirty) {
-        report.worktree = { path: dir, removed: false, reason: `kept: ${dirty.split('\n').length} uncommitted change(s)` }
-      } else {
-        await exec('git', ['worktree', 'remove', dir], { cwd: clone })
-        if (run.branch.startsWith('scan/')) await exec('git', ['branch', '-D', run.branch], { cwd: clone }).catch(() => '')
-        report.worktree = { path: dir, removed: true }
-      }
-    } catch (err) {
-      report.worktree = { path: dir, removed: false, reason: String(err instanceof Error ? err.message : err).slice(0, 300) }
-    }
+  // ASECRM-357: removed after its Verify step halted, `git worktree remove`
+  // stopped part-way at files a container had written as another user. Half
+  // the tree and git's record of it were gone, and the restart that would
+  // have rerun the step was refused by a preflight that could not find a
+  // repository there.
+  if (run.status === 'failed' && ownsWorktree(run)) {
+    report.worktree = { path: run.projectDir!, removed: false, reason: 'kept: a failed run is restarted from here' }
+  } else {
+    report.worktree = await removeRunWorktree(run, exec)
   }
 
   if (report.stacks.length || report.worktree) log.info('run torn down', { runId: run.id, ...report })
   return report
+}
+
+/** A run works in a worktree of its own: `<clone>@<branch>`, still on disk. */
+function ownsWorktree(run: Pick<WorkflowRun, 'branch' | 'projectDir'>): boolean {
+  return !!(run.branch && run.projectDir && /@[^/]+$/.test(run.projectDir) && existsSync(run.projectDir))
+}
+
+/**
+ * Removes a run's own worktree, only if git agrees it is clean: an uncommitted
+ * change is kept and reported, never discarded. A fix branch is kept, since a
+ * pull request may be built on it; a scan's branch holds nothing and goes with
+ * its worktree. Undefined when the run owns no worktree. Never throws.
+ *
+ * The ending's teardown uses it, and so does deleting a run: a failed run keeps
+ * its worktree to be restarted from, and deleting it is the last chance to give
+ * that checkout back.
+ */
+export async function removeRunWorktree(run: Pick<WorkflowRun, 'branch' | 'projectDir'>, exec: Exec = realExec): Promise<TeardownReport['worktree']> {
+  if (!ownsWorktree(run)) return undefined
+  const dir = run.projectDir!
+  const clone = dir.replace(/@[^/]+$/, '')
+  try {
+    const dirty = (await exec('git', ['status', '--porcelain'], { cwd: dir })).trim()
+    if (dirty) return { path: dir, removed: false, reason: `kept: ${dirty.split('\n').length} uncommitted change(s)` }
+    await exec('git', ['worktree', 'remove', dir], { cwd: clone })
+    if (run.branch!.startsWith('scan/')) await exec('git', ['branch', '-D', run.branch!], { cwd: clone }).catch(() => '')
+    return { path: dir, removed: true }
+  } catch (err) {
+    return { path: dir, removed: false, reason: String(err instanceof Error ? err.message : err).slice(0, 300) }
+  }
 }
