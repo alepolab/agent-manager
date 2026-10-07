@@ -39,7 +39,7 @@ const emit = defineEmits<{
 
 const OUTCOME_COLOR: Record<string, string> = {
   started: 'var(--success, #22c55e)',
-  skipped: 'var(--warning, #f59e0b)',
+  skipped: 'var(--text-tertiary)',
   error: 'var(--error, #ef4444)',
 }
 

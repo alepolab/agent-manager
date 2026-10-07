@@ -921,6 +921,27 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.equal(seenUnlock['agent-b'], true, 'the flagged step finds .agent/test-unlock.json in its worktree')
   const unlock = JSON.parse(readFileSync(join(ul.projectDir, '.agent', 'test-unlock.json'), 'utf8'))
   assert.match(unlock.reason, /writes tests and code together/, 'with the reason recorded for the evidence')
+
+  // 18c. a worktree made before the .agent/ guard, on a base that tracks the
+  // plan, gets the guard at its next step. develop carried ASECRM-292's plan
+  // from 25 to 30 Sep; every run cut from it then committed its own plan over
+  // it at Failing Test and Implement Fix, and the guard, applied only when a
+  // worktree was made, never reached them.
+  mkdirSync(join(projectDir, '.agent'), { recursive: true })
+  writeFileSync(join(projectDir, '.agent', 'plan.md'), '# ASECRM-292 plan\n')
+  git(projectDir, ['add', '-f', '.agent/plan.md']); git(projectDir, ['commit', '-q', '-m', 'a plan reached develop'])
+  runner.setAgentCaller(async (agentSlug, input, dir) => {
+    // agent-a stands for the time before the guard: the worktree has none.
+    if (agentSlug === 'agent-a') { git(dir, ['update-index', '--no-skip-worktree', '.agent/plan.md']); return 'out agent-a' }
+    writeFileSync(join(dir, '.agent', 'plan.md'), '# this run\'s plan\n'); writeFileSync(join(dir, 'a.txt'), `fixed by ${agentSlug}\n`)
+    git(dir, ['add', '-A']); git(dir, ['commit', '-q', '-m', `fix by ${agentSlug}`])
+    return `out ${agentSlug}`
+  })
+  let pl = await runner.startRun({ workflow, initialPrompt: 'CSUP-79: plan tracked on the base', watch: 'direct-invocation', autoRun: true, projectDir })
+  pl = await runner.waitForSettled(pl.id, TIMEOUT)
+  assert.equal(pl.status, 'completed', pl.error)
+  assert.deepEqual(git(pl.projectDir, ['diff', '--name-only', 'develop', 'HEAD']).split('\n'), ['a.txt'],
+    'THE REGRESSION: the step after commits the fix alone, not its plan over the base\'s')
   rmSync(projectDir, { recursive: true, force: true })
 }
 

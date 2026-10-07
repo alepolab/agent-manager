@@ -135,7 +135,7 @@ async function submit() {
 <template>
   <div
     class="rounded-lg p-3 t-small space-y-3"
-    style="background: var(--surface-raised); border: 1px solid var(--warning);"
+    style="background: var(--surface-raised); border: 1px solid var(--waiting);"
     role="alert"
     data-testid="run-decision-panel"
   >

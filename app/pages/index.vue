@@ -3,6 +3,7 @@ import { isLiveStatus, isWaitingOnAPerson, type WorkflowRun } from '~~/shared/ty
 import { statusKind, statusWord } from '~/utils/runStatus'
 import { runLastActivityAt } from '~~/shared/utils/runClock'
 import { currentStep } from '~/utils/runActivity'
+import { runningStepsProgress, type StepNorm, type StepProgress } from '~~/shared/utils/stepProgress'
 import { oversightFor } from '~~/shared/utils/oversight'
 import { gateAsk } from '~~/shared/utils/notifications'
 
@@ -31,16 +32,20 @@ const toast = useToast()
 const runs = ref<WorkflowRun[]>([])
 const escalated = ref<{ key: string, watchId: string, lastError?: string, updatedAt: number }[]>([])
 const loaded = ref(false)
+/** What each kind of step usually takes, for how far along a working step is. Read once: it moves over days, not minutes. */
+const norms = ref<Record<string, StepNorm>>({})
+/** When the runs were last read: elapsed minutes are counted to here, so they move with each refresh. */
+const readAt = ref(Date.now())
 /** Why the queue is empty, when it is empty because something broke. */
 const loadError = ref<string | null>(null)
 
 async function refresh() {
-  const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs')])
+  const [r] = await Promise.allSettled([$fetch<WorkflowRun[]>('/api/runs?summary=1')])
   // A rejected fetch used to leave the previous list in place and say nothing,
   // so "Nothing waiting on you" was shown for both an all-clear and an API that
   // was down. On the one screen whose job is to say what needs a person, those
   // two readings could not be further apart.
-  if (r.status === 'fulfilled') { runs.value = r.value; loadError.value = null }
+  if (r.status === 'fulfilled') { runs.value = r.value; loadError.value = null; readAt.value = Date.now() }
   else loadError.value = (r.reason as any)?.data?.message || (r.reason as any)?.message || 'Could not load runs'
   try {
     const watches = await $fetch<{ id: string }[]>('/api/watches')
@@ -52,6 +57,7 @@ async function refresh() {
 let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   refresh()
+  $fetch<Record<string, StepNorm>>('/api/runs/step-norms').then((n) => { norms.value = n }).catch(() => { /* rows show elapsed time and replies without a comparison */ })
   if (!agents.value.length) fetchAgents()
   if (!commands.value.length) fetchCommands()
   if (!skills.value.length) fetchSkills()
@@ -275,6 +281,13 @@ const live = computed(() => runs.value
   .filter(r => r.status === 'running' || r.status === 'joining')
   .sort((a, b) => runLastActivityAt(b) - runLastActivityAt(a)))
 
+/** Each working step of a run, read against what that kind of step usually takes. */
+const progressOf = (r: WorkflowRun) => runningStepsProgress(r, norms.value, readAt.value)
+const minutesWord = (m: number) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`)
+const progressTitle = (p: StepProgress) => (p.norm
+  ? `${p.label} usually takes ~${p.norm.replies} replies and ~${p.norm.minutes} min, and most finish within ${p.norm.minutesP75} min (from ${p.norm.n} completed). How far along is read from replies: time also counts builds and test runs.`
+  : `Not enough completed ${p.label} steps yet to say what is usual.`)
+
 /** The step a run is on, for the row under its title. */
 const stepLabel = (r: WorkflowRun) => currentStep(r)?.label ?? ''
 
@@ -384,7 +397,7 @@ const minedEmpty = computed(() => (role.value === 'qa'
             >{{ riskOf(r) === 'justify' ? 'Owner-gated' : r.blastRadius }}</span>
             <span
               class="inset-row__end"
-              :style="waitTier(r) === 'critical' ? { color: 'var(--warning)', fontWeight: 600 } : undefined"
+              :style="waitTier(r) === 'critical' ? { color: 'var(--waiting)', fontWeight: 600 } : undefined"
               :title="`Waiting ${shortWait(waitedMs(r))}`"
             >{{ shortWait(waitedMs(r)) }}</span>
             <span class="w-16 flex justify-end shrink-0">
@@ -428,8 +441,12 @@ const minedEmpty = computed(() => (role.value === 'qa'
             <span class="inset-row__body">
               <span class="inset-row__title"><span v-if="r.ticketKey" class="font-mono mr-1.5">{{ r.ticketKey }}</span>{{ r.ticketKey ? '' : headline(r) }}<span v-if="r.ticketKey" class="font-normal">{{ headline(r).replace(r.ticketKey, '').replace(/^[:\s-]+/, '') }}</span></span>
               <RunProgressBar :steps="r.steps" class="mt-1.5 max-w-80" />
+              <span v-for="p in progressOf(r)" :key="p.stepId" class="step-progress" :title="progressTitle(p)" data-testid="step-progress">
+                <span class="text-strong">{{ p.label }}</span> · {{ minutesWord(p.minutes) }} · {{ p.replies }} {{ p.replies === 1 ? 'reply' : 'replies' }}<template v-if="p.norm"> of ~{{ p.norm.replies }} usual</template><template v-if="p.words"> · <span :class="{ 'step-progress--over': p.stage === 'over' || p.stage === 'far-over' }">{{ p.words }}</span></template><template v-if="p.quietSec"> · quiet {{ minutesWord(Math.floor(p.quietSec / 60)) === '0 min' ? `${p.quietSec}s` : minutesWord(Math.floor(p.quietSec / 60)) }}</template>
+              </span>
             </span>
-            <span class="inset-row__end">{{ stepLabel(r) }} · {{ ago(runLastActivityAt(r)) }}</span>
+            <!-- The progress line already names the working step; repeated here it took the width the line needs on a phone. -->
+            <span class="inset-row__end">{{ progressOf(r).length ? '' : `${stepLabel(r)} · ` }}{{ ago(runLastActivityAt(r)) }}</span>
           </NuxtLink>
         </div>
       </section>
@@ -500,3 +517,9 @@ const minedEmpty = computed(() => (role.value === 'qa'
     </div>
   </div>
 </template>
+
+<style scoped>
+.step-progress { display: block; margin-top: 4px; font-size: 12px; line-height: 1.4; color: var(--text-secondary); font-weight: 400; }
+.step-progress--over { color: var(--warning); font-weight: 500; }
+</style>
+

@@ -115,7 +115,7 @@ const arrows = computed(() => sendBackArrows(props.run).map((a, i) => ({ ...a, n
 const children = ref<WorkflowRun[]>([])
 watch(() => props.run.steps.some(s => s.childRunIds?.length), async (has) => {
   if (!has) return
-  try { children.value = await $fetch<WorkflowRun[]>('/api/runs') }
+  try { children.value = await $fetch<WorkflowRun[]>('/api/runs?summary=1') }
   catch { children.value = [] }
 }, { immediate: true })
 function childSummary(id: string): string {
@@ -198,7 +198,7 @@ watch(workflowState, (s) => { if (s === 'loaded') focusTarget() }, { once: true 
         <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-folder-open" label="Evidence" @click="() => { evidenceOpen = true }" />
       </div>
       <div class="w-full group-card px-3! py-2! t-small flex items-center gap-2">
-        <UIcon :name="run.watch && run.watch !== 'direct-invocation' ? 'i-lucide-radar' : 'i-lucide-play'" class="size-4 shrink-0" style="color: var(--warning);" />
+        <UIcon :name="run.watch && run.watch !== 'direct-invocation' ? 'i-lucide-radar' : 'i-lucide-play'" class="size-4 shrink-0" style="color: var(--accent-secondary);" />
         <span class="truncate">
           <span class="text-label">Started </span>
           <template v-if="run.ticketKey">from <TicketLink :ticket-key="run.ticketKey" /></template>
