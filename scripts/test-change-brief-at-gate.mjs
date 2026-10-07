@@ -9,7 +9,8 @@
  *   node scripts/test-change-brief-at-gate.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -38,10 +39,12 @@ const BRIEF = {
   recommendation: { option: 'a', why: 'it works' },
 }
 const asks = []
+const askedOf = []
 let writeGood = true
 runner.setAgentCaller(async (slug, input) => {
-  if (slug === 'sdlc-fix-implementer' && /reviewer's brief/.test(input)) {
+  if ((slug === 'sdlc-fix-implementer' || slug === 'sdlc-ce-review') && /reviewer's brief/.test(input)) {
     asks.push(input)
+    askedOf.push(slug)
     const dir = input.match(/Write every artifact you produce into: (\S+)/)?.[1] ?? dirOf
     // While it is being written, the card can see that it is.
     assert.ok(existsSync(join(dir, 'change-brief.pending')), 'marked as being written')
@@ -122,6 +125,39 @@ const settle = async (id) => {
   assert.equal(await runner.ensureChangeBrief(run), 'written', 'a duplicated answer is not complete')
   assert.equal(asks.length, prev + 1)
   delete BRIEF.open_questions
+}
+
+// ── Code Review commits a fix after the implementer wrote its brief ──────────
+// The brief was present, so the gate showed it - describing the code before
+// the review changed it. A commit after the brief means it is asked for again,
+// from the reviewer; a review that committed nothing leaves it standing.
+{
+  let run = (await runner.startOrQueue({ workflow: wf, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev5' })).run
+  dirOf = runArtifactsDir(run.id)
+  run = await runner.waitForSettled(run.id, 8000)
+  await settle(run.id)
+  const file = join(dirOf, 'change-brief.json')
+  const repo = mkdtempSync(join(tmpdir(), 'brief-repo-'))
+  const git = (args, at) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args],
+    { env: { ...process.env, ...(at ? { GIT_AUTHOR_DATE: at, GIT_COMMITTER_DATE: at } : {}) } })
+  git(['init', '-q'])
+  const hourAgo = new Date(Date.now() - 3600_000)
+  git(['commit', '-q', '--allow-empty', '-m', 'fix: the implementer'], hourAgo.toISOString())
+  // The implementer's brief, written after its commit and before the review.
+  const halfHourAgo = (Date.now() - 1800_000) / 1000
+  utimesSync(file, halfHourAgo, halfHourAgo)
+  const reviewed = { ...run, projectDir: repo, steps: [...run.steps,
+    { stepId: 'review', agentSlug: 'sdlc-ce-review', label: 'Code Review', status: 'completed', output: '', visits: 1, startedAt: Date.now() - 60_000, completedAt: Date.now() }] }
+
+  const before = asks.length
+  assert.equal(await runner.ensureChangeBrief(reviewed), 'present', 'a review that committed nothing leaves the brief standing')
+  assert.equal(asks.length, before)
+
+  git(['commit', '-q', '--allow-empty', '-m', 'fix: review - a P1'])
+  assert.equal(await runner.ensureChangeBrief(reviewed), 'written', 'THE GAP: a brief older than the review\'s commit was shown as present')
+  assert.equal(askedOf.at(-1), 'sdlc-ce-review', 'asked of the reviewer, which made the last commit')
+  assert.match(asks.at(-1), /written before your commits changed it\. Rewrite `change-brief\.json`/)
+  assert.equal(await runner.ensureChangeBrief(reviewed), 'present', 'rewritten, it is not asked for again')
 }
 
 console.log('ok - a change waiting at a gate gets a brief of its advantages and disadvantages from the step that made it')

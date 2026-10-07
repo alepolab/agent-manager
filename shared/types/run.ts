@@ -410,7 +410,7 @@ export interface WorkflowRun {
    * answering the same question about the same commit. `reworks` above stays the
    * run total, for display and for anything already reading it.
    */
-  reworksBy?: { ci?: number, verification?: number }
+  reworksBy?: { ci?: number, verification?: number, review?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
   /** Agent-raised send-backs, oldest first. See SendBack. */

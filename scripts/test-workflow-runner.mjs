@@ -666,13 +666,23 @@ assert.equal(rst.steps.find(s => s.stepId === 'b').visits, 2, 'visits keep count
 const stepFiles = readdirSync(join(process.env.AGENT_RUNS_DIR, rst.id, 'artifacts', 'steps'))
 assert.ok(stepFiles.some(f => /step-02-.*-restart-1\.json$/.test(f)), 'the failed attempt is snapshotted before the restart')
 
-// A genuinely different workflow (extra step) is refused, not guessed at.
+// A genuinely different workflow (a step gone, the rest renamed) is refused, not guessed at.
+writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
+  name: workflow.name, description: '',
+  steps: workflow.steps.filter(s => s.id !== 'd').map(s => ({ ...s, id: `x-${s.id}`, next: s.next.filter(n => n !== 'd').map(n => `x-${n}`) })),
+}))
+runner._dropLive(rst.id)
+await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/, 'a reshaped workflow refuses restart')
+// One that only gained a step is not a different workflow: the run records it
+// (scripts/test-workflow-gains-step.mjs has the cases).
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'), JSON.stringify({
   name: workflow.name, description: '',
   steps: [...workflow.steps, { id: 'e', agentSlug: 'agent-e', label: 'E', next: [] }],
 }))
 runner._dropLive(rst.id)
-await assert.rejects(runner.restartRun(rst.id, 'b'), /changed since this run started/, 'a reshaped workflow refuses restart')
+rst = await runner.restartRun(rst.id, 'b')
+rst = await runner.waitForSettled(rst.id, TIMEOUT)
+assert.equal(rst.steps.find(s => s.stepId === 'e')?.status, 'skipped', 'a step gained after the run got going is recorded, as passed')
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'demo.json'),
   JSON.stringify({ name: workflow.name, description: '', steps: workflow.steps }))
 
@@ -1452,6 +1462,31 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
     assert.equal(split.reworksBy.verification, 2)
     assert.equal(split.reworksBy.ci, 2, 'the PR-checks step draws on the ci budget')
     assert.equal(split.reworks, 4, 'and the run total counts them all')
+  }
+
+  // Code review judges the approach before anything is verified. Its
+  // send-backs used to spend the verification allowance, so two from it left
+  // a regression proven later with no automatic send-back at all.
+  {
+    const reviewed = { slug: 'rework-reviewed', name: 'Rework reviewed', steps: [
+      { id: 'f', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['c'] },
+      { id: 'c', agentSlug: 'sdlc-ce-review', label: 'Code Review', next: ['v'] },
+      { id: 'v', agentSlug: 'agent-verify', label: 'Verify + Regression', next: [] },
+    ] }
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'rework-reviewed.json'), JSON.stringify({ ...reviewed, description: '', createdAt: new Date().toISOString() }))
+    let sawCode = 0
+    let sawVerify = 0
+    runner.setAgentCaller(async (agentSlug) => {
+      if (agentSlug === 'agent-fix') return 'fixed'
+      if (agentSlug === 'sdlc-ce-review') { sawCode += 1; return sawCode <= 2 ? 'PIPELINE-REWORK: Implement Fix — the approach duplicates the mapper' : 'REVIEW: PASS' }
+      sawVerify += 1
+      return sawVerify <= 2 ? 'PIPELINE-REWORK: Implement Fix — UploadTest.java:64 fails' : 'VERDICT: PASS'
+    })
+    let rv = await runner.startRun({ workflow: reviewed, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    rv = await runner.waitForSettled(rv.id, TIMEOUT)
+    assert.equal(rv.status, 'completed', `THE REGRESSION: code review spent the verifier's send-backs: ${rv.question?.text ?? rv.error}`)
+    assert.equal(rv.reworksBy.review, 2, 'code review draws on its own allowance')
+    assert.equal(rv.reworksBy.verification, 2, 'and the verifier still has all of its own')
   }
 
   // Two steps in ONE wave can both send back. l.rework used to be assigned

@@ -77,6 +77,14 @@ export const CHANGE_BRIEF_FILE = 'change-brief.json'
 /** Present while the runner is having that brief written; the approval card says so. */
 export const CHANGE_BRIEF_PENDING = 'change-brief.pending'
 
+/**
+ * The agents whose steps make a run's change, and so are asked for that brief
+ * when a gate finds it missing or written before their commits. The reviewer
+ * too: once it has fixed findings it holds the latest picture of the change.
+ * Each must carry "The reviewer's brief" in its instructions.
+ */
+export const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work|ce-review)$/
+
 export interface DecisionOption {
   /** "a", "b", … - what the person answers with. */
   key: string
