@@ -701,6 +701,13 @@ function joinBudgeted(parts: { label: string, text: string }[]): string {
 }
 
 /**
+ * A visit given back: an attempt that never reached an outcome (an
+ * interruption, a quota stop) is not counted against maxVisits. One place, so
+ * the copies that each path used to carry cannot drift.
+ */
+const refundVisit = (visits: number | undefined): number => Math.max(0, (visits ?? 1) - 1)
+
+/**
  * The SDK session a step can continue, or undefined.
  *
  * Requires the recorded session AND its transcript still on disk under the
@@ -1714,7 +1721,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // returned, and the run pauses once the wave settles (see runWave).
     const message = err instanceof Error ? err.message : String(err)
     if (!l.stopped && isAuthFailure(message)) {
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id])
       l.state.status[id] = 'pending'
       armNode(l.state, id)
       Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
@@ -1726,7 +1733,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // The quota, not the work: the same, and the run waits for the reset time.
     const until = l.stopped ? null : quotaResetAt(message)
     if (until) {
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id])
       l.state.status[id] = 'pending'
       armNode(l.state, id)
       Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
@@ -1739,7 +1746,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // A session the API will not continue: the same visit again, cold, once.
     if (resume && !l.stopped && isUnresumable(message) && !l.coldRetried?.has(id)) {
       (l.coldRetried ??= new Set()).add(id)
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id])
       l.state.status[id] = 'pending'
       armNode(l.state, id)
       Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined, sessionId: undefined, sessionProject: undefined })
@@ -3527,7 +3534,10 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
   for (const run of interrupted) {
     if (only && !only.has(run.id)) continue
     awaitingSlot.delete(run.id)
-    const frozen = run.steps.find(s => s.status === 'running')
+    // Every step left at 'running': a wave runs up to MAX_CONCURRENCY at once,
+    // and one restart freezes all of them.
+    const frozenSteps = run.steps.filter(s => s.status === 'running')
+    const frozen = frozenSteps[0]
     if (run.question || run.steps.some(s => s.status === 'waiting')) { out.skipped.push(run.id); continue }
     // One that died between steps has nothing frozen and nothing to reset: it
     // is resumed as it is. Left alone it stayed interrupted for good, and now
@@ -3539,23 +3549,30 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
     if (inFlight.get(group)! >= await capFor(group) || await givingWayTo(group, all)) { out.waiting.push(run.id); awaitingSlot.add(run.id); continue }
     run.interruptions = (run.interruptions ?? 0) + 1
     if (frozen && run.interruptions > MAX_INTERRUPTIONS) {
-      frozen.status = 'pending'
-      // The attempt it froze in never reached an outcome, so it is not a visit
-      // (as in restartRun). Left counted, "try once more" on a step frozen in its
-      // last visit had nothing it could schedule: ASECRM-296's Browser Trace sat
-      // at 3 of 3, and approving it ended the run as stuck.
-      frozen.visits = Math.max(0, (frozen.visits ?? 1) - 1)
+      // Every frozen step, not the first: a fan-out wave froze together, and
+      // one left at 'running' was never scheduled again while the graph,
+      // which reads only its own state, could call the run finished.
+      for (const rec of frozenSteps) {
+        // The attempt it froze in never reached an outcome, so it is not a visit
+        // (as in restartRun). Left counted, "try once more" on a step frozen in
+        // its last visit had nothing it could schedule: ASECRM-296's Browser
+        // Trace sat at 3 of 3, and approving it ended the run as stuck.
+        rec.visits = refundVisit(rec.visits)
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `interrupted-${rec.visits + 1}`) } catch { /* best effort */ }
+        rec.status = 'pending'
+      }
+      const where = frozenSteps.map(f => `"${f.label}"`).join(', ')
       run.status = 'paused'
       run.question = {
         stepId: frozen.stepId, kind: 'approval', askedAt: Date.now(),
-        text: `This run has been interrupted ${run.interruptions} times in a row at "${frozen.label}" without finishing it. Continue to try once more, or stop the run.`,
+        text: `This run has been interrupted ${run.interruptions} times in a row at ${where} without finishing it. Continue to try once more, or stop the run.`,
       }
       run.interruptions = 0
       run.pid = process.pid
       run.bootId = BOOT_ID
       await saveRun(run)
       out.paused.push(run.id)
-      log.warn('run interrupted repeatedly; asking rather than resuming', { runId: run.id, stepId: frozen.stepId })
+      log.warn('run interrupted repeatedly; asking rather than resuming', { runId: run.id, stepIds: frozenSteps.map(f => f.stepId) })
       continue
     }
     await saveRun(run)
@@ -4075,7 +4092,7 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
     // how three container rebuilds exhausted a step's three visits without it
     // ever failing at anything.
     if (rec.status === 'running') {
-      l.state.visits[id] = Math.max(0, (l.state.visits[id] ?? rec.visits ?? 1) - 1)
+      l.state.visits[id] = refundVisit(l.state.visits[id] ?? rec.visits)
       rec.visits = l.state.visits[id]
       try { await writeStepArtifact(run, rec, run.steps.indexOf(rec), `interrupted-${rec.visits + 1}`) } catch { /* best effort */ }
     }
