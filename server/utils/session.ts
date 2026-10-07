@@ -25,7 +25,13 @@ export interface SessionUser {
  */
 function stillValid(user: SessionUser | undefined | null): SessionUser | null {
   if (!user) return null
-  if (user.pw === undefined) return user
+  if (user.pw === undefined) {
+    // The password account's name with no fingerprint: a cookie from before
+    // fingerprints were sealed in, which would otherwise never end. No GitHub
+    // session carries that name; password sign-in refuses a GitHub user's.
+    const passwordUser = process.env.AGENT_MANAGER_LOGIN_USER?.trim().toLowerCase()
+    return passwordUser && user.login.toLowerCase() === passwordUser ? null : user
+  }
   if (user.pw !== passwordFingerprint()) return null
   const { pw: _pw, ...rest } = user
   return rest

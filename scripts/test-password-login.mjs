@@ -154,6 +154,18 @@ delete process.env.AGENT_MANAGER_LOGIN_USER
 assert.equal((await whoami({ cookie })).user, null, 'switching password sign-in off ends its sessions too')
 process.env.AGENT_MANAGER_LOGIN_USER = 'arisht'
 
+// A cookie sealed before fingerprints were (as the first version of this
+// feature issued them) is the password account with no fingerprint: ended.
+{
+  const sealOld = async (user) => `am=${await h3.sealSession(
+    { context: { sessions: { am: { id: 'old', createdAt: Date.now(), data: { user } } } } },
+    { name: 'am', password: process.env.AGENT_MANAGER_SECRET })}`
+  assert.equal(await userFromCookieHeader(await sealOld({ login: 'arisht', name: 'arisht' })), null,
+    'THE REGRESSION: a password session issued before this change would never end')
+  assert.equal((await userFromCookieHeader(await sealOld({ login: 'octocat', name: 'Octo' })))?.login, 'octocat',
+    'a GitHub session, which never carries a fingerprint, is untouched')
+}
+
 // ── the password account is never a GitHub user ──
 const profile = join(process.env.AGENT_USERS_DIR, 'arisht.json')
 writeFileSync(profile, JSON.stringify({ login: 'arisht', githubId: 12345, updatedAt: Date.now() }))
