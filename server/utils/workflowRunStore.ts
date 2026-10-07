@@ -11,7 +11,7 @@ import { runArtifactsDir } from './runArtifacts.ts'
 // runtime, and the plain-node test scripts that import this module directly
 // resolve no aliases. The type-only imports below may keep the alias because
 // they are erased.
-import { isLiveStatus, isTestRun, isWorkingStatus } from '../../shared/types/run.ts'
+import { isLiveStatus, isTestRun, isWaitingOnAPerson, isWorkingStatus } from '../../shared/types/run.ts'
 import type { WorkflowRun, NewRunInput, RunBudget } from '~~/shared/types/run'
 import type { WorkflowParameter } from '~~/shared/utils/workflowParameters'
 
@@ -77,7 +77,10 @@ function applyInterrupted(run: WorkflowRun): WorkflowRun {
   // them here contradicted it, and the contradiction was visible - a restart
   // turned a developer's pending approval into an `interrupted` run, which
   // only an operator may resume. The decision must survive a deploy.
-  if (run.status === 'paused' && run.question) return run
+  // `awaiting_review` is the same wait: a scan holding its ticket drafts for a
+  // person to choose from. Exempting only `paused` turned both of a night's
+  // scan reviews into `interrupted` runs at the next restart.
+  if (isWaitingOnAPerson(run.status) && run.question) return run
   // Deliberately NOT isLiveStatus: a `queued` run has no owner to lose. Its
   // pid and bootId name the process that queued it, which is routinely gone by
   // the time a slot frees, and calling that "interrupted" would delete the
