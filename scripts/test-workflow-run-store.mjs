@@ -264,6 +264,16 @@ rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
   assert.equal(read.status, 'paused', 'a run waiting on a person stays paused when its owner dies')
   assert.equal(read.question?.kind, 'approval', 'and the question it is waiting on survives')
 
+  // A scan holding its ticket drafts for review waits on a person the same way.
+  await store.saveRun({
+    ...read, status: 'awaiting_review',
+    question: { stepId: 'b', kind: 'approval', text: 'Decide which entries of escalated-drafts.json to act on', askedAt: Date.now(), artifact: 'escalated-drafts.json' },
+    bootId: 'a-previous-boot', pid: 0x7fffffff,
+  })
+  const reviewing = await store.getRun(run.id)
+  assert.equal(reviewing.status, 'awaiting_review', 'THE REGRESSION: a scan\'s pending review read as interrupted after a restart')
+  assert.equal(reviewing.question?.artifact, 'escalated-drafts.json')
+
   // The contrast: a run with a step genuinely mid-flight IS interrupted.
   await store.saveRun({
     ...read, status: 'running', question: undefined,
