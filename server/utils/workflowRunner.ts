@@ -3251,6 +3251,10 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
       // One that stepped aside was working, not waiting on anybody: interrupted
       // is what the resume brings back, where `running` would be a lie.
       if (back.status === 'queued') back.status = p.gaveWayTo ? 'interrupted' : p.from
+      // A person's send-back counted itself before it was parked (rework.post.ts),
+      // and rolls the count back when the restart refuses at once. Refused here,
+      // later, it never happened either, and must not spend one of the two.
+      if (p.handOver && back.reworks) back.reworks -= 1
       back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
       await publish(back)
     }
@@ -3538,7 +3542,11 @@ export async function continueRun(
   // tells the agent so in words, and it decides.
   if (run.question?.kind === 'question') {
     l.running = false
-    return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.')
+    // Admitted for the same reason as the send-back grant below. From the queue
+    // the run is still `queued`, which respondToRun answers only when told so:
+    // without it the answer was dropped and the run left queued with nothing
+    // parked on it.
+    return respondToRun(runId, note?.trim() || 'No further input from the operator; proceed on your best judgement and say what you assumed.', { admitted: true })
   }
   if (run.question?.kind === 'approval') {
     if (run.question.reason === 'rework' && run.question.rework) {
@@ -3558,7 +3566,11 @@ export async function continueRun(
       // back again, the operator is asked again rather than silently given
       // another two.
       const added = note?.trim() ? ` The operator added: ${note.trim()}` : ''
-      return restartRun(run.id, w.target, `Sent back by "${from}", granted by the operator after the automatic attempts were spent.${added} ${w.instruction}`, run.startedBy, { fromRunner: true })
+      // Admitted either way: the slot check at the top of this function let it
+      // through, or the queue is carrying this out. Asking again from the queue
+      // waited on the very drain that was carrying it out, and every later
+      // admission behind that.
+      return restartRun(run.id, w.target, `Sent back by "${from}", granted by the operator after the automatic attempts were spent.${added} ${w.instruction}`, run.startedBy, { fromRunner: true, admitted: true })
     }
     // An owner-gated change is approved with a reason or not at all. Writing one
     // sentence is the cheapest defence against a gate decaying into a reflex:

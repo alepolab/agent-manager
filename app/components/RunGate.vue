@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { HOLD } from '~~/shared/types/workflowGroup'
-import type { WorkflowRun } from '~~/shared/types/run'
+import { parkedDecision, type WorkflowRun } from '~~/shared/types/run'
 
 /**
  * A run's open decision: the question, whose it is, the evidence being
@@ -21,7 +21,6 @@ const {
   reject: n => emit('reject', n), rework: (id, n) => emit('rework', id, n),
 })
 const shown = computed(() => !!props.run.question || reviewing.value || props.run.status === 'paused' || (props.run.status === 'queued' && !!props.run.parked))
-const PARKED_LABEL = { continue: 'Your decision is', respond: 'Your answer is', restart: 'The restart is' } as const
 /**
  * The asking step's own report, behind its question. Shown open when the step
  * wrote no decision brief - the one `PIPELINE-ASK:` line alone named "criteria
@@ -66,10 +65,10 @@ function chooseOption(text: string) {
         </p>
       </template>
       <template v-else>
-      <p class="t-head m-0" style="color: var(--text-primary);">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
+      <p class="t-head m-0" style="color: var(--text-primary);">{{ parkedDecision(run.parked).recorded }} recorded - waiting for a free slot</p>
       <p class="m-0 text-label">
         Its group is running as many runs as it allows. This run goes ahead of newer ones in the queue and
-        {{ run.parked.action === 'restart' ? 'restarts' : 'continues' }} the moment a slot frees.
+        {{ parkedDecision(run.parked).verb }} the moment a slot frees.
         <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
       </p>
       </template>

@@ -139,6 +139,14 @@ export function holdsGroupSlot(status: WorkflowRunStatus): boolean {
   return isWorkingStatus(status) && status !== 'joining' && !isWaitingOnAPerson(status)
 }
 
+/** What a parked decision is, in words: a send-back from a gate is parked as a restart, but the person sent it back. */
+export function parkedDecision(parked: NonNullable<WorkflowRun['parked']>): { recorded: string, verb: string } {
+  if (parked.handOver) return { recorded: 'The send-back is', verb: 'is sent back' }
+  if (parked.action === 'restart') return { recorded: 'The restart is', verb: 'restarts' }
+  if (parked.action === 'respond') return { recorded: 'Your answer is', verb: 'continues' }
+  return { recorded: 'Your decision is', verb: 'continues' }
+}
+
 /**
  * Every child of a join has reached an outcome, so the parent can go on.
  *

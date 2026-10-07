@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { WorkflowRun } from '~~/shared/types/run'
+import { parkedDecision, type WorkflowRun } from '~~/shared/types/run'
 import { briefHeadline, riskDetail, riskLevel, unresolvedQuestions } from '~~/shared/utils/decisionBrief'
 import { HOLD } from '~~/shared/types/workflowGroup'
 import { SETTLED_STATUSES } from '~/utils/runStatus'
@@ -31,7 +31,6 @@ const question = computed(() => run.value.question)
 const brief = computed(() => (question.value?.kind === 'question' ? question.value.brief : undefined))
 const paused = computed(() => run.value.status === 'paused')
 const parked = computed(() => run.value.status === 'queued' && !!run.value.parked)
-const PARKED_LABEL = { continue: 'Your decision is', respond: 'Your answer is', restart: 'The restart is' } as const
 
 /** A budget pause's two sentences, with the full stop older records lack between them. */
 const sentenced = (t: string) => t.replace(/([^.\s])\s+(Continue to grant )/, '$1. $2')
@@ -213,7 +212,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <p class="m-0 text-label">It carries on from the next step when they are done, ahead of newer runs.</p>
         </template>
         <template v-else>
-          <p class="t-head m-0 text-strong">{{ PARKED_LABEL[run.parked.action] }} recorded - waiting for a free slot</p>
+          <p class="t-head m-0 text-strong">{{ parkedDecision(run.parked).recorded }} recorded - waiting for a free slot</p>
           <p class="m-0 text-label">
             Its group is running as many runs as it allows; this one goes ahead of newer ones.
             <template v-if="run.parked.note || run.parked.reply">Your note: "{{ run.parked.reply ?? run.parked.note }}"</template>
