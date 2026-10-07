@@ -1443,6 +1443,31 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
     assert.equal(split.reworks, 4, 'and the run total counts them all')
   }
 
+  // Code review judges the approach before anything is verified. Its
+  // send-backs used to spend the verification allowance, so two from it left
+  // a regression proven later with no automatic send-back at all.
+  {
+    const reviewed = { slug: 'rework-reviewed', name: 'Rework reviewed', steps: [
+      { id: 'f', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['c'] },
+      { id: 'c', agentSlug: 'sdlc-ce-review', label: 'Code Review', next: ['v'] },
+      { id: 'v', agentSlug: 'agent-verify', label: 'Verify + Regression', next: [] },
+    ] }
+    writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', 'rework-reviewed.json'), JSON.stringify({ ...reviewed, description: '', createdAt: new Date().toISOString() }))
+    let sawCode = 0
+    let sawVerify = 0
+    runner.setAgentCaller(async (agentSlug) => {
+      if (agentSlug === 'agent-fix') return 'fixed'
+      if (agentSlug === 'sdlc-ce-review') { sawCode += 1; return sawCode <= 2 ? 'PIPELINE-REWORK: Implement Fix — the approach duplicates the mapper' : 'REVIEW: PASS' }
+      sawVerify += 1
+      return sawVerify <= 2 ? 'PIPELINE-REWORK: Implement Fix — UploadTest.java:64 fails' : 'VERDICT: PASS'
+    })
+    let rv = await runner.startRun({ workflow: reviewed, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true })
+    rv = await runner.waitForSettled(rv.id, TIMEOUT)
+    assert.equal(rv.status, 'completed', `THE REGRESSION: code review spent the verifier's send-backs: ${rv.question?.text ?? rv.error}`)
+    assert.equal(rv.reworksBy.review, 2, 'code review draws on its own allowance')
+    assert.equal(rv.reworksBy.verification, 2, 'and the verifier still has all of its own')
+  }
+
   // Two steps in ONE wave can both send back. l.rework used to be assigned
   // unconditionally, so whichever finished second silently erased the first and
   // its finding was never raised again — latent until the verifier could send

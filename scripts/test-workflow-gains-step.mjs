@@ -8,6 +8,7 @@
  *   node scripts/test-workflow-gains-step.mjs
  */
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -102,6 +103,48 @@ const start = async () => (await runner.startOrQueue({ workflow: before, initial
   await runner.restartRun(r.id, 'fix', 'Sent back from "Jira: Dev Done": narrow the change', r.startedBy, { fromRunner: true })
   r = await runner.waitForSettled(r.id, TIMEOUT)
   assert.deepEqual(calls, ['agent-fix', 'agent-review'], 'a fix redone after the change is reviewed')
+}
+
+// ── 5. a new FIRST step: nothing feeds it, so "passed" means the run has begun ──
+{
+  define(before)
+  let r = await runner.waitForSettled((await start()).id, TIMEOUT)
+  assert.equal(r.status, 'paused')
+  define({ ...before, steps: [{ id: 'pre', agentSlug: 'agent-pre', label: 'Triage', next: ['fix'] }, ...before.steps] })
+  runner._dropLive(r.id)
+  calls.length = 0
+  await runner.continueRun(r.id)
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(r.status, 'completed', r.error)
+  const pre = r.steps.find(s => s.label === 'Triage')
+  assert.equal(pre?.status, 'skipped', 'a gained first step on a run already under way is recorded as passed')
+  assert.match(pre.skipReason ?? '', /after this run had passed this point/)
+  assert.ok(!calls.includes('agent-pre'), 'and not run')
+  assert.equal(r.steps[0].label, 'Triage', 'first in the run, as in the workflow')
+}
+
+// ── 6. a test run of a step whose workflow gained an ancestor ──────────────
+// Built from the source run's steps, the test run lacks the gained Code Review.
+// It used to be refused as a different workflow; it now takes it up as passed,
+// so the tested step runs on the source's outputs as it did before.
+{
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+  const projectDir = mkdtempSync(join(tmpdir(), 'gains-repo-'))
+  git(projectDir, 'init', '-q', '-b', 'develop')
+  git(projectDir, 'config', 'user.email', 't@example.com'); git(projectDir, 'config', 'user.name', 't')
+  writeFileSync(join(projectDir, 'README.md'), 'one\n'); git(projectDir, 'add', '.'); git(projectDir, 'commit', '-q', '-m', 'one')
+  define(before)
+  let src = (await runner.startOrQueue({ workflow: before, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: `dev${++dev}`, projectDir })).run
+  src = await runner.waitForSettled(src.id, TIMEOUT)
+  await runner.continueRun(src.id)
+  src = await runner.waitForSettled(src.id, TIMEOUT)
+  assert.equal(src.status, 'completed', src.error)
+  define(after)
+  calls.length = 0
+  const t = await runner.waitForSettled((await runner.startTestRun(src.id, 'qa')).id, TIMEOUT)
+  assert.equal(t.status, 'completed', `the test run took up the gained step: ${t.error}`)
+  assert.deepEqual(calls, ['agent-qa'], 'only the tested step ran')
+  assert.equal(t.steps.find(s => s.label === 'Code Review')?.status, 'skipped', 'the gained ancestor is on the record as passed')
 }
 
 console.log('ok - a run whose workflow gains a step takes it up, or records it as passed')

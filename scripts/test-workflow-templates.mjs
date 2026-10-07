@@ -9,6 +9,34 @@ import { readFileSync } from 'node:fs'
 import { materializeTemplateSteps, workflowTemplates as WORKFLOW_TEMPLATES } from '../app/utils/workflowTemplates.ts'
 import { agentTemplates as AGENT_TEMPLATES } from '../app/utils/templates.ts'
 
+/**
+ * Where an agent's `PIPELINE-REWORK:` lines send the run, checked against the
+ * step labels of one runbook. A literal target must be a label there. A
+ * placeholder that lists its candidates - `<the step that implemented it, by
+ * its label in this run: Implement Fix, or Implement Feature>` - must have at
+ * least one candidate there, and every candidate must be a label in one of the
+ * runbooks the agent runs in (`anyLabels`), so a misspelt one fails rather than
+ * hiding inside the angle brackets. The standing rules' bare `<that step's
+ * label>` names nothing and is skipped. Returns the problems found.
+ */
+function reworkTargetProblems(agent, bodyText, labels, anyLabels = labels) {
+  const problems = []
+  for (const m of bodyText.matchAll(/PIPELINE-REWORK: ([^—\n]+?) —/g)) {
+    const t = m[1].trim()
+    if (!t.startsWith('<')) {
+      if (!labels.has(t)) problems.push(`${agent} sends work back to "${t}", which is not a step label here`)
+      continue
+    }
+    const listed = /:\s*([^>]+)>$/.exec(t)?.[1]
+    if (!listed) continue
+    const names = listed.split(/,\s*or\s+/).map(n => n.trim()).filter(Boolean)
+    for (const n of names) if (!anyLabels.has(n)) problems.push(`${agent} lists "${n}" as a send-back target, which is no step label of any runbook it runs in`)
+    if (!names.some(n => labels.has(n))) problems.push(`${agent}: none of ${names.map(n => `"${n}"`).join(', ')} is a step label here`)
+  }
+  return problems
+}
+const labelsOf = id => new Set(WORKFLOW_TEMPLATES.find(t => t.id === id).steps.map(s => s.label))
+
 const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 
 // ── 1. A template with no `next` stays a plain chain ──────────────────────
@@ -583,12 +611,11 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     // Runbook A's senders. A send-back names a step by label, so a label that is
     // not in this runbook sends the work nowhere and fails the raising step.
     const aLabels = new Set(runbook.steps.map(s => s.label))
-    for (const agent of ['sdlc-verifier', 'sdlc-pr-follow-up', 'sdlc-security-review']) {
-      const targets = [...AGENT_TEMPLATES.find(t => t.id === agent).body.matchAll(/PIPELINE-REWORK: ([^—\n]+?) —/g)]
-        .map(m => m[1].trim())
-        .filter(t => !t.startsWith('<')) // the standing rules' own placeholder
-      assert.ok(targets.length, `${agent} runs in Runbook A and must be able to send work back`)
-      for (const t of targets) assert.ok(aLabels.has(t), `${agent} sends work back to "${t}", which is not a step label of Runbook A`)
+    for (const agent of ['sdlc-verifier', 'sdlc-pr-follow-up', 'sdlc-security-review', 'sdlc-ce-review']) {
+      const body = AGENT_TEMPLATES.find(t => t.id === agent).body
+      assert.ok(/PIPELINE-REWORK: [^<]/.test(body) || /PIPELINE-REWORK: <[^>]*:[^>]+>/.test(body), `${agent} runs in Runbook A and must be able to send work back`)
+      const any = new Set([...aLabels, ...labelsOf('runbook-b-feature-request-to-pr'), ...labelsOf('runbook-c-ce-ticket-to-pr')])
+      assert.deepEqual(reworkTargetProblems(agent, body, aLabels, any), [], 'Runbook A')
     }
   }
   const evidence = AGENT_TEMPLATES.find(t => t.id === 'sdlc-evidence-and-pr')
@@ -648,10 +675,8 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 
   const labels = new Set(runbook.steps.map(s => s.label))
   for (const agent of ['sdlc-ce-work', 'sdlc-ce-review', 'sdlc-qa-automated', 'sdlc-qa-manual', 'sdlc-security-review']) {
-    for (const m of body(agent).matchAll(/PIPELINE-REWORK: ([^—\n]+?) —/g)) {
-      if (m[1].trim().startsWith('<')) continue // the standing rules' own placeholder
-      assert.ok(labels.has(m[1].trim()), `${agent} sends work back to "${m[1].trim()}", which is not a step label of Runbook C`)
-    }
+    const any = new Set([...labels, ...labelsOf('runbook-a-jira-to-diff'), ...labelsOf('runbook-b-feature-request-to-pr')])
+    assert.deepEqual(reworkTargetProblems(agent, body(agent), labels, any), [], 'Runbook C')
   }
 
   for (const [agent, skill] of [['sdlc-ce-plan', 'ce-plan'], ['sdlc-ce-work', 'ce-work'], ['sdlc-ce-review', 'ce-code-review'], ['sdlc-ce-ship', 'ce-commit-push-pr']]) {
@@ -743,12 +768,14 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.match(gateBrief, /Blast radius is `money`, `protocol`, or `schema`\*\* — changes to these areas need human sign-off regardless of clarity/,
     'the decision gate escalates every money, protocol and schema draft')
   assert.match(gateBrief, /When in doubt, escalate/)
+  assert.deepEqual(gated('runbook-b-feature-request-to-pr'), ['Technical Design', 'Evidence Bundle + PR'],
+    'the feature path stops at the design, and again before the PR opens')
   assert.deepEqual(gated('runbook-c-ce-ticket-to-pr'), ['Implement Fix', 'Jira: Dev Done', 'Update Stack', 'Push + PR', 'Jira: QA Done'],
     'the feature path stops at the plan, the diff, verification before ship, and before each claim the ticket makes about the work')
 
   // A gate only means something before the step acts. Both outward-effect steps
   // push; approving them IS the decision to push.
-  for (const id of ['runbook-a-jira-to-diff', 'runbook-c-ce-ticket-to-pr']) {
+  for (const id of ['runbook-a-jira-to-diff', 'runbook-b-feature-request-to-pr', 'runbook-c-ce-ticket-to-pr']) {
     const steps = WORKFLOW_TEMPLATES.find(t => t.id === id).steps
     const pusher = steps.find(s => /PR$/.test(s.label))
     assert.equal(pusher.approval, true, `${id}: the step that opens the PR waits for a person`)
@@ -822,7 +849,20 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
     'and verification, the trace and the security review see the reviewed change')
 }
 
-// The reviewer sends a design it cannot fix back to whichever step implemented it.
-assert.match(AGENT_TEMPLATES.find(a => a.id === 'sdlc-ce-review').body, /Implement Fix, or Implement Feature/)
+// The reviewer sends a design it cannot fix back to whichever step implemented
+// it: each runbook it runs in must have one of its candidates, and every
+// candidate it lists must be a real step label somewhere it runs.
+{
+  const review = AGENT_TEMPLATES.find(a => a.id === 'sdlc-ce-review').body
+  const runsIn = ['runbook-a-jira-to-diff', 'runbook-b-feature-request-to-pr', 'runbook-c-ce-ticket-to-pr']
+  const any = new Set(runsIn.flatMap(id => [...labelsOf(id)]))
+  for (const id of runsIn) assert.deepEqual(reworkTargetProblems('sdlc-ce-review', review, labelsOf(id), any), [], id)
+  // The check sees inside the angle brackets: a misspelt candidate, or a list
+  // with nothing a runbook has, is caught rather than skipped.
+  const bogus = 'end with `PIPELINE-REWORK: <the step that implemented it, by its label in this run: Implement Fix, or Implement Featur> — x`'
+  assert.match(reworkTargetProblems('probe', bogus, labelsOf('runbook-b-feature-request-to-pr'), any).join('\n'), /"Implement Featur" as a send-back target, which is no step label/)
+  const nowhere = 'end with `PIPELINE-REWORK: <the step: Write Code, or Hack> — x`'
+  assert.match(reworkTargetProblems('probe', nowhere, labelsOf('runbook-a-jira-to-diff'), any).join('\n'), /none of "Write Code", "Hack"/)
+}
 
 console.log('workflowTemplates: all assertions passed')

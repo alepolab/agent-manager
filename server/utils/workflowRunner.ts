@@ -586,10 +586,13 @@ const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stop
  * PR follow-up is the only step that reports on CI. The verifier and the
  * security review share one allowance because they are answering the same
  * question about the same commit, so two send-backs from them are two attempts
- * at one problem, not two problems.
+ * at one problem, not two problems. Code review has its own: it runs earlier
+ * and judges the approach and the standards, not whether the commit passes,
+ * so two "the approach is wrong" from it must not leave a proven regression
+ * found later with no automatic send-back at all.
  */
-const reworkBucket = (agentSlug?: string): 'ci' | 'verification' =>
-  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : 'verification'
+const reworkBucket = (agentSlug?: string): 'ci' | 'verification' | 'review' =>
+  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' ? 'review' : 'verification'
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
@@ -3776,6 +3779,9 @@ async function rehydrate(run: WorkflowRun): Promise<Live> {
   // Overridden before alignment too: a test run's record carries the tested
   // step's overridden agent, and must align with the list it was built from.
   const steps = withTestOverride(alignStepIds(withTestOverride(workflow.steps, run), run), run)
+  // Rehydrating is otherwise a read, but this can write: a step the workflow
+  // gained since the run started is recorded on the run and saved here, once
+  // (adoptAddedSteps is idempotent - a recorded step is not added again).
   if (adoptAddedSteps(steps, run)) await saveRun(run)
   const aligned = { ...workflow, steps }
   const graph = buildGraph(steps)
