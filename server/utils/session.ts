@@ -2,6 +2,7 @@ import type { H3Event } from 'h3'
 import { getRequestHeader, parseCookies, unsealSession, useSession } from 'h3'
 import { timingSafeEqual } from 'node:crypto'
 import { roleFor, effectiveRole } from './roles.ts'
+import { passwordFingerprint } from './passwordLogin.ts'
 import { can, rolesWith, type Capabilities, type Role } from '../../shared/types/role.ts'
 
 /**
@@ -13,6 +14,21 @@ export interface SessionUser {
   login: string
   name?: string
   avatar?: string
+  /** Set on a password session: the fingerprint of the hash it signed in with. */
+  pw?: string
+}
+
+/**
+ * The session's user, or null for a password session whose password has since
+ * changed (or whose password sign-in was switched off). Without this a sealed
+ * cookie outlived the password for its full fourteen days.
+ */
+function stillValid(user: SessionUser | undefined | null): SessionUser | null {
+  if (!user) return null
+  if (user.pw === undefined) return user
+  if (user.pw !== passwordFingerprint()) return null
+  const { pw: _pw, ...rest } = user
+  return rest
 }
 
 export const authDisabled = () => process.env.AUTH_DISABLED === '1'
@@ -46,7 +62,7 @@ export async function userFromCookieHeader(cookie: string | null | undefined): P
   if (!sealed) return null
   try {
     const data = await unsealSession(undefined as unknown as H3Event, { password: password(), maxAge: SESSION_MAX_AGE }, sealed) as { data?: { user?: SessionUser } }
-    return data?.data?.user ?? null
+    return stillValid(data?.data?.user)
   } catch {
     return null
   }
@@ -75,7 +91,7 @@ export async function currentUser(event: H3Event): Promise<SessionUser | null> {
   if (automation) return automation
   try {
     const session = await authSession(event)
-    return session.data.user ?? null
+    return stillValid(session.data.user)
   } catch {
     // An unreadable or tampered cookie is a signed-out visitor, never a 500.
     return null

@@ -51,7 +51,7 @@ const TAKES_A_PATH = /query\.path|query\.projectDir|getRouterParam\(event, 'path
 const ALLOWED = new Map([
   ['auth/logout.post.ts', 'Public auth path; clears the caller\'s own session.'],
   ['auth/token.post.ts', 'Public auth path; authenticates by bearer token and refuses anything else.'],
-  ['auth/password.post.ts', 'Public auth path; signs in by username and password, throttled per address, and refuses anything else.'],
+  ['auth/password.post.ts', 'Public auth path; signs in by username and password, with a per-account backoff, and refuses anything else.'],
   ['view-as.post.ts', 'Enforces something stricter itself: refuses anyone whose REAL role is not operator, and only ever narrows.'],
   ['me.put.ts', 'The caller\'s own profile. Every role must be able to set their own Jira credentials.'],
   ['me/jira-test.post.ts', 'Tests the caller\'s own stored credentials; reads nothing else.'],
@@ -109,4 +109,25 @@ for (const key of ALLOWED.keys()) {
     `ALLOWED names ${key}, which is not a route any more — delete the entry`)
 }
 
-console.log(`routes are guarded: ${files.length} mutating routes, ${ALLOWED.size} documented exceptions, 0 unguarded`)
+// ── WebSockets ──────────────────────────────────────────────────────────────
+// An upgrade never reaches the /api/* auth middleware (under the bun runtime
+// it does not see upgrades at all), so every socket checks the session itself
+// in its `upgrade` hook. /api/chat-ws/ws had none, and ran Claude Code with
+// permissions bypassed in a directory the caller named, for anyone.
+async function sourcesUnder(dir) {
+  const out = []
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...await sourcesUnder(path))
+    else if (/\.ts$/.test(entry.name)) out.push(path)
+  }
+  return out
+}
+const sockets = (await sourcesUnder('server')).filter(f => /defineWebSocketHandler\(/.test(readFileSync(f, 'utf8')))
+assert.ok(sockets.length >= 1, 'expected to find the chat WebSocket')
+const openSockets = sockets.filter(f => !/async upgrade\([^)]*\)\s*\{[^}]*userFromCookieHeader\(/s.test(readFileSync(f, 'utf8')))
+assert.deepEqual(openSockets, [],
+  'these WebSockets accept an upgrade without a session. Check userFromCookieHeader in an `upgrade` hook, as '
+  + `server/api/v2/chat/ws.ts does:\n  ${openSockets.join('\n  ')}`)
+
+console.log(`routes are guarded: ${files.length} mutating routes, ${ALLOWED.size} documented exceptions, 0 unguarded; ${sockets.length} WebSocket(s), each checks the session on upgrade`)

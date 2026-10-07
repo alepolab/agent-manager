@@ -7,16 +7,24 @@
  * `node scripts/hash-password.mjs` makes one without the password touching a
  * file or a command line. Off unless both are set.
  *
- * Repeated failures from one address are refused for a while before the
- * password is even checked, so the form cannot be used to guess at speed.
+ * Guessing is slowed per account, not per address: the production runtime
+ * hands requests over without a client address, so a per-address limit was
+ * one shared bucket, and a hard lockout on it let anyone keep the owner out.
+ * Attempts are checked one at a time, each failure makes the next attempt wait
+ * longer (capped at a few seconds), and nothing ever refuses the right
+ * password.
  */
-import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
+import { getProfile } from './users.ts'
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number, opts: { N: number, r: number, p: number, maxmem: number }) => Promise<Buffer>
 
-const N = 16384, R = 8, P = 1, KEYLEN = 32
-const MAXMEM = 64 * 1024 * 1024
+// OWASP's floor for scrypt. A hash made with other parameters keeps verifying:
+// they are read back from the hash itself.
+const N = 2 ** 17, R = 8, P = 1, KEYLEN = 32
+// 128 * N * r is 128 MiB at the default; room for one step stronger.
+const MAXMEM = 256 * 1024 * 1024
 
 /** `scrypt$N$r$p$<salt b64>$<hash b64>`: everything needed to check it again. */
 export async function hashPassword(plain: string): Promise<string> {
@@ -33,8 +41,10 @@ export async function verifyPassword(plain: string, stored: string): Promise<boo
   try {
     const actual = await scrypt(plain, Buffer.from(salt, 'base64'), expected.length, { N: Number(n), r: Number(r), p: Number(p), maxmem: MAXMEM })
     return timingSafeEqual(actual, expected)
-  } catch {
-    // A malformed parameter in the stored hash is a wrong password, never a 500.
+  } catch (err: any) {
+    // Still a refusal, never a 500 - but a hash this server cannot check is a
+    // configuration fault, and reported as a wrong password nobody would find it.
+    console.error(`[password login] AGENT_MANAGER_LOGIN_PASSWORD_HASH cannot be checked (${err?.code ?? err?.message}); make a new one with scripts/hash-password.mjs`)
     return false
   }
 }
@@ -43,42 +53,87 @@ export function passwordLoginConfigured(): boolean {
   return !!process.env.AGENT_MANAGER_LOGIN_USER?.trim() && !!process.env.AGENT_MANAGER_LOGIN_PASSWORD_HASH?.trim()
 }
 
-// ── throttle ──────────────────────────────────────────────────────────────
-
-const MAX_FAILURES = 5
-const WINDOW_MS = 10 * 60 * 1000
-const failures = new Map<string, number[]>()
-
-const recent = (addr: string, now: number) => (failures.get(addr) ?? []).filter(t => now - t < WINDOW_MS)
-
-/** Seconds until `addr` may try again, or 0. */
-export function lockedFor(addr: string, now = Date.now()): number {
-  const times = recent(addr, now)
-  if (times.length < MAX_FAILURES) return 0
-  return Math.ceil((times[0]! + WINDOW_MS - now) / 1000)
+/**
+ * A short digest of the configured hash, sealed into each password session.
+ * Changing the password changes it, which signs every password session out
+ * without touching AGENT_MANAGER_SECRET or anyone's stored tokens.
+ */
+export function passwordFingerprint(): string | null {
+  if (!passwordLoginConfigured()) return null
+  return createHash('sha256').update(process.env.AGENT_MANAGER_LOGIN_PASSWORD_HASH!.trim()).digest('base64url').slice(0, 16)
 }
 
 /**
- * Checks a sign-in attempt from `addr`. The username is compared as well as
- * the password, both in constant time, so the answer to a wrong username
- * looks and takes the same as the answer to a wrong password.
+ * True when the configured username is a GitHub user's login here. The
+ * password session would then be that person: their stored GitHub token on
+ * every run started from it, their commit identity, their profile.
  */
-export async function checkPasswordLogin(username: string, password: string, addr: string, now = Date.now()):
-  Promise<{ ok: true, login: string } | { ok: false, retryAfter?: number }> {
+export async function passwordAccountTakenBy(login: string): Promise<boolean> {
+  const profile = await getProfile(login)
+  return !!(profile?.githubId || profile?.githubToken)
+}
+
+// ── backoff ───────────────────────────────────────────────────────────────
+
+const BASE_DELAY_MS = 250
+const MAX_DELAY_MS = 4000
+/** A failure older than this no longer slows anyone down. */
+const FORGET_AFTER_MS = 15 * 60 * 1000
+/** Attempts allowed to wait their turn; more than this are refused at once. */
+const MAX_WAITING = 8
+
+let failures = 0
+let lastFailureAt = 0
+let waiting = 0
+let turn: Promise<unknown> = Promise.resolve()
+let sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms))
+
+/** How long an attempt waits after `n` failures in a row. */
+export function backoffMs(n: number): number {
+  return n <= 0 ? 0 : Math.min(BASE_DELAY_MS * 2 ** (n - 1), MAX_DELAY_MS)
+}
+
+/**
+ * Checks a sign-in attempt. Attempts take turns, so a burst sent at once is
+ * checked one after another, each after the delay the failures before it
+ * earned: the count is read and updated inside the turn, never across an
+ * await another attempt could slip into. The username is compared as well as
+ * the password, both in constant time, so a wrong username looks and takes
+ * the same as a wrong password.
+ *
+ * `busy` means too many attempts are already waiting: refused without being
+ * checked, so a flood cannot queue up hours of work.
+ */
+export async function checkPasswordLogin(username: string, password: string):
+  Promise<{ ok: true, login: string } | { ok: false, busy?: number }> {
   if (!passwordLoginConfigured()) return { ok: false }
-  const wait = lockedFor(addr, now)
-  if (wait) return { ok: false, retryAfter: wait }
-  const user = process.env.AGENT_MANAGER_LOGIN_USER!.trim()
-  const a = Buffer.from(username.trim().toLowerCase()), b = Buffer.from(user.toLowerCase())
-  const nameOk = a.length === b.length && timingSafeEqual(a, b)
-  const passOk = await verifyPassword(password, process.env.AGENT_MANAGER_LOGIN_PASSWORD_HASH!.trim())
-  if (nameOk && passOk) {
-    failures.delete(addr)
-    return { ok: true, login: user }
+  if (waiting >= MAX_WAITING) return { ok: false, busy: Math.ceil(MAX_DELAY_MS / 1000) }
+  waiting++
+  const mine = turn.then(async () => {
+    if (Date.now() - lastFailureAt > FORGET_AFTER_MS) failures = 0
+    await sleep(backoffMs(failures))
+    const user = process.env.AGENT_MANAGER_LOGIN_USER!.trim()
+    const a = Buffer.from(username.trim().toLowerCase()), b = Buffer.from(user.toLowerCase())
+    const nameOk = a.length === b.length && timingSafeEqual(a, b)
+    const passOk = await verifyPassword(password, process.env.AGENT_MANAGER_LOGIN_PASSWORD_HASH!.trim())
+    if (nameOk && passOk) {
+      failures = 0
+      return { ok: true as const, login: user }
+    }
+    failures++
+    lastFailureAt = Date.now()
+    return { ok: false as const }
+  })
+  turn = mine.catch(() => {})
+  try {
+    return await mine
+  } finally {
+    waiting--
   }
-  failures.set(addr, [...recent(addr, now), now])
-  return { ok: false }
 }
 
 /** For tests. */
-export function _resetThrottle() { failures.clear() }
+export function _resetBackoff(opts: { sleep?: (ms: number) => Promise<void> } = {}) {
+  failures = 0; lastFailureAt = 0; waiting = 0; turn = Promise.resolve()
+  sleep = opts.sleep ?? (ms => new Promise<void>(res => setTimeout(res, ms)))
+}
