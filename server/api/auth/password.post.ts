@@ -1,5 +1,5 @@
 import { authSession, authDisabled } from '../../utils/session.ts'
-import { checkPasswordLogin, passwordFingerprint, passwordLoginConfigured, passwordAccountTakenBy } from '../../utils/passwordLogin.ts'
+import { checkPasswordLogin, deviceCookie, DEVICE_COOKIE, DEVICE_COOKIE_MAX_AGE, passwordFingerprint, passwordLoginConfigured, passwordAccountTakenBy } from '../../utils/passwordLogin.ts'
 
 /** Sign in with the instance's username and password (see passwordLogin.ts). */
 export default defineEventHandler(async (event) => {
@@ -10,7 +10,7 @@ export default defineEventHandler(async (event) => {
   const password = typeof body?.password === 'string' ? body.password : ''
   if (!username || !password) throw createError({ statusCode: 400, message: 'Enter a username and password' })
 
-  const result = await checkPasswordLogin(username, password)
+  const result = await checkPasswordLogin(username, password, getCookie(event, DEVICE_COOKIE))
   if (!result.ok) {
     if (result.busy) {
       setResponseHeader(event, 'Retry-After', result.busy)
@@ -24,5 +24,11 @@ export default defineEventHandler(async (event) => {
   }
   const session = await authSession(event)
   await session.update({ user: { login: result.login, name: result.login, pw: passwordFingerprint()! } })
+  // This browser is now a known device: its next attempts skip the shared lane
+  // a stranger can fill. Sent only to this route, and renewed on each sign-in.
+  const device = deviceCookie(result.device)
+  if (device) {
+    setCookie(event, DEVICE_COOKIE, device, { maxAge: DEVICE_COOKIE_MAX_AGE, httpOnly: true, sameSite: 'lax', secure: false, path: '/api/auth/password' })
+  }
   return { ok: true, login: result.login }
 })

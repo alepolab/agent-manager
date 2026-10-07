@@ -18,7 +18,7 @@ import { fetchNodeRequestHandler } from 'node-mock-http'
 // The route uses Nuxt's auto-imports; give it h3's own.
 Object.assign(globalThis, {
   defineEventHandler: h3.defineEventHandler, readBody: h3.readBody, createError: h3.createError,
-  setResponseHeader: h3.setResponseHeader,
+  setResponseHeader: h3.setResponseHeader, getCookie: h3.getCookie, setCookie: h3.setCookie,
 })
 
 delete process.env.AUTH_DISABLED
@@ -134,8 +134,69 @@ assert.deepEqual(slept, [0], 'a success clears the backoff')
   pl._resetBackoff({ sleep: async () => {} })
 }
 
+// ── a known device is never kept out by a stranger ──
+{
+  // Sleeps longer than zero are held until released, so a stranger's attempts
+  // stay in the queue for as long as the test wants: the review's ten
+  // connections re-sending wrong guesses, without the forty seconds.
+  let holding = true
+  const held = []
+  pl._resetBackoff({ sleep: ms => (ms === 0 || !holding) ? Promise.resolve() : new Promise(res => held.push(res)) })
+  const settle = () => new Promise(res => setTimeout(res, 20))
+
+  const signIn = await post({ username: 'arisht', password: 'correct horse' })
+  assert.equal(signIn.status, 200)
+  const deviceSet = signIn.headers.getSetCookie().find(c => c.startsWith(`${pl.DEVICE_COOKIE}=`))
+  assert.ok(deviceSet, 'signing in makes this browser a known device')
+  assert.match(deviceSet, /HttpOnly/i)
+  assert.match(deviceSet, /SameSite=Lax/i)
+  assert.match(deviceSet, /Path=\/api\/auth\/password/, 'sent only to the sign-in route')
+  assert.match(deviceSet, /Max-Age=7776000/, 'for ninety days')
+  const device = deviceSet.split(';')[0]
+  const deviceId = device.split('=')[1].split('.')[0]
+
+  // A stranger fills the shared lane: one failure, then eight held in their backoff.
+  assert.equal((await post({ username: 'arisht', password: 'stranger0' })).status, 401)
+  const stranger = Array.from({ length: 8 }, (_, i) => post({ username: 'arisht', password: `stranger${i + 1}` }))
+  await settle()
+  assert.equal((await post({ username: 'arisht', password: 'stranger9' })).status, 429, 'the shared lane is full')
+  assert.equal((await post({ username: 'arisht', password: 'correct horse' })).status, 429,
+    'a browser that never signed in shares the lane, and is turned away (as .env.sample says)')
+
+  const owner = await post({ username: 'arisht', password: 'correct horse' }, { cookie: device })
+  assert.equal(owner.status, 200, 'THE REGRESSION: a stranger keeping eight attempts in flight kept the owner out')
+  const renewed = owner.headers.getSetCookie().find(c => c.startsWith(`${pl.DEVICE_COOKIE}=`))
+  assert.equal(renewed.split(';')[0].split('=')[1].split('.')[0], deviceId, 'the device keeps its id when it signs in again')
+
+  // Only a cookie this instance made, for this password, opens the lane.
+  const forged = `${pl.DEVICE_COOKIE}=${deviceId}.${'A'.repeat(43)}`
+  assert.equal((await post({ username: 'arisht', password: 'correct horse' }, { cookie: forged })).status, 429, 'a forged device cookie is no cookie')
+  const current = process.env.AGENT_MANAGER_LOGIN_PASSWORD_HASH
+  process.env.AGENT_MANAGER_LOGIN_PASSWORD_HASH = legacyHash('an earlier password')
+  const stale = `${pl.DEVICE_COOKIE}=${pl.deviceCookie(deviceId)}`
+  process.env.AGENT_MANAGER_LOGIN_PASSWORD_HASH = current
+  assert.equal((await post({ username: 'arisht', password: 'correct horse' }, { cookie: stale })).status, 429, 'nor is one from an earlier password')
+  assert.equal(pl.knownDevice(device.split('=')[1]), deviceId)
+  assert.equal(pl.knownDevice(stale.split('=')[1]), null)
+
+  // The device's lane has its own backoff and its own, smaller cap.
+  assert.equal((await post({ username: 'arisht', password: 'typo' }, { cookie: device })).status, 401)
+  const mine = Array.from({ length: 3 }, (_, i) => post({ username: 'arisht', password: `typo${i}` }, { cookie: device }))
+  await settle()
+  const refused = await Promise.race([Promise.all(mine).then(() => 'all-ran'), settle().then(() => 'some-wait')])
+  assert.equal(refused, 'some-wait', 'two wait their turn in the device lane')
+
+  holding = false
+  held.splice(0).forEach(res => res())
+  const strangerStatuses = (await Promise.all(stranger)).map(r => r.status)
+  assert.deepEqual(strangerStatuses, Array(8).fill(401), 'the stranger\'s attempts were all checked, and all wrong')
+  const mineStatuses = (await Promise.all(mine)).map(r => r.status).sort()
+  assert.deepEqual(mineStatuses, [401, 401, 429], 'a third waiting in the device lane is refused')
+  pl._resetBackoff({ sleep: async () => {} })
+}
+
 // ── the right pair: a session the rest of the app reads ──
-const cookie = ok.headers.get('set-cookie')?.split(';')[0]
+const cookie = ok.headers.getSetCookie().find(c => c.startsWith('am='))?.split(';')[0]
 assert.ok(cookie?.startsWith('am='), 'the same `am` session cookie GitHub sign-in sets')
 const me = (await whoami({ cookie })).user
 assert.equal(me?.login, 'arisht', 'currentUser reads it')

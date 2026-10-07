@@ -1,6 +1,7 @@
-import { authSession } from '../../utils/session'
-import { saveProfile } from '../../utils/users'
-import { membershipFailureDetail } from '../../utils/orgMembership'
+import { authSession } from '../../utils/session.ts'
+import { saveProfile } from '../../utils/users.ts'
+import { membershipFailureDetail } from '../../utils/orgMembership.ts'
+import { isPasswordAccountName } from '../../utils/passwordLogin.ts'
 
 const ORG = () => process.env.GITHUB_ORG || 'alepolab'
 
@@ -47,6 +48,13 @@ export default defineEventHandler(async (event) => {
   if (state_ !== 'active') {
     const detail = membershipFailureDetail({ status: membership.status, state: state_, org: ORG(), login: me.login })
     return sendRedirect(event, '/login?error=' + encodeURIComponent(`Could not confirm @${me.login} as an active member of the ${ORG()} GitHub organisation. ${detail}`))
+  }
+
+  // The password account's name is shared: a GitHub token saved under it would
+  // go to every password session, already issued ones included, as this person.
+  if (isPasswordAccountName(me.login)) {
+    console.warn(`[auth] refused GitHub sign-in for @${me.login}: it is AGENT_MANAGER_LOGIN_USER, the password account's name`)
+    return sendRedirect(event, '/login?error=' + encodeURIComponent(`@${me.login} is the name of this instance's password account, so it cannot sign in with GitHub. Ask the operator to rename AGENT_MANAGER_LOGIN_USER.`))
   }
 
   // The numeric id is what makes a <id>+<login>@users.noreply.github.com commit

@@ -21,6 +21,10 @@ function ask(question) {
 
 const first = await ask('Password: ')
 const again = await ask('Again: ')
+// The backoff still allows thousands of guesses a day against the one
+// account; only a long password makes that hopeless.
+const MIN_LENGTH = 12
 if (!first) { console.error('No password entered.'); process.exit(1) }
+if ([...first].length < MIN_LENGTH) { console.error(`Use at least ${MIN_LENGTH} characters.`); process.exit(1) }
 if (first !== again) { console.error('The two entries differ.'); process.exit(1) }
 console.log(`AGENT_MANAGER_LOGIN_PASSWORD_HASH=${await hashPassword(first)}`)
