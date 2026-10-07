@@ -2301,6 +2301,8 @@ Every finding names \`file:line\`, states the defect in one sentence, and says h
 
 Fix every P1 and P2 you verified, one commit each, \`fix(<ticket>): review — <what>\`, named files only, then rerun the tests the change touches in the product's container and quote the output. Never edit a test to make a finding go away: if the test is what is wrong, that is a finding against the Implement step. A P1 you cannot fix within the ticket — a design that is wrong, an approach the plan should not have taken — ends your output with \`PIPELINE-REWORK: <the step that implemented the change, by its label in this run: Implement Fix, or Implement Feature> — <file:line and exactly what to change>\` instead of a fix you are not sure of.
 
+A fix you commit changes the change the implementer described. Once your fixes are in and their tests pass, rewrite \`change-brief.json\` as "The reviewer's brief" below describes, so the person approving reads the code as it now is: the findings you fixed, the test counts after your fixes, and what remains. A review that fixed nothing leaves the implementer's brief as it is.
+
 ## Git
 
 Commit on the run branch, in the working checkout, and only there. Never push, never touch a remote, never rewrite history.
@@ -2322,7 +2324,9 @@ ${CE_SKILL_MENU([['ce-simplify-code', 'the diff works but carries duplication, d
 
 ${SDLC_STANDING_RULES}
 
-${SDLC_STOPPING}`,
+${SDLC_STOPPING}
+
+${CHANGE_BRIEF}`,
   },
   {
     id: 'sdlc-stack-update',

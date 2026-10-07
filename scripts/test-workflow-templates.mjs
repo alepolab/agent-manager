@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { materializeTemplateSteps, workflowTemplates as WORKFLOW_TEMPLATES } from '../app/utils/workflowTemplates.ts'
 import { agentTemplates as AGENT_TEMPLATES } from '../app/utils/templates.ts'
+import { CHANGE_MAKERS } from '../shared/utils/decisionBrief.ts'
 
 /**
  * Where an agent's `PIPELINE-REWORK:` lines send the run, checked against the
@@ -863,6 +864,18 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.match(reworkTargetProblems('probe', bogus, labelsOf('runbook-b-feature-request-to-pr'), any).join('\n'), /"Implement Featur" as a send-back target, which is no step label/)
   const nowhere = 'end with `PIPELINE-REWORK: <the step: Write Code, or Hack> — x`'
   assert.match(reworkTargetProblems('probe', nowhere, labelsOf('runbook-a-jira-to-diff'), any).join('\n'), /none of "Write Code", "Hack"/)
+}
+
+// Every agent the runner asks for a reviewer's brief has the section that says
+// how to write one. Code Review was made a change maker without it, so a gate
+// that found no brief asked it to write one "exactly as" instructions it did
+// not have.
+{
+  const makers = AGENT_TEMPLATES.filter(a => CHANGE_MAKERS.test(a.id))
+  assert.deepEqual(makers.map(a => a.id).sort(), ['sdlc-ce-review', 'sdlc-ce-work', 'sdlc-feature-implementer', 'sdlc-fix-implementer'])
+  for (const a of makers) assert.match(a.body, /## The reviewer's brief\n[\s\S]*change-brief\.json/, `${a.id} is asked for the brief, so it carries the section`)
+  // And the reviewer is told that a fix it commits means a new brief.
+  assert.match(AGENT_TEMPLATES.find(a => a.id === 'sdlc-ce-review').body, /A fix you commit changes the change[^\n]*rewrite `change-brief\.json`/)
 }
 
 console.log('workflowTemplates: all assertions passed')

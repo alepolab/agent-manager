@@ -17,7 +17,7 @@ import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
-import { captureBaseline } from './gitFacts.ts'
+import { captureBaseline, headCommitTime } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, isWorkingCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, restoreRunWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
@@ -32,11 +32,11 @@ import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_US
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, CHANGE_MAKERS, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -1021,10 +1021,6 @@ export function endedToWait(output: string): boolean {
   return /\b(wait(ing)? for (the )?(background|notification)|background notification|(still )?running in the background|pick (it )?up (again )?(as soon as|once|when) it (completes|finishes)|(once|when) (it|the (build|job|task|container)) (finishes|completes)[^.]{0,40}(I'll|I will))/i.test(tail)
 }
 
-/** The steps that make a run's change, and so know what approving it gains and risks. */
-// The reviewer too: once it has fixed findings it holds the latest picture of the change.
-const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work|ce-review)$/
-
 /**
  * Asks the step that made the change for its reviewer's brief, when a gate
  * holds that change and the brief is missing: ASECRM-288's approval showed
@@ -1040,6 +1036,23 @@ const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work|ce-rev
  * well-informed way; otherwise the same agent starts cold from the artifacts.
  */
 const briefsWriting = new Set<string>()
+
+/**
+ * The brief was written before the latest change maker committed. Code Review
+ * runs after the implementer has written its brief, and a P1 it fixes changes
+ * the change: without this the person at the gate approved from a brief that
+ * described the code before the review touched it. A review that committed
+ * nothing leaves the implementer's brief standing.
+ */
+async function briefOutdated(run: WorkflowRun, maker: RunStep, file: string): Promise<boolean> {
+  if (!maker.startedAt) return false
+  const written = (await stat(file).catch(() => null))?.mtimeMs
+  if (written === undefined || written >= maker.startedAt) return false
+  const head = await headCommitTime(run.projectDir)
+  // git keeps whole seconds: a commit in the second the step started counts.
+  return head !== undefined && head >= Math.floor(maker.startedAt / 1000) * 1000
+}
+
 export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | 'written' | 'none' | 'failed'> {
   const maker = [...run.steps].reverse().find(s => CHANGE_MAKERS.test(s.agentSlug) && s.status === 'completed')
   if (!maker || run.question?.kind !== 'approval' || run.question.reason || run.question.artifact) return 'none'
@@ -1048,7 +1061,8 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
   if (!file || !pending) return 'none'
   const asked = openQuestionsIn(await readFile(resolveRunArtifact(run.id, 'intent.md') ?? '', 'utf8').catch(() => null))
   const answersAll = (b: ReturnType<typeof parseDecisionBrief>) => 'brief' in b && !unansweredQuestions(asked, b.brief).length
-  if (answersAll(parseDecisionBrief(await readFile(file, 'utf8').catch(() => null)))) return 'present'
+  const outdated = await briefOutdated(run, maker, file)
+  if (!outdated && answersAll(parseDecisionBrief(await readFile(file, 'utf8').catch(() => null)))) return 'present'
   if (briefsWriting.has(run.id)) return 'none'
   briefsWriting.add(run.id)
   await writeFile(pending, new Date().toISOString()).catch(() => {})
@@ -1061,18 +1075,20 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
       : ''
     for (let attempt = 1; attempt <= 2; attempt++) {
       const resume = resumableSession(maker)
-      const input = `${resume ? await whereArtifactsAre(run) : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now, exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
+      const input = `${resume ? await whereArtifactsAre(run) : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, ${outdated ? `and the reviewer's brief was written before your commits changed it. Rewrite \`${CHANGE_BRIEF_FILE}\` in the run artifacts directory now, so it describes the change as it now is,` : `and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now,`} exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
 
 That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
       await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
       const parsed = parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))
-      if (answersAll(parsed)) {
+      if (answersAll(parsed) && !await briefOutdated(run, maker, file)) {
         log.info('change brief written for a gate', { runId: run.id, by: maker.agentSlug, resumed: !!resume })
         return 'written'
       }
-      feedback = 'brief' in parsed
-        ? `The brief you wrote has no answer for ${unansweredQuestions(asked, parsed.brief).map(q => `"${q}"`).join(' or ')}. Write it again with one \`open_questions\` entry per question, its \`question\` copied from the list below.\n\n`
-        : `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+      feedback = !('brief' in parsed)
+        ? `The brief you wrote was not usable: ${parsed.error}. Write it again.\n\n`
+        : await briefOutdated(run, maker, file)
+          ? `\`${CHANGE_BRIEF_FILE}\` was not rewritten: it still describes the change before your commits. Write it again.\n\n`
+          : `The brief you wrote has no answer for ${unansweredQuestions(asked, parsed.brief).map(q => `"${q}"`).join(' or ')}. Write it again with one \`open_questions\` entry per question, its \`question\` copied from the list below.\n\n`
       log.warn('change brief unusable', { runId: run.id, attempt, error: 'error' in parsed ? parsed.error : 'open questions unanswered' })
     }
     return 'failed'

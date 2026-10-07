@@ -318,3 +318,17 @@ export async function workingTreeDirty(projectDir: string | undefined): Promise<
     return null
   }
 }
+
+/**
+ * When the commit at HEAD of `projectDir` was made, in milliseconds (git keeps
+ * whole seconds), or undefined when there is no checkout to ask.
+ */
+export async function headCommitTime(projectDir: string | undefined): Promise<number | undefined> {
+  if (!projectDir) return undefined
+  try {
+    const at = Number(await git(projectDir, ['log', '-1', '--format=%ct', 'HEAD']))
+    return Number.isFinite(at) && at > 0 ? at * 1000 : undefined
+  } catch {
+    return undefined
+  }
+}
