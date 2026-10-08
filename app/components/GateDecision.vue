@@ -33,6 +33,17 @@ const brief = computed(() => (question.value?.kind === 'question' ? question.val
 const paused = computed(() => run.value.status === 'paused')
 const parked = computed(() => run.value.status === 'queued' && !!run.value.parked)
 
+// The ticket by its Jira title, at the top: the key alone does not say which ticket this is.
+const ticketTitle = ref<string | null>(null)
+watch(() => (run.value.ticketKey ? run.value.id : null), async (id) => {
+  ticketTitle.value = null
+  if (!id) return
+  try {
+    const { title } = await $fetch<{ title: string | null }>(`/api/runs/${id}/ticket`)
+    if (run.value.id === id) ticketTitle.value = title
+  } catch { /* the key stands on its own */ }
+}, { immediate: true })
+
 /** A budget pause's two sentences, with the full stop older records lack between them. */
 const sentenced = (t: string) => t.replace(/([^.\s])\s+(Continue to grant )/, '$1. $2')
 
@@ -173,7 +184,8 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
   <div class="decision">
     <div class="decision__body space-y-5">
       <!-- What this is, whose it is and how long it has waited. -->
-      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 t-small">
+      <h1 v-if="ticketTitle" class="decision__ticket">{{ ticketTitle }}</h1>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 t-small" :class="{ 'decision__meta--under': ticketTitle }">
         <TicketLink v-if="run.ticketKey" :ticket-key="run.ticketKey" class="font-semibold" />
         <span class="text-label">{{ run.workflowName.split(' — ')[0] }}</span>
         <span class="text-label">Waiting {{ waitingLabel }}</span>
@@ -188,7 +200,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
           <StatusLabel :status="run.status" :label="mineToAnswer ? (isApproval && !runnerPause ? 'Your approval' : 'Your decision') : `${gateOwner ?? 'Someone else'}'s decision`" />
           <span class="text-label">· {{ gateLabel }}</span>
         </p>
-        <h2 class="decision__title">{{ headline }}</h2>
+        <h2 class="decision__title" :class="{ 'decision__title--under': ticketTitle }">{{ headline }}</h2>
         <template v-if="gist">
           <p :id="ids.gist" class="decision__gist" :class="{ 'decision__gist--open': gistOpen }">{{ gist }}</p>
           <button v-if="gist.length > 220" class="t-small focus-ring rounded text-link" :aria-expanded="gistOpen" :aria-controls="ids.gist" @click="gistOpen = !gistOpen">
@@ -418,6 +430,21 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
 <style scoped>
 .decision { display: flex; flex-direction: column; min-height: 100%; }
 .decision__body { flex: 1; max-width: 44rem; width: 100%; margin: 0 auto; padding-bottom: 24px; }
+.decision__ticket {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+/* With the ticket's title above it, the question is the second heading, not a rival first. */
+.decision__title.decision__title--under { font-size: 18px; }
+/* Under the ticket's title the key row belongs to it, not to the question below. */
+.decision__meta--under { margin-top: 6px !important; }
 .decision__title {
   display: -webkit-box;
   -webkit-line-clamp: 3;
