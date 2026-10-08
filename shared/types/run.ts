@@ -453,8 +453,9 @@ export interface WorkflowRun {
     role?: Role
     /** An approval raised by the runner itself: the budget is spent and continuing
      *  grants another allowance, or a step has spent its send-backs and whether to
-     *  grant one more is the developer's call. */
-    reason?: 'budget' | 'rework' | 'auth' | 'quota'
+     *  grant one more is the developer's call, or a step handed the run to a
+     *  step that cannot run yet (`handoff`). */
+    reason?: 'budget' | 'rework' | 'auth' | 'quota' | 'handoff'
     /** For a `quota` pause: when the provider said the quota resets. The run resumes on its own then. */
     resumeAt?: number
     /** The provider named the reset time; false when resumeAt is the 15-minute guess, and its retry is a probe. */
@@ -472,6 +473,11 @@ export interface WorkflowRun {
      * the step that was supposed to run again.
      */
     rework?: { from: string, target: string, instruction: string }
+    /**
+     * For a `handoff` pause: the hand-over the runner refused, and the steps the
+     * target was waiting on. Continue carries on from `stepId` without it.
+     */
+    handoff?: { from: string, target: string, instruction: string, waitingOn: string[] }
     /**
      * The artifact whose entries the operator is deciding about, named by the
      * gated step's own `runWhen` - set only alongside status

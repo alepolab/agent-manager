@@ -41,7 +41,7 @@ const headline = computed(() => {
   const q = question.value
   if (reviewing.value) return `${q?.artifact ?? 'Its drafts'} is waiting on your decisions`
   if (brief.value) return briefHeadline(brief.value, q?.text)
-  if (q?.kind === 'approval' && !runnerPause.value && q.reason !== 'rework') return approvalTitle.value
+  if (q?.kind === 'approval' && !runnerPause.value && q.reason !== 'rework' && q.reason !== 'handoff') return approvalTitle.value
   // Budget pauses recorded before the cap's sentence ended in a full stop
   // read "…242 min cap Continue to grant…": split where the offer starts.
   return briefHeadline(undefined, sentenced(q?.text || 'This run is paused'))
@@ -64,7 +64,9 @@ const approvalTitle = computed(() => {
 const gist = computed(() => {
   if (brief.value) return brief.value.situation
   const q = question.value
-  if (q?.kind === 'approval' && !runnerPause.value) return ''
+  // A runner-raised approval (send-backs spent, a refused hand-over) says what
+  // the choices do in its text; an ordinary gate's verdict card says it instead.
+  if (q?.kind === 'approval' && !runnerPause.value && q.reason !== 'rework' && q.reason !== 'handoff') return ''
   const text = sentenced((q?.text ?? '').trim())
   if (!text || text === headline.value) return ''
   // A runner pause's first line is the title; the rest says what the choices do.
@@ -142,7 +144,7 @@ function sendReply() { if (reply.value) send('respond', reply.value) }
  * pause the runner raised carries it here. Asks once, like everywhere else.
  */
 const { can } = useUser()
-const mayStop = computed(() => can('runEngine') && (runnerPause.value || question.value?.reason === 'rework'))
+const mayStop = computed(() => can('runEngine') && (runnerPause.value || question.value?.reason === 'rework' || question.value?.reason === 'handoff'))
 const confirmingStop = ref(false)
 let stopTimer: ReturnType<typeof setTimeout> | undefined
 function stopRun() {
@@ -271,7 +273,7 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
       <RunBudgetBrief v-else-if="question?.reason === 'budget'" :run="run" />
 
       <!-- An approval: what it lets happen, measured. -->
-      <RunVerdictCard v-else-if="question?.kind === 'approval' && !runnerPause && question.reason !== 'rework'" :run="run" @brief="b => { changeBrief = b }" />
+      <RunVerdictCard v-else-if="question?.kind === 'approval' && !runnerPause && question.reason !== 'rework' && question.reason !== 'handoff'" :run="run" @brief="b => { changeBrief = b }" />
 
       <!-- A question without a brief: the step's report is all there is to go on. -->
       <details v-else-if="report" class="group-details" open>

@@ -142,7 +142,7 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   /** The label on the approve button, which says what it does for a runner pause. */
   const approveLabel = computed(() => {
     const r = run.value.question?.reason
-    return r === 'budget' ? 'Continue with a fresh allowance' : r === 'auth' ? 'Retry the step' : r === 'quota' ? 'Retry now' : 'Approve and run'
+    return r === 'budget' ? 'Continue with a fresh allowance' : r === 'auth' ? 'Retry the step' : r === 'quota' ? 'Retry now' : r === 'handoff' ? 'Carry on without it' : 'Approve and run'
   })
   /** The eyebrow over the question. */
   const gateLabel = computed(() => {
@@ -151,6 +151,7 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
       : q?.reason === 'auth' ? 'Could not reach the model'
       : q?.reason === 'quota' ? 'Waiting for the quota to reset'
       : q?.reason === 'rework' ? 'Send-backs spent'
+      : q?.reason === 'handoff' ? 'Hand-over refused'
       : q?.kind === 'approval' ? 'Waiting for your approval'
       : `${askingStep.value?.label ?? 'A step'} is asking you`
   })

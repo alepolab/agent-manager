@@ -2735,6 +2735,12 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     l.rework = undefined
     const raiser = stepOf(l, w.from)
     const from = raiser?.label ?? w.from
+    // A hand-over to a step that cannot run yet is refused, not attempted.
+    // ASECRM-243: sent back to Implement Fix, which handed on to Verify +
+    // Regression while Code Review and the Jira steps it feeds were pending
+    // again; restartRun threw, and a run with an open PR failed outright. Not
+    // counted against the send-backs: nothing was sent back.
+    if (blockedBy(l.graph, l.state, w.target).length) return refuseHandOver(l, run, { from: w.from, target: w.target, instruction: w.instruction })
     const bucket = reworkBucket(raiser?.agentSlug)
     run.reworks = (run.reworks ?? 0) + 1
     const by = (run.reworksBy ??= {})
@@ -3963,6 +3969,43 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   return run
 }
 
+/** The forward predecessors of `stepId` that have not completed: what stops it being armed. None for an entry. */
+export function blockedBy(graph: WorkflowGraph, state: RunState, stepId: string): string[] {
+  if (graph.entries.includes(stepId)) return []
+  return (graph.forwardPreds[stepId] ?? []).filter(p => state.status[p] !== 'completed')
+}
+
+/**
+ * A step handed the run to a step that cannot run yet. Paused for a person, not
+ * failed: the branch, its commits and any open PR are all still good, and what
+ * to do with the instruction is a judgement - carry on to the step the run
+ * would run next, send it to a step that can act on it, or stop. Same shape as
+ * the spent send-backs pause: no skipped steps, no run.error, no endedAt.
+ */
+async function refuseHandOver(l: Live, run: WorkflowRun, h: { from: string, target: string, instruction: string }): Promise<WorkflowRun> {
+  const label = (id: string) => stepOf(l, id)?.label ?? id
+  const order = (id: string) => run.steps.findIndex(s => s.stepId === id)
+  const waitingOn = ancestorsOf(l.graph, h.target).filter(id => l.state.status[id] !== 'completed').sort((a, b) => order(a) - order(b))
+  const next = readyNodes(l.graph, l.state).find(id => id !== h.target) ?? h.from
+  const names = (ids: string[]) => ids.map(id => `"${label(id)}"`).join(', ')
+  run.status = 'paused'
+  run.question = {
+    stepId: next,
+    kind: 'approval',
+    reason: 'handoff',
+    askedAt: Date.now(),
+    text: `"${label(h.from)}" handed the run to "${label(h.target)}", which cannot run yet: ${names(waitingOn)} ${waitingOn.length === 1 ? 'has' : 'have'} to complete first. Its instruction: ${h.instruction}\n\nCarry on from "${label(next)}" without the hand-off, send the run back to a step that can act on the instruction, or stop the run here.`,
+    handoff: { ...h, waitingOn },
+  }
+  run.currentStepIds = []
+  run.nextStepIds = [next]
+  l.running = false
+  logLine(l, run, recOf(run, h.from), `handed the run to ${label(h.target)}, which cannot run until ${names(waitingOn)} complete: refused, asking the operator`)
+  log.warn('hand-over to a step that cannot run yet; asking the operator', { runId: run.id, from: h.from, target: h.target, waitingOn })
+  await publish(run)
+  return run
+}
+
 export class RestartError extends Error {
   statusCode: number
   data?: Record<string, unknown>
@@ -4151,6 +4194,9 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (stale?.running) throw new RestartError(409, 'This run is already running')
   if (stale) live.delete(runId)
   const l = await rehydrate(run)
+  // Before anything is reset: refused after the reset, the live record was left
+  // with this step's descendants cleared and nothing armed.
+  if (blockedBy(l.graph, l.state, stepId).length) throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
   // A failed step elsewhere in the same wave would stay failed after a partial

@@ -19,6 +19,7 @@ export function gateAsk(run: Pick<WorkflowRun, 'status' | 'question'>): string {
   if (run.question?.reason === 'quota') return `Quota spent - resumes on its own at ${new Date(run.question.resumeAt ?? 0).toLocaleTimeString()}`
   if (run.question?.reason === 'auth') return 'Could not reach the model - fix the server\'s credentials, then retry'
   if (run.question?.reason === 'rework') return 'Out of send-backs - grant another, or stop it'
+  if (run.question?.reason === 'handoff') return 'A hand-over was refused - carry on, send it back, or stop it'
   // The brief's headline when it has one: the full question is often four
   // lines of identifiers, and the list shows its first sentence.
   if (run.question?.brief) return briefHeadline(run.question.brief, run.question.text)
