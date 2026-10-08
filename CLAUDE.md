@@ -278,7 +278,7 @@ A permission prompt interrupts this flow: the stream pauses, the client shows
 
 ### Identity and team
 
-`server/utils/session.ts` holds the sealed-cookie session (`authSession`, `currentUser`, `requireUser`); `server/middleware/auth.ts` rejects `/api/*` without one unless `AUTH_DISABLED=1`. `server/utils/users.ts` stores per-developer profiles with AES-256-GCM sealed tokens and builds the env a run's agents get (`envForUser`). `server/utils/teamSync.ts` compares the config directory with the plugin and templates; `server/plugins/teamSeed.ts` applies it at boot.
+`server/utils/session.ts` holds the sealed-cookie session (`authSession`, `currentUser`, `requireUser`); `server/middleware/auth.ts` rejects `/api/*` without one unless `AUTH_DISABLED=1`. Two ways in: GitHub OAuth, and one username and password (`server/utils/passwordLogin.ts`, `POST /api/auth/password`; `AGENT_MANAGER_LOGIN_USER` plus a scrypt `AGENT_MANAGER_LOGIN_PASSWORD_HASH` from `node scripts/hash-password.mjs`). Scripts use the API token (`AGENT_MANAGER_API_TOKEN` / `AGENT_MANAGER_API_LOGIN`) as a bearer. The `/cli` chat WebSocket checks the session cookie in its `upgrade` hook, since the middleware does not answer upgrades. `server/utils/users.ts` stores per-developer profiles with AES-256-GCM sealed tokens and builds the env a run's agents get (`envForUser`). `server/utils/teamSync.ts` compares the config directory with the plugin and templates; `server/plugins/teamSeed.ts` applies it at boot.
 
 ## Testing
 

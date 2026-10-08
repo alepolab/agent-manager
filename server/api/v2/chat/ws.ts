@@ -2,8 +2,18 @@ import type { Peer } from 'crossws'
 import { providerRegistry } from '../../../utils/providers/registry'
 import { cleanupPeer } from '../../../utils/providers/claudeProvider'
 import type { ChatV2WebSocketMessage, NormalizedMessage } from '~/types'
+import { userFromCookieHeader } from '../../../utils/session'
 
 export default defineWebSocketHandler({
+  // The chat runs Claude Code against the working directory: it is the last
+  // door that should be open without a session, and the server middleware
+  // that guards /api/* is not what answers a WebSocket upgrade.
+  async upgrade(request) {
+    if (!await userFromCookieHeader(request.headers.get('cookie'))) {
+      return new Response('Sign in required', { status: 401 })
+    }
+  },
+
   open(peer: Peer) {
     console.log('[Chat v2 WS] Client connected', peer.id)
 
