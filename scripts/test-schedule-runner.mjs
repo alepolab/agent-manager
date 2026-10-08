@@ -341,6 +341,16 @@ const base = {
   await runner.waitForSettled(wontMove.lastRunId, 5000)
 }
 
+/** Resolves once no live run holds `dir`, by the starter's own check; fails after `ms`. */
+async function untilFree(dir, ms = 5000) {
+  for (const deadline = Date.now() + ms; ;) {
+    const holder = await store.findRunInWorkspace(dir, undefined, { includeQueued: true })
+    if (!holder) return
+    assert.ok(Date.now() < deadline, `${dir} is still held by ${holder.id} (${holder.status}) ${ms}ms after its run settled`)
+    await new Promise(r => setTimeout(r, 20))
+  }
+}
+
 // ══ 6. THE REQUIREMENT: overlap with its own run is a skip, not a failure ══
 {
   runner.setAgentCaller((agentSlug, input, projectDir, { signal } = {}) => new Promise((resolve, reject) => {
@@ -361,10 +371,14 @@ const base = {
   await runner.stopRun(first.lastRunId)
   await runner.waitForSettled(first.lastRunId, 5000)
 
-  // Once it settles, the directory is free again.
+  // Once it settles, the directory is free again. Waited for by the same
+  // check the starter makes rather than assumed from the settle event: on a
+  // slow CI runner the fire below could otherwise be checked a moment before
+  // the stopped record was read as settled, and fail as a skip.
+  await untilFree(starterMod.scheduleProjectDir(s))
   runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
   const third = await starterMod.realScheduleStarter(s)
-  assert.equal(third.lastOutcome, 'started', 'the fire after it settles starts normally')
+  assert.equal(third.lastOutcome, 'started', `the fire after it settles starts normally (${third.lastDetail ?? ''}; held by ${third.lastRunId === first.lastRunId ? 'its own stopped run' : third.lastRunId})`)
   await runner.waitForSettled(third.lastRunId, 5000)
 }
 
@@ -509,6 +523,13 @@ const base = {
     `a schedule enabled after startScheduleRunner() fires on its own timer (observed ${fired.length})`)
 
   live = []
+  // Counted from the moment the supervisor has dropped the job, not from the
+  // edit: a fire that lands in the up-to-50ms before it notices is not a fire
+  // after deletion, and on a slow runner one did, failing this as 4 !== 3.
+  for (const deadline = Date.now() + 2000; sched.scheduledIds().includes('ticker');) {
+    assert.ok(Date.now() < deadline, 'the supervisor drops a deleted schedule')
+    await new Promise(r => setTimeout(r, 10))
+  }
   const settled = fired.length
   await new Promise(r => setTimeout(r, 1500))
   assert.equal(fired.length, settled, 'and stops firing once it is deleted')
