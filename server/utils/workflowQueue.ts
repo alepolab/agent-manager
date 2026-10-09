@@ -11,6 +11,8 @@
  * rejected or failed marks its item `stopped` and pauses the queue, since the
  * next folder may depend on the one that did not land, and a person decides.
  */
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -22,6 +24,7 @@ import { createLogger } from './log.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
 
 const log = createLogger('runner')
+const exec = promisify(execFile)
 
 export type QueueItemStatus = 'pending' | 'running' | 'done' | 'stopped'
 
@@ -38,12 +41,21 @@ export interface QueueItem {
   note?: string
 }
 
+/**
+ * A command run before each item starts, in the item's projectDir, with every
+ * resolved parameter in the environment as `PARAM_<name>`. It answers "what of
+ * this item is still left to do": empty output marks the item done without a
+ * run (nothing left), any other output becomes the value of `parameter` for the
+ * run (e.g. the files still to port). A non-zero exit pauses the queue.
+ */
+export interface QueuePrecheck { command: string, parameter: string }
+
 export interface WorkflowQueue {
   /** Off: nothing new starts. A run already going finishes and is recorded. */
   enabled: boolean
   /** Why the queue turned itself off, shown until someone turns it on again. */
   pausedReason?: string
-  defaults: { parameters?: Record<string, string>, autoRun?: boolean, startedBy?: string }
+  defaults: { parameters?: Record<string, string>, autoRun?: boolean, startedBy?: string, precheck?: QueuePrecheck }
   items: QueueItem[]
 }
 
@@ -78,11 +90,25 @@ function serial<T>(slug: string, fn: () => Promise<T>): Promise<T> {
 async function startNextLocked(slug: string): Promise<QueueItem | null> {
   const queue = await readQueue(slug)
   if (!queue?.enabled || queue.items.some(i => i.status === 'running')) return null
-  const item = queue.items.find(i => i.status === 'pending')
-  if (!item) {
-    log.info('workflow queue finished', { workflow: slug })
-    return null
+  for (;;) {
+    const item = queue.items.find(i => i.status === 'pending')
+    if (!item) {
+      log.info('workflow queue finished', { workflow: slug })
+      return null
+    }
+    const started = await startItem(slug, queue, item)
+    if (started !== 'skipped') return started
   }
+}
+
+async function runPrecheck(check: QueuePrecheck, values: Record<string, string>): Promise<string> {
+  const env = { ...process.env }
+  for (const [k, v] of Object.entries(values)) env[`PARAM_${k}`] = v
+  const { stdout } = await exec('bash', ['-c', check.command], { cwd: values[RESERVED_PARAM_PROJECT_DIR], env, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 })
+  return stdout.trim()
+}
+
+async function startItem(slug: string, queue: WorkflowQueue, item: QueueItem): Promise<QueueItem | null | 'skipped'> {
   const pause = async (why: string) => {
     item.status = 'stopped'
     item.note = why
@@ -97,6 +123,25 @@ async function startNextLocked(slug: string): Promise<QueueItem | null> {
   const supplied = { ...(queue.defaults.parameters ?? {}), ...(item.parameters ?? {}) }
   const { values, missing } = resolveParameters(workflow.parameters, supplied)
   if (missing.length) return pause(`no value for ${missing.join(', ')}`)
+  const check = queue.defaults.precheck
+  if (check?.command) {
+    let left: string
+    try {
+      left = await runPrecheck(check, values)
+    } catch (err) {
+      return pause(`the check of what is left failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 600))
+    }
+    if (!left) {
+      item.status = 'done'
+      item.note = 'nothing left to do: the check found it already done, no run made'
+      item.endedAt = Date.now()
+      await writeQueue(slug, queue)
+      log.info('workflow queue item already done', { workflow: slug, prompt: item.prompt })
+      return 'skipped'
+    }
+    if (left !== values[check.parameter]) item.note = `${check.parameter} set by the check to: ${left}`.slice(0, 2000)
+    values[check.parameter] = left
+  }
   try {
     const { run } = await startOrQueue({
       workflow: toWorkflowLike(workflow),
@@ -110,7 +155,6 @@ async function startNextLocked(slug: string): Promise<QueueItem | null> {
     item.status = 'running'
     item.runId = run.id
     item.startedAt = Date.now()
-    delete item.note
     queue.pausedReason = undefined
     await writeQueue(slug, queue)
     log.info('workflow queue started a run', { workflow: slug, runId: run.id, prompt: item.prompt })
