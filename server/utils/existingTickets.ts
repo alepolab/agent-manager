@@ -13,6 +13,7 @@
  * retracted, and counting it would hide the real finding it was mistaken for.
  */
 import { adfToPlainText } from './adf.ts'
+import { extractCodeRefs, refString } from './duplicateCheck.ts'
 import { jiraAuthHeader } from './jiraCredentials.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 
@@ -25,11 +26,19 @@ export interface ExistingTicket {
   labels: string[]
   /** The description's first few hundred characters, as plain text. */
   excerpt: string
+  /**
+   * The files (with lines, where stated) the WHOLE description names. The
+   * excerpt alone missed ASECRM-368's overlap with ASECRM-584: the shared file
+   * was the ticket's second finding, past the cut. Matching on code, not words.
+   */
+  locations?: string[]
 }
 
 const PAGE_SIZE = 100
 const MAX_PAGES = 5
 const EXCERPT_CHARS = 400
+/** Enough for a ticket that groups several findings, without one ticket swamping the file. */
+const MAX_LOCATIONS = 40
 
 /** Throws on any refusal: "no tickets" and "could not ask" must never look alike. */
 export async function fetchExistingTickets(
@@ -60,6 +69,7 @@ export async function fetchExistingTickets(
         status: i.fields?.status?.name ?? '',
         labels: i.fields?.labels ?? [],
         excerpt: (text ?? '').replace(/\s+/g, ' ').trim().slice(0, EXCERPT_CHARS),
+        locations: extractCodeRefs(text ?? '', MAX_LOCATIONS).map(refString),
       })
     }
     if (body.isLast !== false || !body.nextPageToken) break

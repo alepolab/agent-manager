@@ -44,6 +44,7 @@ import {
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
+import { annotateDuplicates, enforceDuplicateEscalation } from './duplicateCheck.ts'
 import { runNotifyStep, type NotifyStepConfig } from './notifySteps.ts'
 import { admit, blockForQuota, releaseQuota, drainRunQueue, givingWayTo, groupOf, mightHaveWaiting, noteQueued, type LaunchOutcome } from './runQueue.ts'
 import { capFor } from './workflowGroups.ts'
@@ -57,6 +58,8 @@ import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
 import type { ProductMatch, WorkflowRun, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
 
+/** The step whose drafts the duplicate check marks before, and holds after. */
+const DECISION_GATE_SLUG = 'sdlc-decision-gate'
 const log = createLogger('runner')
 
 // Widened to a union rather than requiring every caller to return the
@@ -1439,6 +1442,17 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   try {
     const userEnv = await envResolver(run.startedBy).catch(() => ({}))
     logLine(l, run, rec, `step started, visit ${rec.visits}`)
+    // The drafts are checked for what an open ticket or a live run already
+    // covers before the gate reads them, by the code they name - see
+    // duplicateCheck.ts for the ASECRM-584 duplicate this exists for.
+    if (step.agentSlug === DECISION_GATE_SLUG) {
+      try {
+        const marked = await annotateDuplicates(run, await listRuns())
+        if (marked) logLine(l, run, rec, `${marked} draft(s) marked as possibly covered by an open ticket or a live run (duplicate-check.json)`)
+      } catch (err) {
+        logLine(l, run, rec, `duplicate check could not run: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
@@ -1461,6 +1475,16 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     } })
     const { output, model, usage } = normalizeAgentResult(raw)
     const durationMs = Date.now() - (rec.startedAt ?? Date.now())
+    // Held whatever the gate decided: a draft marked as a possible duplicate is
+    // never auto-approved, so it reaches a person before a second ticket exists.
+    if (step.agentSlug === DECISION_GATE_SLUG) {
+      try {
+        const moved = await enforceDuplicateEscalation(run.id)
+        if (moved) logLine(l, run, rec, `${moved} approved draft(s) moved to escalated: possibly covered by an open ticket or a live run`)
+      } catch (err) {
+        logLine(l, run, rec, `duplicate escalation could not run: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
 
     // A halt is a failure the agent raised deliberately. Checked before the
     // monitor and before the output is published downstream: a step that says
