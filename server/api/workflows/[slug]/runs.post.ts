@@ -1,12 +1,13 @@
-import { requireCapability } from '../../../utils/session'
-import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner'
-import { readWorkflow } from '../../../utils/workflows'
+import { requireCapability } from '../../../utils/session.ts'
+import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner.ts'
+import { readWorkflow } from '../../../utils/workflows.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
-import { findRunInWorkspace, toWorkflowLike } from '../../../utils/workflowRunStore'
-import { canonicalProjectDir, runWorkspace } from '../../../utils/workspace'
-import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
-import { currentUser } from '../../../utils/session'
-import { envForUser } from '../../../utils/users'
+import { toWorkflowLike } from '../../../utils/workflowRunStore.ts'
+import { canonicalProjectDir } from '../../../utils/workspace.ts'
+import { claimManualStart, ManualStartRefused } from '../../../utils/manualStart.ts'
+import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource.ts'
+import { currentUser } from '../../../utils/session.ts'
+import { envForUser } from '../../../utils/users.ts'
 
 export default defineEventHandler(async (event) => {
   // Starting a run spends money and touches a repo; a manager reads, and QA
@@ -58,8 +59,8 @@ export default defineEventHandler(async (event) => {
   // does not fail: callAgent falls back to the Claude config directory for a
   // path that does not exist and reports success. Canonicalised for the lock
   // below, which compares directory strings. An unset directory is not
-  // validated - it resolves to the developer's own workspace root, which
-  // startRun creates.
+  // validated - it resolves to a directory for the ticket, or the developer's
+  // own workspace root, which startRun creates.
   let projectDir = stated
   if (stated) {
     const checked = canonicalProjectDir(stated)
@@ -75,18 +76,20 @@ export default defineEventHandler(async (event) => {
   // products share nothing, and a per-workflow lock made the second one wait
   // behind the first with no queue — which made the pipeline single-user.
   //
-  // The check has to come after the user is known, because an unset projectDir
-  // resolves to that developer's own workspace root.
-  const workspace = runWorkspace({ projectDir, startedBy: user?.login })
-  const active = await findRunInWorkspace(workspace)
-  if (active) {
-    throw createError({
-      statusCode: 409,
-      message: `${active.startedBy ? `@${active.startedBy} has` : 'There is'} a run in progress in ${workspace}`
-        + ` (${active.workflowName ?? active.workflowSlug}). Wait for it, stop it, or start this one against a different project directory.`,
-      data: { runId: active.id },
-    })
+  // A start naming a ticket and no directory gets one of its own for that
+  // ticket, so a second ticket never waits behind the first; a second start
+  // for the same ticket is refused instead. See manualStart.ts. After the user
+  // is known, because an unset directory resolves under their own root.
+  let claimed: Awaited<ReturnType<typeof claimManualStart>>
+  try {
+    claimed = await claimManualStart({ initialPrompt: body.initialPrompt, stated: projectDir, login: user?.login })
+  } catch (err) {
+    if (err instanceof ManualStartRefused) {
+      throw createError({ statusCode: 409, message: err.message, data: { runId: err.runId } })
+    }
+    throw err
   }
+  projectDir = claimed.projectDir
 
   // Deliberately not awaited to completion: the HTTP response returns as soon
   // as the run exists, and the run continues server-side. That is the feature.
