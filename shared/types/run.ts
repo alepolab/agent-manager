@@ -415,6 +415,12 @@ export interface WorkflowRun {
   decisions?: RunDecision[]
   /** Agent-raised send-backs, oldest first. See SendBack. */
   sendBacks?: SendBack[]
+  /**
+   * A step's hand-over that arrived while another step in the same wave was
+   * waiting on the operator. Held here, on the record so a restart keeps it,
+   * and carried out once that question is answered.
+   */
+  deferredRework?: { from: string, target: string, instruction: string }
   /** Set when a developer cleared this run from the home page's attention queue. History keeps it. */
   dismissed?: boolean
   /** A Jira step already posted the outcome comment; settling must not post a second one. */
