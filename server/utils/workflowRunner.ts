@@ -3707,7 +3707,7 @@ export async function continueRun(
     if (stored && (stored.status === 'paused' || stored.status === 'awaiting_review') && !live.get(runId)?.running) {
       // Refused before it is recorded, exactly as the unparked path refuses it.
       const q = stored.question
-      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && q.reason !== 'quota' && needsJustification(stored.blastRadius) && !note?.trim()) {
+      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && q.reason !== 'quota' && q.reason !== 'handoff' && needsJustification(stored.blastRadius) && !note?.trim()) {
         throw new ApprovalNeedsReason(`This run is classified \`${stored.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
       }
       const parked = await parkUnlessSlot(stored, { action: 'continue', note, grantApproval })
@@ -3785,13 +3785,18 @@ export async function continueRun(
     // it cannot be satisfied without having read something. Reject already
     // demanded a reason; approve did not, which had it backwards - saying yes to
     // a money change is the answer that needs the justification.
-    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && run.question.reason !== 'quota' && needsJustification(run.blastRadius) && !note?.trim()) {
+    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && run.question.reason !== 'quota' && run.question.reason !== 'handoff' && needsJustification(run.blastRadius) && !note?.trim()) {
       l.running = false
       throw new ApprovalNeedsReason(
         `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
     }
     if (run.question.reason === 'budget') extendBudget(run)
     else if (run.question.reason === 'auth' || run.question.reason === 'quota') { /* the step is already pending and armed */ }
+    // Carrying on past a refused hand-over approves nothing: the step it names is
+    // only where the run goes next. Marking it approved waived that step's own
+    // gate, gateRole and runWhen, so a gated step ran without the person whose
+    // gate it was ever being asked.
+    else if (run.question.reason === 'handoff') { /* the step is already armed; its own gate still asks */ }
     // Withholding the approval is what lets a review that approved nothing take
     // effect. l.approved waives runWhen (see resolveConditions), so granting it
     // here would run the step over an artifact the operator just emptied - the
@@ -3994,7 +3999,7 @@ async function refuseHandOver(l: Live, run: WorkflowRun, h: { from: string, targ
     kind: 'approval',
     reason: 'handoff',
     askedAt: Date.now(),
-    text: `"${label(h.from)}" handed the run to "${label(h.target)}", which cannot run yet: ${names(waitingOn)} ${waitingOn.length === 1 ? 'has' : 'have'} to complete first. Its instruction: ${h.instruction}\n\nCarry on from "${label(next)}" without the hand-off, send the run back to a step that can act on the instruction, or stop the run here.`,
+    text: `"${label(h.from)}" handed the run to "${label(h.target)}", which cannot run yet: ${names(waitingOn)} ${waitingOn.length === 1 ? 'has' : 'have'} to complete first. Its instruction: ${h.instruction}\n\nCarry on from "${label(next)}" without the hand-over, send the run back to a step that can act on the instruction, or stop the run here.`,
     handoff: { ...h, waitingOn },
   }
   run.currentStepIds = []

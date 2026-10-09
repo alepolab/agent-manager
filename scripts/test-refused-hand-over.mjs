@@ -7,7 +7,7 @@
  * steps feeding it were pending again. restartRun threw "has predecessors that
  * did not complete" inside the run loop and a run with an open PR failed.
  *
- *   node scripts/test-refused-hand-off.mjs
+ *   node scripts/test-refused-hand-over.mjs
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -26,7 +26,7 @@ let preflights = 0
 runner.setPreflight(async () => { preflights++; return { at: Date.now(), checks: [] } })
 const TIMEOUT = 15000
 
-const wf = { slug: 'handoff', name: 'Hand-off', steps: [
+const wf = { slug: 'handoff', name: 'Hand-over', steps: [
   { id: 'fix', agentSlug: 'agent-fix', label: 'Implement Fix', next: ['review'] },
   { id: 'review', agentSlug: 'agent-review', label: 'Code Review', next: ['verify'] },
   { id: 'verify', agentSlug: 'agent-verify', label: 'Verify + Regression', next: ['checks'] },
@@ -69,7 +69,7 @@ assert.deepEqual(run.nextStepIds, ['review'])
 assert.deepEqual(q.handoff, { from: 'fix', target: 'verify', instruction: 'add DelegateHandler.class to the reset list', waitingOn: ['review'] })
 assert.match(q.text, /"Implement Fix" handed the run to "Verify \+ Regression", which cannot run yet: "Code Review" has to complete first/)
 assert.match(q.text, /add DelegateHandler\.class to the reset list/, 'the instruction verbatim')
-assert.match(q.text, /Carry on from "Code Review" without the hand-off/, "worded as the button is")
+assert.match(q.text, /Carry on from "Code Review" without the hand-over/, "worded as the button is")
 assert.equal(run.reworks, 1, 'the refused hand-over is not counted: only the send-back from PR Checks is')
 assert.equal(Object.values(run.reworksBy ?? {}).reduce((a, b) => a + b, 0), 1, 'nor in any send-back bucket')
 assert.equal(run.steps.find(s => s.stepId === 'fix').status, 'completed')
@@ -83,6 +83,47 @@ run = await runner.waitForSettled(run.id, TIMEOUT)
 assert.equal(run.status, 'completed', run.error)
 assert.equal(run.question, undefined)
 assert.deepEqual(calls, ['agent-fix', 'agent-review', 'agent-verify', 'agent-checks', 'agent-fix', 'agent-review', 'agent-verify', 'agent-checks'])
+
+// ── Carry on approves nothing: a gated next step still asks its owner ───────
+// The pause names Code Review only as where the run goes next. Continue once
+// marked it approved, which waived its approval gate and gateRole: a refused
+// hand-over plus one click ran a developer's gate straight through. Run twice,
+// the second time with the live record dropped before Continue, as a server
+// restart between the pause and the answer leaves it.
+for (const restarted of [false, true]) {
+  const gated = { ...wf, slug: `handover-gated${restarted ? '-restarted' : ''}`, steps: wf.steps.map(s => s.id === 'review' ? { ...s, approval: true, gateRole: 'developer' } : s) }
+  writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', `${gated.slug}.json`),
+    JSON.stringify({ name: gated.name, description: '', steps: gated.steps, createdAt: new Date().toISOString() }))
+  calls.length = 0; checksVisits = 0; fixVisits = 0
+  const tag = restarted ? ' (after a restart)' : ''
+  let g = (await runner.startOrQueue({ workflow: gated, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev1' })).run
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  // First pause: Code Review's own gate, before anything has run past it.
+  assert.equal(g.question?.stepId, 'review'); assert.equal(g.question?.reason, undefined)
+  await runner.continueRun(g.id, 'looks right')
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.question?.reason, 'handoff', `the hand-over is refused${tag}`)
+  assert.equal(g.question?.stepId, 'review')
+  if (restarted) {
+    runner._dropLive(g.id)
+    // Owner-gated as well: carrying on approves nothing, so it asks no reason -
+    // the step's own approval below still does.
+    const stored = await store.getRun(g.id)
+    await store.saveRun({ ...stored, blastRadius: 'money' })
+  }
+  await runner.continueRun(g.id)
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.status, 'paused', `THE REGRESSION: carrying on past the hand-over ran the gated step${tag}: ${g.status}`)
+  assert.equal(g.question?.stepId, 'review', `it stops at Code Review's own gate${tag}`)
+  assert.equal(g.question?.reason, undefined, `as an ordinary approval, not the hand-over again${tag}`)
+  assert.equal(g.question?.role, 'developer', `asking the developer, whose gate it is${tag}`)
+  assert.equal(calls.filter(c => c === 'agent-review').length, 1, `Code Review did not run a second time without its approval${tag}`)
+  if (restarted) await assert.rejects(runner.continueRun(g.id), /owner-gated/, 'the gated step\'s own approval still needs its reason')
+  await runner.continueRun(g.id, 'reviewed the fix')
+  g = await runner.waitForSettled(g.id, TIMEOUT)
+  assert.equal(g.status, 'completed', g.error)
+  assert.equal(calls.filter(c => c === 'agent-review').length, 2, `it ran once its owner approved it${tag}`)
+}
 
 // ── a person's restart at a blocked step is refused before anything is reset ─
 {

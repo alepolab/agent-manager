@@ -24,7 +24,9 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   const gateOwner = computed(() => run.value.question?.role)
   const mineToAnswer = computed(() => gateIsMine(gateOwner.value, role.value))
   const mayAnswer = computed(() => can('answerGate') && mineToAnswer.value)
-  const mustJustify = computed(() => needsJustification(run.value.blastRadius))
+  // Carrying on past a refused hand-over approves no step (see continueRun), so it
+  // owes no owner-gated reason; the step's own gate asks for one if it has one.
+  const mustJustify = computed(() => needsJustification(run.value.blastRadius) && run.value.question?.reason !== 'handoff')
   /** Gated on an artifact's entries: RunDecisionPanel owns both the question and the resume. */
   const reviewing = computed(() => run.value.status === 'awaiting_review')
   const isReply = computed(() => run.value.status === 'paused' && run.value.question?.kind === 'question')
