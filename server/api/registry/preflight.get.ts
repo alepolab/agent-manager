@@ -21,7 +21,7 @@ export default defineEventHandler(async (event) => {
     artifactsWritable(),
     text ? resolveProduct(text) : Promise.resolve(undefined),
     text ? explainResolution(text) : Promise.resolve(null),
-    githubSourceFor(user?.login, { hasProfileToken: !!profile?.githubToken }),
+    githubSourceFor(user?.login),
   ])
   const repo = p?.repos?.[0]
   const checkout = repo ? await checkoutState(checkoutDirFor(repo, user?.login)) : null
