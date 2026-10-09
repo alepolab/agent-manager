@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
   setResponseHeaders(event, {
     'Content-Type': 'application/octet-stream',
     'Content-Length': String((await stat(path)).size),
-    'Content-Disposition': `attachment; filename="${name.replace(/"/g, '')}"`,
+    'Content-Disposition': `attachment; filename="${name.split('/').pop()!.replace(/"/g, '')}"`,
   })
   return sendStream(event, createReadStream(path))
 })
