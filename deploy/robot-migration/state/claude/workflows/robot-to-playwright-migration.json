@@ -1,0 +1,128 @@
+{
+  "name": "Robot to Playwright migration",
+  "description": "Ports one old-CRM Robot folder (or chosen files of it) to the ase-crm Playwright suite: the analyst inventories it and plans, a person approves the plan and answers questions, the analyst writes verified scenario sheets, the spec writer implements, runs and commits the specs on the run branch, then after a notification a person approves delivering it: merged into branch workflow/main of the workflow's own copy of the suite, ~/repos/ase-crm-testPlaywright-workflow (deliver=local) or pushed to GitHub (deliver=github). Reject = cancel, nothing delivered. Start each run with the prompt \"Port <robotFolder>\". Local mode never touches the main checkout ~/repos/ase-crm-testPlaywright; the copy is merged into it by hand once reviewed (diff workflow-baseline..workflow/main).",
+  "steps": [
+    {
+      "id": "analyse-plan",
+      "agentSlug": "robot-scenario-analyst",
+      "label": "Inventory & plan",
+      "next": [
+        "explore-sheets"
+      ],
+      "produces": [
+        "plan.md"
+      ],
+      "maxVisits": 2
+    },
+    {
+      "id": "explore-sheets",
+      "agentSlug": "robot-scenario-analyst",
+      "label": "Explore & write sheets",
+      "approval": true,
+      "autoApproveWhenReady": true,
+      "continuesSession": true,
+      "next": [
+        "write-specs"
+      ],
+      "maxVisits": 2
+    },
+    {
+      "id": "write-specs",
+      "agentSlug": "robot-spec-writer",
+      "label": "Write & verify specs",
+      "testsUnlocked": true,
+      "next": [
+        "push-branch"
+      ],
+      "maxVisits": 2
+    },
+    {
+      "id": "push-branch",
+      "agentSlug": "robot-branch-pusher",
+      "label": "Deliver",
+      "approval": true,
+      "autoApproveWhenReady": true,
+      "next": [],
+      "maxVisits": 1
+    }
+  ],
+  "parameters": [
+    {
+      "name": "projectDir",
+      "required": true,
+      "default": "/work/ase-crm-testPlaywright-workflow",
+      "description": "The suite repo that run worktrees are made beside. Local mode: the workflow's own copy, ~/repos/ase-crm-testPlaywright-workflow (branch workflow/main). VM: the suite clone."
+    },
+    {
+      "name": "robotFolder",
+      "required": true,
+      "description": "Robot folder or suite file to port, relative to robotSuiteDir, e.g. Alepo_Testsuites/Business_Configuration/Policies/Taxes."
+    },
+    {
+      "name": "include",
+      "description": "Only these suite files of robotFolder, comma separated (e.g. 01__Bank_Defination.robot). Blank = the whole folder."
+    },
+    {
+      "name": "exclude",
+      "description": "Suite files to leave out, comma separated (e.g. Billing_Policy_API_Creation.txt). Blank for none."
+    },
+    {
+      "name": "robotSuiteDir",
+      "required": true,
+      "default": "/work/atddtestsuite_bss",
+      "description": "Checkout of the old Robot suite (atddtestsuite_bss), the source of truth."
+    },
+    {
+      "name": "crmSourceDir",
+      "required": true,
+      "default": "/work/ase-crm",
+      "description": "Checkout of the new CRM source (frontend + backend), read to work out navigation, fields and messages."
+    },
+    {
+      "name": "crmStack",
+      "default": "ui",
+      "description": "Per-session stack name for docker/stacks/stack.sh test-env (db|ui). Overrides appUrl/keycloakUrl/dbHost and sets the stack lock. Blank = use those three."
+    },
+    {
+      "name": "appUrl",
+      "required": true,
+      "default": "http://localhost:8083",
+      "description": "The live ase-crm app."
+    },
+    {
+      "name": "keycloakUrl",
+      "required": true,
+      "default": "http://localhost:8280",
+      "description": "Keycloak for the app (realm alepo)."
+    },
+    {
+      "name": "dbHost",
+      "required": true,
+      "default": "localhost:3308",
+      "description": "The app database (crm14_db), host:port."
+    },
+    {
+      "name": "deliver",
+      "required": true,
+      "default": "local",
+      "description": "local = merge the run branch into workflow/main of localCheckout (the copy; nothing pushed); github = push the run branch."
+    },
+    {
+      "name": "runCheckout",
+      "default": "in-place",
+      "description": "in-place = every run works in projectDir itself, on its own branch fix/run-<id> cut from baseBranch, so there is one folder for all runs. worktree = a separate <projectDir>@fix-run-<id> folder per run."
+    },
+    {
+      "name": "baseBranch",
+      "default": "workflow/main",
+      "description": "Local branch of projectDir that each run's branch is cut from and that Deliver (local) merges into."
+    },
+    {
+      "name": "localCheckout",
+      "default": "/work/ase-crm-testPlaywright-workflow",
+      "description": "The workflow's own copy of the suite (same repo as projectDir in local mode). deliver=local merges into its workflow/main; also the node_modules source for run worktrees."
+    }
+  ],
+  "createdAt": "2026-10-07T11:11:12.308Z",
+  "notifyChannel": "robot-migration"
+}

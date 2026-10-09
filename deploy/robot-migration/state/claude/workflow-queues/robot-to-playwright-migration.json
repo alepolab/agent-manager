@@ -1,0 +1,1508 @@
+{
+  "enabled": false,
+  "defaults": {
+    "autoRun": true,
+    "startedBy": "local",
+    "parameters": {
+      "projectDir": "/work/ase-crm-testPlaywright-workflow",
+      "robotSuiteDir": "/work/atddtestsuite_bss",
+      "crmSourceDir": "/work/ase-crm",
+      "crmStack": "ui",
+      "appUrl": "http://localhost:8083",
+      "keycloakUrl": "http://localhost:8280",
+      "dbHost": "localhost:3308",
+      "deliver": "local",
+      "localCheckout": "/work/ase-crm-testPlaywright-workflow",
+      "runCheckout": "in-place",
+      "baseBranch": "workflow/main"
+    },
+    "precheck": {
+      "command": "avail=$(df --output=avail -BG /data | tail -1 | tr -dc 0-9); [ \"$avail\" -ge 15 ] || { echo \"only ${avail} GB free on the docker disk (need 15)\" >&2; exit 1; }; node scripts/robot-remaining.mjs \"$PARAM_robotSuiteDir\" \"$PARAM_robotFolder\" \"$PARAM_include\" --flat",
+      "parameter": "include"
+    }
+  },
+  "items": [
+    {
+      "prompt": "Port Sanity_Testcases (03__Discount_Policy.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "03__Discount_Policy.robot"
+      },
+      "status": "done",
+      "runId": "ccd557a3-7059-4331-b56a-5eb6820a751b",
+      "startedAt": 1791535906041,
+      "endedAt": 1791537130952
+    },
+    {
+      "prompt": "Port Sanity_Testcases (04__Tax_Policy.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "04__Tax_Policy.robot"
+      },
+      "status": "done",
+      "runId": "1366f3fb-fc06-4f62-b00e-233ba8500835",
+      "startedAt": 1791537131356,
+      "endedAt": 1791537961093
+    },
+    {
+      "prompt": "Port Sanity_Testcases (05__Billing_Policy.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "05__Billing_Policy.robot"
+      },
+      "status": "done",
+      "runId": "de5397db-2f70-4c63-ac5f-3a515f6698b4",
+      "startedAt": 1791537961366,
+      "endedAt": 1791539719037
+    },
+    {
+      "prompt": "Port Sanity_Testcases (06__Plans.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "06__Plans.robot"
+      },
+      "status": "done",
+      "runId": "dee87a14-2704-4110-b8d3-558210310d7d",
+      "startedAt": 1791539719354,
+      "endedAt": 1791540868805
+    },
+    {
+      "prompt": "Port Sanity_Testcases (07__Service_Management.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "07__Service_Management.robot"
+      },
+      "status": "done",
+      "runId": "072bfba7-3863-48ae-9314-4a3e40a8bec7",
+      "startedAt": 1791540869134,
+      "endedAt": 1791542656287
+    },
+    {
+      "prompt": "Port Sanity_Testcases (08__Service_Option_Management.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "08__Service_Option_Management.robot"
+      },
+      "status": "done",
+      "runId": "140099ab-4cdf-4227-9544-605c3d50ab8b",
+      "startedAt": 1791542656633,
+      "endedAt": 1791543945658
+    },
+    {
+      "prompt": "Port Sanity_Testcases (09__ServiceParameter_Management.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "09__ServiceParameter_Management.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sanity_Testcases (10__Associate_SeviceOption_With_Plan.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "10__Associate_SeviceOption_With_Plan.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sanity_Testcases (11__Add_User.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "11__Add_User.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sanity_Testcases (12__Purchase_Service.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "12__Purchase_Service.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sanity_Testcases (13__Update_Service.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "13__Update_Service.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sanity_Testcases (14__Cancel_Service.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "14__Cancel_Service.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sanity_Testcases (15__Create_Customers.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "15__Create_Customers.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sanity_Testcases (16__Batch_Billing.robot only)",
+      "parameters": {
+        "robotFolder": "Sanity_Testcases",
+        "include": "16__Batch_Billing.robot"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Subscriber_Onboarding/API/02.Purchase_Service",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Subscriber_Onboarding/API/02.Purchase_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Subscriber_Onboarding/API/03.Cancel_Service",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Subscriber_Onboarding/API/03.Cancel_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Subscriber_Onboarding/Required_Tokens_API/01.Registration",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Subscriber_Onboarding/Required_Tokens_API/01.Registration"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Subscriber_Onboarding/Required_Tokens_API/02.Purchase_Service",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Subscriber_Onboarding/Required_Tokens_API/02.Purchase_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Business_Configuration/Inventory_Management/Inventory_Definition",
+      "parameters": {
+        "robotFolder": "Business_Configuration/Inventory_Management/Inventory_Definition"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Business_Configuration/Inventory_Management/Inventory_Repository",
+      "parameters": {
+        "robotFolder": "Business_Configuration/Inventory_Management/Inventory_Repository"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Business_Configuration/Inventory_Management/Inventory_Sales_Config",
+      "parameters": {
+        "robotFolder": "Business_Configuration/Inventory_Management/Inventory_Sales_Config"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Business_Configuration/Inventory_Management/Stock_Transfer_Note",
+      "parameters": {
+        "robotFolder": "Business_Configuration/Inventory_Management/Stock_Transfer_Note"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Approved_Unapproved_Subscriber",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Approved_Unapproved_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/AutoTopUp/FixInterval_AutoTopUp",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/AutoTopUp/FixInterval_AutoTopUp"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/AutoTopUp/ReachingDataLimit_AutoTopUp",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/AutoTopUp/ReachingDataLimit_AutoTopUp"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Balance_Adjustment",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Balance_Adjustment"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Bank_Adjustment",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Bank_Adjustment"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Batch_Billing/Max_Debt_At_User_Level/Bill_In_Advance",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Batch_Billing/Max_Debt_At_User_Level/Bill_In_Advance"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Batch_Billing/Max_Debt_At_User_Level/Bill_Not_in_Advance",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Batch_Billing/Max_Debt_At_User_Level/Bill_Not_in_Advance"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Batch_Billing/Postpaid_Customers/AddOnServiceExpireAfterNBilling",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Batch_Billing/Postpaid_Customers/AddOnServiceExpireAfterNBilling"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Batch_Billing/Postpaid_Customers/Batch_Renewal",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Batch_Billing/Postpaid_Customers/Batch_Renewal"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Batch_Billing/Postpaid_Customers/Batch_Renewal/Allowance_Roll_Over",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Batch_Billing/Postpaid_Customers/Batch_Renewal/Allowance_Roll_Over"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Batch_Billing/Prepaid_Customers",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Batch_Billing/Prepaid_Customers"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Block_Unblock",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Block_Unblock"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/CUG_Purchase_Service",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/CUG_Purchase_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Cancel_Regenerate_Invoice",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Cancel_Regenerate_Invoice"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Cancel_Service/Cancel_Service_From_API",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Cancel_Service/Cancel_Service_From_API"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Cancel_Service/Cancel_Service_From_CRM",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Cancel_Service/Cancel_Service_From_CRM"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Cancel_Service_EOP",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Cancel_Service_EOP"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Delete_Subscriber",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Delete_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/EnableDisableAutoPay",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/EnableDisableAutoPay"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Freeze_Account/API",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Freeze_Account/API"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Freeze_Account/CRM",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Freeze_Account/CRM"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/IPTV/01. Subscriber_Onboarding/API",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/IPTV/01. Subscriber_Onboarding/API"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/IPTV/02. Purchase_Service/API",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/IPTV/02. Purchase_Service/API"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/IPTV/03. Cancel_Service/API",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/IPTV/03. Cancel_Service/API"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/IPTV/04. Switch_Plan/API",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/IPTV/04. Switch_Plan/API"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Multi_Cycle_Billing/01.User_Registration",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Multi_Cycle_Billing/01.User_Registration"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Multi_Cycle_Billing/02.Batch_Renewal",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Multi_Cycle_Billing/02.Batch_Renewal"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Notification_Preferences",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Notification_Preferences"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/PLP_Purchase_Service",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/PLP_Purchase_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Purchase_Service_For_Subscriber/PostpaidUser",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Purchase_Service_For_Subscriber/PostpaidUser"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Purchase_Service_For_Subscriber/PrepaidUser",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Purchase_Service_For_Subscriber/PrepaidUser"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Recurring_Promotion_to_susbscribers",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Recurring_Promotion_to_susbscribers"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Single_charging_For_Option_switch/0",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Single_charging_For_Option_switch/0"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Single_charging_For_Option_switch/1",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Single_charging_For_Option_switch/1"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Single_charging_For_Option_switch/2",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Single_charging_For_Option_switch/2"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/Update_Subscriber_Informations",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/Update_Subscriber_Informations"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Management/UploadDocuments",
+      "parameters": {
+        "robotFolder": "Subscriber_Management/UploadDocuments"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/BlockUnblockService",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/BlockUnblockService"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Finalize_User",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Finalize_User"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Gifting_policy",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Gifting_policy"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Gifting_policy/1. Gifting Limits/MMSBank_gifting_limit",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Gifting_policy/1. Gifting Limits/MMSBank_gifting_limit"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Gifting_policy/1. Gifting Limits/SMSBank_gifting_limit",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Gifting_policy/1. Gifting Limits/SMSBank_gifting_limit"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Gifting_policy/1. Gifting Limits/TimeBank_gifiting_limit",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Gifting_policy/1. Gifting Limits/TimeBank_gifiting_limit"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Gifting_policy/1. Gifting Limits/VolumeBank_gifiting_limit",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Gifting_policy/1. Gifting Limits/VolumeBank_gifiting_limit"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Gifting_policy/1. Gifting Limits/WalletBank_gifting_limit",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Gifting_policy/1. Gifting Limits/WalletBank_gifting_limit"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Global_Search",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Global_Search"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/List_Subscriber/Activate_Accounts",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/List_Subscriber/Activate_Accounts"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/List_Subscriber/Manage_Customers",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/List_Subscriber/Manage_Customers"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/MBR_User_Child_Hierarchy/DifferentCycleFixedDateBP_Hierarchy",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/MBR_User_Child_Hierarchy/DifferentCycleFixedDateBP_Hierarchy"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/MBR_User_Child_Hierarchy/N_Level_Hierarchy/GUI",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/MBR_User_Child_Hierarchy/N_Level_Hierarchy/GUI"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/MBR_User_Child_Hierarchy/Shared_Bank_For_Child",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/MBR_User_Child_Hierarchy/Shared_Bank_For_Child"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/MBR_User_Child_Hierarchy/Single_Level_Hierarchy",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/MBR_User_Child_Hierarchy/Single_Level_Hierarchy"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/MBR_User_Child_Hierarchy/Single_Level_Hierarchy/API",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/MBR_User_Child_Hierarchy/Single_Level_Hierarchy/API"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/MBR_User_Child_Hierarchy/Single_Level_Hierarchy/GUI",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/MBR_User_Child_Hierarchy/Single_Level_Hierarchy/GUI"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/One_Time_Charge",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/One_Time_Charge"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Post_Payment",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Post_Payment"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Post_Payment/OperationEventLimit",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Post_Payment/OperationEventLimit"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Proforma_Invoice",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Proforma_Invoice"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Rate_Cutter/Add_Subscriber",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Rate_Cutter/Add_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Rate_Cutter/Cancel_Service",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Rate_Cutter/Cancel_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Rate_Cutter/Finalize_Subscriber",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Rate_Cutter/Finalize_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Rate_Cutter/Purchase_Service",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Rate_Cutter/Purchase_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/Reward_Point_Accrual",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/Reward_Point_Accrual"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/StartOnFirstConnect",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/StartOnFirstConnect"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/eSIM/01.OnboardSubscriber",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/eSIM/01.OnboardSubscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/eSIM/02.PurchaseService",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/eSIM/02.PurchaseService"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/eSIM/03.CancelService",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/eSIM/03.CancelService"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/eSIM/04.SimSwap",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/eSIM/04.SimSwap"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/eSIM/05.SimReplacement",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/eSIM/05.SimReplacement"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Subscriber_Operations/eSIM/06. SwitchPlan",
+      "parameters": {
+        "robotFolder": "Subscriber_Operations/eSIM/06. SwitchPlan"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Plan_Switch_EOP/Anniversary_To_FixedDate_And_Fixed_To_Anni/Active_User_Plan_Switch",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Plan_Switch_EOP/Anniversary_To_FixedDate_And_Fixed_To_Anni/Active_User_Plan_Switch"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Plan_Switch_EOP/Annually_Fixed_Date",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Plan_Switch_EOP/Annually_Fixed_Date"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Plan_Switch_EOP/MonthlyOnAnniversary_PlanSwitch",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Plan_Switch_EOP/MonthlyOnAnniversary_PlanSwitch"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Plan_Switch_EOP/MonthlyOnAnniversary_SwitchEOP_Configurable services",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Plan_Switch_EOP/MonthlyOnAnniversary_SwitchEOP_Configurable services"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Plan_Switch_EOP/Monthly_FixedDate_SwitchEOP_Configurable services",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Plan_Switch_EOP/Monthly_FixedDate_SwitchEOP_Configurable services"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Plan_Switch_EOP/Quarterly_Fixed_Date",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Plan_Switch_EOP/Quarterly_Fixed_Date"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Plan_Switch_EOP/SemiAnnually_Fixed_Date",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Plan_Switch_EOP/SemiAnnually_Fixed_Date"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/End_Of_Period/Switch_Plan_Revoke_EOP",
+      "parameters": {
+        "robotFolder": "Switch_Plan/End_Of_Period/Switch_Plan_Revoke_EOP"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Plan_Location_Validation",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Plan_Location_Validation"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Adv_NoRefund_SetupFee_False/Anni_To_FixedDate_n_ViceVersa",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Adv_NoRefund_SetupFee_False/Anni_To_FixedDate_n_ViceVersa"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Adv_NoRefund_SetupFee_False/Anniversary_To_Anniversary",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Adv_NoRefund_SetupFee_False/Anniversary_To_Anniversary"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Adv_NoRefund_SetupFee_False/FixedDate",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Adv_NoRefund_SetupFee_False/FixedDate"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Adv_True_NoRefund_SetupFee_False/Anni_To_FixedDate_n_ViceVersa",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Adv_True_NoRefund_SetupFee_False/Anni_To_FixedDate_n_ViceVersa"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Adv_True_NoRefund_SetupFee_False/Anniversary_To_Anniversary",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Adv_True_NoRefund_SetupFee_False/Anniversary_To_Anniversary"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Adv_True_NoRefund_SetupFee_False/FixedDate",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Adv_True_NoRefund_SetupFee_False/FixedDate"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Advance_NoRefund_True/Anni_To_FixedDate_n_ViceVersa",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Advance_NoRefund_True/Anni_To_FixedDate_n_ViceVersa"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Advance_NoRefund_True/Anniversary_To_Anniversary",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Advance_NoRefund_True/Anniversary_To_Anniversary"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_Advance_NoRefund_True/FixedDate",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_Advance_NoRefund_True/FixedDate"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_NoRefund_False_Adv_SetupFee_True/Anni_To_FixedDate_n_ViceVersa",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_NoRefund_False_Adv_SetupFee_True/Anni_To_FixedDate_n_ViceVersa"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_NoRefund_False_Adv_SetupFee_True/Anniversary_To_Anniversary",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_NoRefund_False_Adv_SetupFee_True/Anniversary_To_Anniversary"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_NoRefund_False_Adv_SetupFee_True/FixedDate",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_NoRefund_False_Adv_SetupFee_True/FixedDate"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_SetupFee_True_Adv_NoRefund_False/Anniversary_To_FixedDate_And_Fixed_To_Anni",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_SetupFee_True_Adv_NoRefund_False/Anniversary_To_FixedDate_And_Fixed_To_Anni"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_SetupFee_True_Adv_NoRefund_False/MonthlyOnAnniversary_PlanSwitch",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_SetupFee_True_Adv_NoRefund_False/MonthlyOnAnniversary_PlanSwitch"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Prorate_SetupFee_True_Adv_NoRefund_False/MonthlyOn_FixedDate_PlanSwitch",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Prorate_SetupFee_True_Adv_NoRefund_False/MonthlyOn_FixedDate_PlanSwitch"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/SwitchPlan_FixedBillingCycles",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/SwitchPlan_FixedBillingCycles"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Real_Time/Switch_Plan_Real_time_Deposit_fee_waiver",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Real_Time/Switch_Plan_Real_time_Deposit_fee_waiver"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Switch_Plan_Rollover/Switch_Plan_Rollover_EOP/DifferentBank",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Switch_Plan_Rollover/Switch_Plan_Rollover_EOP/DifferentBank"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Switch_Plan/Switch_Plan_Rollover/Switch_Plan_Rollover_EOP/SameBank",
+      "parameters": {
+        "robotFolder": "Switch_Plan/Switch_Plan_Rollover/Switch_Plan_Rollover_EOP/SameBank"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Trouble_Ticket/Trouble_Ticket_Crud_Operations",
+      "parameters": {
+        "robotFolder": "Trouble_Ticket/Trouble_Ticket_Crud_Operations"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Trouble_Ticket/Trouble_Ticket_Escalations",
+      "parameters": {
+        "robotFolder": "Trouble_Ticket/Trouble_Ticket_Escalations"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Affiliate_AccountStatus",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Affiliate_AccountStatus"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Hierarchy_Affiliate_Management/01.Affiliate_Lifecycle",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Hierarchy_Affiliate_Management/01.Affiliate_Lifecycle"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Hierarchy_Affiliate_Management/02.Airtime_Transfer_B_To_B",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Hierarchy_Affiliate_Management/02.Airtime_Transfer_B_To_B"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Hierarchy_Affiliate_Management/03.Airtime_Transfer_B_To_C",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Hierarchy_Affiliate_Management/03.Airtime_Transfer_B_To_C"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Hierarchy_Affiliate_Management/04.Airtime_Reversal_B_To_C_GUI",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Hierarchy_Affiliate_Management/04.Airtime_Reversal_B_To_C_GUI"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Hierarchy_Affiliate_Management/05.360_Customer_Operation",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Hierarchy_Affiliate_Management/05.360_Customer_Operation"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Hierarchy_Affiliate_Management/08.Inventory_Transfer_B_To_C",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Hierarchy_Affiliate_Management/08.Inventory_Transfer_B_To_C"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/QuickPayment",
+      "parameters": {
+        "robotFolder": "Manage_Partners/QuickPayment"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_Lifecycle",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_Lifecycle"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_Payment",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_Payment"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_Search",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_Search"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_System_User_Import",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Single_Level_Affiliate_Managment/Affiliate_System_User_Import"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/Single_Level_Affiliate_Managment/Affiliates",
+      "parameters": {
+        "robotFolder": "Manage_Partners/Single_Level_Affiliate_Managment/Affiliates"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Manage_Partners/UploadDocuments",
+      "parameters": {
+        "robotFolder": "Manage_Partners/UploadDocuments"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port ManagePartners_NewFlow/Affiliate_CRUD_Operations/CRUD_GUI",
+      "parameters": {
+        "robotFolder": "ManagePartners_NewFlow/Affiliate_CRUD_Operations/CRUD_GUI"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port ManagePartners_NewFlow/Affiliate_Operations/01_Airtime_Transfer_B2B",
+      "parameters": {
+        "robotFolder": "ManagePartners_NewFlow/Affiliate_Operations/01_Airtime_Transfer_B2B"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port ManagePartners_NewFlow/Affiliate_Operations/02_Airtime_Transfer_B2C",
+      "parameters": {
+        "robotFolder": "ManagePartners_NewFlow/Affiliate_Operations/02_Airtime_Transfer_B2C"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port ManagePartners_NewFlow/Affiliate_Operations/03_Affiliate_Airtime_Adjustment",
+      "parameters": {
+        "robotFolder": "ManagePartners_NewFlow/Affiliate_Operations/03_Affiliate_Airtime_Adjustment"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port ManagePartners_NewFlow/Affiliate_Operations/04_Affiliate_Payment_NewFlow",
+      "parameters": {
+        "robotFolder": "ManagePartners_NewFlow/Affiliate_Operations/04_Affiliate_Payment_NewFlow"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port ManagePartners_NewFlow/Affiliate_Operations/05.InventoryTransfer_AffiliateHierarchy_NewFlow",
+      "parameters": {
+        "robotFolder": "ManagePartners_NewFlow/Affiliate_Operations/05.InventoryTransfer_AffiliateHierarchy_NewFlow"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Billing/Billing_Invoice_Verification",
+      "parameters": {
+        "robotFolder": "Billing/Billing_Invoice_Verification"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Billing_Operations/Test_Bill_Run/01. Test_Target",
+      "parameters": {
+        "robotFolder": "Billing_Operations/Test_Bill_Run/01. Test_Target"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Billing_Operations/Test_Bill_Run/02. Bill_Test_Run",
+      "parameters": {
+        "robotFolder": "Billing_Operations/Test_Bill_Run/02. Bill_Test_Run"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Statements/About_SE",
+      "parameters": {
+        "robotFolder": "Statements/About_SE"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Statements/Data_Bank_Statement",
+      "parameters": {
+        "robotFolder": "Statements/Data_Bank_Statement"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Administration/Department",
+      "parameters": {
+        "robotFolder": "Administration/Department"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Administration/Manage_System_User",
+      "parameters": {
+        "robotFolder": "Administration/Manage_System_User"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Administration/Password_Policy",
+      "parameters": {
+        "robotFolder": "Administration/Password_Policy"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Administration/Webhook_Configuration",
+      "parameters": {
+        "robotFolder": "Administration/Webhook_Configuration"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/1Payment_Gateway",
+      "parameters": {
+        "robotFolder": "Settings/1Payment_Gateway"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/2Provisioning_Target",
+      "parameters": {
+        "robotFolder": "Settings/2Provisioning_Target"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Custom_Fields",
+      "parameters": {
+        "robotFolder": "Settings/Custom_Fields"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Customer_Password_Policy",
+      "parameters": {
+        "robotFolder": "Settings/Customer_Password_Policy"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Email_Settings",
+      "parameters": {
+        "robotFolder": "Settings/Email_Settings"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Event_Scheduler",
+      "parameters": {
+        "robotFolder": "Settings/Event_Scheduler"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Event_Types",
+      "parameters": {
+        "robotFolder": "Settings/Event_Types"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Events",
+      "parameters": {
+        "robotFolder": "Settings/Events"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Operation_Event_Limit",
+      "parameters": {
+        "robotFolder": "Settings/Operation_Event_Limit"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/SMPP_Configurations",
+      "parameters": {
+        "robotFolder": "Settings/SMPP_Configurations"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/Server_Nodes",
+      "parameters": {
+        "robotFolder": "Settings/Server_Nodes"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Settings/SystemParameters",
+      "parameters": {
+        "robotFolder": "Settings/SystemParameters"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port System_User_Login",
+      "parameters": {
+        "robotFolder": "System_User_Login"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port System_User_Login/2_Password_Lockout_Login",
+      "parameters": {
+        "robotFolder": "System_User_Login/2_Password_Lockout_Login"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port System_User_Login/3_Password_Policy_Validation",
+      "parameters": {
+        "robotFolder": "System_User_Login/3_Password_Policy_Validation"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Tenant_Management",
+      "parameters": {
+        "robotFolder": "Tenant_Management"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Utilitie",
+      "parameters": {
+        "robotFolder": "Utilitie"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Utilitie/1_Logs_AuditTrail",
+      "parameters": {
+        "robotFolder": "Utilitie/1_Logs_AuditTrail"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Utilitie/2_View Archieve Record",
+      "parameters": {
+        "robotFolder": "Utilitie/2_View Archieve Record"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Utilitie/Import_Data",
+      "parameters": {
+        "robotFolder": "Utilitie/Import_Data"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Sessions_Calls/View_EDR",
+      "parameters": {
+        "robotFolder": "Sessions_Calls/View_EDR"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port WebService/Fetch_Activity_History",
+      "parameters": {
+        "robotFolder": "WebService/Fetch_Activity_History"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port WebService/Fetch_Configurations",
+      "parameters": {
+        "robotFolder": "WebService/Fetch_Configurations"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port WebService/Subscriber_Management",
+      "parameters": {
+        "robotFolder": "WebService/Subscriber_Management"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Alepo_CM/Business_Configuration/Policy",
+      "parameters": {
+        "robotFolder": "Alepo_CM/Business_Configuration/Policy"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Alepo_CM/Business_Configuration/Subscriber",
+      "parameters": {
+        "robotFolder": "Alepo_CM/Business_Configuration/Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Alepo_CM/Business_Configuration/System_Configurations",
+      "parameters": {
+        "robotFolder": "Alepo_CM/Business_Configuration/System_Configurations"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port Alepo_CM/CM_Integration",
+      "parameters": {
+        "robotFolder": "Alepo_CM/CM_Integration"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port VMS_ATDD/VMS/Utilities/Audit_Trail",
+      "parameters": {
+        "robotFolder": "VMS_ATDD/VMS/Utilities/Audit_Trail"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port VMS_ATDD/VMS/Voucher_Management/Voucher_Template",
+      "parameters": {
+        "robotFolder": "VMS_ATDD/VMS/Voucher_Management/Voucher_Template"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port VMS_ATDD/VMS/Voucher_Management/Vouchers",
+      "parameters": {
+        "robotFolder": "VMS_ATDD/VMS/Voucher_Management/Vouchers"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Add_Subscriber/Cyclic_Subscriber",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Add_Subscriber/Cyclic_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Add_Subscriber/Non_Cyclic_Subscriber",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Add_Subscriber/Non_Cyclic_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Block_Subscriber",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Block_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Block_unblock_subscriber_service",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Block_unblock_subscriber_service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Cancel_Service",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Cancel_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Datapass_Adjustment",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Datapass_Adjustment"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Delete_Subscriber",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Delete_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Expire_Subscriber",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Expire_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Finalize_Subscriber",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Finalize_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/GiftingOCS",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/GiftingOCS"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/GiftingPCRF",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/GiftingPCRF"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Recharge/CreditLineRecharge",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Recharge/CreditLineRecharge"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Recharge/CreditLineRecharge/CreditLineRecovery",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Recharge/CreditLineRecharge/CreditLineRecovery"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Recharge/CreditLineRecharge/CreditLineRecovery/VoucherRefill_CreditLineRecovery",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Recharge/CreditLineRecharge/CreditLineRecovery/VoucherRefill_CreditLineRecovery"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Recharge/CreditLineRecharge/Purchase_CreditLine",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Recharge/CreditLineRecharge/Purchase_CreditLine"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Recharge/RechargeErefill/ERefillCRM",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Recharge/RechargeErefill/ERefillCRM"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Recharge/RechargeUsingPhysicalVouchers/Voucher Recharge CRM",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Recharge/RechargeUsingPhysicalVouchers/Voucher Recharge CRM"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Recharge/Redeem_Offers/RedeemCRM",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Recharge/Redeem_Offers/RedeemCRM"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Service_Management/Cancel_Service",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Service_Management/Cancel_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Service_Management/GetServiceBalance",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Service_Management/GetServiceBalance"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Service_Management/Purchase_Service",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Service_Management/Purchase_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Service_Management/Update_Service",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Service_Management/Update_Service"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Unblock_Subscriber",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Unblock_Subscriber"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/Update_Password",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/Update_Password"
+      },
+      "status": "pending"
+    },
+    {
+      "prompt": "Port IntegrationTesting/WebHook/AAA",
+      "parameters": {
+        "robotFolder": "IntegrationTesting/WebHook/AAA"
+      },
+      "status": "pending"
+    }
+  ],
+  "pausedReason": "new host: start it from the queue panel once the access check is green"
+}

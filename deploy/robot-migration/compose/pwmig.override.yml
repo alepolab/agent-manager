@@ -1,0 +1,201 @@
+# The robot-migration instance on a shared host: Agent Manager + its own ase-crm stack, all in one
+# compose project (`pwmig`), layered on a FRESH clone's ase-crm/docker/docker-compose.yml:
+#
+#   docker compose -p pwmig -f /src/ase-crm/docker/docker-compose.yml -f pwmig.override.yml \
+#     --env-file /src/ase-crm/.env --env-file pwmig.env up -d
+#
+# Run only by the builder and stackctl containers (they hold the docker socket), never on the host.
+# Isolation from everything else on the host:
+# - no published ports (`ports: !reset []`): the UI is reached by an SSH tunnel to am's fixed IP;
+# - our own network with a fixed subnet (PWMIG_SUBNET), never alepo-dev or another project's network;
+# - every container named pwmig-*, every image pwmig/*, every volume pwmig_* (compose prefixes them);
+# - no bind mounts: the faketime file, cube model and realm come from named volumes (subpath of pwmig_src);
+# - memory and CPU limits on every service, so a busy run cannot starve the host's other stacks.
+services:
+  mariadb:
+    image: pwmig/mariadb-faketime:latest
+    build: !reset null
+    pull_policy: never
+    container_name: pwmig-mariadb
+    ports: !reset []
+    networks: !override [pwmig]
+    volumes: !override
+      - mariadb-data:/var/lib/mysql
+      - faketime:/faketime
+    mem_limit: 2g
+    cpus: 1.5
+
+  minio:
+    image: pwmig/s3mock:3.12.0
+    pull_policy: never
+    container_name: pwmig-minio
+    ports: !reset []
+    networks: !override [pwmig]
+    mem_limit: 512m
+    cpus: 0.5
+
+  cube:
+    image: pwmig/cube:v1.7.40
+    pull_policy: never
+    container_name: pwmig-cube
+    ports: !reset []
+    networks: !override [pwmig]
+    volumes: !override
+      - type: volume
+        source: src
+        target: /cube/conf/model
+        read_only: true
+        volume: { subpath: ase-crm/cube/model }
+      - type: volume
+        source: src
+        target: /cube/conf/cube.js
+        read_only: true
+        volume: { subpath: ase-crm/cube/cube.js }
+    mem_limit: 768m
+    cpus: 0.5
+
+  billing:
+    image: pwmig/alepobilling-14:v14.0.9
+    pull_policy: never
+    container_name: pwmig-billing
+    ports: !reset []
+    networks: !override [pwmig]
+    mem_limit: 1g
+    cpus: 1
+
+  app:
+    image: pwmig/docker-app:latest
+    build: !reset null
+    pull_policy: never
+    container_name: pwmig-app
+    ports: !reset []
+    networks: !override [pwmig]
+    volumes: !override
+      - faketime:/faketime
+      - ase-templates:${ASE_TEMPLATES_DIR:-/var/lib/ase/templates}
+      - ase-documents:${ASE_DOCUMENTS_DIR:-/var/lib/ase/documents}
+      - ase-exports:${ASE_EXPORTS_DIR:-/var/lib/ase/exports}
+      - ase-imports:${ASE_IMPORTS_DIR:-/var/lib/ase/imports}
+    environment:
+      # The JVM runs WITHOUT libfaketime unless stackctl turned the clock on (idle ~470% CPU with it).
+      LD_PRELOAD: ${APP_LD_PRELOAD:-}
+      # Same issuer the browser in `am` uses (localhost:KC_PORT through the `ports` sidecar).
+      KEYCLOAK_ISSUER_URI: http://localhost:${KC_PORT}/realms/alepo
+      KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/alepo/protocol/openid-connect/certs
+    depends_on:
+      keycloak:
+        condition: service_started
+    mem_limit: 3g
+    cpus: 2
+
+  keycloak:
+    image: pwmig/keycloak:26.0
+    pull_policy: never
+    container_name: pwmig-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HOSTNAME_STRICT: "false"
+      # libfaketime only while the clock is on (the app checks token times against its faked clock).
+      LD_PRELOAD: ${KC_LD_PRELOAD:-}
+      FAKETIME_TIMESTAMP_FILE: /faketime/ts
+      FAKETIME_DONT_FAKE_MONOTONIC: "1"
+    volumes:
+      # H2 data survives a recreate (clock on/off), so users and the crm-api secret stay put.
+      - keycloak-data:/opt/keycloak/data/h2
+      - faketime:/faketime
+      - type: volume
+        source: src
+        target: /opt/keycloak/data/import
+        read_only: true
+        volume: { subpath: ase-crm/keycloak }
+    networks: [pwmig]
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1
+
+  # The app reaches Keycloak at the issuer address (localhost:KC_PORT) from inside its own container.
+  keycloak-forward:
+    image: pwmig/socat:latest
+    pull_policy: never
+    container_name: pwmig-keycloak-forward
+    network_mode: "service:app"
+    command: ["TCP-LISTEN:${KC_PORT},fork,reuseaddr", "TCP:keycloak:8080"]
+    depends_on: [app]
+    restart: unless-stopped
+    mem_limit: 64m
+
+  # Agent Manager + the agents' toolchain (node, git, flock, python+robotframework, chromium).
+  am:
+    image: pwmig/agent-runner:latest
+    pull_policy: never
+    container_name: pwmig-am
+    env_file:
+      - ${PWMIG_KIT}/compose/am.env
+    environment:
+      STACKCTL_URL: http://stackctl:7070
+    volumes:
+      - am-state:/data
+      - claude-home:/home/pwuser/.claude
+      - work:/work
+      - src:/src:ro
+      # The stack's offset file. The entrypoint links the suite's docker/stacks/ui/faketime (FAKETIME_FILE) here.
+      - faketime:/faketime
+    networks:
+      pwmig:
+        ipv4_address: ${PWMIG_AM_IP}
+    restart: unless-stopped
+    mem_limit: 4g
+    cpus: 2
+
+  # Inside am, localhost:<port> reaches the stack exactly as on the laptop (stack.sh test-env ui).
+  ports:
+    image: pwmig/socat:latest
+    pull_policy: never
+    container_name: pwmig-ports
+    network_mode: "service:am"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        socat TCP-LISTEN:${APP_PORT},fork,reuseaddr TCP:app:8081 &
+        socat TCP-LISTEN:${KC_PORT},fork,reuseaddr TCP:keycloak:8080 &
+        socat TCP-LISTEN:${MARIADB_PORT},fork,reuseaddr TCP:mariadb:3306 &
+        socat TCP-LISTEN:${BILLING_PORT},fork,reuseaddr TCP:billing:8007 &
+        socat TCP-LISTEN:${MINIO_API_PORT},fork,reuseaddr TCP:minio:9000 &
+        wait
+    depends_on: [am]
+    restart: unless-stopped
+    mem_limit: 64m
+
+  # The only container with the docker socket. Fixed actions for project pwmig only (clock on/off, status).
+  stackctl:
+    image: pwmig/stackctl:latest
+    pull_policy: never
+    container_name: pwmig-stackctl
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - src:/src:ro
+      - stackctl-state:/state
+    networks: [pwmig]
+    restart: unless-stopped
+    mem_limit: 128m
+
+networks:
+  alepo-dev: !reset null
+  pwmig:
+    name: pwmig-net
+    ipam:
+      config:
+        - subnet: ${PWMIG_SUBNET}
+
+volumes:
+  faketime: {}
+  keycloak-data: {}
+  am-state: {}
+  claude-home: {}
+  work: {}
+  stackctl-state: {}
+  src:
+    external: true
+    name: pwmig_src
