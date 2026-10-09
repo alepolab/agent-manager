@@ -210,7 +210,7 @@ const mustJustify = computed(() => needsJustification(props.run.blastRadius))
           {{ situationOpen ? 'Show less' : 'Show more' }}
         </button>
         <div v-if="openQuestions.length" class="group-card p-3! space-y-2">
-          <h3 class="t-ui font-semibold m-0 text-strong">Intake questions still open</h3>
+          <h3 class="t-ui font-semibold m-0 text-strong">Questions still open for you</h3>
           <dl class="m-0 space-y-2">
             <div v-for="(q, i) in openQuestions" :key="i"><dt class="font-medium text-strong">{{ q.question }}</dt><dd class="m-0 text-label whitespace-pre-wrap">{{ q.answer }}</dd></div>
           </dl>

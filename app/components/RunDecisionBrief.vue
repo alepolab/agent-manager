@@ -50,7 +50,7 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
       </section>
 
       <section v-if="unresolved.length">
-        <h4 class="t-label mb-1" style="color: var(--text-secondary);">Intake questions still open</h4>
+        <h4 class="t-label mb-1" style="color: var(--text-secondary);">Questions still open for you</h4>
         <dl class="m-0 space-y-1.5">
           <div v-for="(q, i) in unresolved" :key="i">
             <dt class="font-medium" style="color: var(--text-primary);">{{ q.question }}</dt>
@@ -74,7 +74,7 @@ const isRecommended = (key: string) => key.replace(/[()]/g, '').trim().toLowerCa
             </div>
             <dl class="m-0 grid gap-x-2 gap-y-0.5" style="grid-template-columns: max-content 1fr;">
               <dt class="text-label">Next</dt><dd class="m-0">{{ o.next }}</dd>
-              <dt class="text-label">{{ approval ? 'Advantages' : 'Ticket gets' }}</dt><dd class="m-0">{{ o.delivers }}</dd>
+              <dt class="text-label">{{ approval ? 'Advantages' : 'Gains' }}</dt><dd class="m-0">{{ o.delivers }}</dd>
               <dt class="text-label">{{ approval ? 'Disadvantages' : 'Left undone' }}</dt><dd class="m-0">{{ o.leaves }}</dd>
               <template v-if="o.risk"><dt class="text-label">Risk</dt><dd class="m-0">{{ o.risk }}</dd></template>
             </dl>
