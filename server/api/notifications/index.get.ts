@@ -5,6 +5,7 @@ import { listPendingPermissions } from '../../utils/providers/claudeProvider'
 import { detectSdkSession } from '../../utils/sdkSessionStorage'
 import { currentRole } from '../../utils/session'
 import { listRuns } from '../../utils/workflowRunStore'
+import { scanOriginIndex } from '../../utils/scanOrigins'
 
 /**
  * Every decision waiting on the caller, for /notifications and the sidebar's
@@ -21,5 +22,7 @@ export default defineEventHandler(async (event) => {
     ...p,
     projectName: (await detectSdkSession(p.sessionId).catch(() => null)) ?? undefined,
   })))
-  return { items: buildNotifications((await listRuns()).filter(r => !isTestRun(r)), permissions, role) }
+  const runs = (await listRuns()).filter(r => !isTestRun(r))
+  // One stat per scan run, a read only when its tickets-created.json changed.
+  return { items: buildNotifications(runs, permissions, role, await scanOriginIndex(runs)) }
 })

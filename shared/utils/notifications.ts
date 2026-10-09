@@ -3,6 +3,7 @@ import type { NotificationItem, PendingPermissionSummary } from '../types/notifi
 import { can, type Role } from '../types/role.ts'
 import { isWaitingOnAPerson } from '../types/run.ts'
 import { briefHeadline } from './decisionBrief.ts'
+import { scanOriginOf, type ScanRunInfo } from './scanOrigin.ts'
 
 /**
  * Every decision a person owes, in one list: the gates runs are stopped on and
@@ -47,10 +48,14 @@ export function permissionAsk(p: Pick<PendingPermissionSummary, 'toolName' | 'to
   return `Allow ${p.toolName}?`
 }
 
+const optional = <K extends string, V>(key: K, value: V | undefined) => (value === undefined ? {} : { [key]: value } as Record<K, V>)
+
 export function buildNotifications(
   runs: WorkflowRun[],
   permissions: PendingPermissionSummary[],
   viewer: Role | undefined | null,
+  /** Which scan filed which ticket; without it no item names a scan. */
+  origins?: { scans: ReadonlyMap<string, ScanRunInfo>, filedBy: ReadonlyMap<string, string> },
 ): NotificationItem[] {
   const gates: NotificationItem[] = runs
     // A quota pause resumes itself at the reset time: nobody owes it a decision.
@@ -67,6 +72,7 @@ export function buildNotifications(
       mine: gateIsMine(r.question?.role, viewer),
       blastRadius: r.blastRadius,
       review: r.status === 'awaiting_review',
+      ...(origins ? optional('scan', scanOriginOf(r, origins.scans, origins.filedBy)) : {}),
     }))
   // Only the people allowed to answer a prompt are handed any, so each one is theirs.
   const prompts: NotificationItem[] = permissions.map(p => ({
