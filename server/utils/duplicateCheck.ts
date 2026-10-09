@@ -20,6 +20,8 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
+import { relative } from 'node:path'
+import { nestedRepos } from './workspace.ts'
 import { resolveRunArtifact, writeArtifactJson } from './runArtifacts.ts'
 import { entriesOf } from '../../shared/utils/workflowGraph.ts'
 import { EXISTING_TICKETS_ARTIFACT, type ExistingTicket } from './existingTickets.ts'
@@ -45,7 +47,10 @@ export interface DuplicateMatch {
 
 // ── code references ────────────────────────────────────────────────────────
 
-const EXT = 'java|kt|kts|scala|groovy|ts|tsx|js|jsx|mjs|cjs|vue|py|go|rb|rs|cs|php|sql|xml|yml|yaml|json|gradle|properties|sh|html|css|scss'
+// C and C++ sources and headers too: the scan templates cover C++ products,
+// and a ticket naming Charging.cpp:100-110 indexed nothing without them. The
+// trailing \b in PATH_RE keeps `h` from matching the start of `hpp`.
+const EXT = 'java|kt|kts|scala|groovy|ts|tsx|js|jsx|mjs|cjs|vue|py|go|rb|rs|cs|php|sql|xml|yml|yaml|json|gradle|properties|sh|html|css|scss|c|cc|cpp|cxx|h|hh|hpp|hxx'
 /** A path: optional directories (an elided `.../` counts as one), then a file with a code extension, then an optional line or range. */
 const PATH_RE = new RegExp(String.raw`((?:[\w@.-]+/|\.\.\./|…/)*[\w@.-]+\.(?:${EXT}))\b(?::(\d+)(?:\s*[-–]\s*(\d+))?)?`, 'g')
 /** A markdown table row naming a file in one cell and its lines in the next. */
@@ -177,15 +182,49 @@ export function parseHunks(diff: string): CodeRef[] {
   return out
 }
 
-/** What a live run has changed since it started: committed on its branch, and not yet committed. */
-export async function changedFilesOf(run: Pick<WorkflowRun, 'projectDir' | 'baseCommit'>): Promise<CodeRef[]> {
-  if (!run.projectDir || !run.baseCommit) return []
+/** One repository's hunks since `base`, committed and not, with `prefix` put before each path. */
+async function hunksSince(dir: string, base: string, prefix = ''): Promise<CodeRef[]> {
   try {
-    const { stdout } = await execFileP('git', ['-C', run.projectDir, 'diff', '-U0', '--no-color', run.baseCommit], { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 })
-    return parseHunks(stdout)
+    const { stdout } = await execFileP('git', ['-C', dir, 'diff', '-U0', '--no-color', base], { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 })
+    return parseHunks(stdout).map(r => (prefix ? { ...r, path: `${prefix}/${r.path}` } : r))
   } catch {
     return []
   }
+}
+
+/**
+ * A module repository's own baseline: where its run branch left the base
+ * branch. The run records one base commit, the outer repository's; a module has
+ * its own history, so its baseline is found the way ensureRunBranch started it -
+ * from origin/<base> when the module has that branch. Without one, only its
+ * uncommitted changes can be told apart from history, so HEAD is the baseline.
+ */
+async function moduleBaseline(dir: string, baseBranch?: string): Promise<string> {
+  if (baseBranch) {
+    try {
+      const { stdout } = await execFileP('git', ['-C', dir, 'merge-base', 'HEAD', `origin/${baseBranch}`], { timeout: 15_000 })
+      if (stdout.trim()) return stdout.trim()
+    } catch { /* the module has no such branch */ }
+  }
+  return 'HEAD'
+}
+
+/**
+ * What a live run has changed since it started: committed on its branch, and not
+ * yet committed - in its own repository and in every nested module repository.
+ * A product like CRM keeps git-ignored repositories under modules/*, each with a
+ * worktree of its own inside the run's; the fix lands there and the outer
+ * repository shows nothing. Module paths keep their place under the run's
+ * worktree (modules/<name>/...), which matches a ticket naming the path either
+ * way: sameFile compares the directories each side states.
+ */
+export async function changedFilesOf(run: Pick<WorkflowRun, 'projectDir' | 'baseCommit'> & { baseBranch?: string }): Promise<CodeRef[]> {
+  if (!run.projectDir) return []
+  const out = run.baseCommit ? await hunksSince(run.projectDir, run.baseCommit) : []
+  for (const dir of nestedRepos(run.projectDir)) {
+    out.push(...await hunksSince(dir, await moduleBaseline(dir, run.baseBranch), relative(run.projectDir, dir)))
+  }
+  return out
 }
 
 /**
@@ -255,6 +294,18 @@ export function duplicateSentence(matches: DuplicateMatch[]): string {
 
 type Entry = Record<string, unknown>
 
+/** Two lists of matches as one, by ticket key, every matched location kept. */
+function mergeMatches(...lists: (DuplicateMatch[] | undefined)[]): DuplicateMatch[] {
+  const out = new Map<string, DuplicateMatch>()
+  for (const list of lists) for (const m of list ?? []) {
+    if (!m || typeof m.key !== 'string') continue
+    const prev = out.get(m.key)
+    if (!prev) out.set(m.key, { ...m, matched: [...(Array.isArray(m.matched) ? m.matched : [])] })
+    else prev.matched = [...new Set([...prev.matched, ...(Array.isArray(m.matched) ? m.matched : [])])]
+  }
+  return [...out.values()]
+}
+
 /** A JSON artifact and the entries inside it, however it is wrapped; null when absent or unreadable. */
 async function readJson(runId: string, name: string): Promise<{ root: unknown, entries: Entry[] } | null> {
   const path = resolveRunArtifact(runId, name)
@@ -321,7 +372,13 @@ export async function enforceDuplicateEscalation(runId: string): Promise<number>
   const drafts = await readJson(runId, DRAFTS_FILE)
   if (!drafts) return 0
   const byId = new Map(drafts.entries.filter(d => typeof d.draft_id === 'string').map(d => [d.draft_id as string, d.possible_duplicate_of as DuplicateMatch[] | undefined]))
-  const marks = (e: Entry) => (e.possible_duplicate_of as DuplicateMatch[] | undefined) ?? (typeof e.draft_id === 'string' ? byId.get(e.draft_id) : undefined)
+  // The runner's mark is the authority and the gate's copy can only add to it.
+  // Preferring the entry's own field let a gate that wrote
+  // `possible_duplicate_of: []` clear the mark, and the draft went on to be filed.
+  const marks = (e: Entry) => mergeMatches(
+    typeof e.draft_id === 'string' ? byId.get(e.draft_id) : undefined,
+    Array.isArray(e.possible_duplicate_of) ? e.possible_duplicate_of as DuplicateMatch[] : undefined,
+  )
 
   const approved = await readJson(runId, APPROVED_FILE)
   if (!approved) return 0
@@ -333,13 +390,14 @@ export async function enforceDuplicateEscalation(runId: string): Promise<number>
   let changed = false
   for (const e of escalated) {
     const m = marks(e)
-    if (m?.length && !e.possible_duplicate_of) { e.possible_duplicate_of = m; changed = true }
+    const had = Array.isArray(e.possible_duplicate_of) ? e.possible_duplicate_of.length : 0
+    if (m.length && m.length !== had) { e.possible_duplicate_of = m; changed = true }
   }
   const keep: Entry[] = []
   let moved = 0
   for (const e of approved.entries) {
     const m = marks(e)
-    if (!m?.length) { keep.push(e); continue }
+    if (!m.length) { keep.push(e); continue }
     const gate = (e.gate && typeof e.gate === 'object') ? e.gate as Record<string, unknown> : {}
     const sentence = duplicateSentence(m)
     escalated.push({

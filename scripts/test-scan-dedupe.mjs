@@ -116,6 +116,72 @@ const draft584 = { draft_id: 'DRAFT-002', finding_ids: ['PERF-005', 'PERF-012'],
   assert.match(dup.duplicateSentence(m), /ASECRM-368 \(SubscriberUnapprovalService\.java:145-155, on its run's unmerged branch\)/)
 }
 
+// ── 4b. C and C++ sources and headers are code too ──
+{
+  const cpp = [{ key: 'RATING-7', summary: '', status: '', labels: [], excerpt: '', locations: dup.extractCodeRefs('See `src/rating/Charging.cpp:100-110` and `include/rating/Charging.hpp:20`').map(dup.refString) }]
+  assert.deepEqual(cpp[0].locations, ['src/rating/Charging.cpp:100-110', 'include/rating/Charging.hpp:20'], `THE GAP: C++ locations were not indexed: ${cpp[0].locations}`)
+  const m = dup.findDuplicates({ draft_id: 'C1', description: 'Loop in `src/rating/Charging.cpp:104`' }, new Map(), cpp, [])
+  assert.equal(m[0]?.key, 'RATING-7', 'and a draft at those lines matches, as the .java equivalent does')
+  for (const ext of ['c', 'cc', 'cxx', 'h', 'hh', 'hxx']) {
+    assert.deepEqual(dup.extractCodeRefs(`x src/a/file.${ext}:5 y`).map(dup.refString), [`src/a/file.${ext}:5`], `.${ext} is indexed whole`)
+  }
+}
+
+// ── 4c. a native Jira table keeps each file with its lines ──
+{
+  const cell = text => ({ type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
+  const row = (...c) => ({ type: 'tableRow', content: c.map(cell) })
+  const tableDoc = { type: 'doc', version: 1, content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Two loops.' }] },
+    { type: 'table', content: [row('File', 'Line', 'Description'), row('src/ApprovalService.java', '404-412', 'save per row'), row('src/Other.java', '7', 'x')] },
+  ] }
+  const [t] = await fetchExistingTickets({ baseUrl: 'https://jira.test', email: 'a@b', apiToken: 't' }, 'ASECRM', async () => new Response(JSON.stringify({
+    isLast: true, issues: [{ key: 'ASECRM-700', fields: { summary: 'Batching', status: { name: 'To Do' }, labels: [], description: tableDoc } }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } }))
+  assert.ok(t.locations.includes('src/ApprovalService.java:404-412'), `THE GAP: a native table row lost its lines: ${t.locations}`)
+  const m = dup.findDuplicates({ draft_id: 'T1', description: '`src/ApprovalService.java:404-412` saves per row' }, new Map(), [t], [])
+  assert.equal(m[0]?.key, 'ASECRM-700', 'and a draft at the identical range matches it')
+}
+
+// ── 4d. a live run's nested module repositories are read too ──
+{
+  const sh = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8' }).trim()
+  const ident = d => { sh(d, 'config', 'user.email', 't@t'); sh(d, 'config', 'user.name', 't') }
+  // The module's origin, with the base branch the run was cut from.
+  const origin = mkdtempSync(join(tmpdir(), 'dedupe-mod-origin-'))
+  sh(origin, 'init', '-q', '-b', 'develop'); ident(origin)
+  const modFile = 'src/main/java/com/alepo/crm/BulkActivation.java'
+  mkdirSync(join(origin, modFile, '..'), { recursive: true })
+  const modLines = Array.from({ length: 120 }, (_, i) => `// m ${i + 1}`)
+  writeFileSync(join(origin, modFile), modLines.join('\n') + '\n'); sh(origin, 'add', '.'); sh(origin, 'commit', '-qm', 'base')
+  // The run's worktree: an outer repository that git-ignores modules/, and the module checked out inside it.
+  const outer = mkdtempSync(join(tmpdir(), 'dedupe-outer-'))
+  sh(outer, 'init', '-q'); ident(outer)
+  writeFileSync(join(outer, '.gitignore'), 'modules/\n'); sh(outer, 'add', '.'); sh(outer, 'commit', '-qm', 'outer')
+  const outerBase = sh(outer, 'rev-parse', 'HEAD')
+  mkdirSync(join(outer, 'modules'))
+  execFileSync('git', ['clone', '-q', origin, join(outer, 'modules', 'crm-core')])
+  const mod = join(outer, 'modules', 'crm-core'); ident(mod)
+  sh(mod, 'checkout', '-q', '-b', 'fix/X-1')
+  modLines[59] = 'batch.findAllById(ids);'
+  writeFileSync(join(mod, modFile), modLines.join('\n') + '\n'); sh(mod, 'commit', '-qam', 'fix')
+  modLines[99] = 'uncommitted();'
+  writeFileSync(join(mod, modFile), modLines.join('\n') + '\n')
+
+  const changes = await dup.changedFilesOf({ projectDir: outer, baseCommit: outerBase, baseBranch: 'develop' })
+  assert.deepEqual(changes, [
+    { path: `modules/crm-core/${modFile}`, from: 60, to: 60 },
+    { path: `modules/crm-core/${modFile}`, from: 100, to: 100 },
+  ], `THE GAP: the module's committed and uncommitted changes were not read: ${JSON.stringify(changes)}`)
+  // A draft naming the path inside the module (no modules/ prefix) is the same file.
+  const live = [{ runId: 'run-mod', ticketKey: 'ASECRM-900', changes }]
+  const m = dup.findDuplicates({ draft_id: 'M1', description: `\`${modFile}:58\` reads row by row` }, new Map(), [], live)
+  assert.equal(m[0]?.key, 'ASECRM-900', 'and a draft at those lines matches the run')
+  // A module without the base branch: only what is not yet committed can be told from history.
+  const lone = await dup.changedFilesOf({ projectDir: outer, baseCommit: outerBase, baseBranch: 'no-such-branch' })
+  assert.deepEqual(lone, [{ path: `modules/crm-core/${modFile}`, from: 100, to: 100 }], 'without its baseline, the uncommitted change still counts')
+}
+
 // ── 5. the runner: marked before the gate, held after it ──
 const store = await import('../server/utils/workflowRunStore.ts')
 const runner = await import('../server/utils/workflowRunner.ts')
@@ -140,7 +206,8 @@ runner.setAgentCaller(async (slug, input) => {
   // A gate that approves everything, as a careless one might.
   const drafts = JSON.parse(readFileSync(join(dir, 'ticket-drafts.json'), 'utf8'))
   seenByGate = drafts
-  w('approved-drafts.json', drafts.map(d => ({ ...d, gate: { verdict: 'auto-approved', reason: 'clear-cut' } })))
+  // ...and writes the mark back EMPTY, which used to clear the runner's.
+  w('approved-drafts.json', drafts.map(d => ({ ...d, possible_duplicate_of: [], gate: { verdict: 'auto-approved', reason: 'clear-cut' } })))
   w('escalated-drafts.json', [])
   return 'gated'
 })
@@ -156,6 +223,7 @@ const escalated = JSON.parse(readFileSync(join(dir, 'escalated-drafts.json'), 'u
 assert.deepEqual(approved.map(d => d.draft_id), ['DRAFT-009'], 'THE REGRESSION: a possible duplicate was auto-approved and would have been filed')
 assert.equal(escalated.length, 1)
 assert.equal(escalated[0].draft_id, 'DRAFT-002')
+assert.equal(escalated[0].possible_duplicate_of?.[0]?.key, 'ASECRM-368', 'the runner\'s mark, not the gate\'s empty copy, is what the review shows')
 assert.equal(escalated[0].gate.verdict, 'escalated')
 assert.ok(escalated[0].gate.escalation_criteria.includes('possible_duplicate'))
 assert.match(escalated[0].gate.decision_prompt, /^Possibly covered by ASECRM-368 .*fold it into ASECRM-368/)
