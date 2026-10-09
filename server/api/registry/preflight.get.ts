@@ -2,6 +2,7 @@ import { explainResolution, resolveProduct } from '../../utils/registry'
 import { artifactsWritable, checkoutDirFor, checkoutState } from '../../utils/workspace'
 import { currentUser } from '../../utils/session'
 import { getProfile } from '../../utils/users'
+import { githubSourceFor } from '../../utils/githubSource'
 
 /** Everything a developer should know before pressing Start: routing, the checkout, evidence storage, identity. */
 export default defineEventHandler(async (event) => {
@@ -13,10 +14,14 @@ export default defineEventHandler(async (event) => {
   // file order, which is invisible: a ticket routed to the wrong product looks
   // exactly like one routed to the right one, and the only way to find out
   // otherwise used to be starting a run and watching it clone the wrong repo.
-  const [artifacts, p, why] = await Promise.all([
+  // GitHub is asked in the environment the agents get, not read off the
+  // profile: without a profile token a run falls back to this host's own `gh`
+  // login, and the warning used to say it would stop when it would not.
+  const [artifacts, p, why, github] = await Promise.all([
     artifactsWritable(),
     text ? resolveProduct(text) : Promise.resolve(undefined),
     text ? explainResolution(text) : Promise.resolve(null),
+    githubSourceFor(user?.login),
   ])
   const repo = p?.repos?.[0]
   const checkout = repo ? await checkoutState(checkoutDirFor(repo, user?.login)) : null
@@ -26,7 +31,9 @@ export default defineEventHandler(async (event) => {
     checkout,
     artifacts,
     tokens: {
-      github: !!profile?.githubToken || !!process.env.AGENT_GH_TOKEN,
+      github: github.ok,
+      githubVia: github.via,
+      githubLogin: github.login,
       jira: !!(profile?.jiraToken && profile?.jiraEmail) || !!(process.env.JIRA_API_TOKEN && process.env.JIRA_EMAIL),
     },
   }
