@@ -522,6 +522,12 @@ async function publish(run: WorkflowRun) {
     }
     // A test run tells no one: no Slack message, no channel notification.
     if (!isTestRun(run)) onRunTransition(run)
+    // A run its workflow's queue started moves the queue on once it settles.
+    // Imported here, not at the top: workflowQueue starts runs through this file.
+    if (!isTestRun(run) && TERMINAL_STATUSES.includes(run.status) && run.watch?.startsWith('queue:')) {
+      void import('./workflowQueue.ts').then(m => m.advanceQueue(run))
+        .catch(err => log.warn('advancing the workflow queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    }
     // A settled run has given its slot back, so whatever is waiting in its
     // group can start. Here rather than in notify.ts, which cannot reach
     // startRun without an import cycle. Not awaited: the drain starts runs of
