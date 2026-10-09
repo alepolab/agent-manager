@@ -28,7 +28,7 @@ watch(() => run.value?.status, (status, was) => {
     <p class="t-ui text-label">{{ error }}</p>
   </div>
   <GateDecision
-    v-else-if="run" :run="run" class="flex-1"
+    v-else-if="run" :run="run" :scan="item.scan" class="flex-1"
     @continue="onContinue" @respond="onRespond" @reject="onReject" @rework="onRework" @stop="onStop"
   />
   <SkeletonCard v-else />

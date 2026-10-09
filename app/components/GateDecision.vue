@@ -14,7 +14,8 @@ import { SETTLED_STATUSES } from '~/utils/runStatus'
  * box to answer it in. Answering goes through useGateAnswer, the same rules
  * RunGate uses on the run's own page.
  */
-const props = defineProps<{ run: WorkflowRun }>()
+// `scan` is the scan that filed the ticket, when the inbox knows one.
+const props = defineProps<{ run: WorkflowRun, scan?: ScanOrigin }>()
 const emit = defineEmits<{ respond: [reply: string], continue: [note?: string], reject: [note: string], rework: [stepId: string, note: string], stop: [] }>()
 
 const run = toRef(props, 'run')
@@ -188,6 +189,10 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1 t-small" :class="{ 'decision__meta--under': ticketTitle }">
         <TicketLink v-if="run.ticketKey" :ticket-key="run.ticketKey" class="font-semibold" />
         <span class="text-label">{{ run.workflowName.split(' — ')[0] }}</span>
+        <NuxtLink
+          v-if="scan" :to="`/runs/${scan.runId}`" class="text-label underline-offset-2 hover:underline focus-ring rounded"
+          :title="`Open the scan run that filed ${run.ticketKey ?? 'this ticket'}`"
+        >From {{ scan.label }} · {{ new Date(scan.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) }}</NuxtLink>
         <span class="text-label">Waiting {{ waitingLabel }}</span>
         <UButton
           :to="`/runs/${run.id}${question?.stepId ? `#step-${question.stepId}` : ''}`"
