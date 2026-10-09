@@ -150,6 +150,15 @@ export interface AgentSkill {
   pluginName?: string
 }
 
+/** A file in a skill's `attachments/` directory, listed in the skill's managed Attachments section. */
+export interface SkillAttachment {
+  name: string
+  /** Relative to the skill's directory, as SKILL.md links it: `attachments/<name>`. */
+  path: string
+  size: number
+  modifiedAt: number
+}
+
 export interface SkillPayload {
   frontmatter: SkillFrontmatter
   body: string

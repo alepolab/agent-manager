@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { resolveClaudePath } from './claudeDir.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import type { SkillFrontmatter, CommandFrontmatter } from '~/types'
@@ -9,6 +9,8 @@ interface ResolvedSkill {
   name: string
   agent: string | null
   body: string
+  /** The skill's own directory, when it has one: its attachments/, scripts/ and references/ resolve against it. */
+  dir?: string
 }
 
 export async function resolveSkillInvocation(
@@ -53,6 +55,7 @@ async function resolveFromSkillsDir(
     name: frontmatter.name || name,
     agent: frontmatter.agent || null,
     body,
+    dir: dirname(skillPath),
   }
 }
 
@@ -89,6 +92,7 @@ async function resolveFromPluginSkills(
       name: frontmatter.name || name,
       agent: frontmatter.agent || null,
       body,
+      dir: dirname(skillPath),
     }
   }
 

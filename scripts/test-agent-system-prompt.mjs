@@ -91,5 +91,17 @@ const { buildAgentSystemPrompt } = await import('../server/utils/agentSystemProm
   assert.doesNotMatch(prompt, /Skills available/)
 }
 
+// ── 6. A skill's folder is stated, so its attachments resolve ─────────────
+// The agent works in the product checkout; `attachments/spec.md` means nothing
+// there unless the prompt says which directory it is relative to.
+{
+  const prompt = await buildAgentSystemPrompt({
+    agentSlug: 'ui-agent', agentBody: 'Body.', skills: ['browser-evidence'], cwd: '/tmp/work',
+  })
+  assert.ok(prompt.includes(`Skill folder: \`${join(dir, 'skills', 'browser-evidence')}\``),
+    'the skill folder is named as an absolute path')
+  assert.ok(prompt.indexOf('Skill folder:') < prompt.indexOf('tracing on'), 'the folder comes before the body')
+}
+
 rmSync(dir, { recursive: true, force: true })
 console.log('agentSystemPrompt: all assertions passed')

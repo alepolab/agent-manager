@@ -32,7 +32,10 @@ export async function buildAgentSystemPrompt(opts: BuildPromptOpts): Promise<str
       const skill = await resolveSkillInvocation(slug)
       // An unresolvable slug is skipped, not fatal: one typo in a skills list
       // must not stop the agent from running at all.
-      if (skill?.body?.trim()) bodies.push(`### ${skill.name}\n\n${skill.body.trim()}`)
+      // The agent runs in the product checkout, not beside SKILL.md, so a skill's
+      // relative links (attachments/<file>, scripts/, references/) need their base.
+      const where = skill?.dir ? `Skill folder: \`${skill.dir}\`. Paths in this skill such as attachments/<file> are relative to it.\n\n` : ''
+      if (skill?.body?.trim()) bodies.push(`### ${skill.name}\n\n${where}${skill.body.trim()}`)
     } catch {
       // Same reasoning — a broken skill file degrades that skill, nothing more.
     }

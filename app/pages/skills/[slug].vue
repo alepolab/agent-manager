@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const { promoting, promote } = usePromote()
-import type { Skill, SkillFrontmatter } from '~/types'
+import type { Skill, SkillAttachment, SkillFrontmatter } from '~/types'
 import InstructionEditor from '~/components/studio/InstructionEditor.vue'
 import { errorToast } from '~/utils/errorToast'
 
@@ -135,6 +135,28 @@ async function save() {
     else toast.add(errorToast('Failed to save skill', e))
   } finally {
     saving.value = false
+  }
+}
+
+// An upload or removal rewrote SKILL.md's Attachments section. The editor is clean
+// (the panel waits for a save), so take the file as it is now.
+async function onAttachmentsChanged(modified: number) {
+  try {
+    applySkill(await $fetch<Skill>(`/api/skills/${encodeURIComponent(slug)}`, { query: skillQuery() }))
+  } catch {
+    lastModified.value = modified
+  }
+}
+
+// Above the managed section: anything below it is replaced the next time the list changes.
+function insertAttachmentReference(a: SkillAttachment) {
+  const line = `See [${a.name}](${a.path}).`
+  const marker = body.value.indexOf('<!-- attachments:start')
+  if (marker === -1) {
+    body.value = `${body.value.replace(/\s+$/, '')}\n\n${line}\n`
+  } else {
+    const before = body.value.slice(0, marker).replace(/\s+$/, '')
+    body.value = `${before}\n\n${line}\n\n${body.value.slice(marker)}`
   }
 }
 
@@ -405,6 +427,16 @@ useUnsavedChanges(isDirty)
             These agents have this skill explicitly listed in their preloaded skills. You can manage this in each agent's settings.
           </p>
         </div>
+
+        <SkillAttachments
+          v-if="!isImported"
+          :slug="slug"
+          :working-dir="queryWorkingDir || workingDir || undefined"
+          :editable="can('configure')"
+          :dirty="isDirty"
+          @changed="onAttachmentsChanged"
+          @insert="insertAttachmentReference"
+        />
 
         <!-- Skill Prompt Editor -->
         <div class="rounded-xl overflow-hidden bg-card flex flex-col" style="border: 1px solid var(--border-subtle); height: 500px;">
