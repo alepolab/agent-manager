@@ -491,6 +491,8 @@ const parallelHint = computed(() => graph.value.entries.length > 1
       </span>
     </div>
 
+    <WorkflowQueuePanel :slug="slug" :can-edit="can('startRun')" />
+
     <p v-if="pausedByRun" data-testid="editing-paused" class="px-4 py-1.5 t-small" style="color: var(--text-tertiary); border-bottom: 1px solid var(--border-subtle);">
       Editing is paused while a run is in progress.
     </p>
