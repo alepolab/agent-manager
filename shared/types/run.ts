@@ -356,6 +356,8 @@ export interface RunDecision {
   target?: string
   /** The run's blast radius at the time, so a later reader can see what the tier demanded. */
   blastRadius?: string
+  /** Not a person's answer: the runner carried an earlier approval to this gate (see shared/utils/gateCarryOver.ts). `by` names whose. */
+  auto?: true
 }
 
 export interface WorkflowRun {
@@ -585,6 +587,8 @@ export interface WorkflowRun {
     stepId?: string
     startedBy?: string
     grantApproval?: boolean
+    /** The person's decision on the gate this continue answers, appended when it is carried out (continueRun's `decision`). */
+    decision?: RunDecision
     /** A send-back from a gate: carried out as the runner's own hand-over (the whole brief, no resumed session), not as an operator's restart. */
     handOver?: boolean
     /** Nobody decided anything: the run stepped aside for this group (WorkflowGroup.yieldsTo). */

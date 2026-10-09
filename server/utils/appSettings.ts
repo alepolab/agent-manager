@@ -21,6 +21,10 @@ export interface AgentManagerSettings {
     /** Appended as "For vis: <name>" on a posted or rendered comment. */
     forVisName?: string
   }
+  gates?: {
+    /** A later gate takes a person's earlier approval instead of asking again (Dev Done → PR step → QA Done; see shared/utils/gateCarryOver.ts). Default true. */
+    carryEarlierApproval?: boolean
+  }
 }
 
 /**
@@ -74,4 +78,9 @@ export function agentManagerSettings(): AgentManagerSettings {
   } catch {
     return {}
   }
+}
+
+/** See AgentManagerSettings.gates.carryEarlierApproval. On unless saved as false. */
+export function carriesEarlierApproval(): boolean {
+  return agentManagerSettings().gates?.carryEarlierApproval !== false
 }

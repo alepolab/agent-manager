@@ -20,9 +20,15 @@ export default defineEventHandler(async (event) => {
   // a developer could accept QA's verification of their own change.
   if (before) await requireGateRole(event, before)
   const user = await currentUser(event)
+  // Taken from `before`, which still holds the question and its askedAt, and
+  // handed to continueRun so it lands on the record the runner keeps writing.
+  // A clone: recordDecision appends to the run it is given.
+  const decision = before?.question?.kind === 'approval'
+    ? recordDecision(structuredClone(before), 'approved', user?.login ?? 'a reviewer', body?.note?.trim())
+    : null
   let run
   try {
-    run = await continueRun(id, body?.note)
+    run = await continueRun(id, body?.note, decision ? { decision } : {})
   } catch (err) {
     // An owner-gated run approved with no reason is a 400 the reviewer can act
     // on, not a 500 that reads as the app breaking.
@@ -54,10 +60,15 @@ export default defineEventHandler(async (event) => {
   // must leave nothing on the record. `before` still holds the question, so the
   // wait is measured from it; the decision is then appended to the run as the
   // runner has just rewritten it, never to this stale copy.
-  if (before?.question?.kind === 'approval') {
-    const decision = recordDecision(before, 'approved', user?.login ?? 'a reviewer', body?.note?.trim())
+  //
+  // continueRun has already appended it on every path that resumes or parks the
+  // run. Only a path that hands off elsewhere (a granted send-back restarts the
+  // step) leaves it out, and that is the one case appended here.
+  const landed = (r: typeof run) => r.decisions?.some(d => d.at === decision?.at && d.stepId === decision?.stepId)
+    || (r.parked?.decision?.at === decision?.at && r.parked?.decision?.stepId === decision?.stepId)
+  if (decision && !landed(run)) {
     const fresh = await getRun(id)
-    if (decision && fresh) {
+    if (fresh && !landed(fresh)) {
       fresh.decisions = [...(fresh.decisions ?? []), decision]
       await saveRun(fresh)
       return fresh
