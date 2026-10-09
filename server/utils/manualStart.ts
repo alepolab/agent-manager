@@ -33,6 +33,33 @@ export class ManualStartRefused extends Error {
   }
 }
 
+/**
+ * One manual start per ticket at a time, across every developer, from the
+ * check that no live run holds the ticket until the new run's record is on
+ * disk. Without it the check was only a check: the route awaits the Jira
+ * fetch between asking and starting, so two overlapping starts for one
+ * ticket both found nothing and both started, and two developers' starts
+ * never met at all, their directories living under different roots. The
+ * second start now waits its turn, finds the first's run, and is refused
+ * naming it.
+ */
+const ticketTurns = new Map<string, Promise<void>>()
+
+export async function oneStartPerTicket<T>(ticketKey: string | undefined, start: () => Promise<T>): Promise<T> {
+  if (!ticketKey) return start()
+  const before = ticketTurns.get(ticketKey) ?? Promise.resolve()
+  let done!: () => void
+  const mine = before.then(() => new Promise<void>((resolve) => { done = resolve }))
+  ticketTurns.set(ticketKey, mine)
+  await before
+  try {
+    return await start()
+  } finally {
+    done()
+    if (ticketTurns.get(ticketKey) === mine) ticketTurns.delete(ticketKey)
+  }
+}
+
 /** A run on `ticketKey` that has not reached an outcome, test runs aside. */
 export async function findLiveRunForTicket(ticketKey: string): Promise<WorkflowRun | null> {
   return (await listRuns()).find(r => r.ticketKey === ticketKey && isLiveStatus(r.status) && !isTestRun(r)) ?? null
