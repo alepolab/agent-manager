@@ -56,10 +56,17 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
       <p v-else class="text-label">Runs in the pipeline itself, with no model call.</p>
       <div class="field-group">
         <label class="flex items-center gap-2">
-          <input type="checkbox" :checked="!!step.approval" :disabled="readOnly" @change="(e) => { emit('patch', (e.target as HTMLInputElement).checked ? { approval: true } : { approval: undefined, gateRole: undefined }) }">
+          <input type="checkbox" :checked="!!step.approval" :disabled="readOnly" @change="(e) => { emit('patch', (e.target as HTMLInputElement).checked ? { approval: true } : { approval: undefined, gateRole: undefined, autoApproveWhenReady: undefined }) }">
           Ask for approval before this step runs
         </label>
         <span class="field-hint">The run pauses on the run page until it is approved, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>
+      </div>
+      <div v-if="step.approval" class="field-group">
+        <label class="flex items-center gap-2">
+          <input type="checkbox" :checked="!!step.autoApproveWhenReady" :disabled="readOnly" @change="(e) => { emit('patch', { autoApproveWhenReady: (e.target as HTMLInputElement).checked || undefined }) }">
+          Pass by itself when the step before is ready
+        </label>
+        <span class="field-hint">The gate opens without you when the previous step's brief says it is ready to hand over and leaves no question open. Any open question stops it here as usual. Recorded on the run as an approval by "automatic".</span>
       </div>
       <div v-if="step.approval" class="field-group">
         <label class="field-label">Who approves</label>

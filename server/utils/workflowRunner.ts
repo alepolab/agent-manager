@@ -32,11 +32,11 @@ import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_US
 let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
-import { appendFile, cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { getClaudeDir, safeSegment, transcriptPath } from './claudeDir.ts'
 import { oversightFor, oversightReason, needsJustification } from '../../shared/utils/oversight.ts'
-import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions } from '../../shared/utils/decisionBrief.ts'
+import { CHANGE_BRIEF_FILE, CHANGE_BRIEF_PENDING, DECISION_FILE, briefFeedback, openQuestionsIn, parseDecisionBrief, unansweredQuestions, unresolvedQuestions } from '../../shared/utils/decisionBrief.ts'
 import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
@@ -103,7 +103,7 @@ interface WorkflowLike {
   group?: string
   /** See Workflow.notifyChannel - where this workflow's run transitions are announced. */
   notifyChannel?: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, autoApproveWhenReady?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
 }
 
 export interface StartRunOpts {
@@ -1241,10 +1241,14 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   // resumed a 25 Sep session, wrote its oracle to the old artifacts directory,
   // and the step failed for a file it had written. Every resumed visit is told
   // where things are now.
-  const input = resume ? await whereArtifactsAre(run) + (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
+  // Named on every visit, fresh or resumed: one agent can serve several steps
+  // (plan, then build, in one continued session), and its instructions can
+  // only scope itself to the step it is in if it is told which one that is.
+  const thisStep = `## This step\n\nYou are running the step "${step.label}" (id ${step.id}) of the workflow "${l.workflow.name}". Do only what your instructions say for this step.\n\n`
+  const input = resume ? await whereArtifactsAre(run) + (stack === 'up' ? '' : `${stackNote(run.id, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : { project: stackProjectOf(run), claimedFrom: run.stackClaimedFrom })}\n\n`) + thisStep + body : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? {
     dir: run.projectDir, branch: run.branch,
     ...(run.branch && run.baseBranch ? { policy: describeBranchChoice(run.branch, baseBranchFor(run.workType, run.origin, run.product?.branches)) } : {}),
-  } : undefined, run.parameters, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + body
+  } : undefined, run.parameters, stack === 'gone' ? { project: stackProjectOf(run), gone: true } : run.stackProject ? { project: run.stackProject, claimedFrom: run.stackClaimedFrom } : undefined) + '\n\n' + thisStep + body
 
   // Logged, not only handed to the agent: "why was there no browser trace" was
   // a question that could previously only be answered by reading an agent's
@@ -2561,6 +2565,19 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // then capped at MAX_CONCURRENCY. `gated` deliberately keeps every gated
   // node, because it is published verbatim as run.nextStepIds below and
   // truncating it would drop steps from the run page.
+  // A gate marked autoApproveWhenReady opens by itself when the step before it
+  // handed over cleanly: see readyHandover. It is recorded as a decision like
+  // any approval, by "automatic", so the run page and the board show it.
+  for (const id of ready) {
+    const s = stepOf(l, id)
+    if (!s?.approval || !s.autoApproveWhenReady || l.approved.has(id) || isTestRun(run)) continue
+    const why = await readyHandover(l, run, id)
+    if (!why) continue
+    l.approved.add(id)
+    run.decisions = [...(run.decisions ?? []), { stepId: id, label: s.label, at: Date.now(), by: 'automatic', verdict: 'approved', note: why, waitedMs: 0, ...(run.blastRadius ? { blastRadius: run.blastRadius } : {}) }]
+    log.info('gate passed automatically', { runId: run.id, stepId: id })
+  }
+
   // A test run never stops for a person: it runs one step nobody is shipping.
   const gatedSet = new Set(ready.filter(id => stepOf(l, id)?.approval && !l.approved.has(id)
     && oversightFor(run.blastRadius) !== 'auto' && !isTestRun(run)))
@@ -2819,6 +2836,32 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
  * have pushed it. Idempotent: a run that already has its branch is left alone.
  */
 /** Intake's classification from meta.json, once it has written one. */
+/**
+ * Why a gate may open by itself, or null when it must stop for a person.
+ *
+ * The step before the gate hands over by writing change-brief.json on this
+ * visit with `"ready": true` and no unresolved open question. A brief from an
+ * earlier visit or step does not count (it is older than the visit), nor does
+ * one the parser refuses: a gate that cannot show its reasons stops.
+ */
+async function readyHandover(l: Live, run: WorkflowRun, gateId: string): Promise<string | null> {
+  const preds = l.graph.forwardPreds[gateId] ?? []
+  const visits = run.steps.filter(s => preds.includes(s.stepId))
+  if (!visits.length || visits.some(s => s.status !== 'completed')) return null
+  const since = Math.max(...visits.map(s => s.startedAt ?? 0))
+  const file = resolveRunArtifact(run.id, CHANGE_BRIEF_FILE)
+  if (!file) return null
+  try {
+    if ((await stat(file)).mtimeMs < since) return null
+    const raw = await readFile(file, 'utf8')
+    if (JSON.parse(raw)?.ready !== true) return null
+    const parsed = parseDecisionBrief(raw)
+    if (!('brief' in parsed) || unresolvedQuestions(parsed.brief).length) return null
+    const by = visits.map(s => s.label).join(', ')
+    return `"${by}" reported ready to hand over with no open questions.${parsed.brief.headline ? ` ${parsed.brief.headline}` : ''}`
+  } catch { return null }
+}
+
 async function readClassification(run: WorkflowRun): Promise<{ work_type?: string, origin?: string, blast_radius?: string, blast_radius_reason?: string } | null> {
   try {
     const meta = JSON.parse(await readFile(join(runArtifactsDir(run.id), 'meta.json'), 'utf8'))

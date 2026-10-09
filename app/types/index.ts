@@ -153,7 +153,7 @@ export interface AgentSkill {
 /** A file in a skill's `attachments/` directory, listed in the skill's managed Attachments section. */
 export interface SkillAttachment {
   name: string
-  /** Relative to the skill's directory, as SKILL.md links it: `attachments/<name>`. */
+  /** Relative to the skill's directory, as SKILL.md links it: `attachments/<name>`, `references/x.md`, `scripts/curl/lib.mjs`. */
   path: string
   size: number
   modifiedAt: number
@@ -270,6 +270,12 @@ export interface WorkflowStep {
   maxVisits?: number
   /** The run pauses before this step and waits for the operator to approve it, even when running to completion. */
   approval?: boolean
+  /**
+   * With `approval`: the gate opens by itself when the step before it hands over
+   * cleanly, i.e. writes change-brief.json on that visit with `"ready": true` and
+   * no unresolved open question. Otherwise it stops for a person as usual.
+   */
+  autoApproveWhenReady?: boolean
   /**
    * Whose decision this gate is. Copied onto `run.question.role` when the gate
    * fires, and enforced by the gate routes.
