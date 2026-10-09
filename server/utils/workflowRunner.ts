@@ -19,7 +19,7 @@ import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type Agent
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
 import { captureBaseline } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
-import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, isWorkingCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, restoreRunWorktrees, worktreeDirFor } from './workspace.ts'
+import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureInPlaceBranch, ensureRunBranch, ensureTestWorktrees, findCheckout, isWorkingCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, restoreRunWorktrees, worktreeDirFor } from './workspace.ts'
 import { runPreflight as realPreflight, preflightFailure, type PreflightReport, type PreflightSteps } from './preflight.ts'
 import { fastPathApplies, inspectStack, reuseVerdict, tryStackFastPath } from './stackFastPath.ts'
 import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_USING_AGENTS, teardownRun } from './runTeardown.ts'
@@ -3074,6 +3074,7 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   // 25-30 Sep) has every Failing Test and Implement Fix commit rewrite it.
   // One whose worktree was removed, whole or in part, gets it back on its own
   // branch first: never through ensureRunBranch's `-B`, which would reset it.
+  if (!run.testOf && run.parameters?.runCheckout?.trim() === 'in-place') return ensureInPlaceRun(run)
   await rebuildRunWorktree(run, { freshBranchOk: true })
   if (run.branch && run.projectDir && existsSync(join(run.projectDir, '.git'))) return keepAgentDirOutOfGit(run.projectDir)
   if (run.parameters?.branch?.trim() && !run.branch && !run.testOf) return ensureBranchWorktree(run, run.parameters.branch.trim())
@@ -3118,6 +3119,30 @@ async function ensureRunCheckoutOnce(run: WorkflowRun): Promise<void> {
   run.baseCommit = (await captureBaseline(run.projectDir)) ?? run.baseCommit
   await saveRun(run)
   log.info('run worktree ready', { runId: run.id, checkout, worktree: run.projectDir, branch, base, reason: choice.reason, repos: worktrees.length })
+}
+
+/**
+ * A run of a workflow that keeps one folder for all its runs
+ * (`runCheckout: in-place`): every step works in the checkout itself, on the
+ * run's own branch, cut from the `baseBranch` parameter. Checked at every step,
+ * since the Deliver step switches the folder back to the base to merge. The
+ * teardown never removes the folder: it is not a `<clone>@<branch>` worktree.
+ */
+async function ensureInPlaceRun(run: WorkflowRun): Promise<void> {
+  const checkout = runCheckout(run)
+  if (!checkout) throw new Error(`no git checkout at ${run.projectDir ?? 'the run\'s project directory'} to work in place`)
+  const base = run.baseBranch && run.branch ? run.baseBranch : run.parameters?.baseBranch?.trim()
+  if (!base) throw new Error('runCheckout is in-place but the run has no baseBranch parameter to cut its branch from')
+  const branch = run.branch ?? `fix/run-${run.id.slice(0, 8)}`
+  await ensureInPlaceBranch(checkout, branch, base)
+  await keepAgentDirOutOfGit(checkout)
+  if (run.branch === branch && run.projectDir === checkout && run.baseBranch === base) return
+  run.branch = branch
+  run.baseBranch = base
+  run.projectDir = checkout
+  run.baseCommit = (await captureBaseline(checkout)) ?? run.baseCommit
+  await saveRun(run)
+  log.info('run checkout ready', { runId: run.id, checkout, branch, base, reason: 'the workflow works in place' })
 }
 
 /**

@@ -393,6 +393,28 @@ async function worktreeOnBranch(repo: string, branch: string): Promise<string | 
   return undefined
 }
 
+/**
+ * A run that works in the checkout itself rather than a worktree beside it
+ * (the `runCheckout: in-place` parameter): one folder for every run, each run
+ * on its own branch in it. Puts the checkout on `branch`, cutting it from the
+ * local `base` the first time. Refuses rather than carrying a change across:
+ * a tracked file left modified belongs to someone, and switching would move
+ * it onto this run's branch. Untracked files (a node_modules link, scratch
+ * output) do not block it.
+ */
+export async function ensureInPlaceBranch(path: string, branch: string, base: string): Promise<void> {
+  const current = await git(path, ['branch', '--show-current']).catch(() => '')
+  if (current === branch) return
+  const dirty = await git(path, ['status', '--porcelain', '--untracked-files=no'])
+  if (dirty) throw new Error(`${path} is on ${current || 'no branch'} with ${dirty.split('\n').length} uncommitted change(s) to tracked files; commit or discard them before this run can switch it to ${branch}`)
+  if (await branchExists(path, branch)) {
+    await git(path, ['switch', '--quiet', branch])
+    return
+  }
+  if (!await branchExists(path, base)) throw new Error(`${path} has no local branch "${base}" to start ${branch} from`)
+  await git(path, ['switch', '--quiet', '-c', branch, base])
+}
+
 /** Does the checkout have this local branch? */
 export async function branchExists(path: string, branch: string): Promise<boolean> {
   try { await git(path, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]); return true } catch { return false }
