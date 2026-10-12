@@ -6,7 +6,6 @@ import { canSave } from '~~/shared/utils/stackEdit'
 import { triggerSummary, type Selection } from '~/utils/buildStack'
 import { producesError } from '~/utils/produces'
 import { summarise } from '~/utils/summarise'
-import { isLiveStatus } from '~~/shared/types/run'
 
 const route = useRoute()
 const router = useRouter()
@@ -75,9 +74,6 @@ const allRuns = computed(() => (run.value ? [run.value, ...runs.value.filter(r =
  *  it runs. Queued is not: launchQueuedRun re-reads the definition, so an edit
  *  made while it waits is the one that runs. */
 const editLocked = computed(() => allRuns.value.some(r => r.status === 'running' || r.status === 'joining'))
-/** Any run of this workflow not yet over - paused, awaiting review and queued
- *  included. The server refuses a second run then (findActiveRun). */
-const anyLive = computed(() => allRuns.value.some(r => isLiveStatus(r.status)))
 
 /** Show a run from `runs` (the newest, when Run mode opens with none). Picking
  *  one other than the live run stops following the live stream, so the pick
@@ -342,6 +338,10 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false, pa
   showRunModal.value = false
   if (!workflow.value) return
   await start(prompt, projectDir, autoRun, parameters)
+  // Read here, or nowhere: the composable records why a start failed and this
+  // page used to drop it, so a refused start looked like nothing happening.
+  const why = workflowRun.error.value
+  if (why) toast.add({ title: 'Not started', description: why, color: 'warning', duration: 0 })
   mode.value = 'run'
   try {
     await update(slug, { lastRunAt: new Date().toISOString() } as any)
@@ -350,7 +350,11 @@ async function startRun(prompt: string, projectDir?: string, autoRun = false, pa
   }
 }
 
-const canRun = computed(() => workflowSteps.value.length > 0 && !anyLive.value)
+// Not held back by another run of this workflow: the server decides what is
+// in the way - another run on the same ticket, or in the same directory - and
+// says so. A ticket runbook has dozens of runs waiting at gates at any time,
+// and this button was disabled for every one of them.
+const canRun = computed(() => workflowSteps.value.length > 0)
 
 const parallelHint = computed(() => graph.value.entries.length > 1
   || workflowSteps.value.some(s => (graph.value.succ[s.id] ?? []).length > 1))

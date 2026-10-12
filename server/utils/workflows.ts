@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { resolveClaudeFile } from './claudeDir'
+import { resolveClaudeFile } from './claudeDir.ts'
 import type { Workflow } from '~/types'
 
 /**

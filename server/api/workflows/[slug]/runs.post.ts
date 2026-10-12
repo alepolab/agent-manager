@@ -1,12 +1,13 @@
-import { requireCapability } from '../../../utils/session'
-import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner'
-import { readWorkflow } from '../../../utils/workflows'
+import { requireCapability } from '../../../utils/session.ts'
+import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner.ts'
+import { readWorkflow } from '../../../utils/workflows.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
-import { findRunInWorkspace, toWorkflowLike } from '../../../utils/workflowRunStore'
-import { canonicalProjectDir, runWorkspace } from '../../../utils/workspace'
-import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource'
-import { currentUser } from '../../../utils/session'
-import { envForUser } from '../../../utils/users'
+import { toWorkflowLike } from '../../../utils/workflowRunStore.ts'
+import { canonicalProjectDir } from '../../../utils/workspace.ts'
+import { claimManualStart, ManualStartRefused, oneStartPerTicket } from '../../../utils/manualStart.ts'
+import { fetchTicketForPrompt, ticketKeyFrom } from '../../../utils/jiraTicketSource.ts'
+import { currentUser } from '../../../utils/session.ts'
+import { envForUser } from '../../../utils/users.ts'
 
 export default defineEventHandler(async (event) => {
   // Starting a run spends money and touches a repo; a manager reads, and QA
@@ -58,8 +59,8 @@ export default defineEventHandler(async (event) => {
   // does not fail: callAgent falls back to the Claude config directory for a
   // path that does not exist and reports success. Canonicalised for the lock
   // below, which compares directory strings. An unset directory is not
-  // validated - it resolves to the developer's own workspace root, which
-  // startRun creates.
+  // validated - it resolves to a directory for the ticket, or the developer's
+  // own workspace root, which startRun creates.
   let projectDir = stated
   if (stated) {
     const checked = canonicalProjectDir(stated)
@@ -70,71 +71,80 @@ export default defineEventHandler(async (event) => {
     if (parameters[RESERVED_PARAM_PROJECT_DIR]) parameters[RESERVED_PARAM_PROJECT_DIR] = checked.path
   }
 
-  // Locked on the DIRECTORY a run will write, not on the workflow. Two runs
-  // sharing a checkout corrupt each other; two developers working on unrelated
-  // products share nothing, and a per-workflow lock made the second one wait
-  // behind the first with no queue — which made the pipeline single-user.
-  //
-  // The check has to come after the user is known, because an unset projectDir
-  // resolves to that developer's own workspace root.
-  const workspace = runWorkspace({ projectDir, startedBy: user?.login })
-  const active = await findRunInWorkspace(workspace)
-  if (active) {
-    throw createError({
-      statusCode: 409,
-      message: `${active.startedBy ? `@${active.startedBy} has` : 'There is'} a run in progress in ${workspace}`
-        + ` (${active.workflowName ?? active.workflowSlug}). Wait for it, stop it, or start this one against a different project directory.`,
-      data: { runId: active.id },
-    })
-  }
-
-  // Deliberately not awaited to completion: the HTTP response returns as soon
-  // as the run exists, and the run continues server-side. That is the feature.
-  // The ticket named anywhere in the prompt is fetched here, under the starter's
-  // identity, before any agent runs: agents have no shell and no Jira access, so
-  // a ticket they are left to fetch is a ticket nobody fetches. When the read
-  // fails the prompt says why, and says not to try.
-  const typed = body.initialPrompt.trim()
-  const ticket = await fetchTicketForPrompt(typed, await envForUser(user?.login))
-  const initialPrompt = ticket.text
-    ? (typed === ticket.key ? ticket.text : `${ticket.text}\n\n---\nStarted with: ${typed}`)
-    : ticket.key
-      ? `${typed}\n\nThe ticket text could not be fetched from Jira for this run (${ticket.reason}). Work from the key and whatever the repository holds, say so in the context packet, and do not try to reach Jira yourself: agents have no shell and no Jira access. The developer can add a Jira token on the Profile page, or paste the ticket text, and start again.`
-      : body.initialPrompt
-
-  try {
-    return await startRun({
-      // toWorkflowLike, not a literal: a manual start ignores the cap on
-      // purpose, but it still OCCUPIES a slot - see startOrQueue. Dropping
-      // `group` here filed the run under `default`, so inFlightForGroup read 0
-      // for the group it was really working in and the drain launched two more
-      // beside it. `notifyChannel` went the same way, to a channel named
-      // `default`.
-      workflow: toWorkflowLike(workflow),
-      initialPrompt,
-      ...(body.productKey ? { productKey: body.productKey } : {}),
-      // This route is the manual/API start path, never a watch dispatch — the
-      // reserved literal is the honest answer to "what triggered this?".
-      watch: 'direct-invocation',
-      // Read from the prompt, so a run started by hand reports back to its ticket
-      // the way a watch-dispatched one does. Without it notifyTicketOutcome never
-      // fires for a manual run - the key was in the prompt and nothing looked.
-      ticketKey: ticketKeyFrom(body.initialPrompt),
-      autoRun: body.autoRun === true,
-      projectDir,
-      parameters,
-      startedBy: user?.login,
-    })
-  } catch (err) {
-    // A start that got past the check above but lost the race to a
-    // near-simultaneous one. Answered exactly like a persisted run in the same
-    // directory, because to the person clicking Start it is the same fact.
-    if (err instanceof WorkspaceBusyError) {
-      throw createError({
-        statusCode: 409,
-        message: `A run is already starting in ${err.workspace}. Wait for it, or start this one against a different project directory.`,
-      })
+  // A start for a ticket takes its turn here, across every developer, and
+  // holds it until the run's record exists: the check below and the Jira
+  // fetch after it are both awaited, and two overlapping starts for one ticket
+  // used to pass the check together. See oneStartPerTicket.
+  const turnKey = projectDir ? undefined : ticketKeyFrom(body.initialPrompt)
+  return oneStartPerTicket(turnKey ?? undefined, async () => {
+    // Locked on the DIRECTORY a run will write, not on the workflow. Two runs
+    // sharing a checkout corrupt each other; two developers working on unrelated
+    // products share nothing, and a per-workflow lock made the second one wait
+    // behind the first with no queue — which made the pipeline single-user.
+    //
+    // A start naming a ticket and no directory gets one of its own for that
+    // ticket, so a second ticket never waits behind the first; a second start
+    // for the same ticket is refused instead. See manualStart.ts. After the user
+    // is known, because an unset directory resolves under their own root.
+    let claimed: Awaited<ReturnType<typeof claimManualStart>>
+    try {
+      claimed = await claimManualStart({ initialPrompt: body.initialPrompt, stated: projectDir, login: user?.login })
+    } catch (err) {
+      if (err instanceof ManualStartRefused) {
+        throw createError({ statusCode: 409, message: err.message, data: { runId: err.runId } })
+      }
+      throw err
     }
-    throw err
-  }
+    projectDir = claimed.projectDir
+
+    // Deliberately not awaited to completion: the HTTP response returns as soon
+    // as the run exists, and the run continues server-side. That is the feature.
+    // The ticket named anywhere in the prompt is fetched here, under the starter's
+    // identity, before any agent runs: agents have no shell and no Jira access, so
+    // a ticket they are left to fetch is a ticket nobody fetches. When the read
+    // fails the prompt says why, and says not to try.
+    const typed = body.initialPrompt.trim()
+    const ticket = await fetchTicketForPrompt(typed, await envForUser(user?.login))
+    const initialPrompt = ticket.text
+      ? (typed === ticket.key ? ticket.text : `${ticket.text}\n\n---\nStarted with: ${typed}`)
+      : ticket.key
+        ? `${typed}\n\nThe ticket text could not be fetched from Jira for this run (${ticket.reason}). Work from the key and whatever the repository holds, say so in the context packet, and do not try to reach Jira yourself: agents have no shell and no Jira access. The developer can add a Jira token on the Profile page, or paste the ticket text, and start again.`
+        : body.initialPrompt
+
+    try {
+      return await startRun({
+        // toWorkflowLike, not a literal: a manual start ignores the cap on
+        // purpose, but it still OCCUPIES a slot - see startOrQueue. Dropping
+        // `group` here filed the run under `default`, so inFlightForGroup read 0
+        // for the group it was really working in and the drain launched two more
+        // beside it. `notifyChannel` went the same way, to a channel named
+        // `default`.
+        workflow: toWorkflowLike(workflow),
+        initialPrompt,
+        ...(body.productKey ? { productKey: body.productKey } : {}),
+        // This route is the manual/API start path, never a watch dispatch — the
+        // reserved literal is the honest answer to "what triggered this?".
+        watch: 'direct-invocation',
+        // Read from the prompt, so a run started by hand reports back to its ticket
+        // the way a watch-dispatched one does. Without it notifyTicketOutcome never
+        // fires for a manual run - the key was in the prompt and nothing looked.
+        ticketKey: ticketKeyFrom(body.initialPrompt),
+        autoRun: body.autoRun === true,
+        projectDir,
+        parameters,
+        startedBy: user?.login,
+      })
+    } catch (err) {
+      // A start that got past the check above but lost the race to a
+      // near-simultaneous one. Answered exactly like a persisted run in the same
+      // directory, because to the person clicking Start it is the same fact.
+      if (err instanceof WorkspaceBusyError) {
+        throw createError({
+          statusCode: 409,
+          message: `A run is already starting in ${err.workspace}. Wait for it, or start this one against a different project directory.`,
+        })
+      }
+      throw err
+    }
+  })
 })

@@ -29,6 +29,19 @@ import type { AgentFrontmatter } from '~/types'
  * nothing and cannot be read relative to the wrong tree.
  */
 /**
+ * The environment an agent call actually runs in: the shared base, then the
+ * starter's own credentials (envForUser, resolved by the runner) over it. So a
+ * profile token GitHub accepted beats AGENT_GH_TOKEN, which beats the host's
+ * `gh` login. Preflight's "pull requests will be opened as" builds the same
+ * thing through this function: it used to read agentEnvFor's order instead,
+ * where AGENT_GH_TOKEN wins, and named the bot while the PR went out as the
+ * developer.
+ */
+export function launchEnv(base: Record<string, string>, userEnv: Record<string, string>): Record<string, string> {
+  return { ...base, ...userEnv }
+}
+
+/**
  * The environment every pipeline agent runs in. Exported because preflight has
  * to ask git the same questions the AGENTS will ask it: a `commit.gpgsign` read
  * from this shell answers for the wrong process, and that is exactly how a run
@@ -449,7 +462,7 @@ export async function callAgent(
       // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
       // including the no-credential one; a conditional env is exactly how a
       // variable goes missing in the configuration nobody tests.
-      env: { ...(await agentEnvFor()), ...userEnv },
+      env: { ...launchEnv(await agentEnvFor(), userEnv) },
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
