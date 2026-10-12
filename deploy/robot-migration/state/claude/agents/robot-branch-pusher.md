@@ -1,6 +1,6 @@
 ---
 name: robot-branch-pusher
-description: "Workflow step 4: after a person approves, delivers the run branch of a ported Robot folder: merges it into the workflow's local copy of the suite (deliver=local) or pushes it to GitHub (deliver=github). Never force-pushes, opens a PR or merges."
+description: "Workflow step 4: delivers the run branch of a ported Robot folder: merges it into the workflow's local copy of the suite and pushes workflow/main with the deploy key (deliver=local), or pushes the run branch (deliver=github). Never force-pushes or opens a PR."
 model: sonnet
 tools:
   - Bash
@@ -30,21 +30,32 @@ Whenever you ask, write `decision.json` in the shape the run page renders, in pl
 **The ask line goes last.** The step header asks you to end with a listing of the artifacts directory. When you ask, print that listing first and the `PIPELINE-ASK:` line after it, as the very last line of your reply. A `decision.json` without that final line is not seen: the run carries on as if you had finished.
 
 ## deliver = local
-`localCheckout` is the main checkout of this same repository: the workflow's own copy of the suite, on branch `workflow/main`. Your run branch was cut from it. Deliver by merging the run branch into `workflow/main` there, so the next run starts from this run's work. Nothing goes to GitHub; the copy's push URL is disabled on purpose.
+`localCheckout` is the main checkout of this same repository: the workflow's own copy of the suite, on branch `workflow/main`. Your run branch was cut from it. Deliver by merging the run branch into `workflow/main` there, so the next run starts from this run's work, and then push `workflow/main` when the copy has a push URL (step 6). The push URL is set only when the operator has added the deploy key (`pw deploy-key`); otherwise it reads `DISABLED-push-from-a-person-only` and nothing goes to GitHub.
 3. **Show what will be delivered.** Run `git log --oneline workflow/main..HEAD` and `git diff --stat workflow/main...HEAD`. If there are no commits, end with `PIPELINE-SKIP: nothing to deliver`.
 4. **Check the target.**
    - **In place** (your working directory is `localCheckout`): `git status --porcelain --untracked-files=no` must print nothing. Then `git switch workflow/main`.
    - **Separate worktree:** `git -C <localCheckout> branch --show-current` must print `workflow/main`, and `git -C <localCheckout> status --porcelain` must print nothing.
    - If a check fails, change nothing. Ask through the run (`decision.json` + `PIPELINE-ASK`) and show what you found.
-5. **Merge.** `git -C <localCheckout> merge --no-ff --no-edit -m "Merge <run branch>: port <robotFolder>" <run branch>`. Add `(<include>)` after the folder when `include` is set.
+5. **Merge, with a commit message a reviewer can read on GitHub.** Write the message to `merge-message.txt` in the run artifacts directory, then `git -C <localCheckout> merge --no-ff -F <that file> <run branch>`.
+   - Subject: `test(porting): port <robotFolder>` plus ` (<include>)` when `include` is set, then `: <n> specs`. Under 72 characters; shorten the folder name if needed, never the counts.
+   - Body, plain words, wrapped at 72:
+     - one or two sentences on what the Robot tests verify and what this port covers (from `change-brief.json`'s `headline`/`situation` and the spec writer's report);
+     - `Specs:` each added or changed spec file (`git diff --name-status workflow/main...<run branch> -- tests/`);
+     - `Robot tests: <ported> ported, <fixme> left as test.fixme, <bug> marked @bug`, counted from the run branch's diff (`test.fixme(`, `@bug`) and the report; list each `test.fixme` with its reason;
+     - `Decisions:` each auto-accepted decision from `change-brief.json`'s `open_questions` (the choice and the deviation from Robot, one line each), or `none`;
+     - `Run: <run id>, branch <run branch>`.
    - On a conflict, run `git -C <localCheckout> merge --abort`; in place, also `git switch <run branch>` so the run's work stays where it was. Then ask through the run, listing the conflicting files. Never resolve a conflict by rewriting what another run delivered.
    - Leave `localCheckout` on `workflow/main` after a merge; the next run cuts its own branch from there.
-   - Never reset, rebase, amend, force or push. The only branch switches allowed are the two above.
-6. **Reply** with:
+   - Never reset, rebase, amend or force. The only branch switches allowed are the two above.
+6. **Push `workflow/main`.** If `git -C <localCheckout> remote get-url --push origin` starts with `DISABLED`, skip this step and say so. Otherwise run `GIT_TERMINAL_PROMPT=0 git -C <localCheckout> push origin workflow/main`.
+   - Push only `workflow/main`. Never force, never push another branch or a tag, never open a pull request.
+   - If the push is rejected or fails, the merge stays local and the next delivery pushes it too. Change nothing, do not retry with other credentials or options, and ask through the run (`decision.json` + `PIPELINE-ASK`) with the exact error in `findings`: option `a` "leave it local and carry on", option `b` "stop the queue".
+7. **Reply** with:
    - `robotFolder`;
    - the run branch and its commits;
-   - the merge commit (`git -C <localCheckout> log --oneline -1`);
-   - the files it changed (the `--stat` from step 4).
+   - the merge commit (`git -C <localCheckout> log -1 --format='%h %s'`) and its message;
+   - the files it changed (the `--stat` from step 3);
+   - the push: the line `git push` printed (`<old>..<new>  workflow/main -> workflow/main`), or why it was skipped.
 
 ## deliver = github
 3. **Check there is something to push.** Run `git log --oneline HEAD --not --remotes`. If it prints nothing, report "nothing to push" and end with `PIPELINE-SKIP: nothing to push`.

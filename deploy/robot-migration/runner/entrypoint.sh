@@ -27,6 +27,7 @@ git config --global --add safe.directory '*'
 clone ase-crm-testPlaywright /work/ase-crm-testPlaywright-workflow workflow/main
 clone atddtestsuite_bss /work/atddtestsuite_bss "$(git -C /src/atddtestsuite_bss branch --show-current)"
 clone ase-crm /work/ase-crm "$(git -C /src/ase-crm branch --show-current)"
+/opt/pwmig/wire-push.sh   # the suite's push URL: the deploy key when there is one (pw deploy-key), else disabled
 
 S=/work/ase-crm-testPlaywright-workflow
 # The skills' scripts and references are the suite's own copies (its .claude/skills/, kept current by git),

@@ -16,6 +16,8 @@
 #   check       runs the access check inside pwmig-am
 #   status | logs <service> | down (keeps every volume) | update (fetch + build + recreate app and am)
 #   redeploy    build + recreate app and am, without fetch (after an import)
+#   deploy-key  makes the suite's push key in pwmig-am (once) and prints its public half: add it to the
+#               suite repo as a deploy key with write access, and each delivered folder is pushed
 # Everything it creates is named pwmig*: containers, images, volumes, the network. It never touches anything else.
 set -euo pipefail
 KIT=/src/agentmanager/deploy/robot-migration
@@ -110,6 +112,23 @@ import_src() {  # $1 one of the REPOS dirs; the tar of that clone (with .git) on
 
 redeploy() { build; dc up -d --no-build --no-deps --force-recreate app am; status; }
 
+# The suite's push key: an SSH deploy key that can write to that one repo and nothing else. It lives in
+# pwmig-am's state volume (/data/am/deploy-key), never on the host; the entrypoint wires it on every boot.
+deploy_key() {
+  docker exec -i pwmig-am bash -s <<'IN'
+set -euo pipefail
+d=/data/am/deploy-key; mkdir -p $d; chmod 700 $d
+[[ -f $d/id_ed25519 ]] || ssh-keygen -q -t ed25519 -N '' -C 'pwmig robot-migration deploy key' -f $d/id_ed25519
+# GitHub's published ed25519 host key, pinned rather than trusted on first use.
+gh='github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
+ssh-keyscan -t ed25519 github.com 2>/dev/null | grep -qxF "$gh" || { echo "[pwmig] ERROR: github.com's host key is not the published one" >&2; exit 1; }
+echo "$gh" > $d/known_hosts
+/opt/pwmig/wire-push.sh
+IN
+  log "public key (add it at <suite repo> > Settings > Deploy keys > Add, with \"Allow write access\"):"
+  docker exec pwmig-am cat /data/am/deploy-key/id_ed25519.pub
+}
+
 build() {
   [[ -d /src/ase-crm/.git ]] || die "run fetch first"
   local login; login=$(mktemp -d); export DOCKER_CONFIG=$login   # ghcr login lives only in this container
@@ -178,5 +197,6 @@ case ${1:-} in
   down) dc down ;;
   update) fetch; redeploy ;;
   redeploy) redeploy ;;
+  deploy-key) deploy_key ;;
   *) sed -n '2,22p' "$0"; exit 1 ;;
 esac
