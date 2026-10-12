@@ -9,7 +9,7 @@ import { resolveTools, resolveMaxTurns, resolveMaxDurationMs } from './agentTool
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
-import { envForUser } from './users.ts'
+import { CLAUDE_CREDENTIAL_VARS, claudeCredentialProblem, envForUser } from './users.ts'
 import type { AgentFrontmatter } from '~/types'
 
 /**
@@ -38,7 +38,12 @@ import type { AgentFrontmatter } from '~/types'
  * developer.
  */
 export function launchEnv(base: Record<string, string>, userEnv: Record<string, string>): Record<string, string> {
-  return { ...base, ...userEnv }
+  const env = { ...base, ...userEnv }
+  // envForUser blanks the credentials it does not use, so the instance's own
+  // cannot sit underneath a developer's. Blank is how it says "unset": drop it,
+  // rather than hand Claude Code a variable set to nothing.
+  for (const v of CLAUDE_CREDENTIAL_VARS) if (env[v] === '') delete env[v]
+  return env
 }
 
 /**
@@ -251,6 +256,9 @@ export interface AgentCallOptions {
    * visits reading the same files and never wrote its plan.
    */
   resume?: string
+  /** Who this agent runs as, so a refusal for want of a Claude credential can
+   *  name the person who has to add one. */
+  login?: string
 }
 
 /** Floor between successive progress emissions when the active tool hasn't
@@ -319,7 +327,13 @@ export function shouldEmitProgress(
 export async function callAgent(
   agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
-  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume } = opts
+  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume, login } = opts
+  // Built once and asked about before launch: the env the agent gets is the env
+  // that must hold a credential. Asking any other would let a call that lost
+  // its developer's env reach the host's own Claude login instead.
+  const env = launchEnv(await agentEnvFor(), userEnv)
+  const noCredential = claudeCredentialProblem(env, login)
+  if (noCredential) throw new Error(noCredential)
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -462,7 +476,7 @@ export async function callAgent(
       // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
       // including the no-credential one; a conditional env is exactly how a
       // variable goes missing in the configuration nobody tests.
-      env: { ...launchEnv(await agentEnvFor(), userEnv) },
+      env: { ...env },
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

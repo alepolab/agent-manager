@@ -26,6 +26,12 @@ export interface UserProfile {
   jiraToken?: string
   /** Encrypted; refreshed on every login. */
   githubToken?: string
+  /** Encrypted. The developer's own Claude credential: an OAuth token from
+   *  `claude setup-token`, or a workspace-scoped API key. Every agent this
+   *  person starts - pipeline steps, /cli chat, Studio - runs on it. */
+  anthropicToken?: string
+  /** Which of the two `anthropicToken` is, read off its prefix when saved. */
+  anthropicKind?: AnthropicKind
   /** Show the unfinished pages - Graph, Explore, Output styles - in this
    *  person's sidebar. Per-developer rather than instance-wide: it is a
    *  preference about what you want to look at, and the instance-wide switch
@@ -34,7 +40,9 @@ export interface UserProfile {
   updatedAt: number
 }
 
-export type PublicProfile = Omit<UserProfile, 'jiraToken' | 'githubToken'> & { hasJiraToken: boolean, hasGithubToken: boolean }
+export type AnthropicKind = 'oauth' | 'apikey'
+
+export type PublicProfile = Omit<UserProfile, 'jiraToken' | 'githubToken' | 'anthropicToken'> & { hasJiraToken: boolean, hasGithubToken: boolean, hasAnthropicToken: boolean }
 
 export const usersDir = () => process.env.AGENT_USERS_DIR || join(homedir(), '.agent-manager', 'users')
 const profilePath = (login: string) => join(usersDir(), `${safe(login)}.json`)
@@ -103,18 +111,24 @@ export async function listProfiles(): Promise<ProfileSummary[]> {
 }
 
 export function toPublic(p: UserProfile): PublicProfile {
-  const { jiraToken, githubToken, ...rest } = p
-  return { ...rest, hasJiraToken: !!jiraToken, hasGithubToken: !!githubToken }
+  const { jiraToken, githubToken, anthropicToken, ...rest } = p
+  return { ...rest, hasJiraToken: !!jiraToken, hasGithubToken: !!githubToken, hasAnthropicToken: !!anthropicToken }
 }
 
 /** Merge a patch into the profile. Plain-text token fields are encrypted here, once. */
-export async function saveProfile(login: string, patch: Partial<UserProfile> & { jiraTokenPlain?: string, githubTokenPlain?: string }): Promise<UserProfile> {
+export async function saveProfile(login: string, patch: Partial<UserProfile> & { jiraTokenPlain?: string, githubTokenPlain?: string, anthropicTokenPlain?: string }): Promise<UserProfile> {
   await mkdir(usersDir(), { recursive: true })
-  const { jiraTokenPlain, githubTokenPlain, ...rest } = patch
+  const { jiraTokenPlain, githubTokenPlain, anthropicTokenPlain, ...rest } = patch
   const current = (await getProfile(login)) ?? { login, updatedAt: 0 }
   const next: UserProfile = { ...current, ...rest, login, updatedAt: Date.now() }
   if (jiraTokenPlain !== undefined) next.jiraToken = jiraTokenPlain ? encrypt(jiraTokenPlain) : undefined
   if (githubTokenPlain !== undefined) next.githubToken = githubTokenPlain ? encrypt(githubTokenPlain) : undefined
+  if (anthropicTokenPlain !== undefined) {
+    const kind = anthropicTokenPlain ? anthropicKindOf(anthropicTokenPlain) ?? undefined : undefined
+    if (anthropicTokenPlain && !kind) throw new Error(UNRECOGNISED_ANTHROPIC_TOKEN)
+    next.anthropicToken = anthropicTokenPlain ? encrypt(anthropicTokenPlain) : undefined
+    next.anthropicKind = kind
+  }
   // A credential file must not outlive the credential. Clearing the token and
   // leaving a docker config behind would keep a revoked value on disk and hand
   // it to the next run, which then fails against the registry for a reason
@@ -226,6 +240,64 @@ export async function githubTokenWorks(token: string, fetchImpl: typeof fetch = 
   return verdict
 }
 
+/**
+ * The variables Claude Code reads a credential from. An instance used to hand
+ * every agent the one set in its own environment, so every developer's runs drew
+ * on one person's subscription and nothing said whose work cost what. Now each
+ * developer brings their own, and the instance's are withheld from agents.
+ */
+export const CLAUDE_CREDENTIAL_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'] as const
+
+export const UNRECOGNISED_ANTHROPIC_TOKEN
+  = 'Not a Claude credential: expected an OAuth token from `claude setup-token` (sk-ant-oat…) or an API key (sk-ant-api…).'
+
+/** `oauth` for a `claude setup-token` token, `apikey` for an API key, else null. */
+export function anthropicKindOf(token: string): AnthropicKind | null {
+  if (/^sk-ant-oat\d\d-/.test(token)) return 'oauth'
+  if (/^sk-ant-api\d\d-/.test(token)) return 'apikey'
+  return null
+}
+
+/**
+ * The Claude credential this developer's agents run with, as env.
+ *
+ * Every credential variable is present in the answer, blank where unused, so
+ * that spreading it over the server's own environment REPLACES the instance's
+ * credential rather than leaving it underneath: an instance API key left beside
+ * a developer's OAuth token wins, and quietly bills the instance. `launchEnv`
+ * drops the blanks, so the agent sees the variable unset, not set to nothing.
+ *
+ * With auth disabled there is one person at the keyboard and it is their host,
+ * so the host's credential stands and nothing is overridden.
+ */
+export function claudeEnvFor(p: Pick<UserProfile, 'anthropicToken' | 'anthropicKind'> | null | undefined): Record<string, string> {
+  if (process.env.AUTH_DISABLED === '1') return {}
+  const env: Record<string, string> = Object.fromEntries(CLAUDE_CREDENTIAL_VARS.map(v => [v, '']))
+  if (!p?.anthropicToken) return env
+  const token = decrypt(p.anthropicToken)
+  if ((p.anthropicKind ?? anthropicKindOf(token)) === 'apikey') env.ANTHROPIC_API_KEY = token
+  else env.CLAUDE_CODE_OAUTH_TOKEN = token
+  return env
+}
+
+/**
+ * Why an agent must not be launched with this env, or null when it may.
+ *
+ * A developer with no Claude credential of their own is refused, not run on the
+ * instance's: falling back is exactly how one person's subscription ended up
+ * carrying everybody's work. Asked of the FINAL env, at the point of launch, so
+ * a path that resolved the developer's env wrongly - or not at all - is refused
+ * too, rather than reaching the host's `~/.claude/.credentials.json`, which the
+ * SDK would otherwise find for itself.
+ */
+export function claudeCredentialProblem(env: Record<string, string | undefined>, login: string | undefined): string | null {
+  if (process.env.AUTH_DISABLED === '1') return null
+  if (CLAUDE_CREDENTIAL_VARS.some(v => env[v])) return null
+  return login
+    ? `@${login} has no Claude credential. Add one on the Profile page (an OAuth token from \`claude setup-token\`, or an API key); this instance does not lend its own.`
+    : 'No Claude credential reached this agent. The person it runs as - whoever started it, or the owner of the watch or schedule that did - needs one on their Profile page.'
+}
+
 export async function envForUser(login: string | undefined, fetchImpl: typeof fetch = fetch): Promise<Record<string, string>> {
   // The commit identity first, and unconditionally. An anonymous run — auth
   // disabled, or a watch dispatch with no starter — still commits, and these
@@ -234,10 +306,10 @@ export async function envForUser(login: string | undefined, fetchImpl: typeof fe
   // The commit identity is set on every path, including the ones that return
   // early: an anonymous run still commits, and these returns were exactly where
   // git was left to invent an identity for itself.
-  if (!login) return { ...gitIdentity() }
+  if (!login) return { ...gitIdentity(), ...claudeEnvFor(null) }
   const p = await getProfile(login)
-  if (!p) return { ...gitIdentity() }
-  const env: Record<string, string> = { ...gitIdentity(p) }
+  if (!p) return { ...gitIdentity(), ...claudeEnvFor(null) }
+  const env: Record<string, string> = { ...gitIdentity(p), ...claudeEnvFor(p) }
   if (p.githubToken) {
     const t = decrypt(p.githubToken)
     const verdict = await githubTokenWorks(t, fetchImpl)

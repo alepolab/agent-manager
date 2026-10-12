@@ -79,6 +79,11 @@ export default defineWebSocketHandler({
             }
           }
 
+          // Who is asking: their agent runs on their own Claude credential. Read
+          // off the upgrade request the socket was opened with, which the
+          // upgrade hook above already refused to open without a session.
+          const user = await userFromCookieHeader(peer.request?.headers.get('cookie'))
+
           // Query provider - provider will handle saving all messages with correct sessionId
           await provider.query(
             msg.message,
@@ -94,6 +99,7 @@ export default defineWebSocketHandler({
               images: msg.images,
               // Pass user message for provider to save with correct sessionId
               userMessage,
+              login: user?.login,
             },
             peer
           )

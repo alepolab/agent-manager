@@ -7,7 +7,9 @@ import { DEFAULT_OUTPUT_STYLES } from '../utils/defaultOutputStyles'
 import { parseFrontmatter } from '../utils/frontmatter'
 import { resolveTools, resolveMaxTurns } from '../utils/agentToolPolicy'
 import { buildAgentSystemPrompt } from '../utils/agentSystemPrompt'
-import { requireCapability } from '../utils/session'
+import { currentUser, requireCapability } from '../utils/session'
+import { agentEnvFor, launchEnv } from '../utils/agentCaller'
+import { claudeCredentialProblem } from '../utils/users'
 import type { AgentFrontmatter } from '~/types'
 
 interface ChatMessage {
@@ -92,6 +94,12 @@ export default defineEventHandler(async (event) => {
   // for precisely this reason; without this line a manager took the same power
   // from the ⌘J panel instead, which is the hole the hidden link implied was closed.
   await requireCapability(event, 'configure')
+  // Studio runs on the signed-in developer's own Claude credential, and is
+  // refused before the stream opens when they have none.
+  const login = (await currentUser(event))?.login
+  const env = launchEnv(await agentEnvFor(login), {})
+  const noCredential = claudeCredentialProblem(env, login)
+  if (noCredential) throw createError({ statusCode: 403, message: noCredential })
   const body = await readBody<{ 
     messages: ChatMessage[]; 
     sessionId?: string; 
@@ -176,6 +184,7 @@ export default defineEventHandler(async (event) => {
       prompt: lastUserMessage.content,
       options: {
         cwd: resolvedCwd,
+        env,
         // `tools` restricts the actual toolset; `allowedTools` only pre-approves a
         // permission prompt and is a no-op under `bypassPermissions` below. Omitted
         // entirely when the agent declares no `tools` frontmatter, so the SDK keeps

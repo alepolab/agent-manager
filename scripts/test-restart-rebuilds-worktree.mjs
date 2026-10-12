@@ -55,9 +55,10 @@ const runner = await import('../server/utils/workflowRunner.ts')
 const { runPreflight } = await import('../server/utils/preflight.ts')
 // The real preflight, product checkout and git identity included: that is
 // where "not a git repository" refused the restart. Only the guardrail hooks
-// check is dropped, which asks about this host's ~/.claude settings.
+// check is dropped, which asks about this host's ~/.claude settings. The agents
+// are stubbed, so none needs a Claude credential.
 runner.setPreflight(async (run, s) => {
-  const report = await runPreflight(run, s)
+  const report = await runPreflight(run, s, fetch, { launchesAgents: false })
   return { ...report, checks: report.checks.filter(c => c.name !== 'guardrail hooks') }
 })
 

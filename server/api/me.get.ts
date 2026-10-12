@@ -21,6 +21,6 @@ export default defineEventHandler(async (event) => {
     realRole,
     can: capabilitiesFor(role),
     authDisabled: authDisabled(),
-    profile: profile ? toPublic(profile) : { login: user.login, hasJiraToken: false, hasGithubToken: false, updatedAt: 0 },
+    profile: profile ? toPublic(profile) : { login: user.login, hasJiraToken: false, hasGithubToken: false, hasAnthropicToken: false, updatedAt: 0 },
   }
 })

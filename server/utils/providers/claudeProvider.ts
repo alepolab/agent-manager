@@ -14,6 +14,8 @@ import { DEFAULT_OUTPUT_STYLES } from '../defaultOutputStyles'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { workingDirProblem } from './workingDir'
+import { agentEnvFor, launchEnv } from '../agentCaller'
+import { claudeCredentialProblem } from '../users'
 
 async function getOutputStyleContent(id: string, projectDir?: string): Promise<{ content: string; keepCodingInstructions: boolean } | null> {
   // 1. Check built-in
@@ -152,9 +154,16 @@ export const claudeProvider: ProviderAdapter = {
       const problem = workingDirProblem(options.workingDir)
       if (problem) throw new Error(problem)
 
+      // The developer's own Claude credential, never the instance's: the same
+      // env a pipeline agent they started would get, refused the same way.
+      const env = launchEnv(await agentEnvFor(options.login), {})
+      const noCredential = claudeCredentialProblem(env, options.login)
+      if (noCredential) throw new Error(noCredential)
+
       // Prepare SDK options
       const sdkOptions: any = {
         cwd: options.workingDir || process.cwd(),
+        env,
         permissionMode: mapPermissionMode(options.permissionMode),
         allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'],
         maxTurns: 10,

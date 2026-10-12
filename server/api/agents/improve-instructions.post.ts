@@ -1,5 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
-import { requireCapability } from '../../utils/session'
+import { currentUser, requireCapability } from '../../utils/session'
+import { agentEnvFor, launchEnv } from '../../utils/agentCaller'
+import { claudeCredentialProblem } from '../../utils/users'
 
 interface ImproveRequest {
   name: string
@@ -23,6 +25,11 @@ export default defineEventHandler(async (event): Promise<ImproveResponse> => {
   // `configure`: this route mutates the instance, and carried no authorisation check —
   // the auth middleware proves WHO the caller is, never WHAT they may do.
   await requireCapability(event, 'configure')
+  // On the caller's own Claude credential, like every other agent they start.
+  const login = (await currentUser(event))?.login
+  const env = launchEnv(await agentEnvFor(login), {})
+  const noCredential = claudeCredentialProblem(env, login)
+  if (noCredential) throw createError({ statusCode: 403, message: noCredential })
   const body = await readBody<ImproveRequest>(event)
 
   if (!body.name) {
@@ -41,6 +48,7 @@ export default defineEventHandler(async (event): Promise<ImproveResponse> => {
     for await (const message of query({
       prompt,
       options: {
+        env,
         maxTurns: 1,
         allowedTools: [],
         systemPrompt: {
