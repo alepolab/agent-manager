@@ -136,6 +136,21 @@
       "name": "localCheckout",
       "default": "/work/ase-crm-testPlaywright-workflow",
       "description": "The workflow's own copy of the suite (same repo as projectDir in local mode). deliver=local merges into its workflow/main; also the node_modules source for run worktrees."
+    },
+    {
+      "name": "autonomous",
+      "default": "yes",
+      "description": "yes = the analyst and the spec writer decide with their own recommendation, keep the Robot test's intent and record every decision; gates open by themselves on a clean hand-over. no = they stop and ask at every decision, as before."
+    },
+    {
+      "name": "pushAfterDeliver",
+      "default": "yes",
+      "description": "yes = after merging a folder into workflow/main, push workflow/main to GitHub (needs the deploy key: pw deploy-key). no = merge on this host only."
+    },
+    {
+      "name": "progressToTeams",
+      "default": "yes",
+      "description": "yes = after each push, post the migration progress (this push, this folder, coverage.csv, whole migration) through the step \"Tell Teams the progress\"; its channel is set on that step. no = no progress message."
     }
   ],
   "createdAt": "2026-10-07T11:11:12.308Z",

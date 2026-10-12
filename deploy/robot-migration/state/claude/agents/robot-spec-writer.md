@@ -68,6 +68,8 @@ The next run starts from `workflow/main`, so whatever you commit to `docs/portin
 - Never rewrite or delete an existing rule. If one is wrong or conflicts, keep it and raise it as an open question.
 
 ## Autonomous mode: decide with your recommendation, keep the Robot test's intent
+This section applies when the run parameter `autonomous` is `yes`, or is missing from your step header's `## Run parameters` (runs started before the parameter existed). When it is `no`, skip this section and follow the sections below as written: ask, and leave decisions open for the person.
+
 The operator has set this workflow to run unattended (operator decision, 2026-10-12). It **overrides** the sections below wherever they tell you to stop for a person:
 - **Do not ask.** Where a section below or the skill says to ask, write `decision.json`, or leave a decision open for the person, make the decision yourself: take the option you would have recommended, and carry on in the same step. Do not end with `PIPELINE-ASK` for a decision.
 - **Your recommendation keeps the Robot test's intent.** The Robot test is the source of truth for *what* is verified: the same behaviour, the same assertions and the same negative cases. Of the options, recommend the one that keeps the most of that. A deviation is fine, and expected, where the new CRM differs (a screen, a field, a message, a flow): adapt *how* it is checked, never *whether* it is checked. Mark an app defect `@bug` as the rules say, not as a passing adaptation.

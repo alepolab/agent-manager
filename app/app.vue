@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAV_PRIMARY, NAV_LIBRARY, NAV_BY_ROLE, itemActive, type NavItem } from '~/utils/navigation'
+import { NAV_PRIMARY, NAV_LIBRARY, NAV_BY_ROLE, SETTINGS_TABS, itemActive, routeIn, type NavItem } from '~/utils/navigation'
 
 const route = useRoute()
 const { claudeDir, exists: claudeDirExists, load: loadConfig } = useClaudeDir()
@@ -111,6 +111,12 @@ function visibleItems(items: NavItem[]) {
 }
 const navPrimary = computed(() => visibleItems(NAV_PRIMARY))
 const navLibrary = computed(() => visibleItems(NAV_LIBRARY))
+/**
+ * Settings, pinned under the menu. It used to live only in the account menu (and ⌘,), where a
+ * person who never opens that menu does not find it: the notification channels page read as
+ * missing. Shown to whoever may change settings, the same `configure` the pages themselves check.
+ */
+const settingsOn = computed(() => SETTINGS_TABS.some(t => routeIn(route.path, t.to)))
 
 /** Reload everything the sidebar counts after onboarding finishes.
  *  Written as a named handler rather than inline: a template expression
@@ -291,6 +297,19 @@ const initials = computed(() => (me.value?.name || me.value?.login || '?')
             </template>
           </template>
         </nav>
+
+        <div v-if="can('configure')" class="shrink-0 pb-3 pt-2" :class="sidebarCollapsed ? 'px-2' : 'px-2.5'" style="border-top: 0.5px solid var(--border-default);">
+          <NuxtLink
+            to="/settings/pipeline"
+            class="sidebar-item focus-ring"
+            :class="{ 'sidebar-item--on': settingsOn, 'justify-center': sidebarCollapsed }"
+            :aria-current="settingsOn ? 'page' : undefined"
+            :title="sidebarCollapsed ? 'Settings (⌘,)' : undefined"
+          >
+            <span class="relative shrink-0 flex"><UIcon name="i-lucide-settings" class="size-4" /></span>
+            <span v-if="!sidebarCollapsed" class="flex-1 truncate">Settings</span>
+          </NuxtLink>
+        </div>
       </aside>
 
       <!-- Main content -->
