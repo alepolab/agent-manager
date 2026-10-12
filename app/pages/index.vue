@@ -168,7 +168,19 @@ async function startFromTicket() {
     ticket.value = ''
     await navigateTo(`/workflows/${run.workflowSlug}?run=${run.id}`)
   } catch (e: any) {
-    if (e?.statusCode === 409 && e?.data?.data?.runId) await navigateTo(`/workflows/${runbook.value.slug}?run=${e.data.data.runId}`)
+    // Said, with the way to the run in the way, rather than taken there: a
+    // quiet jump to the other run read as this one having started. ASECRM-581
+    // and 582 "never appeared" that way - the page showed 580 and said nothing.
+    if (e?.statusCode === 409 && e?.data?.data?.runId) {
+      const runId = e.data.data.runId
+      toast.add({
+        title: 'Not started',
+        description: e.data.message,
+        color: 'warning',
+        duration: 0,
+        actions: [{ label: 'Open that run', onClick: () => { navigateTo(`/runs/${runId}`) } }],
+      })
+    }
     // The workflow declares inputs this box cannot collect. Open the run dialog,
     // which can: a toast alone would say what is missing and leave nowhere to
     // put it.
