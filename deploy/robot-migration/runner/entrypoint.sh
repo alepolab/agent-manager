@@ -42,12 +42,14 @@ done
 if [[ ! -L $S/docker/stacks/ui/faketime ]]; then
   rm -rf "$S/docker/stacks/ui/faketime"; mkdir -p "$S/docker/stacks/ui"; ln -s /faketime "$S/docker/stacks/ui/faketime"
 fi
-if [[ ! -d $S/node_modules ]]; then
-  log "npm ci in the suite"; (cd "$S" && npm ci --no-audit --no-fund >/dev/null)
+# --include=dev: this container runs with NODE_ENV=production (for Agent Manager), which makes npm skip
+# devDependencies, and the suite has nothing else. Without it npm ci installed nothing, and the browser
+# install below then ran npx's own newer Playwright, so the suite's version found no browser.
+if [[ ! -x $S/node_modules/.bin/playwright ]]; then
+  log "npm ci in the suite"; (cd "$S" && npm ci --include=dev --no-audit --no-fund >/dev/null)
 fi
-if [[ ! -d $PLAYWRIGHT_BROWSERS_PATH ]] || ! ls "$PLAYWRIGHT_BROWSERS_PATH" | grep -q '^chromium'; then
-  log "installing the suite's chromium"; (cd "$S" && npx playwright install chromium >/dev/null)
-fi
+# Every boot, from the suite's own Playwright: a no-op when its browser is there, a download after it moves.
+(cd "$S" && npx --no-install playwright install chromium >/dev/null)
 
 # 3. Claude: a person logs in once (docker exec -it pwmig-am claude), the credentials stay in the
 #    pwmig_claude-home volume. Without them every agent call fails, so say so loudly.

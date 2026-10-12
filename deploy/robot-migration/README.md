@@ -75,7 +75,7 @@ Back on the host:
 ```bash
 pw up                        # the rest; sets the crm-api secret and Keycloak redirects; waits for the app (Liquibase on first boot)
 docker exec -it pwmig-am claude      # log in once (/login), then exit; the login stays in volume pwmig_claude-home
-docker restart pwmig-am
+docker restart pwmig-am pwmig-ports   # pwmig-ports lives in pwmig-am's network: restart them together
 pw check                     # access check inside pwmig-am: every line must be ok
 ```
 
