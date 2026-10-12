@@ -51,7 +51,8 @@ Whenever you ask, write `decision.json` in the shape the run page renders, in pl
    - Push only `workflow/main`. Never force, never push another branch or a tag, never open a pull request.
    - If the push is rejected or fails, the merge stays local and the next delivery pushes it too. Change nothing, do not retry with other credentials or options, and ask through the run (`decision.json` + `PIPELINE-ASK`) with the exact error in `findings`: option `a` "leave it local and carry on", option `b` "stop the queue".
 7. **Progress for Teams, only after a successful push.** The step after yours posts `progress.json` from the run artifacts directory to the team's channel, and runs only when that file exists. So when the push in step 6 was skipped or failed, write no `progress.json`. After a push that succeeded:
-   - Run `node /opt/pwmig/migration-progress.mjs <merge>^1 <merge> "<robotFolder> (<include>)" > <artifacts>/progress.json.tmp`, where `<merge>` is the merge commit's hash. Leave out ` (<include>)` when `include` is blank. Then `mv` it to `progress.json`.
+   - Run `node /opt/pwmig/migration-progress.mjs <merge>^1 <merge> "<robotFolder>" "<include>" > <artifacts>/progress.json.tmp`, where `<merge>` is the merge commit's hash and `"<include>"` is `""` when `include` is blank. Then `mv` it to `progress.json`.
+   - Its numbers come from `docs/coverage.csv` through `scripts/coverage-summary.mjs`, `docs/run-status.md` and `scripts/robot-remaining.mjs`, as committed in the merge. So the spec writer's coverage and run-status updates must be in the merge. If `progress.json` says this push added `+0` done, or the folder has no run-status row, say so in your reply: the tracker was not updated.
    - It takes a minute or two: wait for it in the foreground.
    - If it fails, delete `progress.json.tmp`, write no `progress.json`, and report the error. The delivery itself stays done: do not ask, and do not undo anything.
 8. **Reply** with:

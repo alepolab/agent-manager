@@ -2,93 +2,120 @@
 // The migration's progress after one delivered folder, for the Teams message the workflow's
 // "tell-progress" notify step posts. The branch pusher runs it after a successful push:
 //
-//   node migration-progress.mjs <before> <after> "<label>"   > progress.json
+//   node migration-progress.mjs <before> <after> "<robotFolder>" ["<include>"]   > progress.json
 //
 // <before>/<after>: workflow/main before and after this folder's merge (<merge>^1 and <merge>).
-// Counts come from the suite's own tools, so they agree with what the workflow skips and ports:
-//   scope    every queue item's folder (and include list), plus every folder coverage.csv already
-//            tracks (ported before the queue existed), counted by scripts/robot-remaining.mjs
-//   ported   docs/coverage.csv rows of those files with a ported* status, at <after>
-//   push     rows that are ported* at <after> and were not at <before>
-// Prints { entries: [{ title }], progress: {...} }: the title is the message, three lines.
+// Every number comes from the files and tools the porting skills keep and rely on, never from a
+// count of our own:
+//   docs/coverage.csv, read through scripts/coverage-summary.mjs (one row per Robot test, never
+//     deleted; done = ported + ported-bug + ported-missing-feature, out of all rows but excluded),
+//     at <after>, at <before> (this push = the difference) and for this folder;
+//   docs/run-status.md: this folder's verification status, at <after>;
+//   scripts/robot-remaining.mjs: Robot tests of queued folders that coverage.csv has no row for yet.
+// Prints { entries: [{ title }], progress: {...} }: the title is the message.
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const SUITE = process.env.PWMIG_SUITE ?? '/work/ase-crm-testPlaywright-workflow'
 const ROBOT = process.env.PWMIG_ROBOT ?? '/work/atddtestsuite_bss'
 const QUEUE = process.env.PWMIG_QUEUE ?? '/data/am/claude/workflow-queues/robot-to-playwright-migration.json'
-const [before, after, label = ''] = process.argv.slice(2)
-if (!before || !after) { console.error('usage: migration-progress.mjs <before> <after> "<label>"'); process.exit(2) }
+const [before, after, folder = '', include = ''] = process.argv.slice(2)
+if (!before || !after || !folder) { console.error('usage: migration-progress.mjs <before> <after> "<robotFolder>" ["<include>"]'); process.exit(2) }
 
 const git = (...a) => execFileSync('git', ['-C', SUITE, ...a], { encoding: 'utf8', maxBuffer: 64 << 20 })
+const show = (rev, path) => { try { return git('show', `${rev}:${path}`) } catch { return null } }
+const warnings = []
 
-// RFC 4180: quoted fields may hold commas, quotes ("") and newlines (the notes column does).
-function parseCsv(text) {
-  const rows = []; let row = [], f = '', q = false
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]
-    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++ } else q = false } else f += c }
-    else if (c === '"') q = true
-    else if (c === ',') { row.push(f); f = '' }
-    else if (c === '\n') { row.push(f); rows.push(row); row = []; f = '' }
-    else if (c !== '\r') f += c
+// coverage-summary.mjs on coverage.csv as of <rev>, from a copy in this container's temp dir. Its
+// markdown table is read by its own header, so a column it adds or moves does not shift ours.
+// `--folder` always comes first, '' for no filter: without it the script skips its first argument
+// and reads the working tree's coverage.csv instead of the file it was given.
+const tmp = mkdtempSync(join(tmpdir(), 'pwmig-progress-'))
+process.on('exit', () => rmSync(tmp, { recursive: true, force: true }))
+function summary(rev, prefix = '') {
+  const csv = show(rev, 'docs/coverage.csv')
+  if (csv === null) return null
+  const file = join(tmp, `coverage-${rev.replace(/[^\w]/g, '_')}.csv`)
+  writeFileSync(file, csv)
+  let out
+  try {
+    out = execFileSync('node', ['scripts/coverage-summary.mjs', '--folder', prefix, file],
+      { cwd: SUITE, encoding: 'utf8', maxBuffer: 16 << 20 })
+  } catch (e) {   // exit 1 = it found problems (duplicate rows, unknown statuses); the table is still printed
+    out = String(e.stdout ?? '')
+    const n = out.match(/(\d+) problem\(s\)/)?.[1]
+    if (n && rev === after && !prefix) warnings.push(`coverage-summary reports ${n} problem(s) in coverage.csv`)
   }
-  if (f !== '' || row.length) { row.push(f); rows.push(row) }
-  const [head, ...body] = rows
-  return body.filter(r => r.length > 1).map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? ''])))
+  const lines = out.split('\n').filter(l => l.startsWith('|'))
+  const head = lines[0]?.split('|').slice(1, -1).map(s => s.trim()) ?? []
+  const row = lines.find(l => l.startsWith('| **total**'))
+  if (!row) return null
+  const cells = row.split('|').slice(1, -1).map(s => s.trim())
+  const t = Object.fromEntries(head.map((h, i) => [h, parseInt(cells[i], 10) || 0]))
+  // coverage-summary's own short names: ported, p-bug, p-missing, analysed, a-bug, not-avail, blocked, todo, excluded
+  const done = t['ported'] + t['p-bug'] + t['p-missing']
+  return { ...t, done, inScope: t.total - t.excluded, pct: cells[head.indexOf('done %')] ?? '' }
 }
-const coverageAt = (rev) => { try { return parseCsv(git('show', `${rev}:docs/coverage.csv`)) } catch { return [] } }
-const key = r => `${r.robot_file}\u0000${r.robot_id}\u0000${r.robot_test}`
-const PORTED = new Set(['ported', 'ported-bug', 'ported-missing-feature'])
-const split = rows => ({
-  ported: rows.length,
-  pass: rows.filter(r => r.status === 'ported').length,
-  bug: rows.filter(r => r.status === 'ported-bug').length,
-  missing: rows.filter(r => r.status === 'ported-missing-feature').length,
-})
 
-// Scope: every Robot file of every queue item and of every folder coverage.csv tracks, once.
+const now = summary(after)
+if (!now) { console.error('coverage-summary.mjs gave no total for coverage.csv at ' + after); process.exit(1) }
+const was = summary(before) ?? Object.fromEntries(Object.keys(now).map(k => [k, 0]))
+const d = k => (now[k] ?? 0) - (was[k] ?? 0)
+// This folder, or just its included files: coverage-summary's --folder is a prefix of robot_file.
+const files = include.split(',').map(f => f.trim()).filter(Boolean)
+const prefixes = files.length ? files.map(f => `${folder}/${f}`) : [folder]
+const here = prefixes.map(x => summary(after, x)).filter(Boolean).reduce((a, t) => a
+  ? Object.fromEntries(Object.keys(a).map(k => [k, typeof a[k] === 'number' ? a[k] + (t[k] ?? 0) : a[k]]))
+  : t, null)
+if (here) here.pct = here.inScope ? `${Math.round((100 * here.done) / here.inScope)}%` : '0%'
+
+// run-status.md: this folder's rows. Folder runs are "<folder>" or "<folder> (batch …)"; file runs
+// are "<folder>/<file without .robot>".
+const names = files.length ? files.map(f => `${folder}/${f.replace(/\.robot$/, '')}`) : [folder]
+const status = (show(after, 'docs/run-status.md') ?? '').split('\n')
+  .filter(l => l.startsWith('|')).map(l => l.split('|').slice(1, -1).map(s => s.trim()))
+  .filter(c => names.some(nm => c[0] === nm || c[0].startsWith(`${nm} (`))).map(c => c[5]).filter(Boolean)
+const runStatus = status.length ? [...new Set(status)].join('; ') : 'no row in run-status.md'
+
+// Queued Robot tests that coverage.csv has no row for yet: robot-remaining's tests minus rows.
 const queue = JSON.parse(readFileSync(QUEUE, 'utf8')).items ?? []
-const coverageNow = coverageAt(after)
-const folders = new Map()  // "<folder>\0<include>" -> { folder, include }
+let notStarted = 0, notStartedFolders = 0
 for (const it of queue) {
   const p = it.parameters ?? {}
-  if (p.robotFolder) folders.set(`${p.robotFolder}\u0000${p.include ?? ''}`, { folder: p.robotFolder, include: p.include })
-}
-for (const r of coverageNow) {
-  const folder = r.robot_file.split('/').slice(0, -1).join('/')
-  if (folder) folders.set(`${folder}\u0000`, { folder })
-}
-const scope = new Map()   // "<folder>/<file>" -> number of test cases
-for (const p of folders.values()) {
-  const args = [`${SUITE}/scripts/robot-remaining.mjs`, ROBOT, p.folder, ...(p.include ? [p.include] : []), '--json', '--flat']
+  if (!p.robotFolder) continue
   try {
-    const r = JSON.parse(execFileSync('node', args, { encoding: 'utf8', cwd: SUITE, maxBuffer: 16 << 20 }) || '{}')
-    for (const f of [...(r.remaining ?? []), ...(r.done ?? [])]) scope.set(`${p.folder}/${f.file}`, f.tests ?? 0)
-  } catch { /* a folder robot-remaining cannot read stays out of the total */ }
+    const r = JSON.parse(execFileSync('node', ['scripts/robot-remaining.mjs', ROBOT, p.robotFolder, ...(p.include ? [p.include] : []), '--json', '--flat'],
+      { cwd: SUITE, encoding: 'utf8', maxBuffer: 16 << 20 }) || '{}')
+    const missing = (r.remaining ?? []).reduce((a, f) => a + Math.max((f.tests ?? 0) - (f.rows ?? 0), 0), 0)
+    if (missing) { notStarted += missing; notStartedFolders++ }
+  } catch { warnings.push(`robot-remaining could not read ${p.robotFolder}`) }
 }
-const total = [...scope.values()].reduce((a, b) => a + b, 0)
 
-const now = coverageNow.filter(r => scope.has(r.robot_file))
-const was = new Set(coverageAt(before).filter(r => PORTED.has(r.status)).map(key))
-const overall = split(now.filter(r => PORTED.has(r.status)))
-const push = split(now.filter(r => PORTED.has(r.status) && !was.has(key(r))))
-
-const diffFiles = git('diff', '--name-status', before, after, '--', 'tests/').split('\n').filter(l => /^[AM]\s.*\.spec\.ts$/.test(l))
+const specFiles = git('diff', '--name-status', before, after, '--', 'tests/').split('\n').filter(l => /^[AM]\s.*\.spec\.ts$/.test(l)).length
 const fixme = git('diff', before, after, '--', 'tests/').split('\n').filter(l => l.startsWith('+') && l.includes('test.fixme(')).length
 const delivered = queue.filter(i => i.status === 'done' || i.status === 'running').length
 const sha = git('rev-parse', '--short', after).trim()
 
 const n = x => x.toLocaleString('en-US')
-const pct = total ? ((overall.ported / total) * 100).toFixed(1) : '0.0'
-const byStatus = s => [s.bug && `${n(s.bug)} @bug`, s.missing && `${n(s.missing)} missing feature`].filter(Boolean)
+const sgn = x => (x > 0 ? `+${n(x)}` : n(x))
+const parts = (t, f) => [
+  [`${f(t['ported'])} pass`, true], [`${f(t['p-bug'])} @bug`, t['p-bug']], [`${f(t['p-missing'])} missing feature`, t['p-missing']],
+].filter(([, show]) => show).map(([s]) => s)
+const delta = { ported: d('ported'), 'p-bug': d('p-bug'), 'p-missing': d('p-missing') }
+const otherDelta = [['blocked', 'blocked'], ['excluded', 'excluded'], ['not-avail', 'not available'], ['todo', 'todo']]
+  .filter(([k]) => d(k)).map(([k, w]) => `${sgn(d(k))} ${w}`)
+const wholeTotal = now.inScope + notStarted
 const title = [
-  `This push${label ? `: ${label}` : ''}: ${n(push.ported)} Robot tests ported (${[`${n(push.pass)} pass`, ...byStatus(push)].join(', ')}), ${diffFiles.length} spec files, ${fixme} test.fixme · ${sha}`,
-  `Overall: ${n(overall.ported)} of ${n(total)} Robot tests ported (${pct}%)${byStatus(overall).length ? `: ${byStatus(overall).join(', ')}` : ''}; ${n(Math.max(total - overall.ported, 0))} still to port`,
-  `Queue: ${delivered} of ${queue.length} folders delivered, ${queue.length - delivered} to go`,
+  `This push: ${folder}${include ? ` (${include})` : ''} · ${sha}: ${sgn(d('done'))} Robot tests done (${parts(delta, sgn).join(', ')})${otherDelta.length ? `; ${otherDelta.join(', ')}` : ''}; ${specFiles} spec files, ${fixme} test.fixme`,
+  here ? `This folder: ${n(here.done)} of ${n(here.inScope)} done (${here.pct}), ${n(here.todo)} todo; run status: ${runStatus}` : `This folder: run status: ${runStatus}`,
+  `coverage.csv: ${n(now.done)} of ${n(now.inScope)} tracked Robot tests done (${now.pct}): ${parts(now, n).join(', ')}; ${n(now.todo)} todo, ${n(now.blocked)} blocked, ${n(now.excluded)} excluded`,
+  `Whole migration: ${n(now.done)} of ${n(wholeTotal)} (${wholeTotal ? ((100 * now.done) / wholeTotal).toFixed(1) : '0.0'}%), with ${n(notStarted)} Robot tests in ${notStartedFolders} queued folders not in coverage.csv yet. Queue: ${delivered} of ${queue.length} folders delivered`,
+  ...warnings.map(w => `Note: ${w}`),
 ].join('\n')
 
 console.log(JSON.stringify({
   entries: [{ title }],
-  progress: { total, overall, push, specFiles: diffFiles.length, fixme, delivered, queued: queue.length, commit: sha, label },
+  progress: { commit: sha, folder, include, coverage: now, before: was, folderCoverage: here, runStatus, notStarted, notStartedFolders, specFiles, fixme, delivered, queued: queue.length, warnings: warnings.join("; ") },
 }, null, 2))
