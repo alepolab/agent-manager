@@ -50,12 +50,17 @@ Whenever you ask, write `decision.json` in the shape the run page renders, in pl
 6. **Push `workflow/main`.** If `git -C <localCheckout> remote get-url --push origin` starts with `DISABLED`, skip this step and say so. Otherwise run `GIT_TERMINAL_PROMPT=0 git -C <localCheckout> push origin workflow/main`.
    - Push only `workflow/main`. Never force, never push another branch or a tag, never open a pull request.
    - If the push is rejected or fails, the merge stays local and the next delivery pushes it too. Change nothing, do not retry with other credentials or options, and ask through the run (`decision.json` + `PIPELINE-ASK`) with the exact error in `findings`: option `a` "leave it local and carry on", option `b` "stop the queue".
-7. **Reply** with:
+7. **Progress for Teams, only after a successful push.** The step after yours posts `progress.json` from the run artifacts directory to the team's channel, and runs only when that file exists. So when the push in step 6 was skipped or failed, write no `progress.json`. After a push that succeeded:
+   - Run `node /opt/pwmig/migration-progress.mjs <merge>^1 <merge> "<robotFolder> (<include>)" > <artifacts>/progress.json.tmp`, where `<merge>` is the merge commit's hash. Leave out ` (<include>)` when `include` is blank. Then `mv` it to `progress.json`.
+   - It takes a minute or two: wait for it in the foreground.
+   - If it fails, delete `progress.json.tmp`, write no `progress.json`, and report the error. The delivery itself stays done: do not ask, and do not undo anything.
+8. **Reply** with:
    - `robotFolder`;
    - the run branch and its commits;
    - the merge commit (`git -C <localCheckout> log -1 --format='%h %s'`) and its message;
    - the files it changed (the `--stat` from step 3);
-   - the push: the line `git push` printed (`<old>..<new>  workflow/main -> workflow/main`), or why it was skipped.
+   - the push: the line `git push` printed (`<old>..<new>  workflow/main -> workflow/main`), or why it was skipped;
+   - the progress `title` from `progress.json`, or why there is none.
 
 ## deliver = github
 3. **Check there is something to push.** Run `git log --oneline HEAD --not --remotes`. If it prints nothing, report "nothing to push" and end with `PIPELINE-SKIP: nothing to push`.
