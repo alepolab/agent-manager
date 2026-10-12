@@ -236,5 +236,19 @@ const { loadReviewQueue } = await import('../server/utils/runReview.ts')
 const q = await loadReviewQueue({ ...done, status: 'awaiting_review', question: { kind: 'approval', stepId: 'gate', artifact: 'escalated-drafts.json', text: 'review' } })
 assert.deepEqual(q.items[0].possibleDuplicateOf, [{ key: 'ASECRM-368', source: 'ticket', matched: ['SubscriberApprovalService.java:404-412'] }], 'the review item carries the mark for the panel')
 
+// ── 7. an escalated draft whose gate copy keeps the key but drops the evidence ──
+// Same number of keys, so a count comparison saw nothing to restore.
+const { enforceDuplicateEscalation } = await import('../server/utils/duplicateCheck.ts')
+const partialId = 'partial-copy-run'
+const partialDir = join(process.env.AGENT_RUNS_DIR, partialId, 'artifacts')
+mkdirSync(partialDir, { recursive: true })
+const runnerMark = { key: 'TEST-1', source: 'run', matched: ['Approval.java:100', 'Fees.java:200'] }
+writeFileSync(join(partialDir, 'ticket-drafts.json'), JSON.stringify([{ draft_id: 'DRAFT-001', summary: 'Partial', possible_duplicate_of: [runnerMark] }]))
+writeFileSync(join(partialDir, 'approved-drafts.json'), '[]')
+writeFileSync(join(partialDir, 'escalated-drafts.json'), JSON.stringify([{ draft_id: 'DRAFT-001', summary: 'Partial', possible_duplicate_of: [{ key: 'TEST-1', source: 'ticket', matched: [] }], gate: { verdict: 'escalated', reason: 'needs a look' } }]))
+await enforceDuplicateEscalation(partialId)
+const pq = await loadReviewQueue({ ...done, id: partialId, status: 'awaiting_review', question: { kind: 'approval', stepId: 'gate', artifact: 'escalated-drafts.json', text: 'review' } })
+assert.deepEqual(pq.items[0].possibleDuplicateOf, [runnerMark], 'THE LOST EVIDENCE: the gate\'s same-key copy hid the runner\'s locations and its live-run source')
+
 console.log('ok - a draft an open ticket or a live run already covers is marked by its code, and never auto-filed')
 process.exit(0)

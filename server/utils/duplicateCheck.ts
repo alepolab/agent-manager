@@ -390,8 +390,9 @@ export async function enforceDuplicateEscalation(runId: string): Promise<number>
   let changed = false
   for (const e of escalated) {
     const m = marks(e)
-    const had = Array.isArray(e.possible_duplicate_of) ? e.possible_duplicate_of.length : 0
-    if (m.length && m.length !== had) { e.possible_duplicate_of = m; changed = true }
+    // By content, not count: a gate copy can keep the key and drop its locations
+    // or source, and the review would show that copy instead of the runner's.
+    if (m.length && JSON.stringify(m) !== JSON.stringify(e.possible_duplicate_of ?? [])) { e.possible_duplicate_of = m; changed = true }
   }
   const keep: Entry[] = []
   let moved = 0
