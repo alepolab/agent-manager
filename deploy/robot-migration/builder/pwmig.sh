@@ -7,12 +7,15 @@
 # Commands, in first-time order:
 #   preflight   read-only: our names, subnet and disk are free; lists what else runs (left alone)
 #   fetch       fresh clones / pulls of ase-crm, agent-manager, atddtestsuite_bss and the suite into /src
+#   import <dir> reads a tar of one clone on stdin into /src/<dir>, for a token without access to the
+#               private repos: stream it from a laptop clone (see the README, "No repo token")
 #   build       builds every pwmig/* image from those clones (and wraps the external ones)
 #   db-up       starts only pwmig-mariadb, ready for the dump
 #   db-import   reads a crm14_db dump on stdin into pwmig-mariadb (pipe it in from the laptop)
 #   up          starts the rest; sets the crm-api secret and Keycloak redirects; restarts the app on them
 #   check       runs the access check inside pwmig-am
 #   status | logs <service> | down (keeps every volume) | update (fetch + build + recreate app and am)
+#   redeploy    build + recreate app and am, without fetch (after an import)
 # Everything it creates is named pwmig*: containers, images, volumes, the network. It never touches anything else.
 set -euo pipefail
 KIT=/src/agentmanager/deploy/robot-migration
@@ -27,6 +30,9 @@ dc() {
     --env-file /src/ase-crm/.env --env-file $KIT/compose/pwmig.env "$@"
 }
 set -a; source $KIT/compose/pwmig.env; set +a
+# Clones streamed in from a laptop keep its uid; without this git refuses them ("dubious ownership").
+# This container's own global config only, gone when it exits.
+git config --global --add safe.directory '*'
 
 REPOS=(
   "ase-crm|alepolab/ase-crm|${ASE_CRM_BRANCH:-develop}"
@@ -72,6 +78,10 @@ fetch() {
     fi
     log "  $(git -C /src/$dir log --oneline -1)"
   done
+  prepare_src
+}
+
+prepare_src() {
   # ase-crm's .env is not in git: made from .env.example. The crm-api secret is filled in by `up`.
   if [[ ! -f /src/ase-crm/.env ]]; then
     cp /src/ase-crm/.env.example /src/ase-crm/.env
@@ -80,6 +90,25 @@ fetch() {
   fi
   chmod -R a+rX /src
 }
+
+import_src() {  # $1 one of the REPOS dirs; the tar of that clone (with .git) on stdin
+  local dir=${1:?usage: import <dir>} want="" r d b
+  for r in "${REPOS[@]}"; do IFS='|' read -r d _ b <<<"$r"; [[ $d == "$dir" ]] && want=$b; done
+  [[ -n $want ]] || die "import: $dir is not one of: $(printf '%s ' "${REPOS[@]%%|*}")"
+  local tmp=/src/.import-$dir
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  # Into a temporary folder first, swapped in only once the whole tar has arrived:
+  # a broken transfer leaves the existing clone as it was.
+  tar -C "$tmp" -xf - || { rm -rf "$tmp"; die "import: the tar did not arrive whole; /src/$dir is unchanged"; }
+  [[ -d $tmp/.git ]] || { rm -rf "$tmp"; die "import: no .git in the tar (send the clone folder itself)"; }
+  chown -R 0:0 "$tmp"
+  rm -rf "/src/$dir"; mv "$tmp" "/src/$dir"
+  log "imported $dir: $(git -C /src/$dir branch --show-current) $(git -C /src/$dir log --oneline -1)"
+  [[ $(git -C /src/$dir branch --show-current) == "$want" ]] || log "WARNING: $dir is not on $want; the stack and agents use the branch it is on"
+  if [[ -f /src/ase-crm/.env.example ]]; then prepare_src; fi
+}
+
+redeploy() { build; dc up -d --no-build --no-deps --force-recreate app am; status; }
 
 build() {
   [[ -d /src/ase-crm/.git ]] || die "run fetch first"
@@ -134,6 +163,7 @@ status() { docker ps -a --filter label=com.docker.compose.project=$P --format ' 
 case ${1:-} in
   preflight) preflight ;;
   fetch) fetch ;;
+  import) import_src "${2:-}" ;;
   build) build ;;
   db-up) dc up -d --no-build mariadb; log "pwmig-mariadb starting; now pipe the dump into: ... db-import" ;;
   db-import)
@@ -146,6 +176,7 @@ case ${1:-} in
   status) status ;;
   logs) docker logs --tail 200 "pwmig-${2:?service}" ;;
   down) dc down ;;
-  update) fetch; build; dc up -d --no-build --no-deps --force-recreate app am; status ;;
+  update) fetch; redeploy ;;
+  redeploy) redeploy ;;
   *) sed -n '2,22p' "$0"; exit 1 ;;
 esac

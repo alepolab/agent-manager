@@ -44,12 +44,31 @@ pw build                     # pwmig/* images (app and DB from the fresh ase-crm
 pw db-up                     # only pwmig-mariadb
 ```
 
+**No repo token?** If your `GH_TOKEN` can't read the private repos (it still needs `read:packages` for `pw build`),
+skip `pw fetch` and stream each clone in from the laptop instead. `pw import` unpacks it into a temporary folder,
+swaps it in only once the whole tar has arrived, and makes `ase-crm/.env`. On the laptop:
+
+```bash
+H=alepo@10.79.8.126; export COPYFILE_DISABLE=1   # macOS: no ._ files in the tar
+imp() { git clone -q --branch "$3" "https://github.com/$2.git" "$1" && tar -C "$1" -cf - . \
+  | ssh $H "docker run --rm -i -v /var/run/docker.sock:/var/run/docker.sock -v pwmig_src:/src pwmig/builder import $1"; }
+imp ase-crm                alepolab/ase-crm                          develop
+imp atddtestsuite_bss      alepolab/atddtestsuite_bss                CRM_14.0
+imp ase-crm-testPlaywright jayeshchavan-alepo/ase-crm-testPlaywright workflow/main
+```
+
+Later updates go the same way: `imp` the repo again, then `pw redeploy` (`pw update` would try to pull it).
+
 **The database comes from the laptop,** because ase-crm's git has no `crm14_db` dump, and the sessions' seed rows exist only in the laptop's `crm-ui-mariadb`. Run this on the laptop:
 
 ```bash
 docker exec crm-ui-mariadb mariadb-dump -uroot -proot --single-transaction --routines --triggers crm14_db \
   | ssh alepo@10.79.8.126 "docker run --rm -i -v /var/run/docker.sock:/var/run/docker.sock -v pwmig_src:/src pwmig/builder db-import"
 ```
+
+**Or start with an empty database:** skip the dump. The app's Liquibase builds the schema and its reference
+seed on first boot (`pw up` waits for it); `pwmig-billing` restarts until those tables exist, then runs.
+Suites that rely on the laptop's session seed rows will need them added.
 
 Back on the host:
 
