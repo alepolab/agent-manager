@@ -40,11 +40,27 @@ const wf = { slug: 'runbook', name: 'Runbook', steps: [
 writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', `${wf.slug}.json`),
   JSON.stringify({ name: wf.name, description: '', steps: wf.steps, createdAt: new Date().toISOString() }))
 
+// With a step after Dev Done for the review to send the work back to, so a
+// send-back can skip Dev Done entirely.
+const staged = { slug: 'staged', name: 'Staged', steps: [
+  { id: 'work', agentSlug: 'agent-work', label: 'Implement Fix', next: ['dev'] },
+  { id: 'dev', agentSlug: 'agent-dev', label: 'Jira: Dev Done', next: ['stack'], ...gate },
+  { id: 'stack', agentSlug: 'agent-stack', label: 'Update Stack', next: ['rev'] },
+  { id: 'rev', agentSlug: 'agent-rev', label: 'Verify + Regression', next: ['pr'] },
+  { id: 'pr', agentSlug: 'agent-pr', label: 'Evidence Bundle + PR', next: ['qa'], ...gate },
+  { id: 'qa', agentSlug: 'agent-qa', label: 'Jira: QA Done', next: [], ...gate },
+] }
+writeFileSync(join(process.env.CLAUDE_DIR, 'workflows', `${staged.slug}.json`),
+  JSON.stringify({ name: staged.name, description: '', steps: staged.steps, createdAt: new Date().toISOString() }))
+
 const calls = []
 let sendBackOnce = false
+/** What the staged workflow's review answers, one per visit; then it passes. */
+const verdicts = []
 runner.setAgentCaller(async (slug) => {
   calls.push(slug)
   if (slug === 'agent-mid' && sendBackOnce) { sendBackOnce = false; return 'VERDICT: FAIL\nPIPELINE-REWORK: Implement Fix — one case still fails' }
+  if (slug === 'agent-rev' && verdicts.length) return `VERDICT: FAIL\nPIPELINE-REWORK: ${verdicts.shift()} — still failing`
   return `out ${slug}`
 })
 
@@ -104,6 +120,29 @@ const byStep = (r, id) => (r.decisions ?? []).filter(d => d.stepId === id)
     assert.equal(asked, 'pr', 'the approval from before the send-back is not carried to the PR step')
     assert.ok(!byStep(r, 'pr').some(d => d.auto), 'and nothing was carried')
   }
+}
+
+// ── 3b. a send-back the operator granted also voids the approval ─────────────
+// The review spends both automatic send-backs on Implement Fix, each followed
+// by a fresh Dev Done approval, then asks to go back a third time, to Update
+// Stack, after Dev Done. The operator grants it. That attempt changes what Dev
+// Done signed off, so the PR step asks again rather than carrying it.
+{
+  verdicts.push('Implement Fix', 'Implement Fix', 'Update Stack')
+  let r = await runner.waitForSettled((await runner.startOrQueue({ workflow: staged, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev5' })).run.id, TIMEOUT)
+  for (const by of ['dev5', 'dev5-again', 'dev5-third']) {
+    assert.equal(at(r), 'dev', `the run stops at Dev Done for ${by}`)
+    r = await approve(r.id, by)
+  }
+  assert.equal(r.question?.reason, 'rework', 'the automatic send-backs are spent: the operator is asked')
+  assert.equal(r.sendBacks?.length, 2)
+  const grant = recordDecision(structuredClone(r), 'approved', 'operator5')
+  await runner.continueRun(r.id, 'once more', { decision: grant })
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(at(r), 'pr', `THE REGRESSION: the Dev Done approval from before the granted send-back carried on (${r.status} at ${at(r)})`)
+  assert.equal(r.sendBacks?.length, 3, 'the granted send-back is on the record')
+  assert.ok(!byStep(r, 'pr').some(d => d.auto), 'and nothing was carried')
+  assert.ok(byStep(r, r.decisions.find(d => d.by === 'operator5')?.stepId ?? '').length, 'the grant itself is recorded')
 }
 
 // ── 4. the rule itself ───────────────────────────────────────────────────────

@@ -228,17 +228,39 @@ const occupy = async (who) => {
   assert.equal(fixes.length, 3)
   const b = await occupy('dev14')
 
-  const granted = await runner.continueRun(r.id, 'one more')
+  const grant = { stepId: 'fix', label: 'Fix', at: Date.now(), by: 'dev13', verdict: 'approved', note: 'one more' }
+  const granted = await runner.continueRun(r.id, 'one more', { decision: grant })
   assert.equal(granted.status, 'queued', 'the group is full: the grant waits')
   assert.equal(granted.parked.action, 'continue')
+  assert.deepEqual(granted.parked.decision, grant, 'carried by the queue, so the route writes nothing itself')
 
   release()
   const done = await within(finishesWithoutReverting(r.id, 'paused'), 'the granted send-back')
   assert.equal(done.status, 'completed', done.error)
   assert.equal(fixes.length, 4, 'the fix ran once more')
   assert.match(fixes[3], /one more/, 'with the operator\'s note')
+  assert.ok((done.decisions ?? []).some(d => d.by === 'dev13' && d.note === 'one more'),
+    'THE REGRESSION: the grant played back from the queue was dropped from the record')
+  assert.equal((done.sendBacks ?? []).length, 3, 'the two automatic send-backs and the granted one')
   const after = await within(runner.startOrQueue({ workflow: failing, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev15' }), 'a later start')
   await runner.waitForSettled(after.run.id, TIMEOUT)
+}
+
+// ── One more send-back, granted with a slot free ────────────────────────────
+// Carried out at once, the grant is on the record too, with its send-back.
+{
+  rejecting = 3
+  fixes.length = 0
+  let r = (await runner.startOrQueue({ workflow: reviewed, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true, startedBy: 'dev17' })).run
+  r = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(r.question?.reason, 'rework')
+  const grant = { stepId: 'fix', label: 'Fix', at: Date.now(), by: 'dev17', verdict: 'approved', note: 'try again' }
+  const granted = await runner.continueRun(r.id, 'try again', { decision: grant })
+  assert.notEqual(granted.status, 'queued', 'a slot is free')
+  const done = await runner.waitForSettled(r.id, TIMEOUT)
+  assert.equal(done.status, 'completed', done.error)
+  assert.ok((done.decisions ?? []).some(d => d.by === 'dev17'), 'the grant is on the record')
+  assert.equal((done.sendBacks ?? []).length, 3, 'the granted send-back is recorded with the automatic two')
 }
 
 // ── A queued send-back that cannot be carried out is not spent ───────────────

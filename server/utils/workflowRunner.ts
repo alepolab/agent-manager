@@ -3792,6 +3792,14 @@ export async function continueRun(
       const w = run.question.rework
       const from = stepOf(l, w.from)?.label ?? w.from
       run.question = undefined
+      // Both before the save, which restartRun re-reads. The send-back is the
+      // cutoff a later gate's carried approval is measured against
+      // (gateCarryOver.ts): without it, a Dev Done approval from before this
+      // attempt signed off code this attempt replaces. The decision is the
+      // operator's grant: this path returns before the append further down, and
+      // from the queue nothing else writes it.
+      recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${stepOf(l, w.from)?.agentSlug ?? w.from}` })
+      if (opts.decision) run.decisions = [...(run.decisions ?? []), opts.decision]
       await saveRun(run)
       l.running = false
       // The bucket counter is deliberately not reset: if this attempt is sent
