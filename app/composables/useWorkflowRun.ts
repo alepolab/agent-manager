@@ -83,10 +83,13 @@ export function useWorkflowRun(slug: string) {
       listen(started.id)
       await refreshRuns()
     } catch (e: any) {
-      // 409 means a run is already going; attaching to it is more useful than an error.
+      // 409 means a run is in the way. It is shown, since that is where the
+      // person will look next, but so is why: shown alone it read as this
+      // start having worked.
       if (e?.statusCode === 409 && e?.data?.data?.runId) {
         run.value = await $fetch<WorkflowRun>(`/api/runs/${e.data.data.runId}`)
         listen(run.value.id)
+        error.value = e.data.message
       } else {
         error.value = e?.data?.message || e?.message || 'Failed to start run'
       }

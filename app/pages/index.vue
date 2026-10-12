@@ -138,7 +138,7 @@ const headline = (r: WorkflowRun) => r.initialPrompt.split('\n')[0] ?? ''
 const ticket = ref('')
 const starting = ref(false)
 /** Where the registry would route this ticket; shown before Start so the wrong stack is never a surprise. */
-interface Preflight { product: { name: string, suite: string | null, repos: string[], recipe: boolean } | null, checkout: { name: string, exists: boolean, git: boolean, branch?: string, dirty: number } | null, artifacts: { ok: boolean, path: string }, tokens: { github: boolean, jira: boolean } }
+interface Preflight { product: { name: string, suite: string | null, repos: string[], recipe: boolean } | null, checkout: { name: string, exists: boolean, git: boolean, branch?: string, dirty: number } | null, artifacts: { ok: boolean, path: string }, tokens: { github: boolean, githubVia?: 'profile' | 'instance' | 'host' | null, githubLogin?: string | null, jira: boolean } }
 const preflight = ref<Preflight | undefined>(undefined)
 const routing = computed(() => preflight.value === undefined ? undefined : preflight.value.product)
 let routeTimer: ReturnType<typeof setTimeout> | null = null
@@ -168,7 +168,19 @@ async function startFromTicket() {
     ticket.value = ''
     await navigateTo(`/workflows/${run.workflowSlug}?run=${run.id}`)
   } catch (e: any) {
-    if (e?.statusCode === 409 && e?.data?.data?.runId) await navigateTo(`/workflows/${runbook.value.slug}?run=${e.data.data.runId}`)
+    // Said, with the way to the run in the way, rather than taken there: a
+    // quiet jump to the other run read as this one having started. ASECRM-581
+    // and 582 "never appeared" that way - the page showed 580 and said nothing.
+    if (e?.statusCode === 409 && e?.data?.data?.runId) {
+      const runId = e.data.data.runId
+      toast.add({
+        title: 'Not started',
+        description: e.data.message,
+        color: 'warning',
+        duration: 0,
+        actions: [{ label: 'Open that run', onClick: () => { navigateTo(`/runs/${runId}`) } }],
+      })
+    }
     // The workflow declares inputs this box cannot collect. Open the run dialog,
     // which can: a toast alone would say what is missing and leave nowhere to
     // put it.
@@ -252,9 +264,12 @@ const preflightNotes = computed<PreflightNote[]>(() => {
   if (!p) return []
   const n: PreflightNote[] = []
   if (!p.artifacts.ok) n.push({ level: 'error', text: `Runs cannot start: nothing can write to ${p.artifacts.path}. An operator has to fix the run directory on this server.` })
-  if (!p.tokens.github) n.push({ level: 'warn', text: 'This run gets as far as opening the pull request, then stops — you have no GitHub token. Sign in with GitHub to fix it.' })
+  if (!p.tokens.github) n.push({ level: 'warn', text: 'This run gets as far as opening the pull request, then stops — no GitHub login reaches it. Sign in with GitHub to fix it.' })
   if (p.checkout?.git && p.checkout.dirty) n.push({ level: 'warn', text: `${p.checkout.dirty} uncommitted change(s) in ${p.checkout.name} will be included in this run. Review them first if they should not be.` })
   if (p.checkout && !p.checkout.exists) n.push({ level: 'info', text: `${p.checkout.name} is not cloned here yet — the run clones it first, so expect a slower start.` })
+  // Not a problem, but whose account it is: a run with no profile token pushes
+  // as this machine's `gh` login, and the developer should know that.
+  if (p.tokens.github && p.tokens.githubVia === 'host' && p.tokens.githubLogin) n.push({ level: 'info', text: `Pull requests will be opened as ${p.tokens.githubLogin} (this machine's GitHub login).` })
   if (!p.tokens.jira) n.push({ level: 'info', text: 'No Jira token on your profile, so a bare key is not expanded and no result is posted back to Jira. Paste the ticket text instead.' })
   return n
 })
