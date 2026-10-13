@@ -13,6 +13,7 @@
  * retracted, and counting it would hide the real finding it was mistaken for.
  */
 import { adfToPlainText } from './adf.ts'
+import { extractCodeRefs, refString } from './duplicateCheck.ts'
 import { jiraAuthHeader } from './jiraCredentials.ts'
 import type { FetchLike } from './jiraTicketSource.ts'
 
@@ -25,11 +26,44 @@ export interface ExistingTicket {
   labels: string[]
   /** The description's first few hundred characters, as plain text. */
   excerpt: string
+  /**
+   * The files (with lines, where stated) the WHOLE description names. The
+   * excerpt alone missed ASECRM-368's overlap with ASECRM-584: the shared file
+   * was the ticket's second finding, past the cut. Matching on code, not words.
+   */
+  locations?: string[]
+}
+
+interface AdfLike { type?: string, text?: string, content?: AdfLike[] }
+
+/**
+ * A native Jira table's rows as markdown-style lines - `| a | b |` - so a file
+ * in one cell keeps the lines in the next. adfToPlainText flattens each cell to
+ * its own paragraph, and a row naming src/ApprovalService.java beside 404-412
+ * indexed the file without its lines, which never matches.
+ */
+export function adfTableRows(node: unknown): string[] {
+  const rows: string[] = []
+  const textOf = (n: AdfLike | undefined): string =>
+    !n || typeof n !== 'object' ? '' : n.type === 'text' && typeof n.text === 'string' ? n.text
+      : Array.isArray(n.content) ? n.content.map(textOf).join(' ') : ''
+  const visit = (n: AdfLike | undefined) => {
+    if (!n || typeof n !== 'object') return
+    if (n.type === 'tableRow' && Array.isArray(n.content)) {
+      rows.push(`| ${n.content.map(c => textOf(c).replace(/\s+/g, ' ').replace(/\|/g, ' ').trim()).join(' | ')} |`)
+      return
+    }
+    if (Array.isArray(n.content)) n.content.forEach(visit)
+  }
+  visit(node as AdfLike)
+  return rows
 }
 
 const PAGE_SIZE = 100
 const MAX_PAGES = 5
 const EXCERPT_CHARS = 400
+/** Enough for a ticket that groups several findings, without one ticket swamping the file. */
+const MAX_LOCATIONS = 40
 
 /** Throws on any refusal: "no tickets" and "could not ask" must never look alike. */
 export async function fetchExistingTickets(
@@ -60,6 +94,8 @@ export async function fetchExistingTickets(
         status: i.fields?.status?.name ?? '',
         labels: i.fields?.labels ?? [],
         excerpt: (text ?? '').replace(/\s+/g, ' ').trim().slice(0, EXCERPT_CHARS),
+        // Table rows first: a file with its lines outranks the same file named bare.
+        locations: extractCodeRefs([...adfTableRows(i.fields?.description), text ?? ''].join('\n'), MAX_LOCATIONS).map(refString),
       })
     }
     if (body.isLast !== false || !body.nextPageToken) break

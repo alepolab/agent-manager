@@ -1,4 +1,5 @@
 import type { Role } from './role'
+import type { ScanOrigin } from '../utils/scanOrigin'
 
 /** A tool-permission prompt from /cli still waiting on a person. */
 export interface PendingPermissionSummary {
@@ -37,6 +38,8 @@ export type NotificationItem =
     role?: Role
     mine: boolean
     blastRadius?: string
+    /** The scan that filed this ticket, when one did. */
+    scan?: ScanOrigin
     /** Entry-by-entry review of an artifact (`awaiting_review`), not a single yes or no. */
     review: boolean
   }
