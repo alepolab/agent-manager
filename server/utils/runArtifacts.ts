@@ -563,6 +563,14 @@ export function stackNote(runId: string, stack?: StackNote): string {
   return `Compose project for any stack this run stands up: ${own} (the verifier's own: ${own}-verify).`
 }
 
+/** The line that tells a step how to name the images it builds, so the
+ *  runner can remove them when the run ends (runTeardown.ts). Images named by
+ *  ticket number or by nothing at all stayed for good and filled the disk. */
+export function imageNote(runId: string): string {
+  const short = runId.toLowerCase().slice(0, 8)
+  return `Every image you build or tag in this run carries the run id in its tag (\`<name>:${short}-<purpose>\`, or the full id) and the label \`--label agent-manager.run=${runId}\`, whatever else the recipe or this brief adds. The runner removes this run's images by that label and id when the run ends; one named any other way stays on the disk for good.`
+}
+
 /** Prepended to every step's input. The only channel an agent has for
  *  learning where to write, so it must be unmissable and literal. */
 export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: string, runId?: string, checkout?: { dir: string, branch?: string, /** Where the branch came from and where the PR goes, from server/utils/branchPolicy.ts. */ policy?: string }, parameters?: Record<string, string>, stack?: StackNote): string {
@@ -581,6 +589,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
           // run's stacks by exactly this name when it ends, and a stack under
           // any other name stays running for ever. See runTeardown.ts.
           stackNote(runId, stack),
+          imageNote(runId),
           '',
           `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
           `and shown on the run page at ${appUrl}/runs/${runId}. Link that in a pull`,

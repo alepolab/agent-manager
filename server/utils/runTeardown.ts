@@ -12,7 +12,14 @@
  * - compose projects named `sdlc-<run id>` (full or first eight characters),
  *   which is the name every step that stands something up is told to use. A
  *   shared stack (SSO, a product's own database) never carries that name, so
- *   it is never touched. No volume is removed: `down` without `-v`.
+ *   it is never touched. The run's own project goes with its volumes (`down
+ *   -v`); a project it took over from another run goes without them.
+ * - the images the run built: tagged with its id, or labelled
+ *   `agent-manager.run=<run id>` (every step's header asks for both). Removed
+ *   with `docker rmi` and never forced, so the daemon refuses any image a
+ *   container still uses. None is removed while another live run still uses
+ *   one of the run's stacks. Nothing removed images before this, and over
+ *   three weeks the run images and volumes filled a 492 GB disk to 99%.
  * - the run's own worktree (`<clone>@<branch>`), and only if git agrees it is
  *   clean - an uncommitted change is kept and reported, never discarded. A
  *   fix branch is kept, since a pull request may be built on it; a scan's
@@ -40,8 +47,38 @@ const realExec: Exec = async (cmd, args, opts) =>
   (await execFileP(cmd, args, { cwd: opts?.cwd, timeout: 180_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout
 
 export interface TeardownReport {
-  stacks: { project: string, removed: boolean, error?: string }[]
+  stacks: { project: string, removed: boolean, /** Its named volumes went with it: the run's own project only. */ volumes?: boolean, error?: string }[]
   worktree?: { path: string, removed: boolean, reason?: string }
+  images?: ImageReport
+}
+
+export interface ImageReport {
+  removed: string[]
+  /** The daemon refused: a container still uses it. */
+  refused: { image: string, error: string }[]
+  /** Set when none was touched, and why. */
+  kept?: string
+}
+
+/** The label every image a run builds carries; its header asks for it. */
+export const RUN_LABEL = 'agent-manager.run'
+
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+
+/**
+ * Whether an image name (`repo:tag`) was named for this run: it carries the
+ * run's full id, or its first eight characters standing alone. Never a name
+ * that carries another run's full id, which starts with the same eight
+ * characters when two ids share them, and never eight characters inside a
+ * longer hex string such as a commit sha.
+ */
+export function imageNamedFor(runId: string, name: string): boolean {
+  const id = runId.toLowerCase()
+  const n = name.toLowerCase()
+  const fullIds: string[] = n.match(UUID) ?? []
+  if (fullIds.includes(id)) return true
+  if (fullIds.length) return false
+  return new RegExp(`(^|[^0-9a-f])${id.slice(0, 8)}([^0-9a-f]|$)`).test(n)
 }
 
 /** The compose project names that belong to this run and nothing else. */
@@ -123,6 +160,14 @@ export const STACK_USING_AGENTS = /^sdlc-(stack-update|qa-|trace-capture$|pr-fol
  *  no stack to look for, which keeps docker out of every other run's ending. */
 const STACK_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-ui$)/
 
+/** Steps that build images: the stack steps, and every step that runs the
+ *  product's tests or build in its own image. A run with none of them built
+ *  nothing, and is not made to ask docker at its ending. */
+const IMAGE_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-|test-author$|fix-implementer$|feature-(test-author|implementer)$|ce-(work|review)$|alepo-review$|pr-follow-up$|smoke-check$)/
+
+/** Whether any of a run's steps builds images, so its ending or deletion has images to look for. */
+export const runBuildsImages = (run: Pick<WorkflowRun, 'steps'>): boolean => run.steps.some(s => IMAGE_AGENTS.test(s.agentSlug))
+
 export async function teardownRun(
   run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status'>>,
   exec: Exec = realExec,
@@ -148,20 +193,27 @@ export async function teardownRun(
   // A stack another live run uses - the one that claimed it, or the run it was
   // claimed from - stays up: this run only lets go of it. The last user down
   // takes it down.
-  const everyone: StackRun[] = projects.length ? (runs ?? await import('./workflowRunStore.ts').then(m => m.listRuns())) ?? [] : []
+  let everyoneCache: StackRun[] | undefined = runs
+  const everyone = async () => everyoneCache ??= (await import('./workflowRunStore.ts').then(m => m.listRuns())) ?? []
   for (const project of projects) {
-    const users = stackUsers(project, everyone, run.id)
+    const users = stackUsers(project, await everyone(), run.id)
     if (users.length) {
       report.stacks.push({ project, removed: false, error: `kept: in use by run ${users.map(u => u.id.slice(0, 8)).join(', ')}` })
       continue
     }
+    // Volumes go only with a project named for this run. One it took over from
+    // another run was not stood up by it, so its data is not this run's to drop.
+    const own = isOwnProject(run.id, project)
     try {
-      await exec('docker', ['compose', '-p', project, 'down', '--remove-orphans'])
-      report.stacks.push({ project, removed: true })
+      await exec('docker', ['compose', '-p', project, 'down', ...(own ? ['-v'] : []), '--remove-orphans'])
+      report.stacks.push({ project, removed: true, volumes: own })
     } catch (err) {
       report.stacks.push({ project, removed: false, error: String(err instanceof Error ? err.message : err).slice(0, 300) })
     }
   }
+
+  // ── the images it built ──
+  if (runBuildsImages(run)) report.images = await removeRunImages(run, exec, await everyone())
 
   // ── the run's own worktree ──
   // ASECRM-357: removed after its Verify step halted, `git worktree remove`
@@ -175,7 +227,75 @@ export async function teardownRun(
     report.worktree = await removeRunWorktree(run, exec)
   }
 
-  if (report.stacks.length || report.worktree) log.info('run torn down', { runId: run.id, ...report })
+  if (report.stacks.length || report.worktree || report.images) log.info('run torn down', { runId: run.id, ...report })
+  return report
+}
+
+/** A compose project stood up for this run, rather than taken over from another. */
+function isOwnProject(runId: string, project: string): boolean {
+  return runProjectNames(runId).includes(project) || project.startsWith(`sdlc-${runId.toLowerCase()}-`)
+}
+
+/**
+ * Removes the images a run built: named for it (`imageNamedFor`) or labelled
+ * `agent-manager.run=<run id>`. Never forced: the daemon refuses an image a
+ * container still uses, and that refusal is reported, not thrown. An image
+ * found by its label is checked for containers first and then loses every
+ * tag, since its build was this run's. One found by name loses only that name.
+ *
+ * Touches nothing while another live run still uses one of this run's stacks:
+ * its images may be what that stack runs, or what it rebuilds from. Never
+ * throws; undefined when docker cannot be asked.
+ */
+export async function removeRunImages(
+  run: Pick<WorkflowRun, 'id' | 'stackProject'>, exec: Exec = realExec, runs?: StackRun[],
+): Promise<ImageReport | undefined> {
+  if (process.env.RUN_TEARDOWN_DISABLED === '1') return undefined
+  const everyone = runs ?? (await import('./workflowRunStore.ts').then(m => m.listRuns()).catch(() => [])) ?? []
+  const projects = [...new Set([...runProjectNames(run.id), ...(run.stackProject ? [run.stackProject] : [])])]
+  const users = [...new Set(projects.flatMap(p => stackUsers(p, everyone, run.id).map(u => u.id.slice(0, 8))))]
+  if (users.length) return { removed: [], refused: [], kept: `kept: run ${users.join(', ')} still uses this run's stack` }
+
+  let named: string[] = []
+  let labelled: { id: string, names: string[] }[] = []
+  try {
+    named = (await exec('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}'])).split('\n')
+      .map(s => s.trim()).filter(n => n && !n.includes('<none>') && imageNamedFor(run.id, n))
+    const byId = new Map<string, string[]>()
+    for (const line of (await exec('docker', ['images', '--filter', `label=${RUN_LABEL}=${run.id}`, '--format', '{{.ID}}\t{{.Repository}}:{{.Tag}}'])).split('\n')) {
+      const [id, name] = line.trim().split('\t')
+      if (!id) continue
+      const names = byId.get(id) ?? []
+      if (name && !name.includes('<none>')) names.push(name)
+      byId.set(id, names)
+    }
+    labelled = [...byId].map(([id, names]) => ({ id, names }))
+  } catch {
+    return undefined
+  }
+
+  const report: ImageReport = { removed: [], refused: [] }
+  const rmi = async (image: string) => {
+    try {
+      await exec('docker', ['rmi', image])
+      report.removed.push(image)
+    } catch (err) {
+      report.refused.push({ image, error: String(err instanceof Error ? err.message : err).slice(0, 300) })
+    }
+  }
+  const done = new Set<string>()
+  for (const { id, names } of labelled) {
+    // Untagging is allowed even when a container uses the image; only the last
+    // removal is refused. Ask first, so an image a container runs keeps its names.
+    const users = (await exec('docker', ['ps', '-aq', '--filter', `ancestor=${id}`]).catch(() => 'unknown')).trim()
+    if (users) {
+      report.refused.push({ image: names[0] ?? id, error: users === 'unknown' ? 'kept: could not check its containers' : 'kept: a container uses it' })
+      names.forEach(n => done.add(n))
+      continue
+    }
+    for (const n of names.length ? names : [id]) { done.add(n); await rmi(n) }
+  }
+  for (const n of named) if (!done.has(n)) await rmi(n)
   return report
 }
 

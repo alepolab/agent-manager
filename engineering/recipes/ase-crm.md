@@ -38,7 +38,7 @@ No ase-crm image is published to GHCR (the Ansible role carries `app_image_tag: 
    VITE_KEYCLOAK_CLIENT_ID=crm-client
    ```
    The SPA reads these from `import.meta.env` at build time, `keycloak-provider.tsx` has no fallback, the Dockerfile takes no `VITE_*` build args, and no `frontend/.env*` is committed. Without this file the image builds and the browser login is broken.
-3. `docker build --build-arg GIT_COMMIT=<sha> -f docker/Dockerfile -t ghcr.io/alepolab/ase-crm:local-develop-<sha> <tree>`, about 10 minutes cold. Pass the tag as `ASE_CRM_TAG`.
+3. `docker build --build-arg GIT_COMMIT=<sha> --label agent-manager.run=<run id> -f docker/Dockerfile -t ghcr.io/alepolab/ase-crm:local-develop-<sha> <tree>`, about 10 minutes cold. Pass the tag as `ASE_CRM_TAG`.
 
 `develop` must be at or after `19fc7573a` (PR #787); that commit, built unpatched this way, is the image every check in this recipe passed against. Between `bf6e780cc` (2026-09-17, which added the `analytics` Gradle module) and that merge, the Dockerfile's per-module COPY list omitted `backend/analytics/` and every image build failed with `Configuring project ':analytics' without an existing directory`.
 
