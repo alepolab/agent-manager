@@ -3,7 +3,8 @@ import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
-import { requireRunAccess } from '../../../utils/runAccess'
+import { auditActor, requireRunAccess } from '../../../utils/runAccess'
+import { appendRunAudit } from '../../../utils/runArtifacts'
 
 /**
  * Refuse at a gate.
@@ -56,5 +57,6 @@ export default defineEventHandler(async (event) => {
   // crashed one on the run page and in the record. Attribute it instead.
   run.error = `Rejected at "${step?.label ?? before.question.stepId}" by ${user?.login ?? 'a reviewer'}: ${note}`
   await saveRun(run)
+  await appendRunAudit(id, { type: 'reject', ...(await auditActor(event)), stepId: before.question.stepId, text: note })
   return run
 })

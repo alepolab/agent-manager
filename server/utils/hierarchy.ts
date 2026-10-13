@@ -80,3 +80,13 @@ export async function supervises(actor: string | undefined, owner: string | unde
   if (!actor || !owner || actor === owner) return false
   return teamOf(actor, await listPlacements()).includes(owner)
 }
+
+/**
+ * When `actor` acts on work `owner` started, on what authority: as their lead
+ * (at any distance), or by role - an operator, or a reviewer answering the gate
+ * their role owns. Null when it is their own work, or nobody started it.
+ */
+export async function actingFor(actor: string | undefined, owner: string | undefined): Promise<{ onBehalfOf: string, authority: 'lead' | 'role' } | null> {
+  if (!actor || !owner || actor === owner) return null
+  return { onBehalfOf: owner, authority: await supervises(actor, owner) ? 'lead' : 'role' }
+}

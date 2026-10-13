@@ -1,7 +1,7 @@
 import { restartRun, RestartError } from '../../../utils/workflowRunner'
 import { appendRunAudit } from '../../../utils/runArtifacts'
 import { currentUser } from '../../../utils/session'
-import { requireRunAccess } from '../../../utils/runAccess'
+import { auditActor, requireRunAccess } from '../../../utils/runAccess'
 
 export default defineEventHandler(async (event) => {
   await requireRunAccess(event, 'runEngine')
@@ -12,7 +12,7 @@ export default defineEventHandler(async (event) => {
     const user = await currentUser(event)
     const note = typeof body.note === 'string' ? body.note : undefined
     const run = await restartRun(id, body.stepId, note, user?.login)
-    await appendRunAudit(id, { type: 'restart', actor: user?.login, stepId: body.stepId, text: note?.trim() || undefined })
+    await appendRunAudit(id, { type: 'restart', ...(await auditActor(event)), stepId: body.stepId, text: note?.trim() || undefined })
     return run
   } catch (err) {
     if (err instanceof RestartError) throw createError({ statusCode: err.statusCode, message: err.message, data: err.data })

@@ -3,7 +3,8 @@ import type { WorkflowRun } from '../../shared/types/run'
 import { can, rolesWith, type Capabilities } from '../../shared/types/role'
 import { currentRole, currentUser } from './session'
 import { getRun } from './workflowRunStore'
-import { inScope, scopeFor, supervises } from './hierarchy'
+import { actingFor, inScope, scopeFor, supervises } from './hierarchy'
+import type { RunAuditEvent } from './runArtifacts'
 
 /**
  * The gate every route under /api/runs/:id passes: may this person see this
@@ -67,4 +68,19 @@ export async function visibleRuns<T extends { startedBy?: string }>(event: H3Eve
 /** True when the caller leads this run's starter: the backstop at a gate. */
 export async function leadsStarterOf(event: H3Event, run: WorkflowRun): Promise<boolean> {
   return supervises((await currentUser(event))?.login, run.startedBy)
+}
+
+/**
+ * Who did it, for the run's audit trail - and, when it is not the starter, on
+ * whose behalf and by what authority, so the trail reads "@bob stopped the run
+ * on @alice's behalf, as @alice's lead" rather than leaving a reader to work
+ * out why bob's name is on alice's run. Reads the run named in the route.
+ */
+export async function auditActor(event: H3Event): Promise<Pick<RunAuditEvent, 'actor' | 'onBehalfOf' | 'authority' | 'role'>> {
+  const actor = (await currentUser(event))?.login
+  const id = getRouterParam(event, 'id')
+  const run = id ? await getRun(id) : null
+  const behalf = await actingFor(actor, run?.startedBy)
+  if (!behalf) return { actor }
+  return { actor, ...behalf, ...(behalf.authority === 'role' ? { role: await currentRole(event) } : {}) }
 }

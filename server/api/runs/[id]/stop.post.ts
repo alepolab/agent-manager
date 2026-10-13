@@ -1,8 +1,7 @@
 import { stopRun } from '../../../utils/workflowRunner'
 import { getRun } from '../../../utils/workflowRunStore'
 import { appendRunAudit } from '../../../utils/runArtifacts'
-import { currentUser } from '../../../utils/session'
-import { requireRunAccess } from '../../../utils/runAccess'
+import { auditActor, requireRunAccess } from '../../../utils/runAccess'
 
 export default defineEventHandler(async (event) => {
   // Ending a run is driving the pipeline, not reviewing it: a reviewer who
@@ -13,7 +12,7 @@ export default defineEventHandler(async (event) => {
   const run = await stopRun(id)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
   if (before && before.status !== run.status) {
-    await appendRunAudit(id, { type: 'stop', actor: (await currentUser(event))?.login })
+    await appendRunAudit(id, { type: 'stop', ...(await auditActor(event)) })
   }
   return run
 })

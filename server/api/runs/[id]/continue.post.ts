@@ -4,7 +4,7 @@ import { appendRunAudit } from '../../../utils/runArtifacts'
 import { currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
-import { requireRunAccess } from '../../../utils/runAccess'
+import { auditActor, requireRunAccess } from '../../../utils/runAccess'
 
 /** Continue a paused run. `note` reaches the step being approved, or whichever step starts next. */
 export default defineEventHandler(async (event) => {
@@ -50,7 +50,7 @@ export default defineEventHandler(async (event) => {
   if (before && (before.question?.stepId !== run.question?.stepId || before.status !== run.status)) {
     await appendRunAudit(id, {
       type: before.question?.kind === 'question' ? 'answer' : 'approve',
-      actor: user?.login,
+      ...(await auditActor(event)),
       stepId: before.question?.stepId || before.currentStepIds[0],
       text: body?.note?.trim() || undefined,
     })
