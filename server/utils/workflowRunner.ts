@@ -2447,6 +2447,14 @@ async function resumeJoinIfReady(parentRunId: string): Promise<void> {
 async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.stopped) { l.running = false; return run }
 
+  // A hand-over held while another step's question was open (see the rework
+  // branch below): carried out now, before anything else runs.
+  if (run.deferredRework && !l.waiting) {
+    const w = run.deferredRework
+    run.deferredRework = undefined
+    return carryOutRework(l, run, w)
+  }
+
   // Checked between waves: a single step is bounded by its own maxTurns, and
   // the cap stops the next wave from starting rather than killing one mid-flight.
   // A run with no step left to start is not over budget, it is finished: a real
@@ -2729,48 +2737,21 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   }
 
   if (l.rework) {
-    // Bounded per trigger: two steps disagreeing forever is something to hand to
-    // a person, not a loop to keep running.
     const w = l.rework
     l.rework = undefined
-    const raiser = stepOf(l, w.from)
-    const from = raiser?.label ?? w.from
-    const bucket = reworkBucket(raiser?.agentSlug)
-    run.reworks = (run.reworks ?? 0) + 1
-    const by = (run.reworksBy ??= {})
-    const spent = by[bucket] = (by[bucket] ?? 0) + 1
-    if (spent > REWORK_LIMIT) {
-      // Paused and asked, not failed. The branch, its commits and an open PR are
-      // all still good, and one more attempt is usually the right answer - so
-      // throwing the run away here costs far more than asking does. Deliberately
-      // no skipped steps, no run.error and no endedAt: each alone reads as a
-      // finished run downstream, and restartRun needs those pending steps left
-      // pending to reset them. Same shape as the budget gate above.
-      const targetLabel = stepOf(l, w.target)?.label ?? w.target
-      run.status = 'paused'
-      run.question = {
-        stepId: w.target,
-        kind: 'approval',
-        reason: 'rework',
-        askedAt: Date.now(),
-        text: `"${from}" has sent this run back to "${targetLabel}" ${spent} times and still does not accept the result. Its latest instruction: ${w.instruction}\n\nContinue to send it back once more, or stop the run here.`,
-        rework: { from: w.from, target: w.target, instruction: w.instruction },
-      }
-      run.currentStepIds = []
-      run.nextStepIds = [w.target]
-      l.running = false
-      log.warn('run reworked too often; asking the operator', { runId: run.id, bucket, spent, from: w.from, target: w.target })
-      await publish(run)
-      return run
+    // A step in the same wave asked the operator a question: that question is
+    // answered first, and the hand-over waits on the record until it is. Handled
+    // here, it replaced the question - a refused hand-over overwrote it with its
+    // own prompt, and Continue then left the run paused on the asking step with
+    // no question anyone could answer. runWave picks the hand-over up again once
+    // the question is out of the way, and judges it then: the step it names may
+    // have become runnable by the answer.
+    if (l.waiting) {
+      run.deferredRework = w
+      logLine(l, run, recOf(run, w.from), `handed the run to ${stepOf(l, w.target)?.label ?? w.target}; held until "${stepOf(l, l.waiting)?.label ?? l.waiting}" has its answer`)
+    } else {
+      return carryOutRework(l, run, w)
     }
-    run.currentStepIds = []
-    run.nextStepIds = [w.target]
-    l.running = false
-    // Before publish: restartRun re-reads the run from disk.
-    recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${raiser?.agentSlug ?? w.from}` })
-    await publish(run)
-    log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, bucket, spent })
-    return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${REWORK_LIMIT}): ${w.instruction}`, run.startedBy, { fromRunner: true })
   }
 
   if (l.waiting) {
@@ -3701,7 +3682,7 @@ export async function continueRun(
     if (stored && (stored.status === 'paused' || stored.status === 'awaiting_review') && !live.get(runId)?.running) {
       // Refused before it is recorded, exactly as the unparked path refuses it.
       const q = stored.question
-      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && q.reason !== 'quota' && needsJustification(stored.blastRadius) && !note?.trim()) {
+      if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && q.reason !== 'quota' && q.reason !== 'handoff' && needsJustification(stored.blastRadius) && !note?.trim()) {
         throw new ApprovalNeedsReason(`This run is classified \`${stored.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
       }
       const parked = await parkUnlessSlot(stored, { action: 'continue', note, grantApproval })
@@ -3779,13 +3760,18 @@ export async function continueRun(
     // it cannot be satisfied without having read something. Reject already
     // demanded a reason; approve did not, which had it backwards - saying yes to
     // a money change is the answer that needs the justification.
-    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && run.question.reason !== 'quota' && needsJustification(run.blastRadius) && !note?.trim()) {
+    if (run.question.reason !== 'budget' && run.question.reason !== 'auth' && run.question.reason !== 'quota' && run.question.reason !== 'handoff' && needsJustification(run.blastRadius) && !note?.trim()) {
       l.running = false
       throw new ApprovalNeedsReason(
         `This run is classified \`${run.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
     }
     if (run.question.reason === 'budget') extendBudget(run)
     else if (run.question.reason === 'auth' || run.question.reason === 'quota') { /* the step is already pending and armed */ }
+    // Carrying on past a refused hand-over approves nothing: the step it names is
+    // only where the run goes next. Marking it approved waived that step's own
+    // gate, gateRole and runWhen, so a gated step ran without the person whose
+    // gate it was ever being asked.
+    else if (run.question.reason === 'handoff') { /* the step is already armed; its own gate still asks */ }
     // Withholding the approval is what lets a review that approved nothing take
     // effect. l.approved waives runWhen (see resolveConditions), so granting it
     // here would run the step over an artifact the operator just emptied - the
@@ -3959,6 +3945,96 @@ export async function stopRun(runId: string): Promise<WorkflowRun | null> {
   run.currentStepIds = []
   run.nextStepIds = []
   log.info('run stopped', { runId: run.id })
+  await publish(run)
+  return run
+}
+
+/**
+ * Carries out a step's hand-over: refused when the step it names cannot run
+ * yet, asked about once the trigger's send-backs are spent, a restart of that
+ * step otherwise. Bounded per trigger: two steps disagreeing forever is
+ * something to hand to a person, not a loop to keep running.
+ */
+async function carryOutRework(l: Live, run: WorkflowRun, w: { from: string, target: string, instruction: string }): Promise<WorkflowRun> {
+  const raiser = stepOf(l, w.from)
+  const from = raiser?.label ?? w.from
+  // A hand-over to a step that cannot run yet is refused, not attempted.
+  // ASECRM-243: sent back to Implement Fix, which handed on to Verify +
+  // Regression while Code Review and the Jira steps it feeds were pending
+  // again; restartRun threw, and a run with an open PR failed outright. Not
+  // counted against the send-backs: nothing was sent back.
+  if (blockedBy(l.graph, l.state, w.target).length) return refuseHandOver(l, run, { from: w.from, target: w.target, instruction: w.instruction })
+  const bucket = reworkBucket(raiser?.agentSlug)
+  run.reworks = (run.reworks ?? 0) + 1
+  const by = (run.reworksBy ??= {})
+  const spent = by[bucket] = (by[bucket] ?? 0) + 1
+  if (spent > REWORK_LIMIT) {
+    // Paused and asked, not failed. The branch, its commits and an open PR are
+    // all still good, and one more attempt is usually the right answer - so
+    // throwing the run away here costs far more than asking does. Deliberately
+    // no skipped steps, no run.error and no endedAt: each alone reads as a
+    // finished run downstream, and restartRun needs those pending steps left
+    // pending to reset them. Same shape as the budget gate above.
+    const targetLabel = stepOf(l, w.target)?.label ?? w.target
+    run.status = 'paused'
+    run.question = {
+      stepId: w.target,
+      kind: 'approval',
+      reason: 'rework',
+      askedAt: Date.now(),
+      text: `"${from}" has sent this run back to "${targetLabel}" ${spent} times and still does not accept the result. Its latest instruction: ${w.instruction}\n\nContinue to send it back once more, or stop the run here.`,
+      rework: { from: w.from, target: w.target, instruction: w.instruction },
+    }
+    run.currentStepIds = []
+    run.nextStepIds = [w.target]
+    l.running = false
+    log.warn('run reworked too often; asking the operator', { runId: run.id, bucket, spent, from: w.from, target: w.target })
+    await publish(run)
+    return run
+  }
+  run.currentStepIds = []
+  run.nextStepIds = [w.target]
+  l.running = false
+  // Before publish: restartRun re-reads the run from disk.
+  recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${raiser?.agentSlug ?? w.from}` })
+  await publish(run)
+  log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, bucket, spent })
+  return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${REWORK_LIMIT}): ${w.instruction}`, run.startedBy, { fromRunner: true })
+}
+
+/** The forward predecessors of `stepId` that have not completed: what stops it being armed. None for an entry. */
+export function blockedBy(graph: WorkflowGraph, state: RunState, stepId: string): string[] {
+  if (graph.entries.includes(stepId)) return []
+  return (graph.forwardPreds[stepId] ?? []).filter(p => state.status[p] !== 'completed')
+}
+
+/**
+ * A step handed the run to a step that cannot run yet. Paused for a person, not
+ * failed: the branch, its commits and any open PR are all still good, and what
+ * to do with the instruction is a judgement - carry on to the step the run
+ * would run next, send it to a step that can act on it, or stop. Same shape as
+ * the spent send-backs pause: no skipped steps, no run.error, no endedAt.
+ */
+async function refuseHandOver(l: Live, run: WorkflowRun, h: { from: string, target: string, instruction: string }): Promise<WorkflowRun> {
+  const label = (id: string) => stepOf(l, id)?.label ?? id
+  const order = (id: string) => run.steps.findIndex(s => s.stepId === id)
+  const waitingOn = ancestorsOf(l.graph, h.target).filter(id => l.state.status[id] !== 'completed').sort((a, b) => order(a) - order(b))
+  const next = readyNodes(l.graph, l.state).find(id => id !== h.target) ?? h.from
+  const names = (ids: string[]) => ids.map(id => `"${label(id)}"`).join(', ')
+  run.status = 'paused'
+  run.question = {
+    stepId: next,
+    kind: 'approval',
+    reason: 'handoff',
+    askedAt: Date.now(),
+    text: `"${label(h.from)}" handed the run to "${label(h.target)}", which cannot run yet: ${names(waitingOn)} ${waitingOn.length === 1 ? 'has' : 'have'} to complete first. Its instruction: ${h.instruction}\n\nCarry on from "${label(next)}" without the hand-over, send the run back to a step that can act on the instruction, or stop the run here.`,
+    handoff: { ...h, waitingOn },
+  }
+  run.currentStepIds = []
+  run.nextStepIds = [next]
+  l.running = false
+  logLine(l, run, recOf(run, h.from), `handed the run to ${label(h.target)}, which cannot run until ${names(waitingOn)} complete: refused, asking the operator`)
+  log.warn('hand-over to a step that cannot run yet; asking the operator', { runId: run.id, from: h.from, target: h.target, waitingOn })
   await publish(run)
   return run
 }
@@ -4151,6 +4227,9 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   if (stale?.running) throw new RestartError(409, 'This run is already running')
   if (stale) live.delete(runId)
   const l = await rehydrate(run)
+  // Before anything is reset: refused after the reset, the live record was left
+  // with this step's descendants cleared and nothing armed.
+  if (blockedBy(l.graph, l.state, stepId).length) throw new RestartError(409, `Step "${stepId}" has predecessors that did not complete; restart from one of those`)
 
   const reset = [stepId, ...forwardDescendants(l.graph, stepId)]
   // A failed step elsewhere in the same wave would stay failed after a partial
@@ -4311,6 +4390,8 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   // that nobody could answer.
   run.question = undefined
   l.waiting = undefined
+  // A hand-over held behind that question is superseded by the restart too.
+  run.deferredRework = undefined
   run.pid = process.pid
   run.bootId = BOOT_ID
   if (startedBy) run.startedBy = startedBy

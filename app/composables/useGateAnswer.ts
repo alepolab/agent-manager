@@ -24,7 +24,9 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   const gateOwner = computed(() => run.value.question?.role)
   const mineToAnswer = computed(() => gateIsMine(gateOwner.value, role.value))
   const mayAnswer = computed(() => can('answerGate') && mineToAnswer.value)
-  const mustJustify = computed(() => needsJustification(run.value.blastRadius))
+  // Carrying on past a refused hand-over approves no step (see continueRun), so it
+  // owes no owner-gated reason; the step's own gate asks for one if it has one.
+  const mustJustify = computed(() => needsJustification(run.value.blastRadius) && run.value.question?.reason !== 'handoff')
   /** Gated on an artifact's entries: RunDecisionPanel owns both the question and the resume. */
   const reviewing = computed(() => run.value.status === 'awaiting_review')
   const isReply = computed(() => run.value.status === 'paused' && run.value.question?.kind === 'question')
@@ -142,7 +144,7 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   /** The label on the approve button, which says what it does for a runner pause. */
   const approveLabel = computed(() => {
     const r = run.value.question?.reason
-    return r === 'budget' ? 'Continue with a fresh allowance' : r === 'auth' ? 'Retry the step' : r === 'quota' ? 'Retry now' : 'Approve and run'
+    return r === 'budget' ? 'Continue with a fresh allowance' : r === 'auth' ? 'Retry the step' : r === 'quota' ? 'Retry now' : r === 'handoff' ? 'Carry on without it' : 'Approve and run'
   })
   /** The eyebrow over the question. */
   const gateLabel = computed(() => {
@@ -151,6 +153,7 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
       : q?.reason === 'auth' ? 'Could not reach the model'
       : q?.reason === 'quota' ? 'Waiting for the quota to reset'
       : q?.reason === 'rework' ? 'Send-backs spent'
+      : q?.reason === 'handoff' ? 'Hand-over refused'
       : q?.kind === 'approval' ? 'Waiting for your approval'
       : `${askingStep.value?.label ?? 'A step'} is asking you`
   })
