@@ -69,6 +69,7 @@ export async function agentEnvFor(startedBy?: string): Promise<Record<string, st
     SDLC_SCRIPTS_DIR: sdlcScriptsDir(),
     SDLC_SKILLS_DIR: sdlcSkillsDir(),
     CE_SKILLS_DIR: await ceSkillsDir(),
+    ALEPO_SKILLS_DIR: await alepoSkillsDir(),
     // Pipeline commits are unsigned. The developer's own ~/.gitconfig is
     // mounted into the container and may say commit.gpgsign=true, but the
     // agents hold no signing key and the image has no gpg: a real run
@@ -132,6 +133,33 @@ export async function ceSkillsDir(shipped = join(process.cwd(), 'vendor', 'compo
     if (entry?.installPath) return `${entry.installPath.replace(/\\/g, '/')}/skills`
   } catch { /* no registry, or not JSON: not installed */ }
   return existsSync(join(shipped, 'ce-plan', 'SKILL.md')) ? shipped : ''
+}
+
+/**
+ * Absolute path to the skills of Alepo's `developer-workflow` plugin
+ * (alepolab/alepo-claude-workflow), handed to every agent as `ALEPO_SKILLS_DIR`.
+ * The Alepo Review step reads `review/SKILL.md` and its checklist from there at
+ * run time, for the reason CE_SKILLS_DIR exists.
+ *
+ * Resolution order: the plugin installed in this instance's config directory,
+ * then the `alepo` marketplace's clone. The clone is enough on its own, and is
+ * the expected setup: `claude plugin marketplace add alepolab/alepo-claude-workflow`
+ * puts the files on disk without installing alepo-core, whose guard hooks would
+ * otherwise fire in every session beside this pipeline's own plan gate and test
+ * lock.
+ *
+ * Empty when neither has `review/SKILL.md`; the step halts on that rather than
+ * reviewing from memory of what the skill says.
+ */
+export async function alepoSkillsDir(marketplace = resolveClaudePath('plugins', 'marketplaces', 'alepo')): Promise<string> {
+  try {
+    const installed = JSON.parse(await readFile(resolveClaudePath('plugins', 'installed_plugins.json'), 'utf-8'))
+    const entry = Object.entries<any>(installed?.plugins ?? {}).find(([k]) => k.startsWith('developer-workflow@'))?.[1]?.[0]
+    // Forward slashes for the reason ceSkillsDir gives.
+    if (entry?.installPath) return `${entry.installPath.replace(/\\/g, '/')}/skills`
+  } catch { /* no registry, or not JSON: not installed */ }
+  const cloned = join(marketplace, 'developer-workflow', 'skills')
+  return existsSync(join(cloned, 'review', 'SKILL.md')) ? cloned.replace(/\\/g, '/') : ''
 }
 
 const log = createLogger('agent')

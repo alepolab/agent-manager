@@ -248,7 +248,11 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // The change reviewed the way ce-code-review does, before anyone approves it
       // at Dev Done: verified P1/P2 findings fixed and committed here, a design
       // that is wrong sent back to Implement Fix.
-      { agentTemplateId: 'sdlc-ce-review', id: 'code-review', label: 'Code Review', produces: ['review.md'], next: ['jira-dev-done'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ce-review', id: 'code-review', label: 'Code Review', produces: ['review.md'], next: ['alepo-review'], monitorSlug: 'sdlc-step-monitor' },
+      // A second, fresh-context look by Alepo's own checklist (developer-workflow's
+      // review skill): mechanical findings fixed here, judgment calls handed to the
+      // person in the brief they read at Dev Done, which comes next.
+      { agentTemplateId: 'sdlc-alepo-review', id: 'alepo-review', label: 'Alepo Review', produces: ['alepo-review.md'], next: ['jira-dev-done'], monitorSlug: 'sdlc-step-monitor' },
       // The outcome comment rides this step, not the last one: this is the moment the
       // code work is finished, which is what that comment describes.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-dev-done', label: 'Jira: Dev Done', next: ['jira-ready-for-qa'], jira: { transition: 'Dev Done', comment: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
@@ -316,7 +320,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // of review and QA - so the two runbooks tell the board the same story.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-dev-done', label: 'Jira: Dev Done', next: ['jira-ready-for-qa'], jira: { transition: 'Dev Done', comment: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-ready-for-qa', label: 'Jira: Ready for QA', next: ['sdlc-ce-review'], jira: { transition: 'Ready for QA', fields: { 'CI Release Details': '{pr_or_branch}' } }, monitorSlug: 'sdlc-step-monitor' },
-      { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', produces: ['review.md'], next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ce-review', label: 'Code Review', produces: ['review.md'], next: ['alepo-review'], monitorSlug: 'sdlc-step-monitor' },
+      // As in Runbook A: Alepo's checklist after Code Review. Its judgment calls reach the person at Update Stack's gate.
+      { agentTemplateId: 'sdlc-alepo-review', id: 'alepo-review', label: 'Alepo Review', produces: ['alepo-review.md'], next: ['sdlc-stack-update'], monitorSlug: 'sdlc-step-monitor' },
       // Gate 2 of 4: the diff. Rebuilding the stack is the first step that acts on the
       // change, so approval here is the last moment a person sees it before it runs.
       // Rebuilds the image from the worktree and redeploys in place, alone, before anything tests it.
@@ -356,7 +362,9 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'sdlc-feature-test-author', id: 'acceptance-tests', label: 'Acceptance Tests', next: ['implement-feature'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-feature-implementer', id: 'implement-feature', label: 'Implement Feature', next: ['code-review'], monitorSlug: 'sdlc-step-monitor' },
       // Reviewed before verification, as in Runbook A: what the verifier, the trace and the security review see is the reviewed change.
-      { agentTemplateId: 'sdlc-ce-review', id: 'code-review', label: 'Code Review', produces: ['review.md'], next: ['verify-regression', 'browser-trace', 'security-review'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-ce-review', id: 'code-review', label: 'Code Review', produces: ['review.md'], next: ['alepo-review'], monitorSlug: 'sdlc-step-monitor' },
+      // As in Runbook A: Alepo's checklist after Code Review, so verification, the trace and the security review see the change after both reviews.
+      { agentTemplateId: 'sdlc-alepo-review', id: 'alepo-review', label: 'Alepo Review', produces: ['alepo-review.md'], next: ['verify-regression', 'browser-trace', 'security-review'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-verifier', id: 'verify-regression', label: 'Verify + Regression', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-trace-capture', id: 'browser-trace', label: 'Browser Trace', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-security-review', id: 'security-review', label: 'Security Review', next: ['evidence-bundle-pr'], monitorSlug: 'sdlc-step-monitor' },

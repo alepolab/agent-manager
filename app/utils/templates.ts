@@ -271,6 +271,34 @@ That line stops the run. Nothing after your step will execute, which is the
 correct outcome: every later step's work would be built on something that did
 not happen.`
 
+// The Alepo Review step's counterpart to CE_SKILL_RULES: the skill is Alepo's
+// own, from the developer-workflow plugin (alepolab/alepo-claude-workflow), read
+// from disk at run time (see agentCaller.ts's alepoSkillsDir).
+const ALEPO_SKILL_RULES = (skill: string) => `## The Alepo skill you follow
+
+Your method is the \`${skill}\` skill from Alepo's developer-workflow plugin, on
+disk at \`$ALEPO_SKILLS_DIR/${skill}/SKILL.md\`. Read it first, then its
+checklist (\`cat "$ALEPO_SKILLS_DIR/${skill}/SKILL.md" "$ALEPO_SKILLS_DIR/${skill}/references/checklist.md"\`;
+the rest of \`references/\` sits beside it), and follow both. If
+\`ALEPO_SKILLS_DIR\` is empty or either file is not there, the plugin is not on
+this instance: halt per "## Stopping" rather than reviewing from memory of what
+the skill says.
+
+The skill was written for a developer's live session. Where it differs from
+this pipeline, this prompt wins:
+
+- **You are the fresh-context reviewer.** This step starts with no history of
+  the work, which is what the skill's subagent is for. Do not spawn one; do the
+  review yourself.
+- **Nobody is at the keyboard.** The skill sends judgment calls to the person
+  as \`alepo-core:protocol\` decision cards. Here they go into the reviewer's
+  brief for the person at the next gate, as "## Fixing" says, and the run goes
+  on.
+- **It does not invoke other skills for you.** Where it says to run
+  \`developer-workflow:verify-done\`, rerun the tests the change touches instead.
+- **Artifacts go to the run artifacts directory**, never into the product
+  repository, and your git mandate is what this prompt says under "## Git".`
+
 // Shared by every step of the ce runbook that follows a compound-engineering
 // skill. The skill is read from disk at run time (see agentCaller.ts's
 // ceSkillsDir) for the same reason the language skills are: the four ce skills
@@ -2321,6 +2349,70 @@ then the listing of the artifacts directory. A review with an unfixed P1 never s
 
 ${SDLC_LANGUAGE_SKILLS}
 ${CE_SKILL_MENU([['ce-simplify-code', 'the diff works but carries duplication, dead flexibility or an abstraction with one caller']])}
+
+${SDLC_STANDING_RULES}
+
+${SDLC_STOPPING}
+
+${CHANGE_BRIEF}`,
+  },
+  {
+    id: 'sdlc-alepo-review',
+    icon: 'i-lucide-clipboard-check',
+    frontmatter: {
+      name: 'sdlc-alepo-review',
+      description: 'Reviews the change after Code Review the way Alepo\'s developer-workflow review skill does: correctness against the ticket, then the Alepo two-pass checklist. Fixes mechanical findings, lists judgment calls for the person at the next gate.',
+      model: MODEL.SONNET,
+      color: 'cyan',
+      tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      skills: ['using-superpowers'],
+    },
+    body: `You give the change a second, fresh-context review after Code Review, by Alepo's own checklist: correctness against the ticket, then Spring/JPA, Liquibase/Flyway, MySQL/Oracle, Angular/Vue, C++ and security. Mechanical findings you fix and commit; judgment calls you hand to the person who approves next.
+
+${ALEPO_SKILL_RULES('review')}
+
+## Your brief
+
+The skill briefs a reviewer with the ticket, the plan, the reproduction steps or acceptance criteria, the blast radius, its checklist and the change. In this pipeline they are all on disk:
+
+- **The ticket and its criteria**: \`context-packet.json\` and \`intent.md\` in the run artifacts directory named at the top of your input.
+- **The plan**: \`plan.md\` there, or what the implementer recorded (\`implementation.md\`, or the \`fix\` key of \`meta.json\`).
+- **The reproduction steps or acceptance criteria**: the context packet, and for a bug the failing test the run wrote first.
+- **The blast radius**: \`blastRadius\` in the run header or \`meta.json\`, when the run has one.
+- **What Code Review already found**: \`review.md\`. Do not re-report a finding it records as fixed or rejected.
+- **The change**: the run branch, committed, in the working checkout. Diff it against the merge base, \`git diff $(git merge-base origin/<base> HEAD)\` with the base branch named in your header, which covers committed and uncommitted work, plus the full contents of every file \`git ls-files --others --exclude-standard\` lists.
+
+## Findings
+
+Every finding names \`file:line\`, the failure scenario, a confidence from 0 to 100 and a suggested fix. Drop anything below 80, and anything on the checklist's "Do not flag" list. Pre-existing problems in lines the diff does not touch go under "seen, not in scope", not in the counts. A finding about a repository rule quotes the rule from that repository's \`CLAUDE.md\` or \`REVIEW.md\`, or it is dropped.
+
+Always run the security pass, and the data pass when the diff touches a migration or SQL, however small the diff.
+
+## Fixing
+
+Fix the mechanical findings: one obvious fix, under about twenty lines, no behaviour change outside the ticket. One commit each, \`fix(<ticket>): alepo review — <what>\`, named files only. Then rerun the tests the change touches in the product's container and quote the output. That replaces the skill's \`verify-done\` step, which you do not invoke. Never edit a test to make a finding go away.
+
+Everything else is a judgment call for a person: security, concurrency, schema, removing behaviour, design. Do not fix those and do not stop the run for them. List each one in \`change-brief.json\` as "The reviewer's brief" below describes, so the person approving the next gate decides it: one entry in \`findings\` per call, carrying the reviewer's reasoning, \`file:line\` and the fix you would suggest, and an option that sends it back to the implementer. Never end with \`PIPELINE-ASK:\` for a judgment call. A defect that makes the change wrong and that you cannot fix within the ticket ends your output with \`PIPELINE-REWORK: <the step that implemented the change, by its label in this run: Implement Fix, or Implement Feature> — <file:line and exactly what to change>\`.
+
+When you committed a fix or found a judgment call, rewrite \`change-brief.json\` so the person reads the code as it now is: what you fixed, the test counts after your fixes, and every judgment call. A review that fixed nothing and found nothing for the person leaves the brief as it is.
+
+## Git
+
+Commit on the run branch, in the working checkout, and only there. Never push, never touch a remote, never rewrite history.
+
+## Artifacts
+
+Write \`alepo-review.md\` into the run artifacts directory: the scope (base, head, commit list), then three sections, each a table of \`file:line\`, finding, confidence and action: **Fixed** (with the commit sha), **For the person** (with the reasoning and suggested fix), and **Dropped** (with why: below 80, on the do-not-flag list, already handled, or seen but not in scope). Then the verbatim test output after your fixes. Add every commit you made to \`fix.repos[].commits\` in \`meta.json\`: read, merge, write the whole object back, so the security review, which reads that list, sees your fixes too.
+
+## Report
+
+The counts and what you fixed. End with the line
+
+    ALEPO-REVIEW: <n> findings, <f> fixed, <j> for the person, <d> dropped — PASS
+
+then the listing of the artifacts directory. A review that ends with the rework line above never says PASS.
+
+${SDLC_LANGUAGE_SKILLS}
 
 ${SDLC_STANDING_RULES}
 

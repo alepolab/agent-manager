@@ -62,6 +62,27 @@ const { callAgent, ceSkillsDir } = await import('../server/utils/agentCaller.ts'
   rmSync(shipped, { recursive: true, force: true })
 }
 
+// ALEPO_SKILLS_DIR: developer-workflow's skills, from an installed plugin or the
+// `alepo` marketplace clone, or empty. The clone alone is enough, so alepo-core's
+// hooks need not be installed for the Alepo Review step to find its skill.
+{
+  const { mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { alepoSkillsDir } = await import('../server/utils/agentCaller.ts')
+  const marketplace = join(process.env.CLAUDE_DIR, 'plugins', 'marketplaces', 'alepo')
+  assert.equal(await alepoSkillsDir(), '', 'neither installed nor cloned: empty, and the step halts on that')
+  mkdirSync(join(marketplace, 'developer-workflow', 'skills', 'review'), { recursive: true })
+  assert.equal(await alepoSkillsDir(), '', 'a clone without review/SKILL.md is no answer')
+  writeFileSync(join(marketplace, 'developer-workflow', 'skills', 'review', 'SKILL.md'), '# review')
+  assert.equal(await alepoSkillsDir(), join(marketplace, 'developer-workflow', 'skills').replace(/\\/g, '/'), 'the marketplace clone, without installing anything')
+  const installed = join(process.env.CLAUDE_DIR, 'plugins', 'installed_plugins.json')
+  writeFileSync(installed, JSON.stringify({ plugins: { 'alepo-core@alepo': [{ installPath: '/p/core' }], 'developer-workflow@alepo': [{ installPath: '/p/dw/1.4.0' }] } }))
+  assert.equal(await alepoSkillsDir(), '/p/dw/1.4.0/skills', 'an installed developer-workflow wins over the clone')
+  writeFileSync(installed, '{ not json')
+  assert.equal(await alepoSkillsDir(), join(marketplace, 'developer-workflow', 'skills').replace(/\\/g, '/'), 'a broken registry falls back to the clone')
+  rmSync(installed)
+  rmSync(join(process.env.CLAUDE_DIR, 'plugins', 'marketplaces'), { recursive: true, force: true })
+}
+
 // ── 1. Importing workflowRunner.ts alone wires the real caller ────────────
 // No setAgentCaller() call has happened yet in this process. If the wiring
 // regresses to an import-order-dependent side effect that isn't triggered by

@@ -83,7 +83,7 @@ export const CHANGE_BRIEF_PENDING = 'change-brief.pending'
  * too: once it has fixed findings it holds the latest picture of the change.
  * Each must carry "The reviewer's brief" in its instructions.
  */
-export const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work|ce-review)$/
+export const CHANGE_MAKERS = /^sdlc-(fix-implementer|feature-implementer|ce-work|ce-review|alepo-review)$/
 
 export interface DecisionOption {
   /** "a", "b", … - what the person answers with. */
