@@ -86,9 +86,14 @@ def wait_app():
 
 def set_clock(mode):
     env = clock_env(mode)
-    run([*COMPOSE, 'up', '-d', '--no-build', '--no-deps', 'keycloak', 'app'], env=env)
-    kc_redirects()
-    run([*COMPOSE, 'up', '-d', '--no-build', '--no-deps', '--force-recreate', 'keycloak-forward'], env=env)
+    try:
+        run([*COMPOSE, 'up', '-d', '--no-build', '--no-deps', 'keycloak', 'app'], env=env)
+        kc_redirects()
+    finally:
+        # keycloak-forward lives in the app's network namespace. Once the app is recreated it must be too,
+        # even when a step above failed: otherwise it stays in the old app's namespace and localhost:8280
+        # answers nothing inside the new app, until someone recreates it by hand.
+        run([*COMPOSE, 'up', '-d', '--no-build', '--no-deps', '--force-recreate', 'keycloak-forward'], env=env)
     wait_app()
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     with open(STATE, 'w') as f:
@@ -130,6 +135,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 return self.reply(200, set_clock(mode) + '\n')
             except Exception as e:  # noqa: BLE001
+                # Logged as well as returned: the caller is an agent, and its reply is not where an operator looks.
+                print(f'[stackctl] clock {mode} failed: {e}', flush=True)
                 return self.reply(500, f'clock {mode} failed: {e}\n')
 
     def log_message(self, fmt, *args):
