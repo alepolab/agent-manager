@@ -1,8 +1,8 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import readline from 'node:readline'
 import { createReadStream } from 'node:fs'
+import { projectsDirCandidates } from './claudeDir'
 
 export interface ClaudeProject {
   name: string
@@ -19,10 +19,16 @@ export interface ClaudeSession {
 }
 
 /**
- * Get Claude projects directory
+ * Every directory transcripts may be in: the server's own and, when agents run
+ * as their developers, each developer's. A project worked on by two of them
+ * has a folder in each, and is listed once with both folders' sessions.
  */
-function getProjectsDir(): string {
-  return path.join(os.homedir(), '.claude', 'projects')
+async function projectsDirs(): Promise<string[]> {
+  const dirs: string[] = []
+  for (const dir of projectsDirCandidates()) {
+    try { await fs.access(dir); dirs.push(dir) } catch { /* not there */ }
+  }
+  return dirs
 }
 
 /**
@@ -46,39 +52,34 @@ function getDisplayName(projectPath: string): string {
  */
 export async function listProjects(): Promise<ClaudeProject[]> {
   try {
-    const projectsDir = getProjectsDir()
+    const byName = new Map<string, ClaudeProject>()
 
-    // Check if directory exists
-    try {
-      await fs.access(projectsDir)
-    } catch {
-      return []
+    for (const projectsDir of await projectsDirs()) {
+      const entries = await fs.readdir(projectsDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+
+        const projectPath = decodeProjectName(entry.name)
+        const projectDir = path.join(projectsDir, entry.name)
+
+        // Count sessions (.jsonl files, excluding agent-*.jsonl)
+        const files = await fs.readdir(projectDir).catch(() => [] as string[])
+        const sessionFiles = files.filter(file =>
+          file.endsWith('.jsonl') && !file.startsWith('agent-')
+        )
+
+        const seen = byName.get(entry.name)
+        if (seen) seen.sessionsCount += sessionFiles.length
+        else byName.set(entry.name, {
+          name: entry.name,
+          displayName: getDisplayName(projectPath),
+          path: projectPath,
+          sessionsCount: sessionFiles.length,
+        })
+      }
     }
 
-    const entries = await fs.readdir(projectsDir, { withFileTypes: true })
-    const projects: ClaudeProject[] = []
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-
-      const projectPath = decodeProjectName(entry.name)
-      const projectDir = path.join(projectsDir, entry.name)
-
-      // Count sessions (.jsonl files, excluding agent-*.jsonl)
-      const files = await fs.readdir(projectDir)
-      const sessionFiles = files.filter(file =>
-        file.endsWith('.jsonl') && !file.startsWith('agent-')
-      )
-
-      projects.push({
-        name: entry.name,
-        displayName: getDisplayName(projectPath),
-        path: projectPath,
-        sessionsCount: sessionFiles.length,
-      })
-    }
-
-    return projects
+    return [...byName.values()]
   } catch (error) {
     console.error('[Claude Projects] Error listing projects:', error)
     return []
@@ -90,33 +91,31 @@ export async function listProjects(): Promise<ClaudeProject[]> {
  */
 export async function listSessions(projectName: string): Promise<ClaudeSession[]> {
   try {
-    const projectDir = path.join(getProjectsDir(), projectName)
+    // This project's folder in every transcripts directory that has one.
+    const filesWithStats: { file: string, filePath: string, mtime: Date }[] = []
+    for (const projectsDir of await projectsDirs()) {
+      const projectDir = path.join(projectsDir, projectName)
+      const files = await fs.readdir(projectDir).catch(() => [] as string[])
+      for (const file of files) {
+        if (!file.endsWith('.jsonl') || file.startsWith('agent-')) continue
+        const filePath = path.join(projectDir, file)
+        const stats = await fs.stat(filePath)
+        filesWithStats.push({ file, filePath, mtime: stats.mtime })
+      }
+    }
 
-    const files = await fs.readdir(projectDir)
-    const jsonlFiles = files.filter(file =>
-      file.endsWith('.jsonl') && !file.startsWith('agent-')
-    )
-
-    if (jsonlFiles.length === 0) {
+    if (filesWithStats.length === 0) {
       return []
     }
 
-    // Get file stats and sort by modification time
-    const filesWithStats = await Promise.all(
-      jsonlFiles.map(async (file) => {
-        const filePath = path.join(projectDir, file)
-        const stats = await fs.stat(filePath)
-        return { file, mtime: stats.mtime }
-      })
-    )
+    // Sort by modification time
     filesWithStats.sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
 
     // Parse sessions
     const sessions: ClaudeSession[] = []
 
-    for (const { file, mtime } of filesWithStats) {
+    for (const { file, filePath, mtime } of filesWithStats) {
       const sessionId = file.replace('.jsonl', '')
-      const filePath = path.join(projectDir, file)
 
       // Read first few lines to get summary
       let summary = 'New Session'

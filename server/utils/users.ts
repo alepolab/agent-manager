@@ -1,10 +1,11 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, writeFile, rename, rm } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, writeFile, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { jiraBaseUrl as instanceJiraBaseUrl } from './jiraCredentials.ts'
 import { agentManagerSettings, envString, settingString } from './appSettings.ts'
+import { developerPaths, runAsUsers } from './osUsers.ts'
 
 /**
  * Per-developer profiles for a shared instance: the GitHub token from login
@@ -134,7 +135,7 @@ export async function saveProfile(login: string, patch: Partial<UserProfile> & {
   // it to the next run, which then fails against the registry for a reason
   // nothing on this instance can explain.
   if (githubTokenPlain !== undefined && !githubTokenPlain) {
-    await rm(join(usersDir(), `${safe(login)}.docker`), { recursive: true, force: true })
+    await rm(join(credentialDir(login), `${safe(login)}.docker`), { recursive: true, force: true })
   }
   const p = profilePath(login)
   const tmp = `${p}.${process.pid}.tmp`
@@ -340,6 +341,25 @@ export async function envForUser(login: string | undefined, fetchImpl: typeof fe
  *  The alepo host stays the last resort for a deployment that names none. */
 const jiraHost = () => instanceJiraBaseUrl() ?? 'https://alepo.atlassian.net'
 
+/**
+ * Where a developer's tool config files go. Beside their profile, in the
+ * server-only users directory - unless their agents run as their own user,
+ * which cannot read that directory and must not: it holds everyone's. Then in
+ * their private directory, which only they and the server can.
+ */
+function credentialDir(login: string): string {
+  return runAsUsers() ? developerPaths(login).credentials : usersDir()
+}
+
+/**
+ * The mode those files are written with. 0600 alone in the developer's
+ * directory would set its ACL mask to nothing and lock their own user out;
+ * the directory's default ACL is what keeps everyone else out there.
+ */
+const credentialFileMode = () => runAsUsers() ? 0o660 : 0o600
+// Set after writing too: `mode` applies only when a file is created, and the
+// umask trims it even then.
+
 /** The registry a run pulls product images from. */
 const GHCR = 'ghcr.io'
 
@@ -370,17 +390,18 @@ const GHCR = 'ghcr.io'
  * directory, which is kept as evidence and travels into pull request bodies.
  */
 async function dockerConfigFor(login: string, token: string): Promise<string> {
-  const dir = join(usersDir(), `${safe(login)}.docker`)
+  const dir = join(credentialDir(login), `${safe(login)}.docker`)
   await mkdir(dir, { recursive: true })
   const auth = Buffer.from(`${login}:${token}`).toString('base64')
-  await writeFile(join(dir, 'config.json'), JSON.stringify({ auths: { [GHCR]: { auth } } }), { mode: 0o600 })
+  await writeFile(join(dir, 'config.json'), JSON.stringify({ auths: { [GHCR]: { auth } } }), { mode: credentialFileMode() })
+  await chmod(join(dir, 'config.json'), credentialFileMode())
   return dir
 }
 
 async function jiraConfigFor(p: UserProfile): Promise<string> {
   const server = jiraHost()
   const defaultProject = envString('JIRA_DEFAULT_PROJECT') ?? settingString(agentManagerSettings().jira?.defaultProject)
-  const path = join(usersDir(), `${safe(p.login)}.jira.yml`)
+  const path = join(credentialDir(p.login), `${safe(p.login)}.jira.yml`)
   const body = [
     `installation: cloud`,
     `server: ${server}`,
@@ -389,7 +410,8 @@ async function jiraConfigFor(p: UserProfile): Promise<string> {
     ...(defaultProject ? [`project:`, `    key: ${defaultProject}`] : []),
     '',
   ].join('\n')
-  await mkdir(usersDir(), { recursive: true })
-  await writeFile(path, body, { mode: 0o600 })
+  await mkdir(credentialDir(p.login), { recursive: true })
+  await writeFile(path, body, { mode: credentialFileMode() })
+  await chmod(path, credentialFileMode())
   return path
 }

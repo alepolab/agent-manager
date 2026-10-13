@@ -10,6 +10,7 @@ import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
 import { CLAUDE_CREDENTIAL_VARS, claudeCredentialProblem, envForUser } from './users.ts'
+import { osUserProblem, runAsUsers, SAFE_DIRECTORY_CONFIG, spawnAs } from './osUsers.ts'
 import type { AgentFrontmatter } from '~/types'
 
 /**
@@ -132,7 +133,27 @@ export async function agentEnvFor(startedBy?: string): Promise<Record<string, st
     GIT_CONFIG_COUNT: '1',
     GIT_CONFIG_KEY_0: 'commit.gpgsign',
     GIT_CONFIG_VALUE_0: 'false',
+    // Running as a developer, an agent works in checkouts the server cloned:
+    // another owner, which git refuses unless told to trust it.
+    ...(runAsUsers()
+      ? { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_1: SAFE_DIRECTORY_CONFIG.key, GIT_CONFIG_VALUE_1: SAFE_DIRECTORY_CONFIG.value }
+      : {}),
   }
+}
+
+/**
+ * Why an agent must not be launched for this login with this env, or null.
+ * Every launch asks - pipeline steps, chat, Studio, improve-instructions - so
+ * none can start on the instance's Claude login or as the server's own user.
+ */
+export function launchProblem(env: Record<string, string | undefined>, login: string | undefined): string | null {
+  return claudeCredentialProblem(env, login) ?? osUserProblem(login)
+}
+
+/** The SDK options that start the process as the developer, when agents run as them. */
+export function launchAs(login: string | undefined): { spawnClaudeCodeProcess?: ReturnType<typeof spawnAs> } {
+  const spawn = spawnAs(login)
+  return spawn ? { spawnClaudeCodeProcess: spawn } : {}
 }
 
 export function sdlcScriptsDir(): string {
@@ -382,8 +403,8 @@ export async function callAgent(
   // that must hold a credential. Asking any other would let a call that lost
   // its developer's env reach the host's own Claude login instead.
   const env = launchEnv(await agentEnvFor(), userEnv)
-  const noCredential = claudeCredentialProblem(env, login)
-  if (noCredential) throw new Error(noCredential)
+  const refused = launchProblem(env, login)
+  if (refused) throw new Error(refused)
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -527,6 +548,7 @@ export async function callAgent(
       // including the no-credential one; a conditional env is exactly how a
       // variable goes missing in the configuration nobody tests.
       env: { ...env },
+      ...launchAs(login),
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

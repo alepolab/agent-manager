@@ -30,6 +30,7 @@ import { getChannel } from './channels.ts'
 import { fetchExistingTickets, EXISTING_TICKETS_ARTIFACT } from './existingTickets.ts'
 import { agentEnvFor, launchEnv } from './agentCaller.ts'
 import { claudeCredentialProblem } from './users.ts'
+import { osUserFor, osUserProblem, runAsUsers } from './osUsers.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -90,6 +91,16 @@ export async function runPreflight(
     const whose = run.startedBy ? `@${run.startedBy}'s` : "the host's"
     const kind = env.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription token' : env.ANTHROPIC_API_KEY ? 'API key' : 'login'
     return { name: 'Claude credential', level: 'ok', detail: `agents run on ${whose} ${kind}` }
+  })
+
+  // ── the developer's own Unix user, when agents run as theirs ──
+  await guard('agent user', async () => {
+    if (!runAsUsers()) return null
+    if (!launchesAgents) return { name: 'agent user', level: 'skip', detail: 'this runner launches no agents' }
+    const problem = osUserProblem(run.startedBy)
+    return problem
+      ? { name: 'agent user', level: 'fail', detail: problem }
+      : { name: 'agent user', level: 'ok', detail: `agents run as ${osUserFor(run.startedBy!)}` }
   })
 
   // ── the guardrails: without them no agent may touch a product repository ──

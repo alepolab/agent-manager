@@ -9,6 +9,7 @@ import { computeFixFacts } from './gitFacts.ts'
 import { runElapsedMinutes } from '../../shared/utils/runClock.ts'
 import { resolveClaudePath } from './claudeDir.ts'
 import { createLogger } from './log.ts'
+import { grantDeveloper } from './osUsers.ts'
 import { UNTRUSTED_TICKET_TAG } from './jiraTicketSource.ts'
 import type { AgentUsage } from './agentCaller.ts'
 import type { WorkflowRun, RunStep, ProductMatch } from '~~/shared/types/run'
@@ -446,6 +447,9 @@ export async function initRunArtifacts(run: WorkflowRun, workflowName: string): 
   await mkdir(join(dir, 'steps'), { recursive: true })
   await writeFile(join(dir, 'meta.json'),
     JSON.stringify({ ...runnerOwned(run), workflow: workflowName }, null, 2))
+  // The starter's agents write here; with agents running as their own user
+  // they need letting in, and nobody else's do.
+  await grantDeveloper(dir, run.startedBy)
   log.debug('run artifacts initialized', { runId: run.id, dir })
 }
 

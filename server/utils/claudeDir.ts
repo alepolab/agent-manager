@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
+import { developerProjectsDirs } from './osUsers.ts'
 
 let currentClaudeDir: string | null = null
 
@@ -77,6 +78,9 @@ export function projectsDirCandidates(): string[] {
   if (process.env.CLAUDE_CONFIG_DIR) add(join(process.env.CLAUDE_CONFIG_DIR, 'projects'))
   add(join(homedir(), '.claude', 'projects'))
   add(join(getClaudeDir(), 'projects'))
+  // Each developer's own, when their agents run as them: that is where the SDK,
+  // started with their CLAUDE_CONFIG_DIR, wrote their transcripts.
+  for (const dir of developerProjectsDirs()) add(dir)
   return out
 }
 

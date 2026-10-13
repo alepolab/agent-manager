@@ -8,8 +8,7 @@ import { parseFrontmatter } from '../utils/frontmatter'
 import { resolveTools, resolveMaxTurns } from '../utils/agentToolPolicy'
 import { buildAgentSystemPrompt } from '../utils/agentSystemPrompt'
 import { currentUser, requireCapability } from '../utils/session'
-import { agentEnvFor, launchEnv } from '../utils/agentCaller'
-import { claudeCredentialProblem } from '../utils/users'
+import { agentEnvFor, launchAs, launchEnv, launchProblem } from '../utils/agentCaller'
 import type { AgentFrontmatter } from '~/types'
 
 interface ChatMessage {
@@ -98,7 +97,7 @@ export default defineEventHandler(async (event) => {
   // refused before the stream opens when they have none.
   const login = (await currentUser(event))?.login
   const env = launchEnv(await agentEnvFor(login), {})
-  const noCredential = claudeCredentialProblem(env, login)
+  const noCredential = launchProblem(env, login)
   if (noCredential) throw createError({ statusCode: 403, message: noCredential })
   const body = await readBody<{ 
     messages: ChatMessage[]; 
@@ -185,6 +184,7 @@ export default defineEventHandler(async (event) => {
       options: {
         cwd: resolvedCwd,
         env,
+        ...launchAs(login),
         // `tools` restricts the actual toolset; `allowedTools` only pre-approves a
         // permission prompt and is a no-op under `bypassPermissions` below. Omitted
         // entirely when the agent declares no `tools` frontmatter, so the SDK keeps
