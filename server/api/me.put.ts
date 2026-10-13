@@ -1,5 +1,5 @@
 import { requireUser } from '../utils/session'
-import { anthropicKindOf, saveProfile, toPublic, UNRECOGNISED_ANTHROPIC_TOKEN } from '../utils/users'
+import { anthropicKindOf, normaliseAnthropicToken, saveProfile, toPublic, UNRECOGNISED_ANTHROPIC_TOKEN } from '../utils/users'
 
 /** Jira email and token, and the Claude credential every agent they start runs
  *  on, for the signed-in developer, and their own preferences. An empty token
@@ -12,7 +12,9 @@ export default defineEventHandler(async (event) => {
   if (typeof body?.jiraEmail === 'string') patch.jiraEmail = body.jiraEmail.trim()
   if (typeof body?.jiraToken === 'string') patch.jiraTokenPlain = body.jiraToken.trim()
   if (typeof body?.anthropicToken === 'string') {
-    const token = body.anthropicToken.trim()
+    // All whitespace, not just the ends: a token copied out of a terminal
+    // carries the line wrap in its middle. See normaliseAnthropicToken.
+    const token = normaliseAnthropicToken(body.anthropicToken)
     if (token && !anthropicKindOf(token)) throw createError({ statusCode: 400, message: UNRECOGNISED_ANTHROPIC_TOKEN })
     patch.anthropicTokenPlain = token
   }

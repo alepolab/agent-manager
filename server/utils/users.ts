@@ -125,9 +125,10 @@ export async function saveProfile(login: string, patch: Partial<UserProfile> & {
   if (jiraTokenPlain !== undefined) next.jiraToken = jiraTokenPlain ? encrypt(jiraTokenPlain) : undefined
   if (githubTokenPlain !== undefined) next.githubToken = githubTokenPlain ? encrypt(githubTokenPlain) : undefined
   if (anthropicTokenPlain !== undefined) {
-    const kind = anthropicTokenPlain ? anthropicKindOf(anthropicTokenPlain) ?? undefined : undefined
-    if (anthropicTokenPlain && !kind) throw new Error(UNRECOGNISED_ANTHROPIC_TOKEN)
-    next.anthropicToken = anthropicTokenPlain ? encrypt(anthropicTokenPlain) : undefined
+    const token = normaliseAnthropicToken(anthropicTokenPlain)
+    const kind = token ? anthropicKindOf(token) ?? undefined : undefined
+    if (token && !kind) throw new Error(UNRECOGNISED_ANTHROPIC_TOKEN)
+    next.anthropicToken = token ? encrypt(token) : undefined
     next.anthropicKind = kind
   }
   // A credential file must not outlive the credential. Clearing the token and
@@ -252,10 +253,28 @@ export const CLAUDE_CREDENTIAL_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_T
 export const UNRECOGNISED_ANTHROPIC_TOKEN
   = 'Not a Claude credential: expected an OAuth token from `claude setup-token` (sk-ant-oat…) or an API key (sk-ant-api…).'
 
-/** `oauth` for a `claude setup-token` token, `apikey` for an API key, else null. */
+/**
+ * A pasted Claude credential with the whitespace taken out.
+ *
+ * `claude setup-token` prints a token longer than most terminals are wide, and
+ * copying it out of one brings the wrap with it: a real token was stored with
+ * two spaces in its middle. Claude Code cannot send a token with a space in it
+ * and says only "Not logged in · Please run /login" - from inside a pipeline
+ * step, with the token visibly present, which reads like anything but a paste.
+ * No Claude credential contains whitespace, so all of it goes, not just the ends.
+ */
+export function normaliseAnthropicToken(token: string): string {
+  return token.replace(/\s+/g, '')
+}
+
+/**
+ * `oauth` for a `claude setup-token` token, `apikey` for an API key, else null.
+ * The whole token is checked, not only its prefix: a prefix check passed the
+ * wrapped token above.
+ */
 export function anthropicKindOf(token: string): AnthropicKind | null {
-  if (/^sk-ant-oat\d\d-/.test(token)) return 'oauth'
-  if (/^sk-ant-api\d\d-/.test(token)) return 'apikey'
+  if (/^sk-ant-oat\d\d-[A-Za-z0-9_-]+$/.test(token)) return 'oauth'
+  if (/^sk-ant-api\d\d-[A-Za-z0-9_-]+$/.test(token)) return 'apikey'
   return null
 }
 
@@ -275,7 +294,9 @@ export function claudeEnvFor(p: Pick<UserProfile, 'anthropicToken' | 'anthropicK
   if (process.env.AUTH_DISABLED === '1') return {}
   const env: Record<string, string> = Object.fromEntries(CLAUDE_CREDENTIAL_VARS.map(v => [v, '']))
   if (!p?.anthropicToken) return env
-  const token = decrypt(p.anthropicToken)
+  // Normalised on the way out too, so a token stored before saving normalised
+  // it starts working without its owner having to paste it again.
+  const token = normaliseAnthropicToken(decrypt(p.anthropicToken))
   if ((p.anthropicKind ?? anthropicKindOf(token)) === 'apikey') env.ANTHROPIC_API_KEY = token
   else env.CLAUDE_CODE_OAUTH_TOKEN = token
   return env

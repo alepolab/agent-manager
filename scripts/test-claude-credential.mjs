@@ -92,6 +92,32 @@ try {
   assert.match(rejected.content, /401 OAuth access token is invalid.*Profile page/)
   assert.deepEqual(normalizeSDKMessage({ type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } }, 's'), [], 'an ordinary assistant message still adds nothing')
 
+  // ── a token copied out of a terminal carries the line wrap ──
+  // A real one was stored with two spaces in its middle; Claude Code then said
+  // only "Not logged in" from inside a pipeline step. Every shape of wrap a
+  // paste can bring is taken out, on save, and a stray character is refused.
+  const { normaliseAnthropicToken, encrypt } = await import('../server/utils/users.ts')
+  const clean = 'sk-ant-oat01-ABCdef123_-XYZ'
+  for (const [name, pasted] of [
+    ['two spaces mid-token', 'sk-ant-oat01-ABCdef  123_-XYZ'],
+    ['a newline', 'sk-ant-oat01-ABCdef\n123_-XYZ'],
+    ['CRLF', 'sk-ant-oat01-ABCdef\r\n123_-XYZ'],
+    ['a tab', 'sk-ant-oat01-ABC\tdef123_-XYZ'],
+    ['spaces at both ends', '  sk-ant-oat01-ABCdef123_-XYZ  '],
+    ['wrapped twice', 'sk-ant-oat01-AB Cdef12 3_-XYZ\n'],
+  ]) {
+    assert.equal(normaliseAnthropicToken(pasted), clean, `${name}: normalised`)
+    await saveProfile('wrap', { anthropicTokenPlain: pasted })
+    assert.equal((await envForUser('wrap')).CLAUDE_CODE_OAUTH_TOKEN, clean, `${name}: the agent gets it without the wrap`)
+  }
+  await assert.rejects(saveProfile('wrap', { anthropicTokenPlain: 'sk-ant-oat01-ABC$def' }), /Not a Claude credential/, 'a stray character is refused, not stored')
+  assert.equal(anthropicKindOf('sk-ant-oat01-'), null, 'a prefix alone is not a token')
+
+  // A token stored before saving normalised it starts working without a re-paste.
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(join(dir, 'old.json'), JSON.stringify({ login: 'old', updatedAt: 1, anthropicKind: 'oauth', anthropicToken: encrypt('sk-ant-oat01-ABCdef  123_-XYZ') }))
+  assert.equal((await envForUser('old')).CLAUDE_CODE_OAUTH_TOKEN, clean, 'an already-stored wrapped token is healed on the way out')
+
   // Something that is not a Claude credential is not stored as one.
   await assert.rejects(saveProfile('erin', { anthropicTokenPlain: 'hunter2' }), /Not a Claude credential/)
 
