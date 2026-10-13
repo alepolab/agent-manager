@@ -62,25 +62,58 @@ const { callAgent, ceSkillsDir } = await import('../server/utils/agentCaller.ts'
   rmSync(shipped, { recursive: true, force: true })
 }
 
-// ALEPO_SKILLS_DIR: developer-workflow's skills, from an installed plugin or the
-// `alepo` marketplace clone, or empty. The clone alone is enough, so alepo-core's
-// hooks need not be installed for the Alepo Review step to find its skill.
+// ALEPO_SKILLS_DIR: developer-workflow's skills, from an installed plugin, the
+// `alepo` marketplace clone or the copy the repository vendors - each only when
+// it really holds review/SKILL.md - or empty. The clone alone is enough, so
+// alepo-core's hooks need not be installed for the Alepo Review step to find its
+// skill; the vendored copy is what a container has, where the registry names
+// the host's installPath and the clone was stripped from the staged config.
 {
   const { mkdirSync, writeFileSync, rmSync } = await import('node:fs')
   const { alepoSkillsDir } = await import('../server/utils/agentCaller.ts')
   const marketplace = join(process.env.CLAUDE_DIR, 'plugins', 'marketplaces', 'alepo')
-  assert.equal(await alepoSkillsDir(), '', 'neither installed nor cloned: empty, and the step halts on that')
-  mkdirSync(join(marketplace, 'developer-workflow', 'skills', 'review'), { recursive: true })
-  assert.equal(await alepoSkillsDir(), '', 'a clone without review/SKILL.md is no answer')
-  writeFileSync(join(marketplace, 'developer-workflow', 'skills', 'review', 'SKILL.md'), '# review')
-  assert.equal(await alepoSkillsDir(), join(marketplace, 'developer-workflow', 'skills').replace(/\\/g, '/'), 'the marketplace clone, without installing anything')
+  const clone = join(marketplace, 'developer-workflow', 'skills').replace(/\\/g, '/')
+  const shipped = join(process.env.CLAUDE_DIR, 'shipped-dw', 'skills')
+  const none = join(process.env.CLAUDE_DIR, 'no-such-vendor')
   const installed = join(process.env.CLAUDE_DIR, 'plugins', 'installed_plugins.json')
-  writeFileSync(installed, JSON.stringify({ plugins: { 'alepo-core@alepo': [{ installPath: '/p/core' }], 'developer-workflow@alepo': [{ installPath: '/p/dw/1.4.0' }] } }))
-  assert.equal(await alepoSkillsDir(), '/p/dw/1.4.0/skills', 'an installed developer-workflow wins over the clone')
-  writeFileSync(installed, '{ not json')
-  assert.equal(await alepoSkillsDir(), join(marketplace, 'developer-workflow', 'skills').replace(/\\/g, '/'), 'a broken registry falls back to the clone')
-  rmSync(installed)
+  const stale = { plugins: { 'alepo-core@alepo': [{ installPath: '/p/core' }], 'developer-workflow@alepo': [{ installPath: '/p/dw/1.4.0' }] } }
+
+  assert.equal(await alepoSkillsDir(marketplace, none), '', 'nothing installed, cloned or vendored: empty, and the step halts on that')
+  mkdirSync(join(marketplace, 'developer-workflow', 'skills', 'review'), { recursive: true })
+  assert.equal(await alepoSkillsDir(marketplace, none), '', 'a clone without review/SKILL.md is no answer')
+  writeFileSync(join(marketplace, 'developer-workflow', 'skills', 'review', 'SKILL.md'), '# review')
+  assert.equal(await alepoSkillsDir(marketplace, none), clone, 'the marketplace clone, without installing anything')
+
+  // An installed plugin wins - when its directory really holds the skill.
+  const real = join(process.env.CLAUDE_DIR, 'plugins', 'cache', 'dw', '1.5.0')
+  mkdirSync(join(real, 'skills', 'review'), { recursive: true })
+  writeFileSync(join(real, 'skills', 'review', 'SKILL.md'), '# review')
+  writeFileSync(installed, JSON.stringify({ plugins: { 'developer-workflow@alepo': [{ installPath: real }] } }))
+  assert.equal(await alepoSkillsDir(marketplace, none), join(real, 'skills').replace(/\\/g, '/'), 'an installed developer-workflow wins over the clone')
+
+  // A stale installPath (a container's staged registry names the host's) is no
+  // answer: it falls through instead of handing every agent a dead path.
+  writeFileSync(installed, JSON.stringify(stale))
+  assert.equal(await alepoSkillsDir(marketplace, none), clone, 'THE DEAD PATH: a stale installPath beat a valid clone')
   rmSync(join(process.env.CLAUDE_DIR, 'plugins', 'marketplaces'), { recursive: true, force: true })
+  mkdirSync(join(shipped, 'review'), { recursive: true })
+  writeFileSync(join(shipped, 'review', 'SKILL.md'), '# review')
+  assert.equal(await alepoSkillsDir(marketplace, shipped), shipped.replace(/\\/g, '/'), 'THE CONTAINER: stale registry, no clone - the vendored copy is the answer')
+  assert.equal(await alepoSkillsDir(marketplace, none), '', 'stale registry, no clone, nothing vendored: empty')
+
+  writeFileSync(installed, '{ not json')
+  assert.equal(await alepoSkillsDir(marketplace, shipped), shipped.replace(/\\/g, '/'), 'a broken registry falls through to what is on disk')
+
+  // The default vendored copy is the one this repository ships, pinned.
+  const { existsSync, readFileSync } = await import('node:fs')
+  const vendored = join(process.cwd(), 'engineering', 'vendor', 'developer-workflow')
+  assert.ok(existsSync(join(vendored, 'skills', 'review', 'SKILL.md')), 'the repository vendors review/SKILL.md')
+  assert.ok(existsSync(join(vendored, 'skills', 'review', 'references', 'checklist.md')), 'and the checklist it cites')
+  assert.match(readFileSync(join(vendored, 'VERSION'), 'utf-8'), /^alepolab\/alepo-claude-workflow [0-9a-f]{40} /, 'pinned to a commit')
+  assert.equal(await alepoSkillsDir(marketplace), join(vendored, 'skills').replace(/\\/g, '/'), 'and is the default fallback')
+  rmSync(installed)
+  rmSync(join(process.env.CLAUDE_DIR, 'plugins'), { recursive: true, force: true })
+  rmSync(join(process.env.CLAUDE_DIR, 'shipped-dw'), { recursive: true, force: true })
 }
 
 // ── 1. Importing workflowRunner.ts alone wires the real caller ────────────

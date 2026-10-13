@@ -142,24 +142,33 @@ export async function ceSkillsDir(shipped = join(process.cwd(), 'vendor', 'compo
  * run time, for the reason CE_SKILLS_DIR exists.
  *
  * Resolution order: the plugin installed in this instance's config directory,
- * then the `alepo` marketplace's clone. The clone is enough on its own, and is
- * the expected setup: `claude plugin marketplace add alepolab/alepo-claude-workflow`
- * puts the files on disk without installing alepo-core, whose guard hooks would
- * otherwise fire in every session beside this pipeline's own plan gate and test
- * lock.
+ * then the `alepo` marketplace's clone, then the copy this repository vendors
+ * at engineering/vendor/developer-workflow (pinned, see its VERSION) and the
+ * image ships. Each is taken only when it actually has `review/SKILL.md`: a
+ * container's staged installed_plugins.json records the HOST's installPath,
+ * and stage-claude-config.sh strips marketplace clones, so in a container the
+ * first two can name a directory that is not there and only the vendored copy
+ * exists. The clone is the expected host setup:
+ * `claude plugin marketplace add alepolab/alepo-claude-workflow` puts the files
+ * on disk without installing alepo-core, whose guard hooks would otherwise fire
+ * in every session beside this pipeline's own plan gate and test lock.
  *
- * Empty when neither has `review/SKILL.md`; the step halts on that rather than
+ * Empty when none has `review/SKILL.md`; the step halts on that rather than
  * reviewing from memory of what the skill says.
  */
-export async function alepoSkillsDir(marketplace = resolveClaudePath('plugins', 'marketplaces', 'alepo')): Promise<string> {
+export async function alepoSkillsDir(
+  marketplace = resolveClaudePath('plugins', 'marketplaces', 'alepo'),
+  shipped = join(process.cwd(), 'engineering', 'vendor', 'developer-workflow', 'skills'),
+): Promise<string> {
+  // Forward slashes for the reason ceSkillsDir gives.
+  const usable = (dir: string) => existsSync(join(dir, 'review', 'SKILL.md')) ? dir.replace(/\\/g, '/') : ''
   try {
     const installed = JSON.parse(await readFile(resolveClaudePath('plugins', 'installed_plugins.json'), 'utf-8'))
     const entry = Object.entries<any>(installed?.plugins ?? {}).find(([k]) => k.startsWith('developer-workflow@'))?.[1]?.[0]
-    // Forward slashes for the reason ceSkillsDir gives.
-    if (entry?.installPath) return `${entry.installPath.replace(/\\/g, '/')}/skills`
+    const fromPlugin = entry?.installPath ? usable(join(entry.installPath, 'skills')) : ''
+    if (fromPlugin) return fromPlugin
   } catch { /* no registry, or not JSON: not installed */ }
-  const cloned = join(marketplace, 'developer-workflow', 'skills')
-  return existsSync(join(cloned, 'review', 'SKILL.md')) ? cloned.replace(/\\/g, '/') : ''
+  return usable(join(marketplace, 'developer-workflow', 'skills')) || usable(shipped)
 }
 
 const log = createLogger('agent')
