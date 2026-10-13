@@ -19,16 +19,22 @@ const id = ID.toLowerCase()
 const stackSteps = [{ agentSlug: 'sdlc-stack-provisioner' }, { agentSlug: 'sdlc-verifier' }]
 
 /** Answers docker and git as they would, and records every call. */
-function fakeExec({ projects = [], dirty = '', failDown = [], images = [], labelled = [], inUse = [] } = {}) {
+function fakeExec({ projects = [], dirty = '', failDown = [], images = [], labelled = [], inUse = [], revisions = {}, heads = {} } = {}) {
   const calls = []
   const exec = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts?.cwd })
     if (cmd === 'docker' && args[1] === 'ls') return JSON.stringify(projects.map(Name => ({ Name })))
-    // images: every repo:tag; labelled: [{ id, names }] carrying agent-manager.run; inUse: names or ids a container runs
+    // images: every repo:tag; labelled: [{ id, names }] carrying agent-manager.run (a label filter
+    // names one run, so `labelled` may be { [runId]: [...] }); inUse: names or ids a container runs
     if (cmd === 'docker' && args[0] === 'images') {
-      if (args.includes('--filter')) return labelled.flatMap(l => (l.names.length ? l.names : ['<none>:<none>']).map(n => `${l.id}\t${n}`)).join('\n')
-      return [...images, ...labelled.flatMap(l => l.names)].join('\n')
+      const filter = args[args.indexOf('--filter') + 1] ?? ''
+      const mine = Array.isArray(labelled) ? labelled : labelled[filter.split('=').at(-1)] ?? []
+      if (args.includes('--filter')) return mine.flatMap(l => (l.names.length ? l.names : ['<none>:<none>']).map(n => `${l.id}\t${n}`)).join('\n')
+      return [...images, ...(Array.isArray(labelled) ? labelled : Object.values(labelled).flat()).flatMap(l => l.names)].join('\n')
     }
+    // revisions: image name or id -> its org.opencontainers.image.revision; heads: checkout dir -> HEAD
+    if (cmd === 'docker' && args[0] === 'image' && args[1] === 'inspect') return `${revisions[args.at(-1)] ?? ''}\n`
+    if (cmd === 'git' && args[0] === 'rev-parse') return `${heads[opts?.cwd] ?? ''}\n`
     if (cmd === 'docker' && args[0] === 'ps') return inUse.includes(args.at(-1).replace('ancestor=', '')) ? 'c0ffee\n' : ''
     if (cmd === 'docker' && args[0] === 'rmi') {
       if (inUse.includes(args[1])) throw new Error(`conflict: unable to delete ${args[1]} (must be forced) - container c0ffee is using its referenced image`)
@@ -183,13 +189,86 @@ const OTHER = 'abcdef12-0000-4000-8000-000000000000' // shares this run's first 
   assert.match(r.images.kept, /11111111/)
 }
 {
-  // A project this run took over from another: down, but its volumes are not this run's to drop.
+  // A project this run took over from a run that has ended: this run is its last
+  // user, so it comes down with its volumes - no later teardown can find them.
   const from = 'sdlc-22222222-3333-4444-8555-666666666666'
   const exec = fakeExec({ projects: [from] })
   const r = await teardownRun({ id: ID, steps: stackSteps, stackProject: from }, exec, [])
   assert.deepEqual(exec.downed(), [from])
-  assert.deepEqual(exec.withVolumes(), [], 'a claimed project never gets -v')
+  assert.deepEqual(exec.withVolumes(), [from], 'the last user of a claimed project takes its volumes with it')
+  assert.equal(r.stacks[0].volumes, true)
+}
+{
+  // A project not named for a run never gets -v, whoever takes it down.
+  const exec = fakeExec({ projects: ['ase-crm'] })
+  const r = await teardownRun({ id: ID, steps: stackSteps, stackProject: 'ase-crm' }, exec, [])
+  assert.deepEqual(exec.downed(), ['ase-crm'])
+  assert.deepEqual(exec.withVolumes(), [], 'a shared stack\'s volumes are never dropped')
   assert.equal(r.stacks[0].volumes, false)
+}
+{
+  // Run A stands up its stack and stops at a gate; run B claims it. A ends while
+  // B uses it: everything of A's is kept. B ends: B is the last user, so the
+  // stack goes with its volumes, and A's images go too. Before, B took the
+  // stack down without -v and removed only its own images: A's volumes and
+  // images stayed for good.
+  const A = '33333333-4444-4555-8666-777777777777'
+  const a = A.slice(0, 8)
+  const projectA = `sdlc-${A}`
+  const images = [`localhost/agent-sdlc/ase-crm:${a}`, `sdlc-${a}-ui-builder:latest`]
+  const labelled = { [A]: [{ id: 'imgA', names: ['ghcr.io/alepolab/ase-crm:local-a'] }], [ID]: [{ id: 'imgB', names: [`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-fix`] }] }
+  const runA = { id: A, status: 'paused', stackProject: undefined }
+  const runB = { id: ID, status: 'paused', stackProject: projectA, stackClaimedFrom: A, steps: stackSteps }
+
+  // A ends while B still uses its stack.
+  const atA = fakeExec({ projects: [projectA], images, labelled })
+  const rA = await teardownRun({ ...runA, status: 'stopped', steps: stackSteps }, atA, [{ ...runA, status: 'stopped' }, runB])
+  assert.deepEqual(atA.downed(), [], 'A\'s stack stays up for B')
+  assert.deepEqual(atA.rmi(), [], 'and so do A\'s images')
+  assert.match(rA.images.kept, new RegExp(id.slice(0, 8), 'i'))
+
+  // B ends, the last user.
+  const atB = fakeExec({ projects: [projectA], images, labelled })
+  const rB = await teardownRun({ ...runB, status: 'completed' }, atB, [{ ...runA, status: 'stopped' }, { ...runB, status: 'completed' }])
+  assert.deepEqual(atB.withVolumes(), [projectA], 'THE ORPHANED VOLUMES: the last user took A\'s stack down without -v')
+  assert.ok(['ghcr.io/alepolab/ase-crm:local-a', ...images].every(n => atB.rmi().includes(n)),
+    `THE ORPHANED IMAGES: A's images stayed after its stack's last user ended (removed: ${atB.rmi().join(', ')})`)
+  assert.ok(atB.rmi().includes(`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-fix`), 'B\'s own images go too')
+  assert.equal(rB.claimedFromImages.run, A)
+  assert.equal(rB.claimedFromImages.removed.length, 3)
+
+  // B ends while A is still waiting at its gate: A is a user, so nothing of A's goes.
+  const early = fakeExec({ projects: [projectA], images, labelled })
+  const rE = await teardownRun({ ...runB, status: 'completed' }, early, [runA, { ...runB, status: 'completed' }])
+  assert.deepEqual(early.downed(), [], 'A still uses its stack')
+  assert.ok(!images.some(n => early.rmi().includes(n)) && !early.rmi().includes('ghcr.io/alepolab/ase-crm:local-a'), 'A\'s images are A\'s to remove')
+  assert.equal(rE.claimedFromImages, undefined)
+  assert.ok(!early.rmi().includes(`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-fix`), 'and B\'s are kept while A uses the stack they ran in')
+
+  // A ends after B: A is the last user, so B's kept images go with A's.
+  const late = fakeExec({ projects: [projectA], images, labelled })
+  const rL = await teardownRun({ ...runA, status: 'completed', steps: stackSteps }, late, [{ ...runA, status: 'completed' }, { ...runB, status: 'completed' }])
+  assert.deepEqual(late.withVolumes(), [projectA])
+  assert.ok(late.rmi().includes(`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-fix`), 'THE ORPHANED IMAGES: B\'s images stayed after the stack\'s last user ended')
+  assert.equal(rL.claimerImages[0].run, ID)
+}
+{
+  // An image of a commit a live run's checkout is on stays: that run's reuse
+  // lookup may already have picked it, with no container holding it yet.
+  const live = mkdtempSync(join(tmpdir(), 'teardown-live-'))
+  const SHA = '0123456789abcdef0123456789abcdef01234567'
+  const exec = fakeExec({
+    images: [`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}`, `sdlc-${id.slice(0, 8)}-ui-builder:latest`],
+    labelled: [{ id: 'img9', names: ['ghcr.io/alepolab/ase-crm:local-9'] }],
+    revisions: { [`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}`]: SHA, img9: SHA, [`sdlc-${id.slice(0, 8)}-ui-builder:latest`]: 'feedface' },
+    heads: { [live]: SHA },
+  })
+  const r = await teardownRun({ id: ID, steps: [{ agentSlug: 'sdlc-verifier' }] }, exec,
+    [{ id: '44444444-5555-4666-8777-888888888888', status: 'running', projectDir: live }])
+  assert.deepEqual(exec.rmi(), [`sdlc-${id.slice(0, 8)}-ui-builder:latest`], 'only the image no live checkout is at goes')
+  assert.deepEqual(r.images.refused.map(x => x.image).sort(), ['img9', `localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}`].sort())
+  assert.ok(r.images.refused.every(x => /live run's checkout is at 0123456789ab/.test(x.error)))
+  rmSync(live, { recursive: true, force: true })
 }
 {
   // A run with no step that builds anything never asks docker for images.

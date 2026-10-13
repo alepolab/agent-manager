@@ -12,14 +12,18 @@
  * - compose projects named `sdlc-<run id>` (full or first eight characters),
  *   which is the name every step that stands something up is told to use. A
  *   shared stack (SSO, a product's own database) never carries that name, so
- *   it is never touched. The run's own project goes with its volumes (`down
- *   -v`); a project it took over from another run goes without them.
+ *   it is never touched. A project comes down with its volumes (`down -v`)
+ *   when its last live user lets go of it: the run's own, or one it took over
+ *   from a run that has since ended. A project is never torn down twice, so
+ *   the last user is the only one left to drop its volumes.
  * - the images the run built: tagged with its id, or labelled
  *   `agent-manager.run=<run id>` (every step's header asks for both). Removed
  *   with `docker rmi` and never forced, so the daemon refuses any image a
  *   container still uses. None is removed while another live run still uses
- *   one of the run's stacks. Nothing removed images before this, and over
- *   three weeks the run images and volumes filled a 492 GB disk to 99%.
+ *   one of the run's stacks, and the run that took its stack over removes them
+ *   when it ends. None is removed that a live run at the same commit could
+ *   deploy. Nothing removed images before this, and over three weeks the run
+ *   images and volumes filled a 492 GB disk to 99%.
  * - the run's own worktree (`<clone>@<branch>`), and only if git agrees it is
  *   clean - an uncommitted change is kept and reported, never discarded. A
  *   fix branch is kept, since a pull request may be built on it; a scan's
@@ -47,9 +51,13 @@ const realExec: Exec = async (cmd, args, opts) =>
   (await execFileP(cmd, args, { cwd: opts?.cwd, timeout: 180_000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })).stdout
 
 export interface TeardownReport {
-  stacks: { project: string, removed: boolean, /** Its named volumes went with it: the run's own project only. */ volumes?: boolean, error?: string }[]
+  stacks: { project: string, removed: boolean, /** Its named volumes went with it: this run was its last user. */ volumes?: boolean, error?: string }[]
   worktree?: { path: string, removed: boolean, reason?: string }
   images?: ImageReport
+  /** The images of the run this run took its stack over from, kept at that run's ending for this one. */
+  claimedFromImages?: ImageReport & { run: string }
+  /** The images of ended runs that took this run's stack over, kept at their endings for this one. */
+  claimerImages?: (ImageReport & { run: string })[]
 }
 
 export interface ImageReport {
@@ -90,7 +98,13 @@ export function runProjectNames(runId: string): string[] {
 /** The compose project a run's stack steps use: the one it claimed, else its own. */
 export const stackProjectOf = (run: Pick<WorkflowRun, 'id' | 'stackProject'>): string => run.stackProject ?? `sdlc-${run.id.toLowerCase()}`
 
-type StackRun = Pick<WorkflowRun, 'id' | 'status' | 'stackProject' | 'product'>
+type StackRun = Pick<WorkflowRun, 'id' | 'status' | 'stackProject' | 'product'> & Partial<Pick<WorkflowRun, 'projectDir'>>
+
+/** A compose project named for a run. A shared stack never carries such a name. */
+const RUN_PROJECT = /^sdlc-[0-9a-f-]+$/
+
+/** The label a build of a commit carries, and what the image-reuse lookup matches (stackNote). */
+const REVISION_LABEL = 'org.opencontainers.image.revision'
 
 /** The live runs that use `project`: the run it was stood up for, and every run that claimed it. */
 export function stackUsers(project: string, runs: StackRun[], except?: string): StackRun[] {
@@ -169,7 +183,7 @@ const IMAGE_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-|test-a
 export const runBuildsImages = (run: Pick<WorkflowRun, 'steps'>): boolean => run.steps.some(s => IMAGE_AGENTS.test(s.agentSlug))
 
 export async function teardownRun(
-  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status'>>,
+  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status' | 'stackClaimedFrom'>>,
   exec: Exec = realExec,
   /** Every run, to see who else uses a stack. Read from the store when not given. */
   runs?: StackRun[],
@@ -201,12 +215,14 @@ export async function teardownRun(
       report.stacks.push({ project, removed: false, error: `kept: in use by run ${users.map(u => u.id.slice(0, 8)).join(', ')}` })
       continue
     }
-    // Volumes go only with a project named for this run. One it took over from
-    // another run was not stood up by it, so its data is not this run's to drop.
-    const own = isOwnProject(run.id, project)
+    // Nobody else uses it, so this is the last down it will get: its volumes go
+    // with it. That holds for one it took over too - the run it came from has
+    // ended, and once the project is gone no later teardown can find them.
+    // Only a project named for a run: a shared stack never is.
+    const volumes = isOwnProject(run.id, project) || RUN_PROJECT.test(project)
     try {
-      await exec('docker', ['compose', '-p', project, 'down', ...(own ? ['-v'] : []), '--remove-orphans'])
-      report.stacks.push({ project, removed: true, volumes: own })
+      await exec('docker', ['compose', '-p', project, 'down', ...(volumes ? ['-v'] : []), '--remove-orphans'])
+      report.stacks.push({ project, removed: true, volumes })
     } catch (err) {
       report.stacks.push({ project, removed: false, error: String(err instanceof Error ? err.message : err).slice(0, 300) })
     }
@@ -214,6 +230,27 @@ export async function teardownRun(
 
   // ── the images it built ──
   if (runBuildsImages(run)) report.images = await removeRunImages(run, exec, await everyone())
+  // The run this one took its stack over from kept its images at its own
+  // ending, because this run still used that stack. Now this run lets go, and
+  // nobody else would ever remove them. removeRunImages still keeps them while
+  // any other live run uses that run's stacks.
+  const from = run.stackClaimedFrom
+  if (from) {
+    const others = (await everyone()).filter(r => r.id !== run.id)
+    const fromRun = others.find(r => r.id === from)
+    if (!fromRun || TERMINAL_STATUSES.includes(fromRun.status)) {
+      const images = await removeRunImages({ id: from, stackProject: fromRun?.stackProject }, exec, others)
+      if (images) report.claimedFromImages = { run: from, ...images }
+    }
+  }
+  // The other way round: a run that took this run's stack over and ended first
+  // kept its images, because this run still used the stack. This run is its
+  // last user now.
+  const own = new Set(runProjectNames(run.id))
+  if (run.steps.some(s => STACK_AGENTS.test(s.agentSlug))) for (const claimer of (await everyone()).filter(r => r.id !== run.id && TERMINAL_STATUSES.includes(r.status) && r.stackProject && own.has(r.stackProject))) {
+    const images = await removeRunImages(claimer, exec, (await everyone()).filter(r => r.id !== run.id))
+    if (images?.removed.length || images?.refused.length) (report.claimerImages ??= []).push({ run: claimer.id, ...images })
+  }
 
   // ── the run's own worktree ──
   // ASECRM-357: removed after its Verify step halted, `git worktree remove`
@@ -227,7 +264,7 @@ export async function teardownRun(
     report.worktree = await removeRunWorktree(run, exec)
   }
 
-  if (report.stacks.length || report.worktree || report.images) log.info('run torn down', { runId: run.id, ...report })
+  if (report.stacks.length || report.worktree || report.images || report.claimedFromImages || report.claimerImages) log.info('run torn down', { runId: run.id, ...report })
   return report
 }
 
@@ -275,6 +312,22 @@ export async function removeRunImages(
   }
 
   const report: ImageReport = { removed: [], refused: [] }
+  if (!named.length && !labelled.length) return report
+  // A live run deploys an image of its checkout's HEAD instead of building one
+  // (stackNote's lookup by REVISION_LABEL), and that image may be this run's.
+  // Removed between that run's lookup and its `compose up`, no container yet
+  // holds it, so the daemon would not refuse. Keep any image built from a
+  // commit a live run's checkout is on.
+  const reusable = await reusableRevisions(run.id, everyone, exec)
+  const revisionOf = async (image: string) => reusable.size
+    ? (await exec('docker', ['image', 'inspect', '--format', `{{index .Config.Labels "${REVISION_LABEL}"}}`, image]).catch(() => '')).trim()
+    : ''
+  const keptForReuse = async (image: string) => {
+    const rev = await revisionOf(image)
+    if (!rev || !reusable.has(rev)) return false
+    report.refused.push({ image, error: `kept: a live run's checkout is at ${rev.slice(0, 12)}, and may deploy it` })
+    return true
+  }
   const rmi = async (image: string) => {
     try {
       await exec('docker', ['rmi', image])
@@ -293,10 +346,27 @@ export async function removeRunImages(
       names.forEach(n => done.add(n))
       continue
     }
-    for (const n of names.length ? names : [id]) { done.add(n); await rmi(n) }
+    names.forEach(n => done.add(n))
+    if (await keptForReuse(id)) continue
+    for (const n of names.length ? names : [id]) await rmi(n)
   }
-  for (const n of named) if (!done.has(n)) await rmi(n)
+  for (const n of named) if (!done.has(n) && !(await keptForReuse(n))) await rmi(n)
   return report
+}
+
+/**
+ * The commits live runs' checkouts are on, other than this run's: what a live
+ * run's image-reuse lookup can match. Empty when no other live run has a
+ * checkout, so a teardown with nobody to protect asks git nothing.
+ */
+async function reusableRevisions(runId: string, runs: StackRun[], exec: Exec): Promise<Set<string>> {
+  const heads = new Set<string>()
+  for (const r of runs) {
+    if (r.id === runId || TERMINAL_STATUSES.includes(r.status) || !r.projectDir || !existsSync(r.projectDir)) continue
+    const head = (await exec('git', ['rev-parse', 'HEAD'], { cwd: r.projectDir }).catch(() => '')).trim()
+    if (head) heads.add(head)
+  }
+  return heads
 }
 
 /** A run works in a worktree of its own: `<clone>@<branch>`, still on disk. */

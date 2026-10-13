@@ -559,7 +559,7 @@ async function publish(run: WorkflowRun) {
     if (TERMINAL_STATUSES.includes(run.status) && !isTestRun(run)) {
       const ended = run
       void teardownRun(ended)
-        .then(report => (report.stacks.length || report.worktree || report.images) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
+        .then(report => (report.stacks.length || report.worktree || report.images || report.claimedFromImages || report.claimerImages) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
         .catch(err => log.warn('tearing a run down failed', { runId: ended.id, error: err instanceof Error ? err.message : String(err) }))
     }
     // A child of a joining parent has reached its outcome, so the parent may
