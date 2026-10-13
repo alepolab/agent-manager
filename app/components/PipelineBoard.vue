@@ -57,9 +57,10 @@ const waiting = computed(() => runs.value
 const humanMs = computed(() => runs.value.reduce((s, r) => s + humanWaitMs(r), 0))
 const agentMs = computed(() => runs.value.reduce((s, r) => s + runElapsedMs(r, now.value), 0))
 
-/** Every decision anyone has taken at a gate, newest first. */
+/** Every decision anyone has taken at a gate, newest first. A carried approval
+ *  (`auto`) is the runner's, not a person's, and is left out. */
 const decisions = computed(() => runs.value
-  .flatMap(r => (r.decisions ?? []).map(d => ({ ...d, runId: r.id, ticket: r.ticketKey ?? r.workflowName })))
+  .flatMap(r => (r.decisions ?? []).filter(d => !d.auto).map(d => ({ ...d, runId: r.id, ticket: r.ticketKey ?? r.workflowName })))
   .sort((a, b) => b.at - a.at))
 
 const reworked = computed(() => runs.value.filter(r => (r.reworks ?? 0) > 0))

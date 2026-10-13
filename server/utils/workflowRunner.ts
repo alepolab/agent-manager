@@ -52,11 +52,13 @@ import { capFor } from './workflowGroups.ts'
 // node test scripts import this module directly and resolve no aliases.
 import { DEFAULT_GROUP_ID } from '../../shared/types/workflowGroup.ts'
 import { childrenSettled, holdsGroupSlot, isLiveStatus, isTestRun, isWaitingOnAPerson } from '../../shared/types/run.ts'
+import { carriedDecision, earlierApprovalFor } from '../../shared/utils/gateCarryOver.ts'
+import { carriesEarlierApproval } from './appSettings.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
-import type { ProductMatch, WorkflowRun, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
+import type { ProductMatch, WorkflowRun, RunDecision, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
 
 /** The step whose drafts the duplicate check marks before, and holds after. */
 const DECISION_GATE_SLUG = 'sdlc-decision-gate'
@@ -2614,6 +2616,22 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   // node, because it is published verbatim as run.nextStepIds below and
   // truncating it would drop steps from the run page.
   // A test run never stops for a person: it runs one step nobody is shipping.
+  // A person who approved this change at Dev Done is not asked again at the PR
+  // step, and one who approved it at either is not asked again at QA Done:
+  // asking the same person to sign off the same change three times is a gate
+  // nobody reads. The carried approval is recorded as a decision of its own,
+  // marked auto and naming whose it was. See shared/utils/gateCarryOver.ts.
+  if (oversightFor(run.blastRadius) !== 'auto' && !isTestRun(run) && carriesEarlierApproval()) {
+    for (const id of ready) {
+      const step = stepOf(l, id)
+      if (!step?.approval || l.approved.has(id)) continue
+      const from = earlierApprovalFor(run, l.workflow.steps as any, id)
+      if (!from) continue
+      l.approved.add(id)
+      run.decisions = [...(run.decisions ?? []), carriedDecision(step as any, from, run.blastRadius)]
+      log.info('gate takes an earlier approval', { runId: run.id, stepId: id, from: from.label, by: from.by })
+    }
+  }
   const gatedSet = new Set(ready.filter(id => stepOf(l, id)?.approval && !l.approved.has(id)
     && oversightFor(run.blastRadius) !== 'auto' && !isTestRun(run)))
   const gated = [...gatedSet]
@@ -3431,7 +3449,7 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
   run.queuedAt = undefined
   await saveRun(run)
   try {
-    if (p.action === 'continue') await continueRun(run.id, p.note, { grantApproval: p.grantApproval, admitted: true })
+    if (p.action === 'continue') await continueRun(run.id, p.note, { grantApproval: p.grantApproval, admitted: true, ...(p.decision ? { decision: p.decision } : {}) })
     else if (p.action === 'respond') await respondToRun(run.id, p.reply ?? '', { admitted: true })
     else await restartRun(run.id, p.stepId!, p.note, p.startedBy, { admitted: true, ...(p.handOver ? { fromRunner: true } : {}) })
     return 'launched'
@@ -3696,7 +3714,19 @@ export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resum
 export class ApprovalNeedsReason extends Error {}
 
 export async function continueRun(
-  runId: string, note?: string, opts: { grantApproval?: boolean, /** The run already has its slot: the queue, or a resume that checked the cap. */ admitted?: boolean } = {},
+  runId: string, note?: string, opts: {
+    grantApproval?: boolean
+    /** The run already has its slot: the queue, or a resume that checked the cap. */
+    admitted?: boolean
+    /**
+     * The person's decision on this gate, appended to the run here, on the
+     * record the runner then keeps writing. Appended by the route after this
+     * returned, it went to a copy on disk that the runner's next publish wrote
+     * over: ASECRM-243's audit log holds four approvals and its record two, and
+     * a gate that carries an earlier approval (gateCarryOver.ts) reads this list.
+     */
+    decision?: RunDecision
+  } = {},
 ): Promise<WorkflowRun | null> {
   // Default true: every existing caller means "yes, run it". Only the decision
   // endpoint passes false, and only when the operator approved no entry at all.
@@ -3709,7 +3739,7 @@ export async function continueRun(
       if (q?.kind === 'approval' && q.reason !== 'budget' && q.reason !== 'auth' && q.reason !== 'quota' && q.reason !== 'handoff' && needsJustification(stored.blastRadius) && !note?.trim()) {
         throw new ApprovalNeedsReason(`This run is classified \`${stored.blastRadius}\`, which is owner-gated: say in one line why this is right before approving.`)
       }
-      const parked = await parkUnlessSlot(stored, { action: 'continue', note, grantApproval })
+      const parked = await parkUnlessSlot(stored, { action: 'continue', note, grantApproval, ...(opts.decision ? { decision: opts.decision } : {}) })
       if (parked) return parked
     }
   }
@@ -3767,6 +3797,14 @@ export async function continueRun(
       const w = run.question.rework
       const from = stepOf(l, w.from)?.label ?? w.from
       run.question = undefined
+      // Both before the save, which restartRun re-reads. The send-back is the
+      // cutoff a later gate's carried approval is measured against
+      // (gateCarryOver.ts): without it, a Dev Done approval from before this
+      // attempt signed off code this attempt replaces. The decision is the
+      // operator's grant: this path returns before the append further down, and
+      // from the queue nothing else writes it.
+      recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${stepOf(l, w.from)?.agentSlug ?? w.from}` })
+      if (opts.decision) run.decisions = [...(run.decisions ?? []), opts.decision]
       await saveRun(run)
       l.running = false
       // The bucket counter is deliberately not reset: if this attempt is sent
@@ -3807,6 +3845,7 @@ export async function continueRun(
   } else if (note?.trim()) {
     l.nextNote = note.trim()
   }
+  if (opts.decision) run.decisions = [...(run.decisions ?? []), opts.decision]
   run.question = undefined
   // As in restartRun: close any stretch left open by a process that is gone, so
   // resuming does not backdate this run's clock to before the interruption.
