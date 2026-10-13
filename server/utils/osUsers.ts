@@ -20,7 +20,7 @@
  * provisioned is refused, not quietly run as the server.
  */
 import { spawn, execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { execFile } from 'node:child_process'
@@ -217,4 +217,42 @@ export function unreachableFor(login: string, dirs: { enter?: string[], write?: 
     if (r.status !== 0) return `${osUserFor(login)} cannot ${what} ${d}`
   }
   return null
+}
+
+/**
+ * What developers' agents may read in the server's Claude directory: the team
+ * configuration, and `github`, which imported skills and agents are symlinks
+ * into - closing it broke every imported skill for developer users. Everything
+ * else (run records, roles, the hierarchy, watches, schedules, the server
+ * user's own Claude data) is closed to them. install-run-as.sh carries the
+ * same list; a test keeps the two equal.
+ */
+export const SHARED_CLAUDE_ENTRIES = ['agents', 'skills', 'commands', 'output-styles', 'plugins', 'settings.json', 'CLAUDE.md', 'github'] as const
+
+/**
+ * Close every top-level entry of the server's Claude directory that is not
+ * shared and is open to other users; returns what it closed. Symlinks are left
+ * alone (chmod would act on their target).
+ *
+ * The installer can only close what exists when it runs. The server creates
+ * roles.json, hierarchy.json, watches.json, schedules and the rest later, with
+ * its 022 umask - world-readable - so this runs at boot, on every new entry,
+ * and on a sweep. Never throws: an entry it cannot close is left for the next.
+ */
+export function closePrivateClaudeEntries(dir: string): string[] {
+  const shared = new Set<string>(SHARED_CLAUDE_ENTRIES)
+  const closed: string[] = []
+  let entries: string[] = []
+  try { entries = readdirSync(dir) } catch { return closed }
+  for (const name of entries) {
+    if (shared.has(name)) continue
+    const path = join(dir, name)
+    try {
+      const st = lstatSync(path)
+      if (st.isSymbolicLink() || (st.mode & 0o007) === 0) continue
+      chmodSync(path, st.mode & 0o7770)
+      closed.push(name)
+    } catch { /* gone, or not ours: the next sweep tries again */ }
+  }
+  return closed
 }

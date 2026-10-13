@@ -5,9 +5,9 @@
  * it runs, and says once at boot whether the host is set up for it.
  */
 import { existsSync } from 'node:fs'
-import { readdirSync, statSync } from 'node:fs'
-import { resolveClaudePath } from '../utils/claudeDir.ts'
-import { launcherPath, runAsUsers, SAFE_DIRECTORY_CONFIG, developersRoot, osUserProblem, reopenTranscripts } from '../utils/osUsers.ts'
+import { readdirSync, watch } from 'node:fs'
+import { getClaudeDir } from '../utils/claudeDir.ts'
+import { closePrivateClaudeEntries, launcherPath, runAsUsers, SAFE_DIRECTORY_CONFIG, developersRoot, osUserProblem, reopenTranscripts } from '../utils/osUsers.ts'
 
 export default defineNitroPlugin(() => {
   if (!runAsUsers()) return
@@ -19,14 +19,23 @@ export default defineNitroPlugin(() => {
   if (missing.length) console.error(`[runAs] AGENT_RUN_AS=user, but ${missing.join(' and ')} not found: no agent can start until an operator runs sudo scripts/install-run-as.sh`)
   else {
     console.log(`[runAs] agents run as their developers' own users (${developersRoot()})`)
-    // Run records name every run's ticket, parameters and output, and their ids
-    // lead to each run's artifacts. Open to other users, they undo the walls
-    // between developers; install-run-as.sh closes them, and this says so if
-    // something has opened them since.
+    // Keep the server's Claude directory closed to developers' users beyond
+    // the team config they need. The installer closed what existed; the server
+    // creates roles.json, hierarchy.json, watches and the rest later, world-
+    // readable by its umask. So: now, the moment a new entry appears, and on a
+    // sweep in case a watch event is missed.
+    const claudeDir = getClaudeDir()
+    const close = () => {
+      const closed = closePrivateClaudeEntries(claudeDir)
+      if (closed.length) console.log(`[runAs] closed to other users in ${claudeDir}: ${closed.join(', ')}`)
+    }
+    close()
     try {
-      const runs = resolveClaudePath('workflow-runs')
-      if (statSync(runs).mode & 0o007) console.error(`[runAs] ${runs} is readable by other users, so developers can read each other's runs. Run: chmod o-rwx ${runs}`)
-    } catch { /* not created yet */ }
+      watch(claudeDir, { persistent: false }, (type) => { if (type === 'rename') setTimeout(close, 50) })
+    } catch (err) {
+      console.error(`[runAs] cannot watch ${claudeDir} (${err instanceof Error ? err.message : String(err)}); new entries are closed by the sweep only`)
+    }
+    setInterval(close, 30_000).unref()
     // A session whose server restarted under it never had its transcript
     // reopened (spawnAs does that as the process ends), and would stay out of
     // the sidebar and unresumable. Each developer's directory is named by

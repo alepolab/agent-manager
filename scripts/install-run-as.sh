@@ -86,9 +86,12 @@ fi
 # parameters and step output, and its id leads to the run's artifacts), the
 # roles and team files, watches, and the server user's own Claude data
 # (transcripts, file history, paste cache, shell snapshots). Top level only:
-# a closed directory closes everything under it.
+# a closed directory closes everything under it. Entries the server creates
+# later are closed by the server itself (server/plugins/runAs.ts).
 CLAUDE_OWN=${CLAUDE_DIR:-$SERVER_HOME/.claude}
-SHARED_CLAUDE=" agents skills commands output-styles plugins settings.json CLAUDE.md "
+# Same list as SHARED_CLAUDE_ENTRIES in server/utils/osUsers.ts (a test keeps them
+# equal). `github` holds what imported skills and agents are symlinks into.
+SHARED_CLAUDE=" agents skills commands output-styles plugins settings.json CLAUDE.md github "
 if [ -d "$CLAUDE_OWN" ]; then
   # Run records are written later than this script runs: make sure the
   # directory exists closed, so the first run does not create it world-readable.

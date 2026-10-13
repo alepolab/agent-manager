@@ -94,6 +94,33 @@ try {
   assert.match(sudoArgv, /^-n\n-E\n-u\nam-alice\n--\n/)
   assert.ok(!sudoArgv.includes('SECRET'))
 
+  // ── the server's Claude directory: team config shared, everything else closed (review on #150) ──
+  {
+    const { symlinkSync, statSync: st } = await import('node:fs')
+    const cd = join(root, 'claude-dir')
+    for (const d of ['agents', 'skills', 'github', 'workflow-runs', 'agent-memory']) mkdirSync(join(cd, d), { recursive: true, mode: 0o755 })
+    for (const f of ['settings.json', 'roles.json', 'hierarchy.json']) writeFileSync(join(cd, f), '{}', { mode: 0o644 })
+    chmodSync(join(cd, 'roles.json'), 0o644)
+    // An imported skill is a symlink into github/: closing github broke them all.
+    mkdirSync(join(cd, 'github', 'skills', 'owner', 'repo', 'tdd'), { recursive: true })
+    symlinkSync(join(cd, 'github', 'skills', 'owner', 'repo', 'tdd'), join(cd, 'skills', 'tdd'))
+    symlinkSync(join(cd, 'hierarchy.json'), join(cd, 'top-level-link'))
+    const closed = os.closePrivateClaudeEntries(cd).sort()
+    assert.deepEqual(closed, ['agent-memory', 'hierarchy.json', 'roles.json', 'workflow-runs'], 'what is not shared is closed')
+    const other = (f) => st(join(cd, f)).mode & 0o007
+    for (const f of ['agents', 'skills', 'github', 'settings.json']) assert.ok(other(f), `${f} stays readable to developers' agents`)
+    for (const f of closed) assert.equal(other(f), 0, `${f} closed to other users`)
+    assert.equal(st(join(cd, 'roles.json')).mode & 0o777, 0o640, 'only the other bits go')
+    // An entry the server writes later is closed on the next pass.
+    writeFileSync(join(cd, 'watches.json'), '{}', { mode: 0o644 })
+    assert.deepEqual(os.closePrivateClaudeEntries(cd), ['watches.json'], 'created after install, closed too')
+    assert.deepEqual(os.closePrivateClaudeEntries(cd), [], 'and nothing twice')
+    // The installer's list is the same list.
+    const script = readFileSync(join(import.meta.dirname, 'install-run-as.sh'), 'utf8')
+    const shared = /^SHARED_CLAUDE=" (.*) "$/m.exec(script)?.[1].split(' ').sort()
+    assert.deepEqual(shared, [...os.SHARED_CLAUDE_ENTRIES].sort(), 'install-run-as.sh and osUsers.ts share the same entries')
+  }
+
   // ── preflight asks, as the developer's user, whether it can work where its agents will ──
   // A working directory its user cannot enter fails every shell command with
   // exit 1 and no output; a real run spent two steps finding that out.
