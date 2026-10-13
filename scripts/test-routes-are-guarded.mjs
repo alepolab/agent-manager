@@ -86,7 +86,13 @@ const unguarded = []
 for (const file of files) {
   const key = relative(API, file).split(/[\\/]/).join('/')
   const source = readFileSync(file, 'utf8')
+  // A capability check by role, or the run/session gates that take one
+  // (runAccess.ts, sessionOwners.ts): those ask the role too, and open a
+  // second door only for the hierarchy. Without a capability they are a read
+  // check, which is not a guard on a route that changes something.
   const guarded = source.includes('requireCapability')
+    || /requireRunAccess\(event, '\w+'\)/.test(source)
+    || /requireSessionAccess\(event, [^)]*, '\w+'\)/.test(source)
   if (guarded) {
     // A route cannot be both guarded and excused: an entry left in ALLOWED
     // after its route grew a real check is a stale excuse, and the next

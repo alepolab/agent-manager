@@ -1,14 +1,15 @@
 import { continueRun, RestartError, ApprovalNeedsReason } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { appendRunAudit } from '../../../utils/runArtifacts'
-import { requireCapability, currentUser } from '../../../utils/session'
+import { currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 /** Continue a paused run. `note` reaches the step being approved, or whichever step starts next. */
 export default defineEventHandler(async (event) => {
   // The gate itself: a reviewer's whole job, and a manager's non-job.
-  await requireCapability(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ note?: string }>(event).catch(() => ({} as { note?: string }))
   // Read first: continueRun clears the question, and the question is what says

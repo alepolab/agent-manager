@@ -1,8 +1,11 @@
 import { getClaudeCodeSessionMessages } from '../../../../../../../utils/claudeCodeHistory'
+import { requireSessionAccess } from '../../../../../../../utils/sessionOwners'
 
 export default defineEventHandler(async (event) => {
   const projectName = getRouterParam(event, 'name')
   const sessionId = getRouterParam(event, 'sessionId')
+  // Yours, your team's, or - unplaced - anyone's: see sessionOwners.ts.
+  if (sessionId) await requireSessionAccess(event, sessionId)
 
   if (!projectName) {
     throw createError({

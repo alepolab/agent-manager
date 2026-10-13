@@ -1,8 +1,9 @@
-import { getClaudeCodeProjects } from '../../../utils/claudeCodeHistory'
+import { getClaudeCodeProjects, projectSessionIds } from '../../../utils/claudeCodeHistory'
+import { scopedProjects } from '../../../utils/sessionOwners'
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
   try {
-    const projects = await getClaudeCodeProjects()
+    const projects = await scopedProjects(event, await getClaudeCodeProjects(), projectSessionIds)
 
     return {
       projects,

@@ -115,9 +115,9 @@ rmSync(root, { recursive: true, force: true })
   const { join } = await import('node:path')
   const src = readFileSync(join(import.meta.dirname, '..', 'server/api/runs/[id]/reject.post.ts'), 'utf8')
 
-  assert.match(src, /requireCapability\(event, 'answerGate'\)/,
+  assert.match(src, /require(Capability|RunAccess)\(event, 'answerGate'\)/,
     'reject must sit on answerGate — the same capability as approve, or the roles that own the gate cannot use it')
-  assert.doesNotMatch(src, /requireCapability\(event, 'runEngine'\)/,
+  assert.doesNotMatch(src, /require(Capability|RunAccess)\(event, 'runEngine'\)/,
     'and must not be gated on runEngine, which developer and qa do not hold')
   assert.match(src, /statusCode: 400/,
     'a refusal without a reason is refused: the reason is the point of the gate')

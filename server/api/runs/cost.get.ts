@@ -1,6 +1,7 @@
 import { isTestRun } from '../../../shared/types/run.ts'
 import { listRuns } from '../../utils/workflowRunStore.ts'
 import { aggregateCost } from '../../utils/costReport.ts'
+import { visibleRuns } from '../../utils/runAccess.ts'
 
 /**
  * Cost aggregated across runs - a week's spend, a workflow's spend, made
@@ -27,7 +28,8 @@ export default defineEventHandler(async (event) => {
     if (Number.isFinite(parsed)) sinceMs = parsed
   }
 
-  const runs = (await listRuns(workflowSlug)).filter(r => sinceMs === undefined || r.startedAt >= sinceMs)
+  // Cost of the runs this person may see: their own and their team's, when placed.
+  const runs = (await visibleRuns(event, await listRuns(workflowSlug))).filter(r => sinceMs === undefined || r.startedAt >= sinceMs)
   // Test runs (see TestOf) are not real spend on this workflow: aggregated
   // separately under `tests`, never folded into the real totals above.
   return { ...aggregateCost(runs.filter(r => !isTestRun(r))), tests: aggregateCost(runs.filter(isTestRun)) }

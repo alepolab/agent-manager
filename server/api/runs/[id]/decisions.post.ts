@@ -1,9 +1,10 @@
 import { getRun } from '../../../utils/workflowRunStore'
 import { continueRun } from '../../../utils/workflowRunner'
 import { applyReviewDecisions, ReviewError } from '../../../utils/runReview'
-import { currentUser, requireCapability } from '../../../utils/session'
+import { currentUser } from '../../../utils/session'
 import { appendRunAudit } from '../../../utils/runArtifacts'
 import type { ReviewDecision } from '../../../../shared/types/runReview'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 /** Runs whose decisions are being applied right now. See the handler. */
 const applying = new Set<string>()
@@ -27,7 +28,7 @@ const applying = new Set<string>()
  */
 export default defineEventHandler(async (event) => {
   // Deciding which entries to act on IS answering the gate.
-  await requireCapability(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ decisions?: ReviewDecision[], note?: string }>(event)
   const run = await getRun(id)

@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { artifactContentType, runArtifactsDir } from '../../../../utils/runArtifacts'
+import { requireRunAccess } from '../../../../utils/runAccess'
 
 /** 512 KB is plenty for any report or xunit file; a bigger file is truncated with a marker. */
 const MAX_BYTES = 512 * 1024
@@ -10,6 +11,8 @@ const MAX_BINARY_BYTES = 8 * 1024 * 1024
 
 /** One artifact file. Text is returned as text; an image as itself. The path must stay inside the run's artifacts directory. */
 export default defineEventHandler(async (event) => {
+  // Yours, your team's, or - unplaced - anyone's: see runAccess.ts.
+  await requireRunAccess(event)
   const id = getRouterParam(event, 'id')!
   const name = getRouterParam(event, 'name') ?? ''
   const root = resolve(runArtifactsDir(id))

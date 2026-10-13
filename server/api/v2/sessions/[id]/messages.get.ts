@@ -1,8 +1,11 @@
 import { providerRegistry } from '../../../../utils/providers/registry'
 import type { ProviderFetchOptions } from '~/types'
+import { requireSessionAccess } from '../../../../utils/sessionOwners'
 
 export default defineEventHandler(async (event) => {
   const sessionId = getRouterParam(event, 'id')
+  // Yours, your team's, or - unplaced - anyone's: see sessionOwners.ts.
+  if (sessionId) await requireSessionAccess(event, sessionId)
 
   if (!sessionId) {
     throw createError({

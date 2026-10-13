@@ -1,9 +1,10 @@
 import { restartRun, RestartError } from '../../../utils/workflowRunner'
 import { appendRunAudit } from '../../../utils/runArtifacts'
-import { currentUser, requireCapability } from '../../../utils/session'
+import { currentUser } from '../../../utils/session'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 export default defineEventHandler(async (event) => {
-  await requireCapability(event, 'runEngine')
+  await requireRunAccess(event, 'runEngine')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ stepId?: string, note?: string }>(event)
   if (!body?.stepId) throw createError({ statusCode: 400, message: 'stepId is required' })

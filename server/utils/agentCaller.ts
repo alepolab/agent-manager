@@ -11,6 +11,7 @@ import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
 import { CLAUDE_CREDENTIAL_VARS, claudeCredentialProblem, envForUser } from './users.ts'
 import { osUserProblem, runAsUsers, SAFE_DIRECTORY_CONFIG, spawnAs } from './osUsers.ts'
+import { recordSessionOwner } from './sessionOwners.ts'
 import type { AgentFrontmatter } from '~/types'
 
 /**
@@ -587,7 +588,7 @@ export async function callAgent(
     // The one place the real, observed model comes from - never the request.
     if (message.type === 'system' && message.subtype === 'init') {
       modelRan = message.model
-      if (message.session_id && message.session_id !== sessionId) { sessionId = message.session_id; onSession?.(sessionId, cwd) }
+      if (message.session_id && message.session_id !== sessionId) { sessionId = message.session_id; onSession?.(sessionId, cwd); void recordSessionOwner(sessionId, login) }
       log.debug('agent model resolved', { agentSlug, modelRequested: declaredModel ?? '(sdk default)', modelRan })
     }
     if (message.type === 'assistant') {

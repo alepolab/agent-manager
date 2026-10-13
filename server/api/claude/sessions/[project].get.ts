@@ -1,4 +1,5 @@
 import { listSessions } from '../../../utils/claudeProjects'
+import { callerScope, visibleSessions } from '../../../utils/sessionOwners'
 
 export default defineEventHandler(async (event) => {
   const projectName = getRouterParam(event, 'project')
@@ -10,6 +11,6 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const sessions = await listSessions(projectName)
+  const sessions = await visibleSessions(await callerScope(event), await listSessions(projectName))
   return sessions
 })

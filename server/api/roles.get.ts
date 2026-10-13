@@ -1,6 +1,8 @@
 import { requireUser } from '../utils/session'
 import { listRoles } from '../utils/roles'
 import { listProfiles } from '../utils/users'
+import { listPlacements } from '../utils/hierarchy'
+import { LEVEL_LABEL, LEVELS } from '../../shared/types/hierarchy'
 import { DEFAULT_ROLE, ROLE_LABEL, ROLES } from '../../shared/types/role'
 
 /** Who holds which role, and what the roles mean. Readable by anyone signed in:
@@ -12,6 +14,10 @@ import { DEFAULT_ROLE, ROLE_LABEL, ROLES } from '../../shared/types/role'
  *  are one screen, so they are one request. */
 export default defineEventHandler(async (event) => {
   await requireUser(event)
-  const [roles, profiles] = await Promise.all([listRoles(), listProfiles()])
-  return { roles, profiles, default: DEFAULT_ROLE, available: ROLES, labels: ROLE_LABEL }
+  const [roles, profiles, placements] = await Promise.all([listRoles(), listProfiles(), listPlacements()])
+  return {
+    roles, profiles, default: DEFAULT_ROLE, available: ROLES, labels: ROLE_LABEL,
+    // Who leads whom. Absent from this map is outside the hierarchy: sees every run.
+    placements, levels: LEVELS, levelLabels: LEVEL_LABEL,
+  }
 })

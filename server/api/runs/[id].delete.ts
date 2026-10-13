@@ -1,6 +1,6 @@
 import { deleteRun } from '../../utils/workflowRunStore'
 import { _dropLive } from '../../utils/workflowRunner'
-import { requireCapability } from '../../utils/session'
+import { requireRunAccess } from '../../utils/runAccess'
 
 /**
  * Permanently removes a settled run: its record and its evidence directory.
@@ -19,7 +19,7 @@ import { requireCapability } from '../../utils/session'
  */
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')!
-  await requireCapability(event, 'runEngine')
+  await requireRunAccess(event, 'runEngine')
   _dropLive(id) // drop any stale live entry before the files go
   const result = await deleteRun(id)
   if (result === 'not-found') throw createError({ statusCode: 404, message: 'Run not found' })

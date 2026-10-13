@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { workingDirProblem } from './workingDir'
 import { agentEnvFor, launchAs, launchEnv, launchProblem } from '../agentCaller'
+import { recordSessionOwner, resumeProblem } from '../sessionOwners'
 
 async function getOutputStyleContent(id: string, projectDir?: string): Promise<{ content: string; keepCodingInstructions: boolean } | null> {
   // 1. Check built-in
@@ -158,6 +159,11 @@ export const claudeProvider: ProviderAdapter = {
       const env = launchEnv(await agentEnvFor(options.login), {})
       const noCredential = launchProblem(env, options.login)
       if (noCredential) throw new Error(noCredential)
+      // Continuing a session is its owner's alone; see resumeProblem.
+      if (options.sessionId && !options.sessionId.startsWith('new-session-')) {
+        const notYours = await resumeProblem(options.login, options.sessionId)
+        if (notYours) throw new Error(notYours)
+      }
 
       // Prepare SDK options
       const sdkOptions: any = {
@@ -304,6 +310,8 @@ export const claudeProvider: ProviderAdapter = {
 
           if (!sessionCreatedSent) {
             sessionCreatedSent = true
+            // Whose session this is, for the team hierarchy's view of chats.
+            void recordSessionOwner(capturedSessionId, options.login)
             sendMessage(ws, {
               kind: 'session_created',
               id: randomUUID(),

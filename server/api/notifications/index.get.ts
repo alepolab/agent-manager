@@ -6,6 +6,7 @@ import { detectSdkSession } from '../../utils/sdkSessionStorage'
 import { currentRole } from '../../utils/session'
 import { listRuns } from '../../utils/workflowRunStore'
 import { scanOriginIndex } from '../../utils/scanOrigins'
+import { visibleRuns } from '../../utils/runAccess'
 
 /**
  * Every decision waiting on the caller, for /notifications and the sidebar's
@@ -22,7 +23,8 @@ export default defineEventHandler(async (event) => {
     ...p,
     projectName: (await detectSdkSession(p.sessionId).catch(() => null)) ?? undefined,
   })))
-  const runs = (await listRuns()).filter(r => !isTestRun(r))
+  // Yours and your team's, or every run when you are not placed in a team.
+  const runs = (await visibleRuns(event, await listRuns())).filter(r => !isTestRun(r))
   // One stat per scan run, a read only when its tickets-created.json changed.
   return { items: buildNotifications(runs, permissions, role, await scanOriginIndex(runs)) }
 })

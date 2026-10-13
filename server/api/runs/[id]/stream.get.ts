@@ -2,8 +2,11 @@ import { getRun } from '../../../utils/workflowRunStore'
 import { subscribe, subscribeLog, getLiveLog } from '../../../utils/workflowRunner'
 import { isLiveStatus } from '../../../../shared/types/run.ts'
 import type { WorkflowRun } from '~~/shared/types/run'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 export default defineEventHandler(async (event) => {
+  // Yours, your team's, or - unplaced - anyone's: see runAccess.ts.
+  await requireRunAccess(event)
   const id = getRouterParam(event, 'id')!
   const initial = await getRun(id)
   if (!initial) throw createError({ statusCode: 404, message: 'Run not found' })

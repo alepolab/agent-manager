@@ -1,12 +1,13 @@
 import { deleteClaudeCodeSession } from '../../../../utils/claudeCodeHistory'
-import { requireCapability } from '../../../../utils/session'
+import { requireSessionAccess } from '../../../../utils/sessionOwners'
 
 export default defineEventHandler(async (event) => {
   // `configure`: this route mutates the instance, and carried no authorisation check —
   // the auth middleware proves WHO the caller is, never WHAT they may do.
-  await requireCapability(event, 'configure')
   const projectName = getRouterParam(event, 'projectName')
   const sessionId = getRouterParam(event, 'sessionId')
+  // By role, or as its owner or their lead: see sessionOwners.ts.
+  await requireSessionAccess(event, sessionId ?? '', 'configure')
 
   if (!projectName || !sessionId) {
     throw createError({

@@ -1,8 +1,9 @@
 import { restartRun } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
-import { requireCapability, currentUser } from '../../../utils/session'
+import { currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 /**
  * Send the work back to an earlier step, with an instruction.
@@ -27,7 +28,7 @@ import { requireGateRole } from '../../../utils/gateRole'
  * two send-backs, then a person decides rather than a third lap being started.
  */
 export default defineEventHandler(async (event) => {
-  await requireCapability(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ stepId?: string, note?: string }>(event).catch(() => ({} as { stepId?: string, note?: string }))
   const stepId = body?.stepId?.trim()

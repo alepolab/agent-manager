@@ -242,6 +242,11 @@ async function projectJsonlFiles(projectName: string): Promise<string[]> {
   return out
 }
 
+/** The ids of a project's sessions: its transcript files, in every directory. */
+export async function projectSessionIds(projectName: string): Promise<string[]> {
+  return (await projectJsonlFiles(projectName)).map(f => f.slice(f.lastIndexOf('/') + 1, -'.jsonl'.length))
+}
+
 /**
  * Extract the actual project directory from JSONL sessions
  */

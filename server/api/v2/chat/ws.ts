@@ -3,6 +3,7 @@ import { providerRegistry } from '../../../utils/providers/registry'
 import { cleanupPeer } from '../../../utils/providers/claudeProvider'
 import type { ChatV2WebSocketMessage, NormalizedMessage } from '~/types'
 import { userFromCookieHeader } from '../../../utils/session'
+import { sessionInScope } from '../../../utils/sessionOwners'
 
 export default defineWebSocketHandler({
   // The chat runs Claude Code against the working directory: it is the last
@@ -108,6 +109,10 @@ export default defineWebSocketHandler({
         }
 
         case 'abort': {
+          // Stopping a chat is acting on it: yours, your team's, or - outside
+          // the hierarchy - anyone's.
+          const caller = await userFromCookieHeader(peer.request?.headers.get('cookie'))
+          if (!await sessionInScope(caller?.login, msg.sessionId)) break
           // Try to interrupt with all providers (start with default)
           const provider = providerRegistry.getDefault()
           const interrupted = await provider.interrupt(msg.sessionId)
