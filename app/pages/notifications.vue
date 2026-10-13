@@ -69,6 +69,10 @@ const askLine = (n: NotificationItem) => {
 }
 /** Ticket keys are data and read in mono; a prompt's first line is prose. */
 const isKey = (t: string) => /^[A-Z][A-Z0-9]+-\d+$/.test(t)
+/** "From Performance scan · 9 Oct": why a scan-filed ticket is here at all. */
+const scanLine = (n: NotificationItem) => (n.kind === 'gate' && n.scan
+  ? `From ${n.scan.label} · ${new Date(n.scan.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+  : '')
 
 // Ticks the wait figures and the prompt countdowns without refetching.
 const now = ref(Date.now())
@@ -124,7 +128,7 @@ const waitTier = (n: NotificationItem) => {
                     class="inbox-row inbox-row--button focus-ring"
                     :class="{ 'inbox-row--selected': n.id === selectedId }"
                     :aria-current="n.id === selectedId ? 'true' : undefined"
-                    :aria-label="`${kindLabel(n)} — ${n.title}: ${n.ask}`"
+:aria-label="`${kindLabel(n)} — ${n.title}: ${n.ask}${scanLine(n) ? ` (${scanLine(n)})` : ''}`"
                     @click="select(n.id)"
                   >
                     <UIcon
@@ -143,6 +147,7 @@ const waitTier = (n: NotificationItem) => {
                       <span class="t-small text-label line-clamp-2">
                         {{ kindLabel(n) }}<template v-if="n.kind === 'gate' && n.role && !n.mine"> for {{ n.role }}</template> · {{ askLine(n) }}
                       </span>
+                      <span v-if="scanLine(n)" class="t-small text-meta truncate">{{ scanLine(n) }}</span>
                     </span>
                   </button>
                 </li>
