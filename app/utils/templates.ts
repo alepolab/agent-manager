@@ -3092,7 +3092,7 @@ Scan the Working checkout line at the top of your input: a git worktree the runn
 
 ## Already filed
 
-\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3203,7 +3203,7 @@ Scan the Working checkout line at the top of your input: a git worktree the runn
 
 ## Already filed
 
-\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3307,7 +3307,7 @@ Scan the Working checkout line at the top of your input: a git worktree the runn
 
 ## Already filed
 
-\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3401,7 +3401,7 @@ Scan the Working checkout line at the top of your input: a git worktree the runn
 
 ## Already filed
 
-\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3506,7 +3506,7 @@ Scan the Working checkout line at the top of your input: a git worktree the runn
 
 ## Already filed
 
-\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3611,7 +3611,7 @@ Scan the Working checkout line at the top of your input: a git worktree the runn
 
 ## Already filed
 
-\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## Prerequisites
 
@@ -3730,7 +3730,7 @@ Scan the Working checkout line at the top of your input: a git worktree the runn
 
 ## Already filed
 
-\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels and a description excerpt. Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
+\`existing-tickets.json\` in the run artifacts directory lists the product's open and recently resolved Jira tickets: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Read it before you scan. A finding that one of them already tracks is still reported, with that key in an \`existing_ticket\` field and one line on why it is the same issue, so triage can close it without guessing. When the file is absent, say so in your summary.
 
 ## What to scan
 
@@ -3878,9 +3878,11 @@ For each actionable finding (or group), assign:
 
 ## Check for existing tickets
 
-\`existing-tickets.json\` in the run artifacts directory is the product's open and recently resolved Jira tickets, fetched by the runner before the scan: key, summary, status, labels and a description excerpt. Check every finding against it. A finding is \`existing\` when a ticket there covers the same defect - the same file or component and the same root cause, not merely the same category - and you name that key in the reason. The scanner may already have named one in \`existing_ticket\`; verify it rather than trusting it. A ticket resolved recently whose fix is not yet on the scanned branch still counts as existing.
+\`existing-tickets.json\` in the run artifacts directory is the product's open and recently resolved Jira tickets, fetched by the runner before the scan: key, summary, status, labels, a description excerpt and \`locations\` (the files and lines the whole description names). Check every finding against it. A finding is \`existing\` when a ticket there covers the same defect - the same file or component and the same root cause, not merely the same category - and you name that key in the reason. The scanner may already have named one in \`existing_ticket\`; verify it rather than trusting it. A ticket resolved recently whose fix is not yet on the scanned branch still counts as existing.
 
 Scans run nightly and file without a human review, so a finding you let through as \`actionable\` that a listed ticket already covers becomes a duplicate ticket and a duplicate fix run. When in doubt between \`existing\` and \`actionable\`, say why in the reason and prefer \`existing\` if the ticket names the same file.
+
+Compare by code, not by wording. A ticket often groups several findings, and the excerpt is only its first few hundred characters: \`locations\` lists every file its description names, so a finding whose file is in a ticket's \`locations\` is checked against that ticket even when the summaries are worded differently. ASECRM-584 was filed as new because the matching file sat past ASECRM-368's excerpt.
 
 When the file is absent, say so plainly and mark the dedup-against-Jira column as "not checked" — the drafter will note it.
 
@@ -4077,6 +4079,7 @@ Read all three before proceeding.
 4. **Evidence is concrete**: the finding has a specific file, line number, and code snippet — not a general observation
 5. **Not a false-positive risk**: the pattern is a known, unambiguous anti-pattern (e.g. bare \`except:\`, \`eval()\` on user input, SQL concatenation) — not a judgment call about design quality
 6. **Jira dedup was checked**: the triage step confirmed no existing ticket covers this, OR Jira dedup was "not checked" but the finding is clearly new (a specific code pattern at a specific line)
+7. **Not marked as a possible duplicate**: the draft carries no \`possible_duplicate_of\`
 
 ### Escalate when ANY of these are true:
 
@@ -4086,6 +4089,7 @@ Read all three before proceeding.
 4. **Ambiguous intent**: the pattern could be intentional (e.g. a \`@SuppressWarnings\` without a comment — is it hiding a real issue or is there a reason?)
 5. **Cross-cutting concern**: the finding spans multiple components or services and the fix approach is unclear
 6. **First-of-its-kind**: the scan type has never produced this category of finding for this repo before (check \`meta.json\` history if available)
+7. **Possible duplicate**: the draft carries \`possible_duplicate_of\`. The runner writes it into \`ticket-drafts.json\` before you start, when the files a draft names also appear in an open ticket's description or in the unmerged changes of a live run for another ticket. Escalate with criterion \`possible_duplicate\`, keep the field on the entry, and make the decision prompt name it: "Possibly covered by ASECRM-368 (SubscriberApprovalService.java). File this as a new ticket anyway, fold it into ASECRM-368, or skip it?" The runner moves a marked draft you approve into \`escalated-drafts.json\` regardless.
 
 For each escalated draft, write a **decision prompt** — the specific question the human needs to answer, framed as a yes/no or choice:
 - "This bare except in billing/processor.py:142 swallows payment errors. Create a ticket to add specific exception handling? [yes/no]"

@@ -52,6 +52,9 @@ export interface ReviewItem {
   description?: string
   fields?: Record<string, unknown>
   acceptanceCriteria?: string[]
+  /** Open tickets, or live runs for other tickets, that name the same code;
+   *  the runner's duplicate check writes them (server/utils/duplicateCheck.ts). */
+  possibleDuplicateOf?: { key: string, source: 'ticket' | 'run', matched: string[] }[]
   entry: Record<string, unknown>
 }
 

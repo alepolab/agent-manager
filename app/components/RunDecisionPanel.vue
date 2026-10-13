@@ -166,6 +166,16 @@ async function submit() {
            draft is one disclosure away for when it is not. -->
       <p v-if="item.decisionPrompt" class="whitespace-pre-wrap" style="color: var(--text-primary);">{{ item.decisionPrompt }}</p>
       <p v-else class="whitespace-pre-wrap" style="color: var(--text-primary);">{{ item.summary || 'This draft carries no decision prompt; open it to decide.' }}</p>
+      <!-- The runner's duplicate check, in the reviewer's way on purpose: ASECRM-584
+           was approved here with nothing saying ASECRM-368 already covered it. -->
+      <p v-if="item.possibleDuplicateOf?.length" class="flex items-baseline gap-1.5 flex-wrap" style="color: var(--warning);" data-testid="possible-duplicate">
+        <UIcon name="i-lucide-copy" class="size-3.5 shrink-0 self-center" aria-hidden="true" />
+        <span>Possibly covered by</span>
+        <template v-for="(d, di) in item.possibleDuplicateOf" :key="d.key">
+          <TicketLink :ticket-key="d.key" class="font-medium" />
+          <span class="text-label">({{ d.matched.join(', ') }}{{ d.source === 'run' ? ', on its run\'s unmerged branch' : '' }}){{ di < item.possibleDuplicateOf.length - 1 ? ';' : '' }}</span>
+        </template>
+      </p>
       <p v-if="item.reason" class="text-label">{{ item.reason }}</p>
       <p v-if="item.escalationCriteria?.length" class="font-mono t-small text-meta">{{ item.escalationCriteria.join(', ') }}</p>
 

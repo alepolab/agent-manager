@@ -60,6 +60,18 @@ async function gatedEntries(run: WorkflowRun): Promise<{ artifact: string, entri
   return { artifact, entries: read.entries }
 }
 
+/** The duplicate check's marks, kept only where they have a key and a file. */
+function duplicatesOf(v: unknown): ReviewItem['possibleDuplicateOf'] {
+  if (!Array.isArray(v)) return undefined
+  const out = v.flatMap((m) => {
+    const o = objOf(m)
+    const key = o && str(o.key)
+    if (!o || !key) return []
+    return [{ key, source: o.source === 'run' ? 'run' as const : 'ticket' as const, matched: strs(o.matched) ?? [] }]
+  })
+  return out.length ? out : undefined
+}
+
 /** What the run page renders: one reviewable item per entry. */
 export async function loadReviewQueue(run: WorkflowRun): Promise<ReviewQueue> {
   const { artifact, entries } = await gatedEntries(run)
@@ -75,6 +87,7 @@ export async function loadReviewQueue(run: WorkflowRun): Promise<ReviewQueue> {
       description: str(entry.description),
       fields: objOf(entry.fields),
       acceptanceCriteria: strs(entry.acceptance_criteria),
+      possibleDuplicateOf: duplicatesOf(entry.possible_duplicate_of),
       entry,
     }
   })
