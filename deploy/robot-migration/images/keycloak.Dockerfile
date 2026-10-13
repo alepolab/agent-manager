@@ -11,3 +11,7 @@ COPY --from=faketime /usr/lib64/libfaketime.so.1 /opt/faketime/libfaketime.so.1
 USER root
 RUN mkdir -p /opt/keycloak/data/h2 && chown 1000:0 /opt/keycloak/data/h2
 USER 1000
+# Optimized start: Keycloak's build step (Quarkus augmentation) runs once here instead of on every start,
+# as `start-dev` did. Under libfaketime that per-start build is what took ~9 minutes and ~3 CPUs on each
+# clock move. dev-file is the same H2 store under data/h2 that start-dev used, so the volume carries over.
+RUN /opt/keycloak/bin/kc.sh build --db=dev-file

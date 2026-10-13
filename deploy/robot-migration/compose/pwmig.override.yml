@@ -92,7 +92,8 @@ services:
     image: pwmig/keycloak:26.0
     pull_policy: never
     container_name: pwmig-keycloak
-    command: ["start-dev", "--import-realm"]
+    # Production mode on the image's pre-built config (see images/keycloak.Dockerfile), plain HTTP inside pwmig-net.
+    command: ["start", "--optimized", "--import-realm", "--http-enabled=true", "--hostname-strict=false", "--cache=local"]
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
