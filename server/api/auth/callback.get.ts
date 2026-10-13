@@ -1,5 +1,6 @@
 import { authSession } from '../../utils/session.ts'
 import { saveProfile } from '../../utils/users.ts'
+import { signInIdentityOnly } from '../../utils/githubSignIn.ts'
 import { membershipFailureDetail } from '../../utils/orgMembership.ts'
 import { isPasswordAccountName } from '../../utils/passwordLogin.ts'
 
@@ -64,7 +65,9 @@ export default defineEventHandler(async (event) => {
     name: me.name ?? undefined,
     avatar: me.avatar_url,
     ...(typeof me.id === 'number' ? { githubId: me.id } : {}),
-    githubTokenPlain: token.access_token,
+    // Not stored when sign-in is for identity only: it carries no repository
+    // access, and runs use the person's own PAT. See githubSignIn.ts.
+    ...(signInIdentityOnly() ? {} : { githubTokenPlain: token.access_token }),
     // A token the person pasted on their Profile is kept; see saveProfile.
     fromSignIn: true,
   })

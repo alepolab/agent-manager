@@ -1,6 +1,7 @@
 import { currentUser, authDisabled, currentRole } from '../utils/session'
 import { getProfile, toPublic } from '../utils/users'
 import { roleFor } from '../utils/roles'
+import { signInIdentityOnly } from '../utils/githubSignIn'
 import { listPlacements } from '../utils/hierarchy'
 import { teamOf } from '../../shared/types/hierarchy'
 import { capabilitiesFor } from '../../shared/types/role'
@@ -29,6 +30,8 @@ export default defineEventHandler(async (event) => {
     placement,
     team: placement ? teamOf(user.login, placements) : [],
     authDisabled: authDisabled(),
+    // 'identity': GitHub sign-in grants no repository access here; a PAT is how.
+    githubSignIn: signInIdentityOnly() ? 'identity' : 'repo',
     profile: profile ? toPublic(profile) : { login: user.login, hasJiraToken: false, hasGithubToken: false, hasAnthropicToken: false, updatedAt: 0 },
   }
 })

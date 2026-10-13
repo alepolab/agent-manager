@@ -9,7 +9,7 @@ export interface Me {
   /** What they actually hold. Differs from `role` only while viewing as someone else. */
   realRole: Role
   can: Capabilities
-  authDisabled: boolean
+  authDisabled: boolean, githubSignIn?: 'identity' | 'repo'
   profile: { login: string, jiraEmail?: string, hasJiraToken: boolean, hasGithubToken: boolean, githubTokenSource?: 'sign-in' | 'pasted', githubLogin?: string, hasAnthropicToken: boolean, anthropicKind?: 'oauth' | 'apikey', labs?: boolean, updatedAt: number }
 }
 

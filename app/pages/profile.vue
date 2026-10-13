@@ -84,7 +84,12 @@ async function saveGithub(remove = false) {
 /** What the GitHub section says about the token in force now. */
 const githubStatus = computed(() => {
   const p = me.value?.profile
-  if (!p?.hasGithubToken) return me.value?.authDisabled ? 'not needed in local mode' : 'none - runs use the server\'s own GitHub login'
+  if (!p?.hasGithubToken) {
+    if (me.value?.authDisabled) return 'not needed in local mode'
+    // Sign-in here only proves who you are; nothing else will push for you.
+    if (me.value?.githubSignIn === 'identity') return 'none - paste a token: signing in with GitHub here grants no repository access'
+    return 'none - runs use the server\'s own GitHub login'
+  }
   const who = p.githubLogin ? `@${p.githubLogin}` : 'your account'
   return p.githubTokenSource === 'pasted'
     ? `your own token for ${who}; kept when you sign in again`
