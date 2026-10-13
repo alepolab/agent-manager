@@ -93,7 +93,12 @@ try {
   assert.match(await so.resumeProblem('bob', 's-alice'), /@alice's session.*only they can continue/, 'a lead reads, does not take over')
   assert.equal(await so.resumeProblem('dave', 's-alice'), 'Session not found', 'a peer does not even learn it exists')
   assert.match(await so.resumeProblem('alice', 's-unknown'), /no recorded owner/)
-  assert.equal(await so.resumeProblem('zed', 's-unknown'), null, 'unplaced: as before')
+  assert.equal(await so.resumeProblem('zed', 's-unknown'), null, 'unplaced: an unowned session, as before')
+  // Owner-only holds for the unplaced too: before anyone is placed everyone is
+  // unplaced, and they could otherwise continue anyone's chat on their own
+  // credential (review on #150).
+  assert.match(await so.resumeProblem('zed', 's-alice'), /@alice's session.*only they can continue/, 'unplaced cannot continue an owned session')
+  assert.equal(await so.resumeProblem(undefined, 's-alice') !== null, true, 'nor can nobody')
 
   assert.equal(await so.sessionInScope('bob', 's-alice'), true)
   assert.equal(await so.sessionInScope('bob', 's-frank'), false)
@@ -101,6 +106,23 @@ try {
   // owner index survives a reload from disk
   const fresh = await import(`../server/utils/sessionOwners.ts?reload=${Date.now()}`)
   assert.equal(await fresh.sessionOwner('s-frank'), 'frank')
+
+  // ── what the hierarchy may grant, per route (review on #150) ──
+  // Placing someone must not hand them every capability on their runs: an L1
+  // deleting their rejected run (and its evidence) or restarting past the gate
+  // that rejected it is exactly what the role guards exist to stop.
+  {
+    const { readFileSync } = await import('node:fs')
+    const route = (f) => readFileSync(join(import.meta.dirname, '..', 'server', 'api', 'runs', f), 'utf8')
+    const grant = (f) => /requireRunAccess\(event, '\w+'(?:, '([\w-]+)')?\)/.exec(route(f))?.[1] ?? 'role only'
+    const expected = {
+      '[id].delete.ts': 'role only', '[id]/restart.post.ts': 'role only', '[id]/test.post.ts': 'role only',
+      '[id]/stop.post.ts': 'owner-or-lead', '[id]/note.post.ts': 'owner-or-lead', '[id]/dismiss.post.ts': 'owner-or-lead',
+      '[id]/continue.post.ts': 'lead', '[id]/reject.post.ts': 'lead', '[id]/rework.post.ts': 'lead',
+      '[id]/respond.post.ts': 'lead', '[id]/decisions.post.ts': 'lead',
+    }
+    for (const [f, want] of Object.entries(expected)) assert.equal(grant(f), want, `${f}: the hierarchy grants ${want}`)
+  }
 
   console.log('hierarchy: scope by team, tree kept sound, chats owned and continued only by their owner')
 } finally {

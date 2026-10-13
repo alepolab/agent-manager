@@ -5,7 +5,8 @@
  * it runs, and says once at boot whether the host is set up for it.
  */
 import { existsSync } from 'node:fs'
-import { readdirSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
+import { resolveClaudePath } from '../utils/claudeDir.ts'
 import { launcherPath, runAsUsers, SAFE_DIRECTORY_CONFIG, developersRoot, osUserProblem, reopenTranscripts } from '../utils/osUsers.ts'
 
 export default defineNitroPlugin(() => {
@@ -18,6 +19,14 @@ export default defineNitroPlugin(() => {
   if (missing.length) console.error(`[runAs] AGENT_RUN_AS=user, but ${missing.join(' and ')} not found: no agent can start until an operator runs sudo scripts/install-run-as.sh`)
   else {
     console.log(`[runAs] agents run as their developers' own users (${developersRoot()})`)
+    // Run records name every run's ticket, parameters and output, and their ids
+    // lead to each run's artifacts. Open to other users, they undo the walls
+    // between developers; install-run-as.sh closes them, and this says so if
+    // something has opened them since.
+    try {
+      const runs = resolveClaudePath('workflow-runs')
+      if (statSync(runs).mode & 0o007) console.error(`[runAs] ${runs} is readable by other users, so developers can read each other's runs. Run: chmod o-rwx ${runs}`)
+    } catch { /* not created yet */ }
     // A session whose server restarted under it never had its transcript
     // reopened (spawnAs does that as the process ends), and would stay out of
     // the sidebar and unresumable. Each developer's directory is named by

@@ -6,7 +6,7 @@ import { requireRunAccess } from '../../../utils/runAccess'
 /** Send a note to whichever step starts next in a running run. */
 export default defineEventHandler(async (event) => {
   // Steering an agent mid-flight is engine work, whatever it looks like.
-  await requireRunAccess(event, 'runEngine')
+  await requireRunAccess(event, 'runEngine', 'owner-or-lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ text?: string }>(event)
   if (!body?.text?.trim()) throw createError({ statusCode: 400, message: 'text is required' })

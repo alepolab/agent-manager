@@ -27,7 +27,7 @@ import { requireRunAccess } from '../../../utils/runAccess'
  * nothing, and the whole value of a human gate is the judgement behind it.
  */
 export default defineEventHandler(async (event) => {
-  await requireRunAccess(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ note?: string }>(event).catch(() => ({} as { note?: string }))
   const note = body?.note?.trim()

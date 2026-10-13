@@ -7,7 +7,7 @@ import { requireRunAccess } from '../../../utils/runAccess'
 export default defineEventHandler(async (event) => {
   // Ending a run is driving the pipeline, not reviewing it: a reviewer who
   // disagrees at a gate sends the work back, and only an operator stops it.
-  await requireRunAccess(event, 'runEngine')
+  await requireRunAccess(event, 'runEngine', 'owner-or-lead')
   const id = getRouterParam(event, 'id')!
   const before = await getRun(id)
   const run = await stopRun(id)

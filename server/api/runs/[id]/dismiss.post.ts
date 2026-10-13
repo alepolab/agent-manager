@@ -14,7 +14,7 @@ import { requireRunAccess } from '../../../utils/runAccess'
  */
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')!
-  await requireRunAccess(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'owner-or-lead')
   const run = await getRun(id)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
   if (isLiveStatus(run.status)) throw createError({ statusCode: 409, message: 'A live run cannot be dismissed; stop it first' })

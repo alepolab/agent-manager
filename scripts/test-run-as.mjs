@@ -101,9 +101,17 @@ try {
     const me = execFileSync('id', ['-un'], { encoding: 'utf8' }).trim()
     process.env.AGENT_OS_USER_PREFIX = ''
     const dir = join(root, 'runs', 'r1', 'artifacts')
-    mkdirSync(dir, { recursive: true })
+    // Created the way initRunArtifacts creates it: the umask's 0755/0644,
+    // readable by every user on the host until the grant takes that away.
+    mkdirSync(join(dir, 'steps'), { recursive: true, mode: 0o755 })
+    writeFileSync(join(dir, 'meta.json'), '{}', { mode: 0o644 })
     await os.grantDeveloper(dir, me)
-    assert.match(execFileSync('getfacl', ['-p', dir], { encoding: 'utf8' }), new RegExp(`default:user:${me}:rwx`))
+    const acl = (p) => execFileSync('getfacl', ['-p', p], { encoding: 'utf8' })
+    assert.match(acl(dir), new RegExp(`default:user:${me}:rwx`), 'the starter is let in, and so is what comes later')
+    for (const p of [dir, join(dir, 'steps'), join(dir, 'meta.json'), join(root, 'runs', 'r1')]) {
+      assert.match(acl(p), /^other::---$/m, `nobody else can open ${p.slice(root.length)}`)
+    }
+    assert.match(acl(dir), /^default:other::---$/m, 'nor anything created in it later')
     delete process.env.AGENT_OS_USER_PREFIX
   } else {
     console.log('  (setfacl not installed: the artifacts ACL grant is not exercised here)')

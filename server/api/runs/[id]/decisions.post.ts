@@ -28,7 +28,7 @@ const applying = new Set<string>()
  */
 export default defineEventHandler(async (event) => {
   // Deciding which entries to act on IS answering the gate.
-  await requireRunAccess(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ decisions?: ReviewDecision[], note?: string }>(event)
   const run = await getRun(id)

@@ -28,7 +28,7 @@ import { requireRunAccess } from '../../../utils/runAccess'
  * two send-backs, then a person decides rather than a third lap being started.
  */
 export default defineEventHandler(async (event) => {
-  await requireRunAccess(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ stepId?: string, note?: string }>(event).catch(() => ({} as { stepId?: string, note?: string }))
   const stepId = body?.stepId?.trim()

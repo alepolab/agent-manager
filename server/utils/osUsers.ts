@@ -180,8 +180,12 @@ export function reopenTranscripts(login: string, env: NodeJS.ProcessEnv = proces
 export async function grantDeveloper(dir: string, login: string | undefined): Promise<void> {
   if (!runAsUsers() || !login) return
   const user = osUserFor(login)
-  await execFileP('setfacl', ['-m', `u:${user}:x`, dirname(dir)])
-  await execFileP('setfacl', ['-R', '-m', `u:${user}:rwX,m::rwx`, dir])
+  // Adding the developer is not enough: the directories were created with the
+  // server's umask, readable by every other user, and an ACL entry added
+  // beside `other::r-x` leaves it there. So other is removed outright - on the
+  // run's directory, everything already in it, and its default for what comes.
+  await execFileP('setfacl', ['-m', `u:${user}:x,o::---`, dirname(dir)])
+  await execFileP('setfacl', ['-R', '-m', `u:${user}:rwX,m::rwx,o::---`, dir])
   await execFileP('setfacl', ['-R', '-d', '-m', `u::rwx,u:${user}:rwx,g::---,m::rwx,o::---`, dir])
 }
 

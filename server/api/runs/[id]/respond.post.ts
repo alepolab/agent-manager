@@ -5,7 +5,7 @@ import { currentUser } from '../../../utils/session'
 import { requireRunAccess } from '../../../utils/runAccess'
 
 export default defineEventHandler(async (event) => {
-  await requireRunAccess(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ reply: string }>(event)
   if (!body?.reply?.trim()) throw createError({ statusCode: 400, message: 'reply is required' })

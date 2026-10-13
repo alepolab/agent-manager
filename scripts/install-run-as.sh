@@ -79,11 +79,28 @@ if [ -d "$AM" ]; then
   echo "secured        $AM"
 fi
 [ -f "$APP_DIR/.env" ] && chmod 0600 "$APP_DIR/.env" && echo "secured        $APP_DIR/.env"
-# The server user's own Claude transcripts. Developers' agents never need
-# them - each has their own - and the team's agents and skills beside them
-# stay readable.
+# The server's Claude directory: developers' agents need the team config in it
+# - agents, skills, commands, output styles, plugins (the guardrail hooks),
+# settings.json and CLAUDE.md - and nothing else. Everything else is closed to
+# them: run records (workflow-runs/<id>.json holds every run's ticket,
+# parameters and step output, and its id leads to the run's artifacts), the
+# roles and team files, watches, and the server user's own Claude data
+# (transcripts, file history, paste cache, shell snapshots). Top level only:
+# a closed directory closes everything under it.
 CLAUDE_OWN=${CLAUDE_DIR:-$SERVER_HOME/.claude}
-[ -d "$CLAUDE_OWN/projects" ] && chmod 0700 "$CLAUDE_OWN/projects" && echo "secured        $CLAUDE_OWN/projects"
+SHARED_CLAUDE=" agents skills commands output-styles plugins settings.json CLAUDE.md "
+if [ -d "$CLAUDE_OWN" ]; then
+  # Run records are written later than this script runs: make sure the
+  # directory exists closed, so the first run does not create it world-readable.
+  install -d -o "$SERVER_USER" -m 0700 "$CLAUDE_OWN/workflow-runs"
+  closed=0
+  for entry in "$CLAUDE_OWN"/* "$CLAUDE_OWN"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    case "$SHARED_CLAUDE" in *" $(basename "$entry") "*) continue ;; esac
+    chmod o-rwx "$entry" && closed=$((closed + 1))
+  done
+  echo "secured        $CLAUDE_OWN ($closed entries closed; shared:$SHARED_CLAUDE)"
+fi
 
 # Developers' processes must reach the app (the SDK's CLI lives in its
 # node_modules) and node. Report a closed directory on the way rather than

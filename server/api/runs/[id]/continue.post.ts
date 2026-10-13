@@ -9,7 +9,7 @@ import { requireRunAccess } from '../../../utils/runAccess'
 /** Continue a paused run. `note` reaches the step being approved, or whichever step starts next. */
 export default defineEventHandler(async (event) => {
   // The gate itself: a reviewer's whole job, and a manager's non-job.
-  await requireRunAccess(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ note?: string }>(event).catch(() => ({} as { note?: string }))
   // Read first: continueRun clears the question, and the question is what says

@@ -114,12 +114,15 @@ export async function requireSessionAccess(event: H3Event, sessionId: string, ca
  */
 export async function resumeProblem(login: string | undefined, sessionId: string): Promise<string | null> {
   const owner = await sessionOwner(sessionId)
-  if (owner === login) return null
+  if (owner && owner === login) return null
   const scope = await scopeFor(login)
   if (!owner) return scope.all ? null : 'This session has no recorded owner, so it can only be continued by someone outside the team hierarchy.'
-  if (await supervises(login, owner)) return `This is @${owner}'s session. You can read it, but only they can continue it.`
-  if (scope.all) return null
-  return 'Session not found'
+  // Owned by someone else: refused whatever the hierarchy says. The reason -
+  // their credential, their Unix user - holds for the unplaced too; before
+  // anyone is placed everyone is unplaced, and "anyone may continue anyone's
+  // chat" was exactly the hole. Only how much the refusal reveals differs.
+  if (!inScope(scope, owner)) return 'Session not found'
+  return `This is @${owner}'s session. You can read it, but only they can continue it.`
 }
 
 /**

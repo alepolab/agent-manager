@@ -14,17 +14,25 @@ import { inScope, scopeFor, supervises } from './hierarchy'
  * 404, not 403: whether a colleague outside your team has a run going is not
  * yours to learn from a status code.
  *
- * Changing it needs the capability by role, as before - or, for anyone placed
- * in the hierarchy, that the run is theirs or their team's. That second door is
- * the point of levels: an L1 developer may stop their own run though no
- * developer holds runEngine, and an L2 may answer a gate on their L1's run.
- * Role still decides everything the hierarchy does not reach: configuring the
- * pipeline, starting runs.
+ * Changing it needs the capability by role, as before. The hierarchy opens a
+ * second door only where the route asks for one, and only as narrow as it
+ * names:
+ *
+ * - `owner-or-lead`: the run's starter or their lead - stopping, steering
+ *   with a note, dismissing. An L1 developer may stop their own run though no
+ *   developer holds runEngine.
+ * - `lead`: the starter's lead alone - deciding at a gate for their team. Never
+ *   the starter, whose work the gate exists to have someone else review.
+ * - omitted: role only. Deleting a run (its evidence and audit trail with it),
+ *   restarting from an arbitrary step (past a gate that rejected it) and test
+ *   runs stay where they were, with the roles that hold the capability.
  *
  * Returns the run, or null when there is none, leaving the route's own "not
  * found" to answer as it always has.
  */
-export async function requireRunAccess(event: H3Event, capability?: keyof Capabilities): Promise<WorkflowRun | null> {
+export type HierarchyGrant = 'owner-or-lead' | 'lead'
+
+export async function requireRunAccess(event: H3Event, capability?: keyof Capabilities, through?: HierarchyGrant): Promise<WorkflowRun | null> {
   const id = getRouterParam(event, 'id')
   const run = id ? await getRun(id) : null
   const user = await currentUser(event)
@@ -37,12 +45,16 @@ export async function requireRunAccess(event: H3Event, capability?: keyof Capabi
 
   const role = await currentRole(event)
   if (can(role, capability)) return run
-  // Placed in the hierarchy, and the run is theirs or their team's.
-  if (run && !scope.all) return run
+  // The hierarchy's door, only as wide as this route opened it.
+  if (run && !scope.all && through) {
+    const leads = await supervises(user?.login, run.startedBy)
+    if (leads) return run
+    if (through === 'owner-or-lead' && user?.login && user.login === run.startedBy) return run
+  }
 
   throw createError({
     statusCode: 403,
-    message: `Your role (${role}) cannot do this. Ask ${rolesWith(capability).join(' or ')}${scope.all ? '' : ', or your lead'}.`,
+    message: `Your role (${role}) cannot do this. Ask ${rolesWith(capability).join(' or ')}${!scope.all && through ? ', or your lead' : ''}.`,
   })
 }
 
