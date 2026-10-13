@@ -137,13 +137,38 @@ export function runAsArgv(login: string, command: string, args: string[]): strin
  */
 export function spawnAs(login: string | undefined) {
   if (!runAsUsers() || !login) return undefined
-  return (options: { command: string, args: string[], cwd?: string, env: Record<string, string | undefined>, signal?: AbortSignal }) =>
-    spawn('sudo', runAsArgv(login, options.command, options.args), {
+  return (options: { command: string, args: string[], cwd?: string, env: Record<string, string | undefined>, signal?: AbortSignal }) => {
+    const env = runAsEnv(login, options.env) as NodeJS.ProcessEnv
+    const child = spawn('sudo', runAsArgv(login, options.command, options.args), {
       cwd: options.cwd,
-      env: runAsEnv(login, options.env) as NodeJS.ProcessEnv,
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
       signal: options.signal,
     })
+    // Claude Code writes transcripts 0600, and in a directory with a default
+    // ACL that sets the mask to nothing: the server, which lists them in the
+    // chat sidebar and reads them to resume, is locked out of its own
+    // developer's sessions. Only the owner can reopen the mask, so it is done
+    // as them - while the session runs, and once more when it ends.
+    //
+    // Polled, not an 'exit' listener: the SDK calls removeAllListeners() on
+    // the process it is handed, and a listener added here silently vanished.
+    let ticks = 0
+    const timer = setInterval(() => {
+      const ended = child.exitCode !== null || child.signalCode !== null
+      if (ended || ++ticks % 15 === 0) reopenTranscripts(login, env)
+      if (ended) clearInterval(timer)
+    }, 1_000)
+    timer.unref?.()
+    return child
+  }
+}
+
+/** The mask on a developer's transcripts, reopened by their own user. Never throws. */
+export function reopenTranscripts(login: string, env: NodeJS.ProcessEnv = process.env): void {
+  const { projects } = developerPaths(login)
+  const fix = spawn('sudo', runAsArgv(login, 'setfacl', ['-R', '-m', 'm::rwX', projects]), { env: { PATH: env.PATH, AM_PATH: env.PATH }, stdio: 'ignore' })
+  fix.on('error', () => { /* best effort: the next run reopens it */ })
 }
 
 /**
