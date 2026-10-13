@@ -52,9 +52,59 @@ export function launchEnv(base: Record<string, string>, userEnv: Record<string, 
  * from this shell answers for the wrong process, and that is exactly how a run
  * finished its fix and then halted at `git commit`.
  */
+/**
+ * Names that hold a secret: the instance's own (the key every stored token is
+ * sealed under, the OAuth client secret, the API token that signs anyone in as
+ * a developer, the Slack webhook, the login password hash) and anything else
+ * named like one. Matched by pattern, not listed, because a host carries
+ * secrets nobody here put there - a parent Claude Code session's messaging
+ * token, an npm token in a shell profile - and a list only ever covers the
+ * ones somebody thought of.
+ */
+const SECRET_NAME = /SECRET|PASSW(OR)?D|PRIVATE_KEY|API_KEY|(^|_)TOKEN($|_)|WEBHOOK|COOKIE|CREDENTIAL|_HASH$|^AGENT_MANAGER_/i
+
+/** Comma-separated names an operator lets through anyway: a registry token a
+ *  build needs, or the instance's Jira token for developers who have none. */
+export const AGENT_ENV_PASSTHROUGH = 'AGENT_ENV_PASSTHROUGH'
+
+/**
+ * The server's environment minus its secrets: what every agent starts from.
+ *
+ * It used to be all of process.env. An agent's commands land in step logs and
+ * evidence artifacts - one already wrote GITHUB_CLIENT_SECRET into a stack
+ * report by running `env` - and with AGENT_MANAGER_SECRET among them, any
+ * agent on a shared instance held the key to every developer's stored GitHub,
+ * Jira and Claude tokens.
+ *
+ * Everything else passes, deliberately not an allowlist: a host's toolchain
+ * (JAVA_11_HOME, SDKMAN_*, CATALINA_HOME, NVM_*...) is what the product builds
+ * need, and differs per host in ways no list here would keep up with.
+ *
+ * Credentials an agent IS meant to have come back on top, by name, from
+ * envForUser (the starter's own) and agentEnvFor (AGENT_GH_TOKEN as GH_TOKEN).
+ * With auth disabled the host's Claude credential stays, as it is the only one.
+ *
+ * Note what this is not: agents run as the server's OS user, so a file the
+ * server can read - ~/.agent-manager/secret, the app's .env - an agent can
+ * read too. This keeps secrets out of what agents are handed and print; it
+ * does not wall them off from an agent that goes looking.
+ */
+export function agentBaseEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const passthrough = new Set((env[AGENT_ENV_PASSTHROUGH] ?? '').split(',').map(s => s.trim()).filter(Boolean))
+  const keepClaude = env.AUTH_DISABLED === '1'
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined) continue
+    const claudeCredential = (CLAUDE_CREDENTIAL_VARS as readonly string[]).includes(name)
+    if (SECRET_NAME.test(name) && !passthrough.has(name) && !(keepClaude && claudeCredential)) continue
+    out[name] = value
+  }
+  return out
+}
+
 export async function agentEnvFor(startedBy?: string): Promise<Record<string, string>> {
   return {
-    ...process.env as Record<string, string>,
+    ...agentBaseEnv(),
     // The commit identity — the starter's, or the bot as the floor. It used to
     // be the caller's job alone: callAgent spreads envForUser over this, so an
     // agent always had it, and preflight — which calls this and nothing else —
