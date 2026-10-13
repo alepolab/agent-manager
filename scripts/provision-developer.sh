@@ -53,7 +53,9 @@ WORKSPACE=$WS_ROOT/$SAFE
 
 # The user. The comment records whose it is, so a second login that cuts to
 # the same 32 characters is refused rather than handed the first one's files.
-TAG="agent-manager:$LOGIN"
+# Not "agent-manager:<login>": `:` separates /etc/passwd fields, and useradd
+# refuses it. The safe form of the login, for the same reason.
+TAG="agent-manager/$SAFE"
 if id -u "$OS_USER" >/dev/null 2>&1; then
   have=$(getent passwd "$OS_USER" | cut -d: -f5)
   [ "$have" = "$TAG" ] || die "$OS_USER already exists and belongs to '$have', not $LOGIN"
