@@ -94,6 +94,22 @@ try {
   assert.match(sudoArgv, /^-n\n-E\n-u\nam-alice\n--\n/)
   assert.ok(!sudoArgv.includes('SECRET'))
 
+  // ── preflight asks, as the developer's user, whether it can work where its agents will ──
+  // A working directory its user cannot enter fails every shell command with
+  // exit 1 and no output; a real run spent two steps finding that out.
+  {
+    const savedPath = process.env.PATH
+    process.env.PATH = `${bin}:${savedPath}`
+    try {
+      const open = join(root, 'open'); mkdirSync(open, { mode: 0o755 })
+      const shut = join(root, 'shut'); mkdirSync(shut, { mode: 0o000 })
+      assert.equal(os.unreachableFor('alice', { enter: [open], write: [open] }), null, 'a directory it can use passes')
+      assert.match(os.unreachableFor('alice', { enter: [open, shut] }), new RegExp(`am-alice cannot enter ${shut}`), 'one it cannot enter is named')
+      assert.match(os.unreachableFor('alice', { write: [shut] }), /cannot write to/, 'and one it cannot write to')
+      chmodSync(shut, 0o755)
+    } finally { process.env.PATH = savedPath }
+  }
+
   // ── a run's artifacts directory is granted to its starter's user (needs setfacl) ──
   let hasAcl = true
   try { execFileSync('setfacl', ['--version'], { stdio: 'ignore' }) } catch { hasAcl = false }

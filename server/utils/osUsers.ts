@@ -19,7 +19,7 @@
  * as they did. On, there is no fallback: a developer whose user has not been
  * provisioned is refused, not quietly run as the server.
  */
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -196,3 +196,25 @@ export async function grantDeveloper(dir: string, login: string | undefined): Pr
  * agent through agentEnvFor. Only in this mode - elsewhere one user owns all.
  */
 export const SAFE_DIRECTORY_CONFIG = { key: 'safe.directory', value: '*' } as const
+
+/**
+ * The first of these directories the developer's user cannot use, with what it
+ * cannot do, or null. Asked as that user, through the same launcher an agent
+ * starts through, because nothing else answers for their permissions.
+ *
+ * An agent whose working directory its user cannot enter fails every shell
+ * command with exit 1 and no output - `whoami` included - and one that cannot
+ * reach its run's artifacts cannot write its report. A real run spent two steps
+ * and $0.55 on that before anything said why; preflight asks this instead.
+ */
+export function unreachableFor(login: string, dirs: { enter?: string[], write?: string[] }): string | null {
+  const checks = [
+    ...(dirs.enter ?? []).map(d => ({ d, test: '-x', what: 'enter' })),
+    ...(dirs.write ?? []).map(d => ({ d, test: '-w', what: 'write to' })),
+  ]
+  for (const { d, test, what } of checks) {
+    const r = spawnSync('sudo', runAsArgv(login, 'test', [test, d]), { env: { PATH: process.env.PATH, AM_PATH: process.env.PATH }, stdio: 'ignore', timeout: 10_000 })
+    if (r.status !== 0) return `${osUserFor(login)} cannot ${what} ${d}`
+  }
+  return null
+}

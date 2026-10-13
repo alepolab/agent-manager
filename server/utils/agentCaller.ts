@@ -13,6 +13,7 @@ import { CLAUDE_CREDENTIAL_VARS, claudeCredentialProblem, envForUser } from './u
 import { osUserProblem, runAsUsers, SAFE_DIRECTORY_CONFIG, spawnAs } from './osUsers.ts'
 import { recordSessionOwner } from './sessionOwners.ts'
 import type { AgentFrontmatter } from '~/types'
+import { workspaceRootFor } from './workspace.ts'
 
 /**
  * Absolute path to the shipped `engineering/scripts` directory, handed to every
@@ -411,7 +412,14 @@ export async function callAgent(
   if (signal?.aborted) abortController.abort()
   signal?.addEventListener('abort', () => abortController.abort())
   const claudeDir = getClaudeDir()
-  const cwd = projectDir && existsSync(projectDir) ? projectDir : claudeDir
+  // With no project, an agent running as its developer starts in their own
+  // workspace: the server's Claude directory is closed to developers' users
+  // (install-run-as.sh), and a working directory its user cannot enter fails
+  // every shell command with exit 1 and nothing else.
+  const ownWorkspace = runAsUsers() && login ? workspaceRootFor(login) : undefined
+  const cwd = projectDir && existsSync(projectDir)
+    ? projectDir
+    : ownWorkspace && existsSync(ownWorkspace) ? ownWorkspace : claudeDir
 
   let systemAppend = `You are "${agentSlug}", a specialized agent.`
   let frontmatter: AgentFrontmatter | undefined

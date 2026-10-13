@@ -30,7 +30,9 @@ import { getChannel } from './channels.ts'
 import { fetchExistingTickets, EXISTING_TICKETS_ARTIFACT } from './existingTickets.ts'
 import { agentEnvFor, launchEnv } from './agentCaller.ts'
 import { claudeCredentialProblem } from './users.ts'
-import { osUserFor, osUserProblem, runAsUsers } from './osUsers.ts'
+import { osUserFor, osUserProblem, runAsUsers, unreachableFor } from './osUsers.ts'
+import { agentRunsRoot } from './runArtifacts.ts'
+import { workspaceRootFor } from './workspace.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -98,9 +100,15 @@ export async function runPreflight(
     if (!runAsUsers()) return null
     if (!launchesAgents) return { name: 'agent user', level: 'skip', detail: 'this runner launches no agents' }
     const problem = osUserProblem(run.startedBy)
-    return problem
-      ? { name: 'agent user', level: 'fail', detail: problem }
-      : { name: 'agent user', level: 'ok', detail: `agents run as ${osUserFor(run.startedBy!)}` }
+    if (problem) return { name: 'agent user', level: 'fail', detail: problem }
+    // Where its agents will work, asked as their user: the checkout (or, with
+    // none, their own workspace) and the root every run's artifacts live under.
+    const workdir = run.projectDir?.trim() || workspaceRootFor(run.startedBy)
+    const blocked = unreachableFor(run.startedBy!, { enter: [agentRunsRoot()], write: [workdir] })
+    if (blocked) {
+      return { name: 'agent user', level: 'fail', detail: `${blocked}, so every shell command its agents run would fail. An operator must grant it (sudo scripts/provision-developer.sh ${run.startedBy}) or move the directory somewhere its user can reach.` }
+    }
+    return { name: 'agent user', level: 'ok', detail: `agents run as ${osUserFor(run.startedBy!)} in ${workdir}` }
   })
 
   // ── the guardrails: without them no agent may touch a product repository ──
