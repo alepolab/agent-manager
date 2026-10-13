@@ -7,6 +7,8 @@ const jiraEmail = ref('')
 const jiraToken = ref('')
 const claudeToken = ref('')
 const savingClaude = ref(false)
+const githubToken = ref('')
+const savingGithub = ref(false)
 const savingLabs = ref(false)
 const saving = ref(false)
 const testing = ref(false)
@@ -60,6 +62,35 @@ async function saveClaude(clear = false) {
   }
 }
 
+/** A token of their own for pushes and pull requests. GitHub is asked whose it
+ *  is before anything is stored, and sign-in leaves it alone afterwards. */
+async function saveGithub(remove = false) {
+  savingGithub.value = true
+  try {
+    await $fetch('/api/me', { method: 'PUT', body: { githubToken: remove ? '' : githubToken.value } })
+    githubToken.value = ''
+    await load()
+    toast.add({
+      title: remove ? 'GitHub token removed' : `GitHub token saved - runs act as @${me.value?.profile.githubLogin}`,
+      color: 'success',
+    })
+  } catch (e) {
+    toast.add(errorToast('Could not save the GitHub token', e))
+  } finally {
+    savingGithub.value = false
+  }
+}
+
+/** What the GitHub section says about the token in force now. */
+const githubStatus = computed(() => {
+  const p = me.value?.profile
+  if (!p?.hasGithubToken) return me.value?.authDisabled ? 'not needed in local mode' : 'none - runs use the server\'s own GitHub login'
+  const who = p.githubLogin ? `@${p.githubLogin}` : 'your account'
+  return p.githubTokenSource === 'pasted'
+    ? `your own token for ${who}; kept when you sign in again`
+    : `from GitHub sign-in, as ${who}; refreshed each time you sign in`
+})
+
 async function testJira() {
   testing.value = true
   testResult.value = null
@@ -79,7 +110,7 @@ async function testJira() {
         <img v-if="me.avatar" :src="me.avatar" alt="" class="size-10 rounded-full" />
         <div>
           <div class="t-body font-medium" style="color: var(--text-primary);">{{ me.name || me.login }}</div>
-          <div class="t-small text-label">@{{ me.login }} · GitHub token {{ me.profile.hasGithubToken ? 'stored' : (me.authDisabled ? 'not needed in local mode' : 'missing, sign in again') }}</div>
+          <div class="t-small text-label">@{{ me.login }} · GitHub: {{ githubStatus }}</div>
         </div>
       </div>
 
@@ -101,6 +132,26 @@ async function testJira() {
         <div class="flex items-center gap-2">
           <UButton label="Save" size="sm" :loading="savingClaude" :disabled="!claudeToken.trim()" @click="saveClaude()" />
           <UButton v-if="me?.profile.hasAnthropicToken" label="Remove" size="sm" variant="soft" color="error" :loading="savingClaude" @click="saveClaude(true)" />
+        </div>
+      </div>
+
+      <div class="rounded-xl p-4 space-y-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+        <div class="t-ui font-medium" style="color: var(--text-primary);">GitHub</div>
+        <p class="t-small text-label">
+          Runs you start push and open pull requests with this token. Signing in with GitHub stores one for you; paste your own
+          instead - a fine-grained token, or one for a password account - and it is kept when you sign in again. GitHub is asked
+          whose it is before it is saved.
+        </p>
+        <div class="field-group">
+          <label class="field-label">
+            Personal access token
+            <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">{{ githubStatus }}</span>
+          </label>
+          <input v-model="githubToken" type="password" class="field-input w-full" placeholder="github_pat_… or ghp_…" autocomplete="off" />
+        </div>
+        <div class="flex items-center gap-2">
+          <UButton label="Save" size="sm" :loading="savingGithub" :disabled="!githubToken.trim()" @click="saveGithub()" />
+          <UButton v-if="me?.profile.githubTokenSource === 'pasted'" label="Remove" size="sm" variant="soft" color="error" :loading="savingGithub" @click="saveGithub(true)" />
         </div>
       </div>
 

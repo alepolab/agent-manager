@@ -65,6 +65,8 @@ export default defineEventHandler(async (event) => {
     avatar: me.avatar_url,
     ...(typeof me.id === 'number' ? { githubId: me.id } : {}),
     githubTokenPlain: token.access_token,
+    // A token the person pasted on their Profile is kept; see saveProfile.
+    fromSignIn: true,
   })
   await session.update({ user: { login: me.login, name: me.name ?? undefined, avatar: me.avatar_url } } as any)
   return sendRedirect(event, '/')
