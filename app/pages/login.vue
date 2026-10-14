@@ -29,7 +29,12 @@ async function signIn() {
     // The route guard loaded the user while signed out; load it again.
     await load()
     // No Claude token yet: set it up first, as GitHub sign-in does.
-    await navigateTo(me.value && !me.value.authDisabled && !me.value.profile.hasAnthropicToken ? '/profile?setup=1' : next.value)
+    const target = me.value && !me.value.authDisabled && !me.value.profile.hasAnthropicToken ? '/profile?setup=1' : next.value
+    // A full page load, as GitHub sign-in arrives by. Navigating in place from
+    // this layout-less page into the app shell left a blank page: the shell's
+    // patch failed ("insertBefore ... not a child of this node") and nothing
+    // rendered until a reload.
+    window.location.assign(target)
   } catch (err: any) {
     error.value = err?.data?.message || err?.statusMessage || 'Sign-in failed'
     password.value = ''

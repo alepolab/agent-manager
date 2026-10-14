@@ -140,9 +140,10 @@ async function testJira() {
           </li>
         </ul>
         <div class="flex items-center gap-3">
-          <UButton label="Continue to the app" size="sm" to="/" :disabled="!me?.profile.hasAnthropicToken" />
-          <span v-if="!me?.profile.hasAnthropicToken" class="t-small text-label">Add your Claude token to continue.</span>
-          <NuxtLink v-else-if="!me?.profile.hasGithubToken" to="/" class="t-small underline focus-ring text-label">Skip the GitHub token for now</NuxtLink>
+          <!-- Shown only once it can be used: a link button ignores `disabled`. -->
+          <UButton v-if="me?.profile.hasAnthropicToken" label="Continue to the app" size="sm" to="/" />
+          <span v-else class="t-small text-label">Add your Claude token below to continue.</span>
+          <span v-if="me?.profile.hasAnthropicToken && !me?.profile.hasGithubToken" class="t-small text-label">You can add the GitHub token later.</span>
         </div>
       </div>
 
