@@ -320,6 +320,18 @@ const initials = computed(() => (me.value?.name || me.value?.login || '?')
           >Back to your own view</button>
         </div>
 
+        <!-- No Claude token yet: every agent this person starts would be refused.
+             Everywhere but the page where it is added, until it is. -->
+        <div
+          v-if="me && !me.authDisabled && !me.profile.hasAnthropicToken && route.path !== '/profile'"
+          class="shrink-0 flex flex-wrap items-center gap-2 t-small px-4 py-2"
+          style="background: var(--accent-muted); border-bottom: 1px solid var(--accent);"
+        >
+          <UIcon name="i-lucide-key-round" class="size-4 shrink-0" style="color: var(--accent);" />
+          <span style="color: var(--text-primary);">Add your Claude token to chat and run agents.</span>
+          <NuxtLink to="/profile?setup=1" class="ml-auto underline focus-ring" style="color: var(--text-primary);">Finish setting up</NuxtLink>
+        </div>
+
         <!-- Setup wizard when directory doesn't exist -->
         <SetupWizard
           v-if="initialized && !claudeDirExists"

@@ -42,11 +42,24 @@ export async function listRoles(): Promise<Record<string, Role>> {
   }
 }
 
-/** The role a login really holds. `operator` when unlisted — see the file header. */
+/**
+ * The role of anyone not listed. `operator` unless AGENT_MANAGER_DEFAULT_ROLE
+ * names another: a team instance where newcomers should start as developers
+ * sets it, and lists its admins in roles.json. Read per call, so it follows the
+ * environment the server runs in; an unknown name falls back to `operator`
+ * rather than locking everyone into something nobody meant.
+ */
+export const DEFAULT_ROLE_VAR = 'AGENT_MANAGER_DEFAULT_ROLE'
+export function defaultRole(): Role {
+  const v = process.env[DEFAULT_ROLE_VAR]?.trim()
+  return isRole(v) ? v : DEFAULT_ROLE
+}
+
+/** The role a login really holds: its roles.json entry, else defaultRole(). */
 export async function roleFor(login: string | undefined): Promise<Role> {
-  if (!login) return DEFAULT_ROLE
+  if (!login) return defaultRole()
   const all = await listRoles()
-  return all[login] ?? DEFAULT_ROLE
+  return all[login] ?? defaultRole()
 }
 
 /** Set or clear one login's role. Clearing returns them to the default. */

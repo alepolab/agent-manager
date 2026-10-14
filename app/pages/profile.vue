@@ -2,6 +2,17 @@
 import { errorToast } from '~/utils/errorToast'
 
 const { me, load } = useUser()
+const route = useRoute()
+/** Arrived straight from sign-in with no Claude token: walk them through it. */
+const setup = computed(() => route.query.setup === '1')
+const setupSteps = computed(() => {
+  const p = me.value?.profile
+  return [
+    { key: 'claude', done: !!p?.hasAnthropicToken, name: 'Claude token', why: 'Required: nothing that uses Claude runs without it.' },
+    { key: 'github', done: !!p?.hasGithubToken, name: 'GitHub token', why: 'Needed for runs that push branches or open pull requests.' },
+    { key: 'jira', done: !!p?.hasJiraToken, name: 'Jira', why: 'Optional: runs read and comment on tickets as you.' },
+  ]
+})
 const toast = useToast()
 const jiraEmail = ref('')
 const jiraToken = ref('')
@@ -116,6 +127,22 @@ async function testJira() {
         <div>
           <div class="t-body font-medium" style="color: var(--text-primary);">{{ me.name || me.login }}</div>
           <div class="t-small text-label">@{{ me.login }} · GitHub: {{ githubStatus }}</div>
+        </div>
+      </div>
+
+      <div v-if="setup" class="rounded-xl p-4 space-y-3" style="background: var(--accent-muted); border: 1px solid var(--accent);">
+        <div class="t-ui font-medium" style="color: var(--text-primary);">Finish setting up</div>
+        <p class="t-small text-label">You are signed in. Add your tokens below once; they are stored encrypted and used only for runs you start.</p>
+        <ul class="space-y-1.5">
+          <li v-for="step in setupSteps" :key="step.key" class="flex items-start gap-2 t-small">
+            <UIcon :name="step.done ? 'i-lucide-circle-check' : 'i-lucide-circle'" class="size-4 shrink-0 mt-0.5" :style="{ color: step.done ? 'var(--success)' : 'var(--text-disabled)' }" />
+            <span style="color: var(--text-primary);"><span class="font-medium">{{ step.name }}</span> - <span class="text-label">{{ step.why }}</span></span>
+          </li>
+        </ul>
+        <div class="flex items-center gap-3">
+          <UButton label="Continue to the app" size="sm" to="/" :disabled="!me?.profile.hasAnthropicToken" />
+          <span v-if="!me?.profile.hasAnthropicToken" class="t-small text-label">Add your Claude token to continue.</span>
+          <NuxtLink v-else-if="!me?.profile.hasGithubToken" to="/" class="t-small underline focus-ring text-label">Skip the GitHub token for now</NuxtLink>
         </div>
       </div>
 

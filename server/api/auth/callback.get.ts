@@ -1,5 +1,5 @@
 import { authSession } from '../../utils/session.ts'
-import { saveProfile } from '../../utils/users.ts'
+import { getProfile, saveProfile } from '../../utils/users.ts'
 import { signInIdentityOnly } from '../../utils/githubSignIn.ts'
 import { membershipFailureDetail } from '../../utils/orgMembership.ts'
 import { isPasswordAccountName } from '../../utils/passwordLogin.ts'
@@ -72,5 +72,9 @@ export default defineEventHandler(async (event) => {
     fromSignIn: true,
   })
   await session.update({ user: { login: me.login, name: me.name ?? undefined, avatar: me.avatar_url } } as any)
-  return sendRedirect(event, '/')
+  // Nothing that uses Claude runs without the person's own token, so someone who
+  // has none yet goes straight to setting it up rather than to a console whose
+  // first action would be refused.
+  const saved = await getProfile(me.login)
+  return sendRedirect(event, saved?.anthropicToken ? '/' : '/profile?setup=1')
 })

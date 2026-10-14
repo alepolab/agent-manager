@@ -65,13 +65,17 @@ assert.ok(!existsSync(join(process.env.AGENT_USERS_DIR, 'shared-name.json')))
 githubLogin = 'octocat'
 const ok = await callback()
 assert.equal(ok.status, 302)
-assert.equal(ok.headers.get('location'), '/')
+assert.equal(ok.headers.get('location'), '/profile?setup=1', 'a first sign-in with no Claude token goes to setting it up')
 assert.equal((await getProfile('octocat'))?.githubId, 4242, 'their profile is saved')
+// Once they have a Claude token, sign-in goes straight in.
+const { saveProfile } = await import('../server/utils/users.ts')
+await saveProfile('octocat', { anthropicTokenPlain: 'sk-ant-oat01-SetUp' })
+assert.equal((await callback()).headers.get('location'), '/', 'with a Claude token, straight to the app')
 
 // ── with password sign-in off, the name is nobody's to refuse ──
 delete process.env.AGENT_MANAGER_LOGIN_USER
 githubLogin = 'shared-name'
-assert.equal((await callback()).headers.get('location'), '/')
+assert.equal((await callback()).headers.get('location'), '/profile?setup=1', 'signed in (to setup: no Claude token yet)')
 
 console.log('ok - GitHub sign-in refuses the password account\'s name')
 process.exit(0)

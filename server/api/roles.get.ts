@@ -1,9 +1,9 @@
 import { requireUser } from '../utils/session'
-import { listRoles } from '../utils/roles'
+import { defaultRole, listRoles } from '../utils/roles'
 import { listProfiles } from '../utils/users'
-import { listPlacements } from '../utils/hierarchy'
+import { defaultLevel, listPlacements, listUnplacedOnPurpose } from '../utils/hierarchy'
 import { LEVEL_LABEL, LEVELS } from '../../shared/types/hierarchy'
-import { DEFAULT_ROLE, ROLE_LABEL, ROLES } from '../../shared/types/role'
+import { ROLE_LABEL, ROLES } from '../../shared/types/role'
 
 /** Who holds which role, and what the roles mean. Readable by anyone signed in:
  *  knowing that Ashwani answers the verification gate is how a team works.
@@ -14,9 +14,12 @@ import { DEFAULT_ROLE, ROLE_LABEL, ROLES } from '../../shared/types/role'
  *  are one screen, so they are one request. */
 export default defineEventHandler(async (event) => {
   await requireUser(event)
-  const [roles, profiles, placements] = await Promise.all([listRoles(), listProfiles(), listPlacements()])
+  const [roles, profiles, placements, unplaced] = await Promise.all([listRoles(), listProfiles(), listPlacements(), listUnplacedOnPurpose()])
   return {
-    roles, profiles, default: DEFAULT_ROLE, available: ROLES, labels: ROLE_LABEL,
+    roles, profiles, default: defaultRole(), available: ROLES, labels: ROLE_LABEL,
+    // The level of an unplaced non-operator, when the instance sets one; and who
+    // was taken out of the hierarchy on purpose (they keep seeing everything).
+    defaultLevel: defaultLevel(), unplaced,
     // Who leads whom. Absent from this map is outside the hierarchy: sees every run.
     placements, levels: LEVELS, levelLabels: LEVEL_LABEL,
   }

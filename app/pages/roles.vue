@@ -24,6 +24,10 @@ interface RolesResponse {
   available: Role[]
   labels: Record<Role, string>
   placements: Record<string, Placement>
+  /** The level of an unplaced non-operator, when the instance sets one. */
+  defaultLevel: Level | null
+  /** Taken out of the hierarchy on purpose: they see everything, default or not. */
+  unplaced: string[]
   levels: Level[]
   levelLabels: Record<Level, string>
 }
@@ -87,15 +91,22 @@ function leadsFor(login: string, level: Level | undefined) {
  * below the person they would lead, a loop, or removing someone who still
  * leads others, with a message that says which; it is shown as it comes.
  */
-async function setPlacement(login: string, level: Level | null, lead?: string) {
+async function setPlacement(login: string, level: Level | null | 'default', lead?: string) {
   saving.value = login
   try {
     const res = await $fetch<{ placements: Record<string, Placement> }>('/api/hierarchy', {
       method: 'PUT', body: { login, level, lead: lead || null },
     })
     if (data.value) data.value.placements = res.placements
+    if (data.value) {
+      // Mirror what the server now holds: taken out on purpose, or not.
+      data.value.unplaced = data.value.unplaced.filter(l => l !== login)
+      if (level === null) data.value.unplaced.push(login)
+    }
     toast.add({
-      title: level ? `${login} is L${level}${lead ? `, led by ${lead}` : ''}` : `${login} is out of the hierarchy - sees every run`,
+      title: level === 'default'
+        ? `${login} is back on the default level`
+        : level ? `${login} is L${level}${lead ? `, led by ${lead}` : ''}` : `${login} is out of the hierarchy - sees every run`,
       color: 'success',
     })
   } catch (e) {
@@ -107,6 +118,30 @@ async function setPlacement(login: string, level: Level | null, lead?: string) {
 }
 
 const unlistedCount = computed(() => rows.value.filter(r => r.role === null).length)
+
+/**
+ * The level a row takes when nobody set one: the instance's default for a
+ * non-operator, nothing for an operator (they keep seeing everything), and
+ * nothing for someone taken out on purpose.
+ */
+function defaultLevelFor(r: { login: string, role: Role | null }): Level | null {
+  const d = data.value
+  if (!d || d.defaultLevel === null || d.unplaced.includes(r.login)) return null
+  return (r.role ?? d.default) === 'operator' ? null : d.defaultLevel
+}
+
+/** The level select's value: a level, 'none' (taken out on purpose) or 'default'. */
+function levelValue(r: { login: string, placement: Placement | null }): string {
+  if (r.placement) return String(r.placement.level)
+  if (!data.value?.defaultLevel) return ''
+  return data.value.unplaced.includes(r.login) ? 'none' : 'default'
+}
+
+function onLevelChange(r: { login: string, placement: Placement | null }, value: string) {
+  if (value === 'default') return setPlacement(r.login, 'default')
+  if (value === 'none' || value === '') return setPlacement(r.login, null)
+  return setPlacement(r.login, Number(value) as Level, r.placement?.lead)
+}
 
 async function setRole(login: string, next: string) {
   const role = next === '' ? null : next as Role
@@ -159,8 +194,8 @@ function seen(at: number) {
     <div class="px-6 py-4 space-y-5 max-w-4xl">
       <p class="t-ui leading-relaxed text-label">
         A role decides what this console offers a person: which pages are in their sidebar, whether they can
-        drive a run, and which gates are theirs to answer. Anyone not listed here is an operator, because that
-        is the default - a missing roles file must never lock the team out of its own pipeline.
+        drive a run, and which gates are theirs to answer. Anyone without a role set here is
+        <span class="font-mono">{{ data?.default ?? 'operator' }}</span>, the default on this instance.
       </p>
       <p class="t-ui leading-relaxed text-label">
         A level and a lead decide whose work they see. An L1 sees and acts on their own runs and chats; an L2
@@ -178,7 +213,7 @@ function seen(at: number) {
       <div v-else-if="loading && !data" class="space-y-2"><SkeletonCard v-for="i in 2" :key="i" /></div>
 
       <template v-else-if="data">
-        <div v-if="unlistedCount" class="rounded-xl px-4 py-3 flex items-center gap-3" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.14);">
+        <div v-if="unlistedCount && data.default === 'operator'" class="rounded-xl px-4 py-3 flex items-center gap-3" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.14);">
           <UIcon name="i-lucide-shield-alert" class="size-4 shrink-0" style="color: var(--warning);" />
           <span class="t-small flex-1" style="color: var(--text-secondary);">
             {{ unlistedCount }} {{ unlistedCount === 1 ? 'person has' : 'people have' }} no role set, so
@@ -221,11 +256,11 @@ function seen(at: number) {
                     :disabled="saving === r.login"
                     @change="setRole(r.login, ($event.target as HTMLSelectElement).value)"
                   >
-                    <option value="">No role set - operator</option>
+                    <option value="">No role set - {{ data.default }}</option>
                     <option v-for="role in data.available" :key="role" :value="role">{{ role }}</option>
                   </select>
                   <span v-else :style="{ color: r.role ? 'var(--text-primary)' : 'var(--warning)' }">
-                    {{ r.role ?? 'No role set - acting as operator' }}
+                    {{ r.role ?? `No role set - ${data.default}` }}
                   </span>
                 </td>
                 <td class="py-2.5 pr-3">
@@ -233,14 +268,18 @@ function seen(at: number) {
                     v-if="can('configure')"
                     class="field-select"
                     :aria-label="`Level for ${r.login}`"
-                    :value="r.placement?.level ?? ''"
+                    :value="levelValue(r)"
                     :disabled="saving === r.login"
-                    @change="setPlacement(r.login, (Number(($event.target as HTMLSelectElement).value) || null) as Level | null, r.placement?.lead)"
+                    @change="onLevelChange(r, ($event.target as HTMLSelectElement).value)"
                   >
-                    <option value="">None - sees every run</option>
+                    <template v-if="data.defaultLevel">
+                      <option value="default">Default - {{ defaultLevelFor(r) ? `L${defaultLevelFor(r)}` : 'none (operator)' }}</option>
+                      <option value="none">None - sees every run</option>
+                    </template>
+                    <option v-else value="">None - sees every run</option>
                     <option v-for="l in data.levels" :key="l" :value="l" :title="data.levelLabels[l]">L{{ l }}</option>
                   </select>
-                  <span v-else>{{ r.placement ? `L${r.placement.level}` : 'None' }}</span>
+                  <span v-else>{{ r.placement ? `L${r.placement.level}` : defaultLevelFor(r) ? `L${defaultLevelFor(r)} (default)` : 'None' }}</span>
                 </td>
                 <td class="py-2.5 pr-3">
                   <select
