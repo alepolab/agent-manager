@@ -38,6 +38,7 @@ const SHIPPED = [
   ['schemas', 'assemble-bundle.mjs validates against schemas/evidence-bundle.v0.1.schema.json and halts without it'],
   ['recipes', 'registry.ts resolves <registry>/../../recipes/<key>.md; absent, every product silently has no recipe'],
   ['hooks', 'agentHooks.ts falls back to /app/engineering/hooks, and in a container that is the ONLY path that resolves: the staged installed_plugins.json records the host\'s installPath. Absent, preflight fails every run on "the guardrail hooks are on neither"'],
+  ['vendor', 'agentCaller.ts alepoSkillsDir falls back to /app/engineering/vendor/developer-workflow/skills, and in a container that is the ONLY path that resolves: the staged registry names the host\'s installPath and the marketplace clone is stripped. Absent, every run halts at Alepo Review'],
   ['.claude-plugin', 'teamSync reads the manifest for shippedVersion AND records this directory as the installed plugin, which is what puts it on the Plugins page; absent, the page is empty on an instance whose plugin is demonstrably installed'],
 ]
 

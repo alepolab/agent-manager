@@ -656,7 +656,8 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.deepEqual(byLabel['Implement Fix'].next, [id('Jira: Dev Done')], 'the board reads DEV DONE as soon as the code is written')
   assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
   assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Code Review')], 'review before anything is deployed')
-  assert.deepEqual(byLabel['Code Review'].next, [id('Update Stack')], 'the stack is rebuilt from the reviewed fix')
+  assert.deepEqual(byLabel['Code Review'].next, [id('Alepo Review')], 'Code Review hands to the Alepo review')
+  assert.deepEqual(byLabel['Alepo Review'].next, [id('Update Stack')], 'the stack is rebuilt from the twice-reviewed fix')
   assert.deepEqual(byLabel['Update Stack'].next, [id('Jira: QA In Progress')],
     'QA In Progress is posted immediately before the wave - a step cannot fire while its siblings start')
   assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Automated QA'), id('Manual QA'), id('Security Review')].sort(),
@@ -800,7 +801,9 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 
   assert.deepEqual(byLabel['Implement Fix'].next, [id('Code Review')], 'the fix is reviewed before anything else')
   assert.equal(byLabel['Code Review'].agentSlug, 'sdlc-ce-review')
-  assert.deepEqual(byLabel['Code Review'].next, [id('Jira: Dev Done')], 'and the reviewed fix hands to Jira, not straight to verification')
+  assert.deepEqual(byLabel['Code Review'].next, [id('Alepo Review')], 'Code Review hands to the Alepo review')
+  assert.equal(byLabel['Alepo Review'].agentSlug, 'sdlc-alepo-review')
+  assert.deepEqual(byLabel['Alepo Review'].next, [id('Jira: Dev Done')], 'and the reviewed fix hands to Jira, not straight to verification')
   assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
   assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Jira: QA In Progress')])
   assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
@@ -834,7 +837,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.notEqual(resynced.find(s => !unchanged(s)).id, byLabel['Jira: Ready for QA'].id,
     'and only the step it never had gets a new one')
   const rByLabel = Object.fromEntries(resynced.map(s => [s.label, s]))
-  assert.deepEqual(rByLabel['Code Review'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
+  assert.deepEqual(rByLabel['Alepo Review'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
 }
 
 // Runbook B reviews the feature the same way, before verification fans out.
@@ -846,7 +849,8 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   const id = label => byLabel[label].id
   assert.deepEqual(byLabel['Implement Feature'].next, [id('Code Review')], 'the feature is reviewed first')
   assert.equal(byLabel['Code Review'].agentSlug, 'sdlc-ce-review')
-  assert.deepEqual([...byLabel['Code Review'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
+  assert.deepEqual(byLabel['Code Review'].next, [id('Alepo Review')], 'Code Review hands to the Alepo review')
+  assert.deepEqual([...byLabel['Alepo Review'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
     'and verification, the trace and the security review see the reviewed change')
 }
 
@@ -872,10 +876,56 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 // not have.
 {
   const makers = AGENT_TEMPLATES.filter(a => CHANGE_MAKERS.test(a.id))
-  assert.deepEqual(makers.map(a => a.id).sort(), ['sdlc-ce-review', 'sdlc-ce-work', 'sdlc-feature-implementer', 'sdlc-fix-implementer'])
+  assert.deepEqual(makers.map(a => a.id).sort(), ['sdlc-alepo-review', 'sdlc-ce-review', 'sdlc-ce-work', 'sdlc-feature-implementer', 'sdlc-fix-implementer'])
   for (const a of makers) assert.match(a.body, /## The reviewer's brief\n[\s\S]*change-brief\.json/, `${a.id} is asked for the brief, so it carries the section`)
   // And the reviewer is told that a fix it commits means a new brief.
   assert.match(AGENT_TEMPLATES.find(a => a.id === 'sdlc-ce-review').body, /A fix you commit changes the change[^\n]*rewrite `change-brief\.json`/)
+}
+
+// The Alepo review: straight after Code Review in all three runbooks, reading
+// Alepo's own review skill from disk, and handing judgment calls to the person
+// at the next gate instead of stopping the run for them.
+{
+  const { toStack } = await import('../shared/utils/workflowStack.ts')
+  const after = {
+    'runbook-a-jira-to-diff': ['Jira: Dev Done'],
+    'runbook-b-feature-request-to-pr': ['Verify + Regression', 'Browser Trace', 'Security Review'],
+    'runbook-c-ce-ticket-to-pr': ['Update Stack'],
+  }
+  const any = new Set(Object.keys(after).flatMap(id => [...labelsOf(id)]))
+  for (const [templateId, nextLabels] of Object.entries(after)) {
+    const runbook = WORKFLOW_TEMPLATES.find(t => t.id === templateId)
+    const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
+    const steps = materializeTemplateSteps(runbook, slugs)
+    const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
+    const id = label => byLabel[label].id
+    const review = byLabel['Alepo Review']
+    assert.ok(review, `${templateId} has the Alepo Review step`)
+    assert.equal(review.agentSlug, 'sdlc-alepo-review', templateId)
+    assert.equal(review.monitorSlug, 'sdlc-step-monitor', `${templateId}: the step is monitored`)
+    assert.deepEqual(byLabel['Code Review'].next, [review.id], `${templateId}: Code Review hands to it and only to it`)
+    assert.deepEqual([...review.next].sort(), nextLabels.map(id).sort(), `${templateId}: it hands on to what Code Review used to`)
+    assert.equal(steps.filter(s => s.next.includes(review.id)).length, 1, `${templateId}: nothing else feeds it`)
+    assert.ok(!review.approval, `${templateId}: it is not a gate of its own`)
+    const r = toStack(steps.map(s => ({ id: s.id, label: s.label, next: s.next })))
+    assert.ok(r.ok, `${templateId} can still be drawn as a stack: ${r.reason ?? ''}`)
+    assert.deepEqual(reworkTargetProblems('sdlc-alepo-review', AGENT_TEMPLATES.find(a => a.id === 'sdlc-alepo-review').body, labelsOf(templateId), any), [], templateId)
+  }
+
+  const agent = AGENT_TEMPLATES.find(a => a.id === 'sdlc-alepo-review')
+  assert.ok(agent, 'the sdlc-alepo-review agent template ships')
+  assert.match(agent.body, /\$ALEPO_SKILLS_DIR\/review\/SKILL\.md/, 'it reads the review skill from disk')
+  assert.match(agent.body, /\$ALEPO_SKILLS_DIR\/review\/references\/checklist\.md/, 'and its checklist')
+  assert.match(agent.body, /If\s+`ALEPO_SKILLS_DIR` is empty or either file is not there[\s\S]*halt per "## Stopping"/, 'it halts when the skill is not on this instance')
+  assert.match(agent.body, /PIPELINE-HALT/, 'and knows how to')
+  assert.ok(!(agent.frontmatter.skills ?? []).includes('review'), 'the skill is read from disk, not declared and inlined')
+  assert.match(agent.body, /Never end with `PIPELINE-ASK:` for a judgment call/, 'judgment calls do not pause the run')
+  assert.match(agent.body, /judgment call[\s\S]*change-brief\.json/, 'they go to the person in the brief')
+  assert.match(agent.body, /below 80/, 'the skill\'s confidence filter')
+  assert.match(agent.body, /alepo-review\.md/, 'its artifact')
+  assert.match(agent.body, /ALEPO-REVIEW: <n> findings, <f> fixed, <j> for the person, <d> dropped — PASS/)
+  assert.match(agent.body, /Never push, never touch a remote/)
+  assert.match(agent.body, /## The reviewer's brief\n/)
 }
 
 console.log('workflowTemplates: all assertions passed')

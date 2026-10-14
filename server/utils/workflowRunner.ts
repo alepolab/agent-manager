@@ -595,10 +595,11 @@ const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stop
  * at one problem, not two problems. Code review has its own: it runs earlier
  * and judges the approach and the standards, not whether the commit passes,
  * so two "the approach is wrong" from it must not leave a proven regression
- * found later with no automatic send-back at all.
+ * found later with no automatic send-back at all. The Alepo review shares it:
+ * it is a second look at the same approach, before anything is verified.
  */
 const reworkBucket = (agentSlug?: string): 'ci' | 'verification' | 'review' =>
-  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' ? 'review' : 'verification'
+  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' || agentSlug === 'sdlc-alepo-review' ? 'review' : 'verification'
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
