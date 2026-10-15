@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkflowParameter } from '~/types'
-import { RESERVED_PARAM_PROJECT_DIR } from '~~/shared/utils/workflowParameters'
+import { isFileParameter, RESERVED_PARAM_PROJECT_DIR } from '~~/shared/utils/workflowParameters'
 
 const props = defineProps<{
   open: boolean
@@ -29,7 +29,41 @@ const declared = computed(() => props.parameters ?? [])
 const bindsProjectDir = computed(() => declared.value.some(p => p.name === RESERVED_PARAM_PROJECT_DIR))
 const unfilled = computed(() =>
   declared.value.filter(p => p.required && !(values.value[p.name] ?? '').trim()).map(p => p.name))
-const canStart = computed(() => !!prompt.value.trim() && !unfilled.value.length)
+/** File inputs: which one is uploading, what each last uploaded, and why one failed. */
+const uploading = ref<string | null>(null)
+const uploaded = ref<Record<string, { name: string, size: number }>>({})
+const uploadError = ref<Record<string, string>>({})
+const canStart = computed(() => !!prompt.value.trim() && !unfilled.value.length && !uploading.value)
+
+const formatSize = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
+
+function pickFile(name: string) {
+  (document.getElementById(`run-upload-${name}`) as HTMLInputElement | null)?.click()
+}
+
+/**
+ * Sends the chosen file to the server and puts the path it lands at in the
+ * input: agents run on the server, and cannot read this machine's files.
+ */
+async function onFileChosen(name: string, e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  uploading.value = name
+  uploadError.value = { ...uploadError.value, [name]: '' }
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    const saved = await $fetch<{ path: string, name: string, size: number }>('/api/uploads', { method: 'POST', body: form })
+    values.value = { ...values.value, [name]: saved.path }
+    uploaded.value = { ...uploaded.value, [name]: { name: saved.name, size: saved.size } }
+  } catch (err: any) {
+    uploadError.value = { ...uploadError.value, [name]: err?.data?.message || err?.message || 'Upload failed' }
+  } finally {
+    uploading.value = null
+  }
+}
 
 function reset() {
   prompt.value = props.initial?.prompt ?? ''
@@ -42,6 +76,8 @@ function reset() {
   // field it replaced did: a workflow that declares `projectDir` to say what
   // the directory MEANS must not cost the operator the prefill they had when
   // the same box was called "Project folder".
+  uploaded.value = {}
+  uploadError.value = {}
   values.value = Object.fromEntries(declared.value.map(p => [
     p.name, props.initial?.parameters?.[p.name] ?? p.default
       ?? (p.name === RESERVED_PARAM_PROJECT_DIR ? workingDir.value : ''),
@@ -104,11 +140,39 @@ watch(() => props.open, (val) => {
                   style="color: var(--text-disabled);"
                 >optional</span>
               </label>
-              <input
-                v-model="values[param.name]"
-                :placeholder="param.default || (param.name === RESERVED_PARAM_PROJECT_DIR ? '/Users/you/projects/my-app' : '')"
-                class="field-input w-full"
-              >
+              <div class="flex items-center gap-2">
+                <input
+                  v-model="values[param.name]"
+                  :placeholder="param.default || (param.name === RESERVED_PARAM_PROJECT_DIR ? '/Users/you/projects/my-app' : '')"
+                  class="field-input w-full"
+                  @input="() => { delete uploaded[param.name] }"
+                >
+                <template v-if="isFileParameter(param)">
+                  <input
+                    :id="`run-upload-${param.name}`"
+                    type="file"
+                    class="hidden"
+                    :accept="param.accept || undefined"
+                    @change="(e) => onFileChosen(param.name, e)"
+                  >
+                  <UButton
+                    :label="uploading === param.name ? 'Uploading…' : 'Upload'"
+                    icon="i-lucide-upload"
+                    size="sm"
+                    variant="soft"
+                    class="shrink-0"
+                    :loading="uploading === param.name"
+                    :disabled="!!uploading"
+                    @click="() => { pickFile(param.name) }"
+                  />
+                </template>
+              </div>
+              <span v-if="uploaded[param.name]" class="field-hint">
+                Uploaded {{ uploaded[param.name]!.name }} ({{ formatSize(uploaded[param.name]!.size) }}). The agents read it from the server.
+              </span>
+              <span v-if="uploadError[param.name]" class="field-hint" style="color: var(--error);">
+                {{ uploadError[param.name] }}
+              </span>
               <span v-if="param.description" class="field-hint">{{ param.description }}</span>
               <span v-else-if="param.name === RESERVED_PARAM_PROJECT_DIR" class="field-hint">
                 Agents will read and write files in this directory.

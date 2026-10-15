@@ -1,7 +1,8 @@
 import { requireCapability } from '../../../utils/session.ts'
 import { startRun, WorkspaceBusyError } from '../../../utils/workflowRunner.ts'
 import { readWorkflow } from '../../../utils/workflows.ts'
-import { resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
+import { isFileParameter, resolveParameters, RESERVED_PARAM_PROJECT_DIR } from '../../../../shared/utils/workflowParameters.ts'
+import { uploadProblem } from '../../../utils/uploads.ts'
 import { toWorkflowLike } from '../../../utils/workflowRunStore.ts'
 import { canonicalProjectDir } from '../../../utils/workspace.ts'
 import { claimManualStart, ManualStartRefused, oneStartPerTicket } from '../../../utils/manualStart.ts'
@@ -48,6 +49,13 @@ export default defineEventHandler(async (event) => {
       message: `This workflow needs ${missing.length === 1 ? 'a value' : 'values'} for ${missing.join(', ')}`,
       data: { missing },
     })
+  }
+  // A file input carries a path. An upload that is someone else's, or that is
+  // gone, is refused here; a typed path is left to the starter, as text is.
+  for (const param of workflow.parameters ?? []) {
+    const value = parameters[param.name]
+    const problem = isFileParameter(param) && value ? uploadProblem(value, user?.login) : null
+    if (problem) throw createError({ statusCode: 400, message: `${param.name}: ${problem}` })
   }
   // The one parameter the runner acts on instead of merely stating. An
   // explicit value wins over the request's own projectDir, because the
