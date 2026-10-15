@@ -1,0 +1,22 @@
+# The defect-register stack: ase-crm's own compose, renamed and on its own
+# network so it cannot collide with the other ase-crm stacks on this host.
+services:
+  mariadb:
+    container_name: dr-mariadb
+    volumes:
+      - /home/alepo/defect-stack/clock:/faketime
+  minio:
+    container_name: dr-minio
+  cube:
+    container_name: dr-cube
+  app:
+    container_name: dr-app
+    image: defect-register/ase-crm:develop
+    volumes:
+      - /home/alepo/defect-stack/clock:/faketime
+  billing:
+    container_name: dr-billing
+networks:
+  alepo-dev:
+    name: dr-net
+    external: false

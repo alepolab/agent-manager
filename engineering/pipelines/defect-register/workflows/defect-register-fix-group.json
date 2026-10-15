@@ -1,0 +1,82 @@
+{
+  "name": "Defect register — fix one group",
+  "description": "Started by the fix fan-out, once per approved group, in rank order: reproduces, makes the smallest fix with a unit test, verifies, and opens one PR against develop in the defect-register format. Runs one at a time, because fixes share the live stack.",
+  "parameters": [
+    {
+      "name": "stateDir",
+      "description": "The pipeline's working folder, shared across its runs: backlog, triage verdicts, ranked.md, fixes.",
+      "default": "~/defect-register"
+    },
+    {
+      "name": "productRepo",
+      "description": "The product repository, owner/name.",
+      "default": "alepolab/ase-crm"
+    },
+    {
+      "name": "productBase",
+      "description": "The product branch fixes start from and PRs target.",
+      "default": "develop"
+    },
+    {
+      "name": "testRepo",
+      "description": "The Playwright repository with the failing specs.",
+      "default": "alepolab/ase-crm-testPlaywright"
+    },
+    {
+      "name": "testBranch",
+      "description": "The test repository branch the register was built from.",
+      "default": "workflow/main"
+    },
+    {
+      "name": "appUrl",
+      "description": "The live stack's ase-crm app.",
+      "default": "http://localhost:18081"
+    },
+    {
+      "name": "keycloakUrl",
+      "description": "The live stack's Keycloak.",
+      "default": "http://localhost:19091"
+    },
+    {
+      "name": "dbPort",
+      "description": "The live stack's MariaDB port.",
+      "default": "13307"
+    },
+    {
+      "name": "billingUrl",
+      "description": "The live stack's billing service.",
+      "default": "http://localhost:18107"
+    },
+    {
+      "name": "faketimeFile",
+      "description": "The live stack's libfaketime clock file (the tests' FAKETIME_FILE).",
+      "default": "/home/alepo/defect-stack/clock/ts"
+    }
+  ],
+  "steps": [
+    {
+      "id": "fix",
+      "agentSlug": "defect-register-fixer",
+      "label": "Fix and verify",
+      "next": [
+        "open-pr"
+      ],
+      "monitorSlug": "sdlc-step-monitor",
+      "maxVisits": 2,
+      "testsUnlocked": true,
+      "produces": [
+        "fix-report.md"
+      ]
+    },
+    {
+      "id": "open-pr",
+      "agentSlug": "defect-register-pr-opener",
+      "label": "Open PR",
+      "produces": [
+        "pr.md"
+      ]
+    }
+  ],
+  "createdAt": "2026-10-14T12:00:00.000Z",
+  "group": "defect-register-stack"
+}

@@ -1,0 +1,146 @@
+{
+  "name": "Defect register — triage and first batch",
+  "description": "Reads the ase-crm Defect Register, confirms which defects still reproduce on develop, ranks them simplest-first, stops for a person to approve the order and batch, then raises one fix PR per root cause and reports.",
+  "parameters": [
+    {
+      "name": "registerFile",
+      "description": "The Defect Register HTML. Upload it here, or give a path on the server.",
+      "required": true,
+      "default": "~/defect-register/ase-crm Defect Register_12Oct.html",
+      "type": "file",
+      "accept": ".html,.htm"
+    },
+    {
+      "name": "stateDir",
+      "description": "The pipeline's working folder, shared across its runs: backlog, triage verdicts, ranked.md, fixes.",
+      "default": "~/defect-register"
+    },
+    {
+      "name": "productRepo",
+      "description": "The product repository, owner/name.",
+      "default": "alepolab/ase-crm"
+    },
+    {
+      "name": "productBase",
+      "description": "The product branch fixes start from and PRs target.",
+      "default": "develop"
+    },
+    {
+      "name": "testRepo",
+      "description": "The Playwright repository with the failing specs.",
+      "default": "alepolab/ase-crm-testPlaywright"
+    },
+    {
+      "name": "testBranch",
+      "description": "The test repository branch the register was built from.",
+      "default": "workflow/main"
+    },
+    {
+      "name": "appUrl",
+      "description": "The live stack's ase-crm app.",
+      "default": "http://localhost:18081"
+    },
+    {
+      "name": "keycloakUrl",
+      "description": "The live stack's Keycloak.",
+      "default": "http://localhost:19091"
+    },
+    {
+      "name": "dbPort",
+      "description": "The live stack's MariaDB port.",
+      "default": "13307"
+    },
+    {
+      "name": "billingUrl",
+      "description": "The live stack's billing service.",
+      "default": "http://localhost:18107"
+    },
+    {
+      "name": "faketimeFile",
+      "description": "The live stack's libfaketime clock file (the tests' FAKETIME_FILE).",
+      "default": "/home/alepo/defect-stack/clock/ts"
+    },
+    {
+      "name": "batchSize",
+      "description": "How many groups a batch fixes when the approver does not name them.",
+      "default": "5"
+    }
+  ],
+  "steps": [
+    {
+      "id": "ingest",
+      "agentSlug": "defect-register-ingest",
+      "label": "Ingest and group",
+      "next": [
+        "triage-each"
+      ],
+      "produces": [
+        "backlog.json",
+        "areas.json",
+        "feature-backlog.md",
+        "ingest-report.md"
+      ]
+    },
+    {
+      "id": "triage-each",
+      "agentSlug": "sdlc-auto-dispatcher",
+      "label": "Triage each area",
+      "next": [
+        "rank"
+      ],
+      "triggerWorkflow": {
+        "source": "areas.json",
+        "slug": "defect-register-triage-area",
+        "join": true
+      }
+    },
+    {
+      "id": "rank",
+      "agentSlug": "defect-register-ranker",
+      "label": "Rank by fix complexity",
+      "next": [
+        "plan-batch"
+      ],
+      "produces": [
+        "ranked.md",
+        "ranked.json"
+      ]
+    },
+    {
+      "id": "plan-batch",
+      "agentSlug": "defect-register-batch-planner",
+      "label": "Plan the batch",
+      "next": [
+        "fix-each"
+      ],
+      "produces": [
+        "batch.json",
+        "batch-plan.md",
+        "review.md"
+      ]
+    },
+    {
+      "id": "fix-each",
+      "agentSlug": "sdlc-auto-dispatcher",
+      "label": "Fix each group",
+      "next": [
+        "report"
+      ],
+      "triggerWorkflow": {
+        "source": "batch.json",
+        "slug": "defect-register-fix-group",
+        "join": true
+      },
+      "approval": true
+    },
+    {
+      "id": "report",
+      "agentSlug": "defect-register-reporter",
+      "label": "Report",
+      "produces": [
+        "report.md"
+      ]
+    }
+  ],
+  "createdAt": "2026-10-14T12:00:00.000Z"
+}

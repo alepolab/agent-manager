@@ -1,0 +1,69 @@
+{
+  "name": "Defect register — triage one area",
+  "description": "Started by the triage fan-out, once per area: confirms which of the area's groups still reproduce on develop and why, with file:line evidence. Changes no code. Runs one at a time with the fixes, because they share the live stack.",
+  "parameters": [
+    {
+      "name": "stateDir",
+      "description": "The pipeline's working folder, shared across its runs: backlog, triage verdicts, ranked.md, fixes.",
+      "default": "~/defect-register"
+    },
+    {
+      "name": "productRepo",
+      "description": "The product repository, owner/name.",
+      "default": "alepolab/ase-crm"
+    },
+    {
+      "name": "productBase",
+      "description": "The product branch fixes start from and PRs target.",
+      "default": "develop"
+    },
+    {
+      "name": "testRepo",
+      "description": "The Playwright repository with the failing specs.",
+      "default": "alepolab/ase-crm-testPlaywright"
+    },
+    {
+      "name": "testBranch",
+      "description": "The test repository branch the register was built from.",
+      "default": "workflow/main"
+    },
+    {
+      "name": "appUrl",
+      "description": "The live stack's ase-crm app.",
+      "default": "http://localhost:18081"
+    },
+    {
+      "name": "keycloakUrl",
+      "description": "The live stack's Keycloak.",
+      "default": "http://localhost:19091"
+    },
+    {
+      "name": "dbPort",
+      "description": "The live stack's MariaDB port.",
+      "default": "13307"
+    },
+    {
+      "name": "billingUrl",
+      "description": "The live stack's billing service.",
+      "default": "http://localhost:18107"
+    },
+    {
+      "name": "faketimeFile",
+      "description": "The live stack's libfaketime clock file (the tests' FAKETIME_FILE).",
+      "default": "/home/alepo/defect-stack/clock/ts"
+    }
+  ],
+  "steps": [
+    {
+      "id": "triage",
+      "agentSlug": "defect-register-triage-area",
+      "label": "Triage area",
+      "produces": [
+        "triage.json",
+        "triage-report.md"
+      ]
+    }
+  ],
+  "createdAt": "2026-10-14T12:00:00.000Z",
+  "group": "defect-register-stack"
+}

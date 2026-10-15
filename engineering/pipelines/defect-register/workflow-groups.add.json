@@ -1,0 +1,7 @@
+[
+  {
+    "id": "defect-register-stack",
+    "name": "Defect register (shared stack)",
+    "maxConcurrent": 1
+  }
+]

@@ -1,0 +1,104 @@
+{
+  "name": "Defect register — next batch",
+  "description": "Fixes the next approved batch of a defect register that has already been triaged and ranked: one PR per group, simplest first, then updates ranked.md and reports.",
+  "parameters": [
+    {
+      "name": "groups",
+      "description": "The approved group keys, one per line. Empty: the next batchSize groups by rank.",
+      "default": ""
+    },
+    {
+      "name": "batchSize",
+      "description": "How many groups to fix when no groups are named.",
+      "default": "5"
+    },
+    {
+      "name": "stateDir",
+      "description": "The pipeline's working folder, shared across its runs: backlog, triage verdicts, ranked.md, fixes.",
+      "default": "~/defect-register"
+    },
+    {
+      "name": "productRepo",
+      "description": "The product repository, owner/name.",
+      "default": "alepolab/ase-crm"
+    },
+    {
+      "name": "productBase",
+      "description": "The product branch fixes start from and PRs target.",
+      "default": "develop"
+    },
+    {
+      "name": "testRepo",
+      "description": "The Playwright repository with the failing specs.",
+      "default": "alepolab/ase-crm-testPlaywright"
+    },
+    {
+      "name": "testBranch",
+      "description": "The test repository branch the register was built from.",
+      "default": "workflow/main"
+    },
+    {
+      "name": "appUrl",
+      "description": "The live stack's ase-crm app.",
+      "default": "http://localhost:18081"
+    },
+    {
+      "name": "keycloakUrl",
+      "description": "The live stack's Keycloak.",
+      "default": "http://localhost:19091"
+    },
+    {
+      "name": "dbPort",
+      "description": "The live stack's MariaDB port.",
+      "default": "13307"
+    },
+    {
+      "name": "billingUrl",
+      "description": "The live stack's billing service.",
+      "default": "http://localhost:18107"
+    },
+    {
+      "name": "faketimeFile",
+      "description": "The live stack's libfaketime clock file (the tests' FAKETIME_FILE).",
+      "default": "/home/alepo/defect-stack/clock/ts"
+    }
+  ],
+  "steps": [
+    {
+      "id": "plan-batch",
+      "agentSlug": "defect-register-batch-planner",
+      "label": "Plan the batch",
+      "next": [
+        "fix-each"
+      ],
+      "produces": [
+        "batch.json",
+        "batch-plan.md",
+        "review.md"
+      ]
+    },
+    {
+      "id": "fix-each",
+      "agentSlug": "sdlc-auto-dispatcher",
+      "label": "Fix each group",
+      "next": [
+        "report"
+      ],
+      "triggerWorkflow": {
+        "source": "batch.json",
+        "slug": "defect-register-fix-group",
+        "join": true
+      },
+      "approval": true
+    },
+    {
+      "id": "report",
+      "agentSlug": "defect-register-reporter",
+      "label": "Report",
+      "produces": [
+        "report.md"
+      ]
+    }
+  ],
+  "createdAt": "2026-10-14T12:00:00.000Z"
+}
