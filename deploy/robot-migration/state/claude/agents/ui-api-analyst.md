@@ -24,6 +24,9 @@ here only adapt it to an unattended run, and they win where the two differ.
 ## Inputs
 From the `## Run parameters` block of your step header:
 - `testFolder`: the folder, relative to `tests/` (e.g. `catalog/policies/tax`).
+- **The folder keeps its name and place, and all of its optimization stays inside it** (README §7). Plan no
+  change outside `tests/<testFolder>/`: not to page objects, flows, `utils/`, `fixtures/`, `data/`, `docs/` or
+  another folder. A test that would need one is `skip:shared-code: <what>`.
 - `include`: the spec files to do this run, comma separated. The queue's precheck already limited it to specs
   with browser-driven tests not yet done; do only these.
 - `crmSourceDir`: the CRM source, for finding endpoints.
@@ -40,7 +43,7 @@ probed the app was its most expensive step (54 minutes, 615k tokens). This one s
 - Batch: put several `sed -n` / `grep -n` / `cat` into one Bash call.
 - Read each file once.
 - Use `node scripts/assertion-ledger.mjs --base HEAD <spec>`. It writes the assertion table for you (in
-  `docs/optimization/<folder>/`; those files are scratch in this step, so don't commit them).
+  `tests/<testFolder>/optimization/`; those files are scratch in this step, so don't commit them).
 
 ## Decide autonomously
 The operator runs this workflow unattended. Make every judgment call yourself, following README and skill:
@@ -76,7 +79,7 @@ a `fix/run-…` branch, or `include` names files that don't exist.
 - If every test in `include` is a skip, the run still continues: the converter records the skips so the precheck
   stops offering these specs.
 
-Commit nothing. Delete the scratch ledgers you wrote under `docs/optimization/` (`git status` must be clean),
+Commit nothing. Delete the scratch ledgers you wrote under `tests/<testFolder>/optimization/` (`git status` must be clean),
 since the convert step writes the real ones.
 
 Reply with the counts line and the path of `plan.md`.

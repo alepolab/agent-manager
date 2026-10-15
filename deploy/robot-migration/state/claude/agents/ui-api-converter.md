@@ -67,13 +67,14 @@ and the PR step.
 2. `node scripts/assertion-ledger.mjs --base <base> <each spec in include>` exits 0. Never get to green by
    weakening an assertion, by moving a UI assertion out of the UI test, or by recording a non-sync assertion as a
    drop.
-3. `git diff <base> --stat` shows only:
-   - the specs in `include` and their `.api.spec.ts`;
-   - `utils/opt/<folder-slug>.ts`;
-   - `docs/optimization/<testFolder>/`.
+3. **Everything stays in the folder** (README §7). `git diff <base> --name-only` must list only:
+   - the specs in `include` and their `.api.spec.ts` siblings in `tests/<testFolder>/`;
+   - files under `tests/<testFolder>/optimization/`.
 
-   Anything else (a page object, a flow, `utils/api.ts`, another folder) needs a reason in the brief. Changing a
-   page object's behaviour is not allowed: add a method instead.
+   Anything else must be reverted:
+   - page objects, flows, components, `utils/`, `fixtures/`, `data/`, `setup/`, `docs/`, other folders;
+   - a missing locator: use `page.getBy…` in the spec;
+   - wrong shared code: `skip:shared-code`.
 4. Bookkeeping per README §6: `status.csv` gets a row for **every** spec in `include`, including all-skipped ones,
    or the precheck offers them again. Then `skipped.csv`, `drops.csv` and the ledger files.
 
