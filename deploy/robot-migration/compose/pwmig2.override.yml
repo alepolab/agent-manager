@@ -1,0 +1,144 @@
+# Lane 2's CRM stack: the same services as pwmig.override.yml, in compose project `pwmig2`, on its own
+# network, with its own volumes (pwmig2_*). Agent Manager stays in project `pwmig` and reaches this stack
+# through `ports` below, which lives in pwmig-am's network namespace (pwmig-am is attached to pwmig2-net).
+#
+#   docker compose -p pwmig2 -f /src/ase-crm/docker/docker-compose.yml -f pwmig2.override.yml \
+#     --env-file /src/ase-crm/.env --env-file pwmig2.env up -d
+#
+# Same isolation rules as lane 1: no published ports, our own network, every name pwmig2-*, limits on all.
+services:
+  mariadb:
+    image: pwmig/mariadb-faketime:latest
+    build: !reset null
+    pull_policy: never
+    container_name: pwmig2-mariadb
+    ports: !reset []
+    networks: !override [pwmig2]
+    volumes: !override
+      - mariadb-data:/var/lib/mysql
+      - &faketime { type: volume, source: faketime, target: /faketime, volume: { subpath: ui2 } }
+    mem_limit: 2g
+    cpus: 1.5
+
+  minio:
+    image: pwmig/s3mock:3.12.0
+    pull_policy: never
+    container_name: pwmig2-minio
+    ports: !reset []
+    networks: !override [pwmig2]
+    mem_limit: 512m
+    cpus: 0.5
+
+  cube:
+    image: pwmig/cube:v1.7.40
+    pull_policy: never
+    container_name: pwmig2-cube
+    ports: !reset []
+    networks: !override [pwmig2]
+    volumes: !override
+      - { type: volume, source: src, target: /cube/conf/model, read_only: true, volume: { subpath: ase-crm/cube/model } }
+      - { type: volume, source: src, target: /cube/conf/cube.js, read_only: true, volume: { subpath: ase-crm/cube/cube.js } }
+    mem_limit: 768m
+    cpus: 0.5
+
+  billing:
+    image: pwmig/alepobilling-14:v14.0.9
+    pull_policy: never
+    container_name: pwmig2-billing
+    ports: !reset []
+    networks: !override [pwmig2]
+    mem_limit: 1g
+    cpus: 1
+
+  app:
+    image: pwmig/docker-app:latest
+    build: !reset null
+    pull_policy: never
+    container_name: pwmig2-app
+    ports: !reset []
+    networks: !override [pwmig2]
+    volumes: !override
+      - *faketime
+      - ase-templates:${ASE_TEMPLATES_DIR:-/var/lib/ase/templates}
+      - ase-documents:${ASE_DOCUMENTS_DIR:-/var/lib/ase/documents}
+      - ase-exports:${ASE_EXPORTS_DIR:-/var/lib/ase/exports}
+      - ase-imports:${ASE_IMPORTS_DIR:-/var/lib/ase/imports}
+    environment:
+      LD_PRELOAD: ${APP_LD_PRELOAD:-}
+      KEYCLOAK_ISSUER_URI: http://localhost:${KC_PORT}/realms/alepo
+      KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/alepo/protocol/openid-connect/certs
+    depends_on:
+      keycloak:
+        condition: service_started
+    mem_limit: 3g
+    cpus: 2
+
+  keycloak:
+    image: pwmig/keycloak:26.0
+    pull_policy: never
+    container_name: pwmig2-keycloak
+    command: ["start", "--optimized", "--import-realm", "--http-enabled=true", "--hostname-strict=false", "--cache=local"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HOSTNAME_STRICT: "false"
+      LD_PRELOAD: ${KC_LD_PRELOAD:-}
+      FAKETIME_TIMESTAMP_FILE: /faketime/ts
+      FAKETIME_DONT_FAKE_MONOTONIC: "1"
+    volumes:
+      - keycloak-data:/opt/keycloak/data/h2
+      - *faketime
+      - { type: volume, source: src, target: /opt/keycloak/data/import, read_only: true, volume: { subpath: ase-crm/keycloak } }
+    networks: [pwmig2]
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 3
+
+  # The app reaches Keycloak at the issuer address (localhost:KC_PORT) from inside its own container.
+  keycloak-forward:
+    image: pwmig/socat:latest
+    pull_policy: never
+    container_name: pwmig2-keycloak-forward
+    network_mode: "service:app"
+    command: ["TCP-LISTEN:${KC_PORT},fork,reuseaddr", "TCP:keycloak:8080"]
+    depends_on: [app]
+    restart: unless-stopped
+    mem_limit: 64m
+
+  # Inside pwmig-am, localhost:<port> reaches this stack (stack.sh test-env ui2). Container names, not
+  # service names: pwmig-am is on both networks, where `app` would be ambiguous.
+  ports:
+    image: pwmig/socat:latest
+    pull_policy: never
+    container_name: pwmig2-ports
+    network_mode: "container:pwmig-am"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        socat TCP-LISTEN:${APP_PORT},fork,reuseaddr TCP:pwmig2-app:8081 &
+        socat TCP-LISTEN:${KC_PORT},fork,reuseaddr TCP:pwmig2-keycloak:8080 &
+        socat TCP-LISTEN:${MARIADB_PORT},fork,reuseaddr TCP:pwmig2-mariadb:3306 &
+        socat TCP-LISTEN:${BILLING_PORT},fork,reuseaddr TCP:pwmig2-billing:8007 &
+        socat TCP-LISTEN:${MINIO_API_PORT},fork,reuseaddr TCP:pwmig2-minio:9000 &
+        wait
+    restart: unless-stopped
+    mem_limit: 64m
+
+networks:
+  alepo-dev: !reset null
+  pwmig2:
+    name: pwmig2-net
+    ipam:
+      config:
+        - subnet: ${PWMIG2_SUBNET}
+
+volumes:
+  keycloak-data: {}
+  # Lane 1's offset volume, each stack in its own subdirectory (ui2/ts here): pwmig-am already mounts it
+  # at /faketime, so the suite writes this stack's offset to /faketime/ui2/ts.
+  faketime:
+    external: true
+    name: pwmig_faketime
+  src:
+    external: true
+    name: pwmig_src

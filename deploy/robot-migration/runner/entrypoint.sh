@@ -43,6 +43,10 @@ done
 if [[ ! -L $S/docker/stacks/ui/faketime ]]; then
   rm -rf "$S/docker/stacks/ui/faketime"; mkdir -p "$S/docker/stacks/ui"; ln -s /faketime "$S/docker/stacks/ui/faketime"
 fi
+# Lane 2's stack (ui2, compose project pwmig2) reads its offset from the ui2 subdirectory of the same volume.
+if [[ -f $S/docker/stacks/ui2.env && ! -L $S/docker/stacks/ui2/faketime ]]; then
+  rm -rf "$S/docker/stacks/ui2/faketime"; mkdir -p "$S/docker/stacks/ui2"; ln -s /faketime/ui2 "$S/docker/stacks/ui2/faketime"
+fi
 # --include=dev: this container runs with NODE_ENV=production (for Agent Manager), which makes npm skip
 # devDependencies, and the suite has nothing else. Without it npm ci installed nothing, and the browser
 # install below then ran npx's own newer Playwright, so the suite's version found no browser.

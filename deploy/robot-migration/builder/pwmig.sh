@@ -16,6 +16,11 @@
 #   check       runs the access check inside pwmig-am
 #   status | logs <service> | down (keeps every volume) | update (fetch + build + recreate app and am)
 #   redeploy    build + recreate app and am, without fetch (after an import)
+# Lane 2 (a second CRM stack, compose project pwmig2, for a second queue lane):
+#   lane2-seed  copies lane 1's data into lane 2 (empty lane 2 only): crm14_db by mariadb-dump, Keycloak's H2
+#               files with pwmig-keycloak stopped for about a minute. Run it between two folders.
+#   lane2-up    starts lane 2, attaches pwmig-am to pwmig2-net, sets Keycloak's redirects for its app port
+#   lane2-down  stops lane 2 (keeps every pwmig2_* volume)
 #   deploy-key  makes the suite's push key in pwmig-am (once) and prints its public half: add it to the
 #               suite repo as a deploy key with write access, and each delivered folder is pushed
 # Everything it creates is named pwmig*: containers, images, volumes, the network. It never touches anything else.
@@ -151,6 +156,57 @@ build() {
 
 kc() { docker exec pwmig-keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
 
+# Lane 2: the second CRM stack. Its settings come from pwmig2.env, read only here (the rest stays lane 1).
+dc2() {
+  docker compose -p pwmig2 -f /src/ase-crm/docker/docker-compose.yml -f $KIT/compose/pwmig2.override.yml \
+    --env-file /src/ase-crm/.env --env-file $KIT/compose/pwmig2.env "$@"
+}
+l2() { (set -a; source $KIT/compose/pwmig2.env; set +a; echo "${!1}"); }
+kc2() { docker exec pwmig2-keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+wait_healthy() { until [[ $(docker inspect -f '{{.State.Health.Status}}' "$1" 2>/dev/null) == healthy ]]; do sleep 3; done; }
+
+lane2_seed() {
+  local pw=${MARIADB_ROOT_PASSWORD:-root}
+  [[ -z $(docker ps -aq --filter label=com.docker.compose.project=pwmig2 --filter status=running) ]] \
+    || die "lane 2 is running; lane2-seed only fills an empty, stopped lane 2"
+  docker volume inspect pwmig2_mariadb-data >/dev/null 2>&1 && die "pwmig2_mariadb-data exists: lane 2 is already seeded"
+  # One subdirectory per stack in the shared offset volume (pwmig2.override.yml mounts subpath ui2).
+  docker run --rm --entrypoint sh -v ${P}_faketime:/f pwmig/socat:latest -c 'mkdir -p /f/ui2 && chmod 0777 /f/ui2' >/dev/null
+  log "copying Keycloak's data (pwmig-keycloak stops for about a minute)"
+  docker volume create pwmig2_keycloak-data >/dev/null
+  docker stop pwmig-keycloak >/dev/null
+  docker run --rm --entrypoint sh -v ${P}_keycloak-data:/a:ro -v pwmig2_keycloak-data:/b pwmig/socat:latest -c 'cp -a /a/. /b/' \
+    || { docker start pwmig-keycloak >/dev/null; die "copying Keycloak's data failed; pwmig-keycloak restarted"; }
+  docker start pwmig-keycloak >/dev/null
+  log "starting pwmig2-mariadb and copying crm14_db into it"
+  dc2 up -d --no-build mariadb
+  wait_healthy pwmig2-mariadb
+  docker exec pwmig-mariadb mariadb-dump -uroot -p"$pw" --single-transaction --routines --triggers --events \
+      --databases crm14_db | docker exec -i pwmig2-mariadb mariadb -uroot -p"$pw"
+  log "lane 2 seeded: $(docker exec pwmig2-mariadb mariadb -uroot -p"$pw" -N -e 'select count(*) from information_schema.tables where table_schema="crm14_db"') tables"
+}
+
+lane2_up() {
+  local port; port=$(l2 APP_PORT)
+  docker volume inspect pwmig2_mariadb-data >/dev/null 2>&1 || die "lane 2 has no data yet: run lane2-seed first"
+  dc2 up -d --no-build mariadb keycloak minio cube billing
+  log "waiting for lane 2's Keycloak"
+  until kc2 config credentials --server http://localhost:8080 --realm master --user admin --password admin >/dev/null 2>&1; do sleep 3; done
+  local cid; cid=$(kc2 get clients -r alepo -q clientId=crm-client --fields id --format csv --noquotes)
+  kc2 update "clients/$cid" -r alepo \
+    -s "redirectUris=[\"http://localhost:$port/*\",\"http://127.0.0.1:$port/*\"]" \
+    -s "webOrigins=[\"http://localhost:$port\",\"http://127.0.0.1:$port\"]"
+  dc2 up -d --no-build app keycloak-forward
+  # pwmig2-ports lives in pwmig-am's namespace and resolves pwmig2-* names there (stackctl keeps this up later).
+  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' pwmig-am | grep -qw pwmig2-net \
+    || docker network connect pwmig2-net pwmig-am
+  dc2 up -d --no-build --force-recreate ports
+  log "waiting for lane 2's app (localhost:$port inside pwmig-am)"
+  until [[ $(docker exec pwmig-am curl -s -o /dev/null -w '%{http_code}' -m 5 http://localhost:$port/actuator/health 2>/dev/null) == 200 ]]; do sleep 10; done
+  docker ps -a --filter label=com.docker.compose.project=pwmig2 --format '  {{.Names}}\t{{.Status}}'
+}
+
+
 up() {
   dc up -d --no-build
   # The faketime volume is written by the tests (uid of pwuser in pwmig-am) and read by app, DB and Keycloak.
@@ -198,5 +254,8 @@ case ${1:-} in
   update) fetch; redeploy ;;
   redeploy) redeploy ;;
   deploy-key) deploy_key ;;
-  *) sed -n '2,22p' "$0"; exit 1 ;;
+  lane2-seed) lane2_seed ;;
+  lane2-up) lane2_up ;;
+  lane2-down) dc2 down ;;
+  *) sed -n '2,26p' "$0"; exit 1 ;;
 esac
