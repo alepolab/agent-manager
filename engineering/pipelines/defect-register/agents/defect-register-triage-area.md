@@ -25,6 +25,7 @@ Keep one clone of each repo under `<stateDir>/repos/`. Fetch, then use `origin/<
 - Never restart, rebuild or reconfigure shared containers.
 - libfaketime offsets must be signed (`+N s x1`). Never move the app clock ahead of real time: Keycloak and billing do not follow it (401).
 - Before the first test, check the stack answers (`appUrl`, `keycloakUrl`, `billingUrl`). If it does not, stop and report `stack-down` for the area; do not guess verdicts.
+- Keep scratch files (scripts, probes, logs) under `<run artifacts directory>/work/`, never in `/tmp`. Other areas run as the same user, and a shared `/tmp/build_triage.py` was overwritten mid-run by another area's agent, which then wrote into the wrong run.
 
 ## For each group
 1. **Find the code path** on develop: the controller, the operation chain in `backend/pipeline/src/main/resources/pipeline/legacy/crm-operations.txt`, the processors, the frontend module under `frontend/src/modules/**`, and the tables written. Treat `dev_hint` as a lead, not a fact: confirm it in the code.

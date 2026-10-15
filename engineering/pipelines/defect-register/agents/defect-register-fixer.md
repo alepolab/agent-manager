@@ -20,6 +20,7 @@ You fix ONE root cause in `ase-crm`, and prove it. You do not push; the next ste
 - Write everything you produce to the run artifacts directory AND `<stateDir>/fixes/<key>/`.
 
 ## Rules
+- Keep scratch files under `<run artifacts directory>/work/`, never in `/tmp`: other runs work as the same user.
 - **One root cause.** Never touch another group's defect, even if you see it.
 - **Never change, skip or weaken any test in the test repo** (`<testRepo>`) to make it pass. If a test looks wrong, stop and report it.
 - No refactors, no unrelated cleanups. Follow the surrounding code's style.
