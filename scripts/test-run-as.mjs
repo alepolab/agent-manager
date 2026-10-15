@@ -155,6 +155,21 @@ try {
       assert.match(acl(p), /^other::---$/m, `nobody else can open ${p.slice(root.length)}`)
     }
     assert.match(acl(dir), /^default:other::---$/m, 'nor anything created in it later')
+
+    // What an agent leaves with a narrow mode - a cp out of /tmp at 0600, a
+    // 0700 mkdir - has a mask that shuts out every named user, the server too.
+    // Reopened as the developer, through the launcher, it is readable again.
+    const shot = join(dir, 'shots', 'a.png')
+    mkdirSync(join(dir, 'shots'), { mode: 0o700 })
+    writeFileSync(shot, 'png', { mode: 0o600 })
+    execFileSync('setfacl', ['-m', `u:${me}:rw,m::---`, shot])
+    assert.match(acl(shot), /^mask::---$/m)
+    const savedPath = process.env.PATH
+    process.env.PATH = `${bin}:${savedPath}`
+    try { await os.reopenForServer(dir, me) } finally { process.env.PATH = savedPath }
+    assert.match(acl(shot), new RegExp(`^user:${me}:rw-$`, 'm'), 'the server is named on what the agent wrote')
+    assert.match(acl(shot), /^mask::rw-$/m, 'and the mask lets it through')
+    assert.match(readFileSync(join(root, 'sudo-argv'), 'utf8'), /\nsetfacl\n-R\n/, 'run as the developer, who owns those files')
     delete process.env.AGENT_OS_USER_PREFIX
   } else {
     console.log('  (setfacl not installed: the artifacts ACL grant is not exercised here)')

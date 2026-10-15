@@ -44,6 +44,7 @@ import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
 } from './runArtifacts.ts'
+import { reopenForServer } from './osUsers.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
@@ -1719,6 +1720,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // Checked before the monitor, so a step that left out a file is sent back
     // for that exact file instead of paying for a model to notice. A skip is
     // exempt: a step with nothing to do has nothing to write.
+    // What the agent wrote as the developer's user, readable to the server
+    // before it checks for it: an unreadable file used to read as unwritten.
+    await reopenForServer(runArtifactsDir(run.id), run.startedBy)
     if (!skip && step.produces?.length) {
       const contents: Record<string, string | null> = {}
       for (const name of step.produces) {
