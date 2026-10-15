@@ -20,7 +20,6 @@
       "label": "Explore & write sheets",
       "approval": true,
       "autoApproveWhenReady": true,
-      "continuesSession": true,
       "next": [
         "write-specs"
       ],
