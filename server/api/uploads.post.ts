@@ -1,5 +1,6 @@
 import { requireCapability, currentUser } from '../utils/session.ts'
 import { maxUploadBytes, saveUpload } from '../utils/uploads.ts'
+import { osUserProblem } from '../utils/osUsers.ts'
 
 /**
  * One file for a workflow input of type `file`, from the run dialog. Answers
@@ -21,6 +22,11 @@ export default defineEventHandler(async (event) => {
   if (file.data.byteLength > max) throw tooBig()
   if (!file.data.byteLength) throw createError({ statusCode: 400, message: 'That file is empty' })
 
+  // With agents running as their developer, the file goes in that developer's
+  // private directory. Someone with no user there has no agents to read it,
+  // and the folder the server would create for them would not be private.
   const user = await currentUser(event)
+  const problem = osUserProblem(user?.login)
+  if (problem) throw createError({ statusCode: 400, message: problem })
   return saveUpload(user?.login, file.filename, file.data)
 })
