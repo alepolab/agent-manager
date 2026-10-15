@@ -24,9 +24,9 @@ here only adapt it to an unattended run, and they win where the two differ.
 ## Inputs
 From the `## Run parameters` block of your step header:
 - `testFolder`: the folder, relative to `tests/` (e.g. `catalog/policies/tax`).
-- **The folder keeps its name and place, and all of its optimization stays inside it** (README §7). Plan no
-  change outside `tests/<testFolder>/`: not to page objects, flows, `utils/`, `fixtures/`, `data/`, `docs/` or
-  another folder. A test that would need one is `skip:shared-code: <what>`.
+- **The folder keeps its name and place, and its tests and bookkeeping stay inside it** (README §7). New helpers
+  go in `utils/opt/<folder-slug>.ts` (folder path, `/` as `~`). Plan no other change outside `tests/<testFolder>/`:
+  not to page objects, flows, the rest of `utils/`, `fixtures/`, `data/`, `docs/` or another folder. A test that would need one is `skip:shared-code: <what>`.
 - `include`: the spec files to do this run, comma separated. The queue's precheck already limited it to specs
   with browser-driven tests not yet done; do only these.
 - `crmSourceDir`: the CRM source, for finding endpoints.

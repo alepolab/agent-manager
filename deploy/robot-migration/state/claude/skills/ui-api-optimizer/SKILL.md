@@ -21,7 +21,7 @@ Cost is the lesson here. The migration's explore step was its most expensive (54
    and assertion with its line and a first UI/data guess. Start from that table rather than reading for it.
 2. For each in-scope test, list:
    - **setup steps**, each with its channel today (form, API, DB) and the helper that would do it: an existing
-     function, the folder's `optimization/helpers.ts` (new, name the endpoint you found), or `none`. To find an endpoint, run
+     function, `utils/opt/<folder-slug>.ts` (new, name the endpoint you found), or `none`. To find an endpoint, run
      one batched grep over `crmSourceDir` (the controllers' `@RequestMapping` / `@PostMapping` paths) and over
      `docs/porting/sessions/crm-module-status-reference.md` and `docs/reference/crm-module-status-digest.md`;
    - **each assertion**: its line, its marker, a class (UI, DATA or SYNC, from README §2) and its target (`ui`,
@@ -41,7 +41,7 @@ Cost is the lesson here. The migration's explore step was its most expensive (54
 ## Convert (stack `crmStack`, every app/DB command under `flock "$CRM_LOCK"`)
 1. **Baseline, once.** Run the in-scope tests marked `convert` as they are, one spec per command (`--grep` of
    their TC ids), with the JSON reporter. A red test becomes `skip:red-before`; don't try to fix it.
-2. **Helpers first.** Write the planned helpers in `tests/<folder>/optimization/helpers.ts`. Prove each one with a single
+2. **Helpers first.** Write the planned helpers in `utils/opt/<folder-slug>.ts` (folder path, `/` as `~`). Prove each one with a single
    throwaway call (create, then read back by id and delete). Never delete rows you did not create.
 3. **Rewrite**, spec by spec, as README §4 says:
    - setup through helpers;
@@ -70,5 +70,5 @@ Cost is the lesson here. The migration's explore step was its most expensive (54
 - Move a UI assertion out of the UI test.
 - Touch a test that does not drive the browser.
 - Move the clock, reset the environment, or delete or update data this run did not create.
-- Change anything outside `tests/<folder>/` (README §7): not `utils/`, `pages/`, `flows/`, `components/`, `fixtures/`, `data/`, `setup/`, `docs/`, or another test folder.
+- Change anything outside `tests/<folder>/` and `utils/opt/<folder-slug>.ts` (README §7): not the rest of `utils/`, `pages/`, `flows/`, `components/`, `fixtures/`, `data/`, `setup/`, `docs/`, or another test folder.
 - Add helpers to `utils/api.ts`.

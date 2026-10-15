@@ -69,10 +69,11 @@ and the PR step.
    drop.
 3. **Everything stays in the folder** (README §7). `git diff <base> --name-only` must list only:
    - the specs in `include` and their `.api.spec.ts` siblings in `tests/<testFolder>/`;
-   - files under `tests/<testFolder>/optimization/`.
+   - files under `tests/<testFolder>/optimization/`;
+   - `utils/opt/<folder-slug>.ts` (folder path, `/` as `~`).
 
    Anything else must be reverted:
-   - page objects, flows, components, `utils/`, `fixtures/`, `data/`, `setup/`, `docs/`, other folders;
+   - page objects, flows, components, the rest of `utils/`, `fixtures/`, `data/`, `setup/`, `docs/`, other folders;
    - a missing locator: use `page.getBy…` in the spec;
    - wrong shared code: `skip:shared-code`.
 4. Bookkeeping per README §6: `status.csv` gets a row for **every** spec in `include`, including all-skipped ones,
