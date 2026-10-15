@@ -27,9 +27,21 @@ git config --global --add safe.directory '*'
 clone ase-crm-testPlaywright /work/ase-crm-testPlaywright-workflow workflow/main
 clone atddtestsuite_bss /work/atddtestsuite_bss "$(git -C /src/atddtestsuite_bss branch --show-current)"
 clone ase-crm /work/ase-crm "$(git -C /src/ase-crm branch --show-current)"
+S=/work/ase-crm-testPlaywright-workflow L2=/work/ase-crm-testPlaywright-lane2
+# Lane 2 (a queue lane on stack ui2) works in its own clone, made once the suite has docker/stacks/ui2.env.
+# It shares lane 1's node_modules; the two meet on GitHub's workflow/main (runner/main-sync.sh).
+if [[ -f $S/docker/stacks/ui2.env && ! -d $L2/.git ]]; then
+  log "cloning lane 2's suite checkout into $L2"
+  git clone --quiet --branch workflow/main "$S" "$L2"
+  git -C "$L2" remote set-url origin "$(git -C "$S" remote get-url origin)"
+  git -C "$L2" remote set-url --push origin DISABLED-push-from-a-person-only
+fi
+if [[ -d $L2/.git ]]; then
+  [[ -e $L2/node_modules ]] || ln -s "$S/node_modules" "$L2/node_modules"
+  grep -qx node_modules "$L2/.git/info/exclude" 2>/dev/null || echo node_modules >> "$L2/.git/info/exclude"
+fi
 /opt/pwmig/wire-push.sh   # the suite's push URL: the deploy key when there is one (pw deploy-key), else disabled
 
-S=/work/ase-crm-testPlaywright-workflow
 # The skills' scripts and references are the suite's own copies (its .claude/skills/, kept current by git),
 # refreshed every boot; the kit only ships each SKILL.md.
 for s in robot-scenario-analyst robot-spec-writer; do
@@ -44,9 +56,10 @@ if [[ ! -L $S/docker/stacks/ui/faketime ]]; then
   rm -rf "$S/docker/stacks/ui/faketime"; mkdir -p "$S/docker/stacks/ui"; ln -s /faketime "$S/docker/stacks/ui/faketime"
 fi
 # Lane 2's stack (ui2, compose project pwmig2) reads its offset from the ui2 subdirectory of the same volume.
-if [[ -f $S/docker/stacks/ui2.env && ! -L $S/docker/stacks/ui2/faketime ]]; then
-  rm -rf "$S/docker/stacks/ui2/faketime"; mkdir -p "$S/docker/stacks/ui2"; ln -s /faketime/ui2 "$S/docker/stacks/ui2/faketime"
-fi
+for c in "$S" "$L2"; do
+  [[ -f $c/docker/stacks/ui2.env && ! -L $c/docker/stacks/ui2/faketime ]] || continue
+  rm -rf "$c/docker/stacks/ui2/faketime"; mkdir -p "$c/docker/stacks/ui2" /faketime/ui2; ln -s /faketime/ui2 "$c/docker/stacks/ui2/faketime"
+done
 # --include=dev: this container runs with NODE_ENV=production (for Agent Manager), which makes npm skip
 # devDependencies, and the suite has nothing else. Without it npm ci installed nothing, and the browser
 # install below then ran npx's own newer Playwright, so the suite's version found no browser.

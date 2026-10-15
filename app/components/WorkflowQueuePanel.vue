@@ -12,6 +12,7 @@ interface QueueItem {
   startedAt?: number
   endedAt?: number
   note?: string
+  lane?: string
 }
 interface WorkflowQueue {
   enabled: boolean
@@ -121,6 +122,7 @@ const statusColor: Record<QueueItem['status'], string> = {
           {{ item.prompt }}
           <span v-if="item.note" class="text-label"> - {{ item.note }}</span>
         </span>
+        <span v-if="item.lane && item.status === 'running'" class="shrink-0 text-label">{{ item.lane }}</span>
         <NuxtLink v-if="item.runId" :to="`/runs/${item.runId}`" class="shrink-0 underline text-label">run {{ item.runId.slice(0, 8) }}</NuxtLink>
         <template v-if="canEdit && item.status === 'pending'">
           <UButton icon="i-lucide-arrow-up" size="xs" variant="ghost" aria-label="Move up" :disabled="busy || i === 0 || queue.items[i - 1]?.status !== 'pending'" @click="move(i, -1)" />

@@ -94,6 +94,15 @@ pw check                     # access check inside pwmig-am: every line must be 
 - **Commands:** `pw status`, `pw logs <service>`, and `pw down`, which stops everything but keeps all volumes.
 - **Restarts:** they're safe. Runs resume, and the queue moves on, after a container or host restart.
 
+## A second lane (optional)
+Two folders at once, each on its own CRM stack (`pwmig2-*`, ports 8084/3309/9004/8110/8281) and its own suite clone (`/work/ase-crm-testPlaywright-lane2`). One queue feeds both.
+- **Stack:** `pw lane2-seed` copies lane 1's database and Keycloak into it. It stops `pwmig-keycloak` for about a minute, so run it between folders. Then `pw lane2-up`; `pw lane2-down` stops it again.
+- **Clock:** stackctl turns on one stack's clock at a time (`/clock/on?stack=ui2`). A second clock-on waits for the first to end.
+- **Clone:** made on `pwmig-am`'s next boot once the suite has `docker/stacks/ui2.env`. It shares lane 1's `node_modules`.
+- **Queue:** add `"lanes": [{"name": "lane1"}, {"name": "lane2", "parameters": {"projectDir": "/work/ase-crm-testPlaywright-lane2", "localCheckout": "/work/ase-crm-testPlaywright-lane2", "crmStack": "ui2", "appUrl": "http://localhost:8084", "keycloakUrl": "http://localhost:8281", "dbHost": "localhost:3309"}}]` and `"laneKey": "robotFolder"` under `defaults`. The lanes then never work in the same top-level area at once.
+- **Delivery:** both lanes deliver to GitHub's `workflow/main`, one at a time, through `/opt/pwmig/main-sync.sh`. The queue's precheck fast-forwards each clone before its run starts.
+- **Failures:** a failed run in either lane still pauses the whole queue.
+
 ## Removing it completely
 `pw down`, then:
 

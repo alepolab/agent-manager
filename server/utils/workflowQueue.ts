@@ -39,7 +39,16 @@ export interface QueueItem {
   endedAt?: number
   /** Why it stopped, or how the run ended. */
   note?: string
+  /** The lane it ran in, when the queue has lanes. */
+  lane?: string
 }
+
+/**
+ * A lane runs one item at a time with its own parameters laid over the
+ * defaults (and under the item's), e.g. its own CRM stack and checkout. A
+ * queue with lanes runs one item per lane at once; without, one item at a time.
+ */
+export interface QueueLane { name: string, parameters?: Record<string, string> }
 
 /**
  * A command run before each item starts, in the item's projectDir, with every
@@ -55,8 +64,28 @@ export interface WorkflowQueue {
   enabled: boolean
   /** Why the queue turned itself off, shown until someone turns it on again. */
   pausedReason?: string
-  defaults: { parameters?: Record<string, string>, autoRun?: boolean, startedBy?: string, precheck?: QueuePrecheck }
+  defaults: {
+    parameters?: Record<string, string>
+    autoRun?: boolean
+    startedBy?: string
+    precheck?: QueuePrecheck
+    /** With lanes: a parameter whose first path segment two lanes never run at once (e.g. robotFolder,
+     *  so sibling folders that share data or build on each other stay one after another). */
+    laneKey?: string
+  }
+  lanes?: QueueLane[]
   items: QueueItem[]
+}
+
+const ONE_LANE: QueueLane[] = [{ name: 'main' }]
+
+function laneOf(queue: WorkflowQueue, item: QueueItem): string {
+  return item.lane ?? queue.lanes?.[0]?.name ?? ONE_LANE[0]!.name
+}
+
+function laneArea(queue: WorkflowQueue, item: QueueItem): string | undefined {
+  const key = queue.defaults.laneKey
+  return key ? (item.parameters?.[key] ?? queue.defaults.parameters?.[key])?.split('/')[0] : undefined
 }
 
 export function queuePath(slug: string): string {
@@ -86,19 +115,34 @@ function serial<T>(slug: string, fn: () => Promise<T>): Promise<T> {
   return next
 }
 
-/** Start the first pending item, unless the queue is off or an item is running. */
+/**
+ * Fill every free lane with its next pending item, unless the queue is off.
+ * A lane is free when none of its items is running. With `laneKey`, a lane
+ * skips items whose area another lane is running. Returns the first item
+ * started, if any.
+ */
 async function startNextLocked(slug: string): Promise<QueueItem | null> {
   const queue = await readQueue(slug)
-  if (!queue?.enabled || queue.items.some(i => i.status === 'running')) return null
-  for (;;) {
-    const item = queue.items.find(i => i.status === 'pending')
-    if (!item) {
-      log.info('workflow queue finished', { workflow: slug })
-      return null
+  if (!queue?.enabled) return null
+  const lanes = queue.lanes?.length ? queue.lanes : ONE_LANE
+  let first: QueueItem | null = null
+  for (const lane of lanes) {
+    if (queue.items.some(i => i.status === 'running' && laneOf(queue, i) === lane.name)) continue
+    for (;;) {
+      if (!queue.enabled) return first
+      const busy = new Set(queue.items.filter(i => i.status === 'running').map(i => laneArea(queue, i)).filter(Boolean))
+      const item = queue.items.find(i => i.status === 'pending' && !busy.has(laneArea(queue, i)))
+      if (!item) {
+        if (!queue.items.some(i => i.status === 'pending' || i.status === 'running')) log.info('workflow queue finished', { workflow: slug })
+        break
+      }
+      const started = await startItem(slug, queue, item, queue.lanes?.length ? lane : undefined)
+      if (started === 'skipped') continue
+      first ??= started
+      break
     }
-    const started = await startItem(slug, queue, item)
-    if (started !== 'skipped') return started
   }
+  return first
 }
 
 async function runPrecheck(check: QueuePrecheck, values: Record<string, string>): Promise<string> {
@@ -108,7 +152,7 @@ async function runPrecheck(check: QueuePrecheck, values: Record<string, string>)
   return stdout.trim()
 }
 
-async function startItem(slug: string, queue: WorkflowQueue, item: QueueItem): Promise<QueueItem | null | 'skipped'> {
+async function startItem(slug: string, queue: WorkflowQueue, item: QueueItem, lane?: QueueLane): Promise<QueueItem | null | 'skipped'> {
   const pause = async (why: string) => {
     item.status = 'stopped'
     item.note = why
@@ -120,7 +164,7 @@ async function startItem(slug: string, queue: WorkflowQueue, item: QueueItem): P
   }
   const workflow = await loadWorkflowSteps(slug)
   if (!workflow?.steps.length) return pause(`workflow "${slug}" is missing or has no steps`)
-  const supplied = { ...(queue.defaults.parameters ?? {}), ...(item.parameters ?? {}) }
+  const supplied = { ...(queue.defaults.parameters ?? {}), ...(lane?.parameters ?? {}), ...(item.parameters ?? {}) }
   const { values, missing } = resolveParameters(workflow.parameters, supplied)
   if (missing.length) return pause(`no value for ${missing.join(', ')}`)
   const check = queue.defaults.precheck
@@ -155,6 +199,7 @@ async function startItem(slug: string, queue: WorkflowQueue, item: QueueItem): P
     item.status = 'running'
     item.runId = run.id
     item.startedAt = Date.now()
+    if (lane) item.lane = lane.name
     queue.pausedReason = undefined
     await writeQueue(slug, queue)
     log.info('workflow queue started a run', { workflow: slug, runId: run.id, prompt: item.prompt })

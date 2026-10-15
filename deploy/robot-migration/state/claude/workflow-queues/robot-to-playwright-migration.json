@@ -17,7 +17,7 @@
       "baseBranch": "workflow/main"
     },
     "precheck": {
-      "command": "avail=$(df --output=avail -BG /data | tail -1 | tr -dc 0-9); [ \"$avail\" -ge 15 ] || { echo \"only ${avail} GB free on the docker disk (need 15)\" >&2; exit 1; }; node scripts/robot-remaining.mjs \"$PARAM_robotSuiteDir\" \"$PARAM_robotFolder\" \"$PARAM_include\" --flat",
+      "command": "/opt/pwmig/main-sync.sh pull \"$PWD\" >&2 || true; avail=$(df --output=avail -BG /data | tail -1 | tr -dc 0-9); [ \"$avail\" -ge 15 ] || { echo \"only ${avail} GB free on the docker disk (need 15)\" >&2; exit 1; }; node scripts/robot-remaining.mjs \"$PARAM_robotSuiteDir\" \"$PARAM_robotFolder\" \"$PARAM_include\" --flat",
       "parameter": "include"
     }
   },

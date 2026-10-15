@@ -24,7 +24,10 @@ export default defineEventHandler(async (event) => {
     if (known && (known.status === 'running' || i.status === 'running')) return known
     return i.status === 'running' ? { ...i, status: 'pending' as const, runId: undefined } : i
   })
-  const queue: WorkflowQueue = { enabled: !!body.enabled, pausedReason: body.pausedReason, defaults: body.defaults ?? {}, items }
+  // Lanes are kept as the server has them unless the body sends its own: a page that does not know lanes
+  // must not drop them by saving.
+  const lanes = body.lanes ?? current?.lanes
+  const queue: WorkflowQueue = { enabled: !!body.enabled, pausedReason: body.pausedReason, defaults: body.defaults ?? {}, ...(lanes ? { lanes } : {}), items }
   await writeQueue(slug, queue)
   return { queue }
 })

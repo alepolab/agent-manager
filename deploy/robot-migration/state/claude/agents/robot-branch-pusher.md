@@ -33,10 +33,10 @@ Whenever you ask, write `decision.json` in the shape the run page renders, in pl
 `localCheckout` is the main checkout of this same repository: the workflow's own copy of the suite, on branch `workflow/main`. Your run branch was cut from it. Deliver by merging the run branch into `workflow/main` there, so the next run starts from this run's work, and then push `workflow/main` when the copy has a push URL (step 6). The push URL is set only when the operator has added the deploy key (`pw deploy-key`); otherwise it reads `DISABLED-push-from-a-person-only` and nothing goes to GitHub.
 3. **Show what will be delivered.** Run `git log --oneline workflow/main..HEAD` and `git diff --stat workflow/main...HEAD`. If there are no commits, end with `PIPELINE-SKIP: nothing to deliver`.
 4. **Check the target.**
-   - **In place** (your working directory is `localCheckout`): `git status --porcelain --untracked-files=no` must print nothing. Then `git switch workflow/main`.
+   - **In place** (your working directory is `localCheckout`): `git status --porcelain --untracked-files=no` must print nothing. Stay on the run branch; the script in step 5 switches.
    - **Separate worktree:** `git -C <localCheckout> branch --show-current` must print `workflow/main`, and `git -C <localCheckout> status --porcelain` must print nothing.
    - If a check fails, change nothing. Ask through the run (`decision.json` + `PIPELINE-ASK`) and show what you found.
-5. **Merge, with a commit message a reviewer can read on GitHub.** Write the message to `merge-message.txt` in the run artifacts directory, then `git -C <localCheckout> merge --no-ff -F <that file> <run branch>`.
+5. **Merge, with a commit message a reviewer can read on GitHub.** Write the message to `merge-message.txt` in the run artifacts directory, then merge as below.
    - Subject: `test(porting): port <robotFolder>` plus ` (<include>)` when `include` is set, then `: <n> specs`. Under 72 characters; shorten the folder name if needed, never the counts.
    - Body, plain words, wrapped at 72:
      - one or two sentences on what the Robot tests verify and what this port covers (from `change-brief.json`'s `headline`/`situation` and the spec writer's report);
@@ -44,10 +44,16 @@ Whenever you ask, write `decision.json` in the shape the run page renders, in pl
      - `Robot tests: <ported> ported, <fixme> left as test.fixme, <bug> marked @bug`, counted from the run branch's diff (`test.fixme(`, `@bug`) and the report; list each `test.fixme` with its reason;
      - `Decisions:` each auto-accepted decision from `change-brief.json`'s `open_questions` (the choice and the deviation from Robot, one line each), or `none`;
      - `Run: <run id>, branch <run branch>`.
-   - On a conflict, run `git -C <localCheckout> merge --abort`; in place, also `git switch <run branch>` so the run's work stays where it was. Then ask through the run, listing the conflicting files. Never resolve a conflict by rewriting what another run delivered.
+   - **In place, merge and push with one command:** `/opt/pwmig/main-sync.sh deliver <localCheckout> <run branch> <artifacts>/merge-message.txt`, with `PUSH=no` in front when the run parameter `pushAfterDeliver` is `no`. Run it in the foreground with a 35-minute timeout. Other lanes deliver to the same `workflow/main` on GitHub: the script waits for the delivery lock, fast-forwards `workflow/main` to GitHub, merges, and pushes. It replaces the merge here and step 6. Its exit code:
+     - `0`: merged and pushed (it prints the merge and the push line), or merged with the push skipped (it says why). Go to step 7.
+     - `3`: a conflict. It aborted the merge and switched back to the run branch, and printed the conflicting files. Ask through the run, listing them: option `a` "leave the run branch undelivered and carry on", option `b` "stop the queue". Recommend `b`.
+     - `4`: the push failed; the merge stays local. Ask as in step 6.
+     - `5`, `6` or `7`: the checkout was not clean, another lane held the lock for 30 minutes, or GitHub could not be read. Nothing was merged. Ask through the run with the output in `findings`: option `a` "retry the delivery", option `b` "stop the queue". Recommend `a`.
+   - **Separate worktree:** `git -C <localCheckout> merge --no-ff -F <that file> <run branch>`. On a conflict, run `git -C <localCheckout> merge --abort`, then ask through the run, listing the conflicting files.
+   - Never resolve a conflict by rewriting what another run delivered.
    - Leave `localCheckout` on `workflow/main` after a merge; the next run cuts its own branch from there.
-   - Never reset, rebase, amend or force. The only branch switches allowed are the two above.
-6. **Push `workflow/main`.** If the run parameter `pushAfterDeliver` is `no`, skip this step and say so. A missing parameter means `yes`. If `git -C <localCheckout> remote get-url --push origin` starts with `DISABLED`, skip this step and say so. Otherwise run `GIT_TERMINAL_PROMPT=0 git -C <localCheckout> push origin workflow/main`.
+   - Never reset, rebase, amend or force. The only branch switches allowed are the ones above and the script's own.
+6. **Push `workflow/main`** (separate worktree only; in place, the script in step 5 pushed). If the run parameter `pushAfterDeliver` is `no`, skip this step and say so. A missing parameter means `yes`. If `git -C <localCheckout> remote get-url --push origin` starts with `DISABLED`, skip this step and say so. Otherwise run `GIT_TERMINAL_PROMPT=0 git -C <localCheckout> push origin workflow/main`.
    - Push only `workflow/main`. Never force, never push another branch or a tag, never open a pull request.
    - If the push is rejected or fails, the merge stays local and the next delivery pushes it too. Change nothing, do not retry with other credentials or options, and ask through the run (`decision.json` + `PIPELINE-ASK`) with the exact error in `findings`: option `a` "leave it local and carry on", option `b` "stop the queue".
 7. **Progress for Teams, only after a successful push.** If the run parameter `progressToTeams` is `no`, skip this step and write no `progress.json`. A missing parameter means `yes`. The step after yours posts `progress.json` from the run artifacts directory to the team's channel, and runs only when that file exists. So when the push in step 6 was skipped or failed, write no `progress.json`. After a push that succeeded:
