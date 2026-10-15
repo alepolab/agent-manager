@@ -1,0 +1,7 @@
+[
+  {
+    "id": "robot-migration",
+    "name": "Robot migration lanes",
+    "maxConcurrent": 2
+  }
+]

@@ -153,5 +153,6 @@
     }
   ],
   "createdAt": "2026-10-07T11:11:12.308Z",
-  "notifyChannel": "robot-migration"
+  "notifyChannel": "robot-migration",
+  "group": "robot-migration"
 }
