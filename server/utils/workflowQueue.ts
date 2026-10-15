@@ -189,7 +189,10 @@ export function advanceQueue(run: WorkflowRun): Promise<void> {
   const slug = run.workflowSlug
   return serial(slug, async () => {
     const queue = await readQueue(slug)
-    const item = queue?.items.find(i => i.runId === run.id && i.status === 'running')
+    // A run that was stopped (its item marked stopped) and then restarted from its step can still
+    // complete; its item is then done, though the queue stays as a person left it.
+    const item = queue?.items.find(i => i.runId === run.id
+      && (i.status === 'running' || (i.status === 'stopped' && run.status === 'completed')))
     if (!queue || !item) return
     item.endedAt = Date.now()
     if (run.status === 'completed') {

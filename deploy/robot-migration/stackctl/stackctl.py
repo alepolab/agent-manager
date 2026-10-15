@@ -9,6 +9,10 @@ and nothing else:
   POST /clock/on    recreate app + keycloak under libfaketime, wait until the app answers and reaches Keycloak
   POST /clock/off   the same without libfaketime (the default: the JVM idles at ~470% CPU with it)
 
+It also keeps the two socat forwarders alive. Each lives in another container's network namespace
+(ports in am's, keycloak-forward in the app's), so when that container restarts the forwarder is left in a
+dead namespace while docker still shows it Up. Every minute, a forwarder older than its host is recreated.
+
 The compose files and env come from the read-only pwmig_src volume; the project name is fixed here.
 """
 import json
@@ -102,6 +106,36 @@ def set_clock(mode):
     return f"pwmig-app: libfaketime {mode} (LD_PRELOAD='{preload}')"
 
 
+# (host container, compose service, forwarder container): the forwarder shares the host's network namespace.
+FORWARDERS = [('pwmig-am', 'ports', 'pwmig-ports'), ('pwmig-app', 'keycloak-forward', 'pwmig-keycloak-forward')]
+
+
+def started_at(name):
+    return run(['docker', 'inspect', '-f', '{{.State.Running}} {{.State.StartedAt}}', name], timeout=30).split()
+
+
+def heal_forwarders():
+    while True:
+        time.sleep(60)
+        # A clock move recreates keycloak-forward itself; never race it.
+        if not lock.acquire(blocking=False):
+            continue
+        try:
+            mode = open(STATE).read().strip() if os.path.exists(STATE) else 'off'
+            for host, service, fwd in FORWARDERS:
+                try:
+                    (h_up, h_at), (_, f_at) = started_at(host), started_at(fwd)
+                    # Second resolution: a forwarder recreated in the same second as its host is current.
+                    if h_up == 'true' and h_at[:19] > f_at[:19]:
+                        print(f'[stackctl] {fwd} predates {host} ({f_at[:19]} < {h_at[:19]}): recreating it', flush=True)
+                        run([*COMPOSE, 'up', '-d', '--no-build', '--no-deps', '--force-recreate', service],
+                            env=clock_env(mode), timeout=300)
+                except Exception as e:  # noqa: BLE001
+                    print(f'[stackctl] forwarder check for {fwd} failed: {e}', flush=True)
+        finally:
+            lock.release()
+
+
 def status():
     ps = run(['docker', 'ps', '-a', '--filter', f'label=com.docker.compose.project={PROJECT}',
               '--format', '{{.Names}}\t{{.Status}}'], timeout=60)
@@ -144,4 +178,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    threading.Thread(target=heal_forwarders, daemon=True).start()
     ThreadingHTTPServer(('0.0.0.0', 7070), Handler).serve_forever()
