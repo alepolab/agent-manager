@@ -399,7 +399,7 @@ export interface WorkflowRun {
   blastRadius?: string
   /** The branch the run branch was cut from and the pull request targets (see server/utils/branchPolicy.ts). */
   baseBranch?: string
-  /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
+  /** How many times the run was sent back to an earlier step, by a step or a person; the run total. */
   reworks?: number
   /**
    * Send-backs spent per trigger, which is what the bound is actually applied to.
@@ -409,10 +409,11 @@ export interface WorkflowRun {
    * once, left nothing for the second red check and stopped the run on a person
    * for something routine. `ci` is the PR-checks step; `verification` is the
    * verifier and the security review, which share one allowance because both are
-   * answering the same question about the same commit. `reworks` above stays the
-   * run total, for display and for anything already reading it.
+   * answering the same question about the same commit. `person` is a reviewer's
+   * send-backs from a gate (personSendBacks). `reworks` above stays the run
+   * total, for display and for anything already reading it.
    */
-  reworksBy?: { ci?: number, verification?: number, review?: number }
+  reworksBy?: { ci?: number, verification?: number, review?: number, person?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
   /** Agent-raised send-backs, oldest first. See SendBack. */

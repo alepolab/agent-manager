@@ -3466,6 +3466,7 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
       // and rolls the count back when the restart refuses at once. Refused here,
       // later, it never happened either, and must not spend one of the two.
       if (p.handOver && back.reworks) back.reworks -= 1
+      if (p.handOver && back.reworksBy?.person) back.reworksBy.person -= 1
       back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
       await publish(back)
     }
