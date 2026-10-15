@@ -136,6 +136,18 @@ COPY --chown=bun:bun engineering/recipes ./engineering/recipes
 # /app/engineering/hooks" — accurate, and entirely about a missing COPY.
 COPY --chown=bun:bun engineering/hooks ./engineering/hooks
 
+# And the review skill of Alepo's developer-workflow plugin, which every
+# runbook's Alepo Review step reads at run time (agentCaller.ts,
+# ALEPO_SKILLS_DIR). alepoSkillsDir tries an installed developer-workflow
+# plugin, then the `alepo` marketplace clone, and falls back to this copy - in a
+# container the first names the host's installPath and stage-claude-config.sh
+# strips the second, so without this COPY every run halts at Alepo Review.
+# Vendored in the repository rather than fetched here as compound-engineering
+# is: alepolab/alepo-claude-workflow is private, and the build has no
+# credentials for it. Pinned to the commit in VERSION; refresh both together.
+COPY --chown=bun:bun engineering/vendor ./engineering/vendor
+RUN test -f /app/engineering/vendor/developer-workflow/skills/review/SKILL.md
+
 # And the compound-engineering skills Runbook C's Plan, Implement Fix, Code
 # Review and Push + PR steps read at run time (agentCaller.ts, CE_SKILLS_DIR).
 # ceSkillsDir resolves them from an installed compound-engineering plugin first
