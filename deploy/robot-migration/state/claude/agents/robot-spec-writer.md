@@ -110,8 +110,15 @@ Other runs and Claude sessions port other folders into the same suite and run Pl
 - Always pass `--output=<run artifacts directory>/pw-out` and write the JSON report into the run artifacts directory, never the shared `test-results/`.
 - Edit `docs/coverage.csv` and `docs/run-status.md` with targeted row edits only.
 
+## Test runs: short, in the foreground, the clock only where needed
+A whole run of a big folder takes 45 to 50 minutes. Re-running all of it after every fix, with the clock on, cost one run four hours (Cancel_Service_From_CRM, 2026-10-15). Run tests like this:
+- **Every Playwright command fits in one Bash call.** Give the Bash tool `timeout: 600000` (10 minutes, the most it allows) and keep each command under about 9 minutes: one spec file, or a `--grep` of test IDs, per command. Never run a whole folder in one command when it takes longer than that. A Bash call that passes its timeout is moved to the background. If that happens, wait for it with foreground polls (each with `timeout: 600000`) until it ends, and never end your reply while it runs.
+- **Re-run only what failed.** After a run, fix the failures, then run only the failing tests again: `--last-failed` with the same `--output` directory, or `--grep "<TC ids joined with |>"`. Do not re-run tests that already match their sheet while you fix others.
+- **The final run covers everything once.** When the failures are fixed, run every spec of the folder once (file by file is fine), each with its own JSON report in the run artifacts directory, and run `check_results.mjs` on each report with that file's sheet. All of them exiting 0 is the one full run the rulebook asks for; record it in `docs/run-status.md` as one run.
+- **The clock only for the tests that need it.** Turning the clock on (`stack.sh clock <crmStack> on`) restarts the app and Keycloak under faketime: it takes about 8 minutes, and every request is much slower while it is on. Before you turn it on, list the tests whose sheets need a moved date, and run all other tests with the clock off. Then turn it on, run only the date-dependent tests (with their own reports), and turn it off straight after. Batch the date-dependent tests and their fixes so that you turn it on as few times as possible, and never leave it on while you run or fix tests that do not need it.
+
 ## Finishing
-- Done means what the skill says, with the rulebook's run rule: currently ONE full run (json reporter + `check_results.mjs` exit 0, never full logs) with every test matching its sheet, coverage and run-status updated, and nothing left behind in the DB.
+- Done means what the skill says, with the rulebook's run rule: currently ONE full run (file by file is fine, see Test runs) (json reporter + `check_results.mjs` exit 0, never full logs) with every test matching its sheet, coverage and run-status updated, and nothing left behind in the DB.
 - Commit your work on the run's branch, staging specific paths (never `git add -A`), with a message like `test(<area>): port <robotFolder>`. Never push and never open a pull request: the next step delivers it after a person approves.
 - Write `change-brief.json` for the Deliver gate. Rewrite it, since the plan gate's brief is still there.
   - `headline`: `Deliver <robotFolder>: <N> tests, <pass> pass, <bug> @bug?`
