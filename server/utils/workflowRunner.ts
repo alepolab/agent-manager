@@ -3629,6 +3629,21 @@ export function resumeAwaitingSlot(): Promise<unknown> {
 export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resumed: string[], paused: string[], skipped: string[], waiting: string[], swept: string[] }> {
   const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], waiting: [] as string[], swept: [] as string[] }
   const all = await listRuns()
+  // Joining parents, including one an older server marked interrupted: its
+  // children may all have settled while no server was up to hear the last one.
+  if (!only) {
+    for (const run of all) {
+      const stranded = run.status === 'interrupted' && run.steps.some(s => s.status === 'waiting' && s.childRunIds?.length)
+      if (run.status !== 'joining' && !stranded) continue
+      if (stranded) {
+        run.status = 'joining'
+        await saveRun(run)
+        log.info('a joining parent marked interrupted is joining again', { runId: run.id })
+      }
+      await resumeJoinIfReady(run.id).catch(err =>
+        log.warn('resuming a joining parent failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    }
+  }
   // The full boot pass only; a pass for runs waiting on a slot has none to sweep.
   if (!only) for (const run of all) {
     // Not one this process is still unwinding: publish/afterUnwound own that.

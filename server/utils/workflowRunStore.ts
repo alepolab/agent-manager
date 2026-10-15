@@ -83,6 +83,12 @@ function applyInterrupted(run: WorkflowRun): WorkflowRun {
   // person to choose from. Exempting only `paused` turned both of a night's
   // scan reviews into `interrupted` runs at the next restart.
   if (isWaitingOnAPerson(run.status) && run.question) return run
+  // A joining parent runs nothing itself: its children are runs of their own,
+  // and resumeJoinIfReady rebuilds it from disk when the last one settles.
+  // Marked interrupted, nothing brought it back - the boot resume skips a run
+  // with a waiting step, and the join only advances a `joining` one - so a
+  // deploy during a fan-out stranded the parent after every child finished.
+  if (run.status === 'joining') return run
   // Deliberately NOT isLiveStatus: a `queued` run has no owner to lose. Its
   // pid and bootId name the process that queued it, which is routinely gone by
   // the time a slot frees, and calling that "interrupted" would delete the
