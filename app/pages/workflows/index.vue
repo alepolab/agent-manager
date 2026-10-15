@@ -19,9 +19,9 @@ const scheduleCounts = computed(() => {
   return counts
 })
 const { agents, create: createAgent } = useAgents()
-// Creating a workflow is `configure`, which only an operator holds. The three
-// create affordances on this page were offered to every role and each ended in
-// a 403 from POST /api/workflows.
+// A blank workflow is `editWorkflows` (developer, QA, operator). A template is
+// still `configure`, because it creates the template's agents too. Offered to
+// every role, each of these ended in a 403.
 const { can } = useUser()
 const router = useRouter()
 const toast = useToast()
@@ -174,7 +174,7 @@ async function saveGroups() {
       <template #right>
         <input v-if="workflows.length" v-model="searchQuery" placeholder="Filter workflows" class="field-input t-small w-52" aria-label="Filter workflows" />
         <UButton v-if="can('configure')" label="Groups" icon="i-lucide-layers" size="sm" variant="ghost" color="neutral" @click="() => { showGroups = true }" />
-        <UButton v-if="can('configure')" label="New Workflow" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
+        <UButton v-if="can('editWorkflows')" label="New Workflow" icon="i-lucide-plus" size="sm" @click="() => { showCreateModal = true }" />
       </template>
     </PageHeader>
 
@@ -231,7 +231,7 @@ async function saveGroups() {
         <!-- Each card creates a workflow, so the whole grid is `configure`.
              Offering a reviewer a template they cannot instantiate is the same
              dead control as the New Workflow button above it. -->
-        <p v-if="!can('configure')" class="t-ui text-label">
+        <p v-if="!can('editWorkflows')" class="t-ui text-label">
           No workflows on this instance yet. An operator sets them up.
         </p>
         <h4 v-if="can('configure')" class="text-section-label">Templates</h4>
@@ -268,7 +268,7 @@ async function saveGroups() {
         </div>
 
         <div class="text-center">
-          <UButton v-if="can('configure')" label="Or create from scratch" variant="ghost" size="sm" @click="() => { showCreateModal = true }" />
+          <UButton v-if="can('editWorkflows')" label="Or create from scratch" variant="ghost" size="sm" @click="() => { showCreateModal = true }" />
         </div>
       </div>
     </div>

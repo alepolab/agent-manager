@@ -5,7 +5,7 @@ import { resolveClaudeFile } from '../../utils/claudeDir'
 import type { Workflow } from '~/types'
 
 export default defineEventHandler(async (event) => {
-  await requireCapability(event, 'configure')
+  await requireCapability(event, 'editWorkflows')
   const slug = getRouterParam(event, 'slug')!
   const filePath = resolveClaudeFile('workflows', slug)
 
