@@ -124,6 +124,53 @@ try {
     for (const [f, want] of Object.entries(expected)) assert.equal(grant(f), want, `${f}: the hierarchy grants ${want}`)
   }
 
+  // ── instance defaults: newcomers start as developer + L1, operators see everything ──
+  {
+    const { writeFileSync: wf } = await import('node:fs')
+    const roles = await import('../server/utils/roles.ts')
+    const claudeDir = join(root, 'claude')
+    wf(join(claudeDir, 'roles.json'), JSON.stringify({ boss: 'operator', dev2: 'developer' }))
+    wf(join(claudeDir, 'hierarchy.json'), '{}')
+
+    // Unset: the behaviour before defaults - operator, sees everything.
+    delete process.env.AGENT_MANAGER_DEFAULT_ROLE
+    delete process.env.AGENT_MANAGER_DEFAULT_LEVEL
+    assert.equal(await roles.roleFor('newbie'), 'operator')
+    assert.deepEqual(await h.scopeFor('newbie'), { all: true })
+
+    process.env.AGENT_MANAGER_DEFAULT_ROLE = 'developer'
+    process.env.AGENT_MANAGER_DEFAULT_LEVEL = '1'
+    assert.equal(await roles.roleFor('newbie'), 'developer', 'a newcomer starts as a developer')
+    assert.equal(await roles.roleFor('boss'), 'operator', 'a listed role still wins')
+    const nb = await h.scopeFor('newbie')
+    assert.equal(nb.all, false, 'and at the default level')
+    assert.deepEqual([...nb.logins], ['newbie'], 'seeing only their own work: nobody leads a defaulted person')
+    assert.deepEqual(await h.effectivePlacement('newbie'), { level: 1, source: 'default' })
+    assert.deepEqual(await h.scopeFor('boss'), { all: true }, 'an operator is not defaulted into a level: an admin who sees only their own runs cannot administer')
+    assert.equal(await h.effectivePlacement('boss'), null)
+
+    // Taken out on purpose is remembered, not replaced by the default.
+    await h.setPlacement('dev2', null)
+    assert.deepEqual(await h.scopeFor('dev2'), { all: true }, '"None" chosen for a developer holds')
+    assert.deepEqual(await h.listUnplacedOnPurpose(), ['dev2'])
+    await h.setPlacement('dev2', 'default')
+    assert.equal((await h.scopeFor('dev2')).all, false, 'and "back to default" takes the default again')
+    assert.deepEqual(await h.listUnplacedOnPurpose(), [])
+
+    // An explicit placement always wins over the default.
+    await h.setPlacement('lead2', { level: 2 })
+    await h.setPlacement('dev2', { level: 1, lead: 'lead2' })
+    assert.deepEqual([...(await h.scopeFor('lead2')).logins].sort(), ['dev2', 'lead2'])
+
+    // A typo in the setting falls back to operator rather than locking everyone into it.
+    process.env.AGENT_MANAGER_DEFAULT_ROLE = 'develper'
+    assert.equal(roles.defaultRole(), 'operator')
+    process.env.AGENT_MANAGER_DEFAULT_LEVEL = '7'
+    assert.equal(h.defaultLevel(), null)
+    delete process.env.AGENT_MANAGER_DEFAULT_ROLE
+    delete process.env.AGENT_MANAGER_DEFAULT_LEVEL
+  }
+
   console.log('hierarchy: scope by team, tree kept sound, chats owned and continued only by their owner')
 } finally {
   rmSync(root, { recursive: true, force: true })

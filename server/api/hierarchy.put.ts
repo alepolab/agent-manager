@@ -9,12 +9,13 @@ import { isLevel, type Placement } from '../../shared/types/hierarchy'
  */
 export default defineEventHandler(async (event) => {
   await requireCapability(event, 'configure')
-  const body = await readBody<{ login?: string, level?: number | null, lead?: string | null }>(event)
+  const body = await readBody<{ login?: string, level?: number | null | 'default', lead?: string | null }>(event)
   const login = body?.login?.trim()
   if (!login) throw createError({ statusCode: 400, message: 'login is required' })
-  let next: Placement | null = null
-  if (body.level !== null && body.level !== undefined) {
-    if (!isLevel(body.level)) throw createError({ statusCode: 400, message: 'level must be 1, 2 or 3, or null to take them out' })
+  // null = out of the hierarchy on purpose; 'default' = back to the default level.
+  let next: Placement | null | 'default' = body.level === 'default' ? 'default' : null
+  if (body.level !== null && body.level !== undefined && body.level !== 'default') {
+    if (!isLevel(body.level)) throw createError({ statusCode: 400, message: 'level must be 1, 2 or 3, null to take them out, or \"default\"' })
     next = { level: body.level, ...(body.lead?.trim() ? { lead: body.lead.trim() } : {}) }
   }
   try {

@@ -2,7 +2,7 @@ import { currentUser, authDisabled, currentRole } from '../utils/session'
 import { getProfile, toPublic } from '../utils/users'
 import { roleFor } from '../utils/roles'
 import { signInIdentityOnly } from '../utils/githubSignIn'
-import { listPlacements } from '../utils/hierarchy'
+import { effectivePlacement, listPlacements } from '../utils/hierarchy'
 import { teamOf } from '../../shared/types/hierarchy'
 import { capabilitiesFor } from '../../shared/types/role'
 
@@ -21,7 +21,7 @@ export default defineEventHandler(async (event) => {
   // Their place in the hierarchy and who is below them: the UI offers a
   // person filter on runs only to someone who has a team to filter.
   const placements = await listPlacements()
-  const placement = placements[user.login] ?? null
+  const placement = await effectivePlacement(user.login)
   return {
     ...user,
     role,

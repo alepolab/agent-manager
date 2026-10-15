@@ -6,7 +6,7 @@ const error = ref(typeof route.query.error === 'string' ? route.query.error : ''
 const doors = ref<{ passwordLogin: boolean, githubLogin: boolean }>({ passwordLogin: false, githubLogin: true })
 
 // Taken in setup: after an await the Nuxt context, and with it useState, is gone.
-const { load } = useUser()
+const { load, me } = useUser()
 
 const username = ref('')
 const password = ref('')
@@ -28,7 +28,13 @@ async function signIn() {
     await $fetch('/api/auth/password', { method: 'POST', body: { username: username.value, password: password.value } })
     // The route guard loaded the user while signed out; load it again.
     await load()
-    await navigateTo(next.value)
+    // No Claude token yet: set it up first, as GitHub sign-in does.
+    const target = me.value && !me.value.authDisabled && !me.value.profile.hasAnthropicToken ? '/profile?setup=1' : next.value
+    // A full page load, as GitHub sign-in arrives by. Navigating in place from
+    // this layout-less page into the app shell left a blank page: the shell's
+    // patch failed ("insertBefore ... not a child of this node") and nothing
+    // rendered until a reload.
+    window.location.assign(target)
   } catch (err: any) {
     error.value = err?.data?.message || err?.statusMessage || 'Sign-in failed'
     password.value = ''
