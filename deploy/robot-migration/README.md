@@ -115,7 +115,7 @@ Workflow `ui-to-api-optimization` goes through the suite one test folder at a ti
   - It adds only folders the migration has finished, one item per 15 UI specs, pilots first.
   - Re-run it as the migration finishes more folders.
   - Prefer `PUT /api/workflows/ui-to-api-optimization/queue` while the queue runs.
-- **Precheck:** `opt-sync.sh pull` fast-forwards `optimization` and merges new `workflow/main` work into it. Then `scripts/ui-remaining.mjs` gives the next 15 specs; empty output means the item is done.
+- **Precheck:** `opt-sync.sh pull` (main-sync.sh with `BRANCH=optimization`) fast-forwards `optimization`, then `opt-upmerge.sh` merges new `workflow/main` work into it. Then `scripts/ui-remaining.mjs` gives the next 15 specs; empty output means the item is done.
 - **Second lane:** after the pilots, add `{"name": "opt2", "parameters": {"projectDir": "/work/ase-crm-testPlaywright-opt2", "localCheckout": "/work/ase-crm-testPlaywright-opt2", "crmStack": "ui2", "appUrl": "http://localhost:8084", "keycloakUrl": "http://localhost:8281", "dbHost": "localhost:3309"}}` to its `lanes`. `laneKey` is `laneArea` (the folder), so two lanes never take the same folder.
 
 ## Removing it completely

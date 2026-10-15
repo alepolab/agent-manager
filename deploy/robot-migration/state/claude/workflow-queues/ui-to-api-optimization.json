@@ -18,7 +18,7 @@
       "autonomous": "yes"
     },
     "precheck": {
-      "command": "/opt/pwmig/opt-sync.sh pull \"$PWD\" >&2 || true; avail=$(df --output=avail -BG /data | tail -1 | tr -dc 0-9); [ \"$avail\" -ge 15 ] || { echo \"only ${avail} GB free on the docker disk (need 15)\" >&2; exit 1; }; node scripts/ui-remaining.mjs \"tests/$PARAM_testFolder\" --max 15",
+      "command": "/opt/pwmig/opt-sync.sh pull \"$PWD\" >&2 || true; /opt/pwmig/opt-upmerge.sh \"$PWD\"; avail=$(df --output=avail -BG /data | tail -1 | tr -dc 0-9); [ \"$avail\" -ge 15 ] || { echo \"only ${avail} GB free on the docker disk (need 15)\" >&2; exit 1; }; node scripts/ui-remaining.mjs \"tests/$PARAM_testFolder\" --max 15",
       "parameter": "include"
     },
     "laneKey": "laneArea"
