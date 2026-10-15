@@ -158,8 +158,11 @@ kc() { docker exec pwmig-keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
 
 # Lane 2: the second CRM stack. Its settings come from pwmig2.env, read only here (the rest stays lane 1).
 dc2() {
-  docker compose -p pwmig2 -f /src/ase-crm/docker/docker-compose.yml -f $KIT/compose/pwmig2.override.yml \
-    --env-file /src/ase-crm/.env --env-file $KIT/compose/pwmig2.env "$@"
+  # In a subshell with pwmig2.env exported: this script exports pwmig.env, and compose lets the shell's
+  # environment win over --env-file, which gave lane 2 lane 1's ports (pwmig2-ports could not bind).
+  (set -a; source $KIT/compose/pwmig2.env; set +a
+   docker compose -p pwmig2 -f /src/ase-crm/docker/docker-compose.yml -f $KIT/compose/pwmig2.override.yml \
+     --env-file /src/ase-crm/.env --env-file $KIT/compose/pwmig2.env "$@")
 }
 l2() { (set -a; source $KIT/compose/pwmig2.env; set +a; echo "${!1}"); }
 kc2() { docker exec pwmig2-keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
@@ -181,8 +184,11 @@ lane2_seed() {
   log "starting pwmig2-mariadb and copying crm14_db into it"
   dc2 up -d --no-build mariadb
   wait_healthy pwmig2-mariadb
+  # Through a file in pwmig2-mariadb: piped straight into mariadb the 36 MB dump failed mid-way with a
+  # syntax error (2026-10-15), while the same dump imported from a file loads cleanly.
   docker exec pwmig-mariadb mariadb-dump -uroot -p"$pw" --single-transaction --routines --triggers --events \
-      --databases crm14_db | docker exec -i pwmig2-mariadb mariadb -uroot -p"$pw"
+      --databases crm14_db | docker exec -i pwmig2-mariadb sh -c 'cat > /tmp/seed.sql'
+  docker exec pwmig2-mariadb sh -c "mariadb -uroot -p'$pw' < /tmp/seed.sql; rc=\$?; rm -f /tmp/seed.sql; exit \$rc"
   log "lane 2 seeded: $(docker exec pwmig2-mariadb mariadb -uroot -p"$pw" -N -e 'select count(*) from information_schema.tables where table_schema="crm14_db"') tables"
 }
 
