@@ -87,6 +87,24 @@ opt(<testFolder>): <n> UI tests slimmed, <m> API tests added, <k> left as is
 Its body lists the specs, one line per skip reason, and `Run: <run id>`. Never push. The next step delivers. A
 step that ends with uncommitted work stalls the queue.
 
+## Never stop with uncommitted work
+The step must end with your work committed. Run `catalog/policies/freeze` (126b89c0, 2026-10-15) ended with a
+finished, green conversion left uncommitted: one read-only call was refused and the step stopped to wait, so the
+queue paused.
+- **Commit as soon as the proof passes.** Once the final run is green and the ledger exits 0, write the bookkeeping
+  and commit straight away. Anything you check afterwards (reports, the brief) comes after the commit. Amend
+  nothing; a fix-up is a second commit.
+- **A refused or interrupted tool call is not a stop.** For example: "The user doesn't want to take this action
+  right now", a denied permission, or a timeout. Nobody is watching, so nobody answers. Get the same result
+  another way:
+  - read a JSON report with the Read tool, or `jq`, instead of an inline `node -e` script;
+  - split a long command;
+  - try it once more.
+
+  If it still can't be done, carry on without it and say so in the brief's `findings`.
+- Never end a reply waiting to be told how to go on. End it committed and with the brief written, or with
+  `PIPELINE-ASK` for one of the rule-breaking cases below.
+
 ## Decide autonomously
 Make every call yourself as README and skill say. Record the ones they don't settle in `change-brief.json`
 `open_questions`, with `resolved: true` and:
