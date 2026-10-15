@@ -28,11 +28,18 @@ function fakeExec({ projects = [], dirty = '', failDown = [], images = [], label
     // names one run, so `labelled` may be { [runId]: [...] }); inUse: names or ids a container runs
     if (cmd === 'docker' && args[0] === 'images') {
       const filter = args[args.indexOf('--filter') + 1] ?? ''
+      // `label=agent-manager.run` with no value: every labelled image, by id
+      if (filter === 'label=agent-manager.run') return (Array.isArray(labelled) ? labelled : Object.values(labelled).flat()).map(l => l.id).join('\n')
       const mine = Array.isArray(labelled) ? labelled : labelled[filter.split('=').at(-1)] ?? []
       if (args.includes('--filter')) return mine.flatMap(l => (l.names.length ? l.names : ['<none>:<none>']).map(n => `${l.id}\t${n}`)).join('\n')
       return [...images, ...(Array.isArray(labelled) ? labelled : Object.values(labelled).flat()).flatMap(l => l.names)].join('\n')
     }
     // revisions: image name or id -> its org.opencontainers.image.revision; heads: checkout dir -> HEAD
+    if (cmd === 'docker' && args[0] === 'image' && args[1] === 'inspect' && args.join(' ').includes('agent-manager.run')) {
+      const runOf = id => Array.isArray(labelled) ? '' : Object.entries(labelled).find(([, ls]) => ls.some(l => l.id === id))?.[0] ?? ''
+      return args.slice(args.indexOf('--format') + 2).map(runOf).join('\n')
+    }
+    if (cmd === 'docker' && args[0] === 'builder') return 'Total:\t1.5GB\n'
     if (cmd === 'docker' && args[0] === 'image' && args[1] === 'inspect') return `${revisions[args.at(-1)] ?? ''}\n`
     if (cmd === 'git' && args[0] === 'rev-parse') return `${heads[opts?.cwd] ?? ''}\n`
     if (cmd === 'docker' && args[0] === 'ps') return inUse.includes(args.at(-1).replace('ancestor=', '')) ? 'c0ffee\n' : ''
@@ -234,15 +241,16 @@ const OTHER = 'abcdef12-0000-4000-8000-000000000000' // shares this run's first 
   assert.ok(['ghcr.io/alepolab/ase-crm:local-a', ...images].every(n => atB.rmi().includes(n)),
     `THE ORPHANED IMAGES: A's images stayed after its stack's last user ended (removed: ${atB.rmi().join(', ')})`)
   assert.ok(atB.rmi().includes(`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-fix`), 'B\'s own images go too')
-  assert.equal(rB.claimedFromImages.run, A)
-  assert.equal(rB.claimedFromImages.removed.length, 3)
+  assert.equal(rB.endedRunImages.length, 1)
+  assert.equal(rB.endedRunImages[0].run, A)
+  assert.equal(rB.endedRunImages[0].removed.length, 3)
 
   // B ends while A is still waiting at its gate: A is a user, so nothing of A's goes.
   const early = fakeExec({ projects: [projectA], images, labelled })
   const rE = await teardownRun({ ...runB, status: 'completed' }, early, [runA, { ...runB, status: 'completed' }])
   assert.deepEqual(early.downed(), [], 'A still uses its stack')
   assert.ok(!images.some(n => early.rmi().includes(n)) && !early.rmi().includes('ghcr.io/alepolab/ase-crm:local-a'), 'A\'s images are A\'s to remove')
-  assert.equal(rE.claimedFromImages, undefined)
+  assert.equal(rE.endedRunImages, undefined)
   assert.ok(!early.rmi().includes(`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-fix`), 'and B\'s are kept while A uses the stack they ran in')
 
   // A ends after B: A is the last user, so B's kept images go with A's.
@@ -250,7 +258,67 @@ const OTHER = 'abcdef12-0000-4000-8000-000000000000' // shares this run's first 
   const rL = await teardownRun({ ...runA, status: 'completed', steps: stackSteps }, late, [{ ...runA, status: 'completed' }, { ...runB, status: 'completed' }])
   assert.deepEqual(late.withVolumes(), [projectA])
   assert.ok(late.rmi().includes(`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-fix`), 'THE ORPHANED IMAGES: B\'s images stayed after the stack\'s last user ended')
-  assert.equal(rL.claimerImages[0].run, ID)
+  assert.equal(rL.endedRunImages[0].run, ID)
+}
+{
+  // A hand-over chain: A stands up its stack, B takes it over and ends while C
+  // has taken it from B. Before, C's ending removed A's images (the run it took
+  // the stack from) and nobody's else: B's, kept at B's ending because C still
+  // used the stack, stayed for good. 39 ended runs' images were on disk this way.
+  const A = '55555555-6666-4777-8888-999999999999'
+  const B = '66666666-7777-4888-9999-aaaaaaaaaaaa'
+  const projectA = `sdlc-${A}`
+  const labelled = {
+    [A]: [{ id: 'imgA', names: [`localhost/agent-sdlc/ase-crm:${A.slice(0, 8)}-fix`] }],
+    [B]: [{ id: 'imgB', names: [`localhost/agent-sdlc/ase-crm:${B.slice(0, 8)}-verify`] }],
+    [ID]: [{ id: 'imgC', names: [`localhost/agent-sdlc/ase-crm:${id.slice(0, 8)}-trace`] }],
+  }
+  const runs = [
+    { id: A, status: 'completed' },
+    { id: B, status: 'completed', stackProject: projectA, stackClaimedFrom: A },
+    { id: ID, status: 'completed', stackProject: projectA, stackClaimedFrom: A },
+  ]
+  const exec = fakeExec({ projects: [projectA], labelled })
+  const r = await teardownRun({ ...runs[2], steps: stackSteps }, exec, runs)
+  for (const n of Object.values(labelled).flat().flatMap(l => l.names)) assert.ok(exec.rmi().includes(n), `THE CHAIN: ${n} stayed after the stack's last user ended (removed: ${exec.rmi().join(', ')})`)
+  assert.deepEqual(r.endedRunImages.map(x => x.run).sort(), [A, B].sort())
+
+  // While another run still waits at a gate on that stack, nothing of A's or B's goes.
+  const waiting = fakeExec({ projects: [projectA], labelled })
+  const D = { id: '77777777-8888-4999-aaaa-bbbbbbbbbbbb', status: 'paused', stackProject: projectA }
+  const rW = await teardownRun({ ...runs[2], steps: stackSteps }, waiting, [...runs, D])
+  assert.deepEqual(waiting.rmi(), [], 'a run waiting at a gate still uses the stack')
+  assert.equal(rW.endedRunImages, undefined)
+
+  // An ended run whose stack nobody shares any more is swept by any ending,
+  // even one that never touched that stack: what an earlier teardown kept.
+  const E = '88888888-9999-4aaa-bbbb-cccccccccccc'
+  const stray = fakeExec({ labelled: { [E]: [{ id: 'imgE', names: ['ghcr.io/alepolab/ase-crm:local-e'] }] }, images: [`x:${E.slice(0, 8)}`] })
+  const rS = await teardownRun({ id: ID, status: 'completed', steps: [{ agentSlug: 'sdlc-test-author' }] }, stray, [{ id: E, status: 'failed' }, { id: ID, status: 'completed' }])
+  assert.deepEqual(stray.rmi().sort(), ['ghcr.io/alepolab/ase-crm:local-e', `x:${E.slice(0, 8)}`].sort())
+  assert.equal(rS.endedRunImages[0].run, E)
+}
+{
+  // The build cache is capped at every ending that built something, and not at one that built nothing.
+  const exec = fakeExec()
+  const r = await teardownRun({ id: ID, steps: [{ agentSlug: 'sdlc-verifier' }] }, exec, [])
+  const prune = exec.calls.find(c => c.args[0] === 'builder')
+  assert.deepEqual(prune.args, ['builder', 'prune', '-f', '--max-used-space', '40GB'])
+  assert.deepEqual(r.buildCache, { max: '40GB', reclaimed: '1.5GB' })
+  process.env.RUN_BUILD_CACHE_MAX = 'off'
+  const off = fakeExec()
+  assert.equal((await teardownRun({ id: ID, steps: [{ agentSlug: 'sdlc-verifier' }] }, off, [])).buildCache, undefined)
+  assert.ok(!off.calls.some(c => c.args[0] === 'builder'), 'RUN_BUILD_CACHE_MAX=off leaves the cache alone')
+  delete process.env.RUN_BUILD_CACHE_MAX
+  // Docker before 28 has no --max-used-space: the older flag does the same.
+  const old = fakeExec()
+  const oldExec = async (cmd, args, opts) => {
+    if (args[0] === 'builder' && args.includes('--max-used-space')) { old.calls.push({ cmd, args }); throw new Error('unknown flag: --max-used-space') }
+    return old(cmd, args, opts)
+  }
+  const rO = await teardownRun({ id: ID, steps: [{ agentSlug: 'sdlc-verifier' }] }, oldExec, [])
+  assert.ok(old.calls.some(c => c.args.includes('--keep-storage')))
+  assert.equal(rO.buildCache.error, undefined)
 }
 {
   // An image of a commit a live run's checkout is on stays: that run's reuse

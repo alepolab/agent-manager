@@ -20,10 +20,13 @@
  *   `agent-manager.run=<run id>` (every step's header asks for both). Removed
  *   with `docker rmi` and never forced, so the daemon refuses any image a
  *   container still uses. None is removed while another live run still uses
- *   one of the run's stacks, and the run that took its stack over removes them
- *   when it ends. None is removed that a live run at the same commit could
- *   deploy. Nothing removed images before this, and over three weeks the run
- *   images and volumes filled a 492 GB disk to 99%.
+ *   one of the run's stacks; every later ending looks again (sweepEndedRunImages)
+ *   and removes them once no live run does. None is removed that a live run at
+ *   the same commit could deploy. Nothing removed images before this, and over
+ *   three weeks the run images and volumes filled a 492 GB disk to 99%.
+ * - build cache over RUN_BUILD_CACHE_MAX (40GB by default), least recently
+ *   used first. Every ase-crm build adds to it and nothing took it back: it
+ *   grew to 147 GB in the two days after it was last pruned by hand.
  * - the run's own worktree (`<clone>@<branch>`), and only if git agrees it is
  *   clean - an uncommitted change is kept and reported, never discarded. A
  *   fix branch is kept, since a pull request may be built on it; a scan's
@@ -54,10 +57,9 @@ export interface TeardownReport {
   stacks: { project: string, removed: boolean, /** Its named volumes went with it: this run was its last user. */ volumes?: boolean, error?: string }[]
   worktree?: { path: string, removed: boolean, reason?: string }
   images?: ImageReport
-  /** The images of the run this run took its stack over from, kept at that run's ending for this one. */
-  claimedFromImages?: ImageReport & { run: string }
-  /** The images of ended runs that took this run's stack over, kept at their endings for this one. */
-  claimerImages?: (ImageReport & { run: string })[]
+  /** Images of other ended runs, kept at their endings because a live run used their stack, which none does now. */
+  endedRunImages?: (ImageReport & { run: string })[]
+  buildCache?: { max: string, reclaimed?: string, error?: string }
 }
 
 export interface ImageReport {
@@ -230,27 +232,17 @@ export async function teardownRun(
 
   // ── the images it built ──
   if (runBuildsImages(run)) report.images = await removeRunImages(run, exec, await everyone())
-  // The run this one took its stack over from kept its images at its own
-  // ending, because this run still used that stack. Now this run lets go, and
-  // nobody else would ever remove them. removeRunImages still keeps them while
-  // any other live run uses that run's stacks.
-  const from = run.stackClaimedFrom
-  if (from) {
-    const others = (await everyone()).filter(r => r.id !== run.id)
-    const fromRun = others.find(r => r.id === from)
-    if (!fromRun || TERMINAL_STATUSES.includes(fromRun.status)) {
-      const images = await removeRunImages({ id: from, stackProject: fromRun?.stackProject }, exec, others)
-      if (images) report.claimedFromImages = { run: from, ...images }
-    }
+  // Images an ended run kept at its ending, because a live run still used its
+  // stack, are removed by nobody at that run's ending. Looking only at the run
+  // this one took its stack from, and at runs that took this one's, missed
+  // every run further along a hand-over chain - A's stack to B, then to C -
+  // and 39 ended runs' images were still on disk two days after the fix that
+  // was meant to remove them. Any ending looks at every ended run instead.
+  if (runBuildsImages(run) || run.steps.some(s => STACK_AGENTS.test(s.agentSlug))) {
+    const swept = await sweepEndedRunImages(run.id, exec, await everyone())
+    if (swept.length) report.endedRunImages = swept
   }
-  // The other way round: a run that took this run's stack over and ended first
-  // kept its images, because this run still used the stack. This run is its
-  // last user now.
-  const own = new Set(runProjectNames(run.id))
-  if (run.steps.some(s => STACK_AGENTS.test(s.agentSlug))) for (const claimer of (await everyone()).filter(r => r.id !== run.id && TERMINAL_STATUSES.includes(r.status) && r.stackProject && own.has(r.stackProject))) {
-    const images = await removeRunImages(claimer, exec, (await everyone()).filter(r => r.id !== run.id))
-    if (images?.removed.length || images?.refused.length) (report.claimerImages ??= []).push({ run: claimer.id, ...images })
-  }
+  if (runBuildsImages(run)) report.buildCache = await capBuildCache(exec)
 
   // ── the run's own worktree ──
   // ASECRM-357: removed after its Verify step halted, `git worktree remove`
@@ -264,7 +256,7 @@ export async function teardownRun(
     report.worktree = await removeRunWorktree(run, exec)
   }
 
-  if (report.stacks.length || report.worktree || report.images || report.claimedFromImages || report.claimerImages) log.info('run torn down', { runId: run.id, ...report })
+  if (report.stacks.length || report.worktree || report.images || report.endedRunImages) log.info('run torn down', { runId: run.id, ...report })
   return report
 }
 
@@ -352,6 +344,64 @@ export async function removeRunImages(
   }
   for (const n of named) if (!done.has(n) && !(await keptForReuse(n))) await rmi(n)
   return report
+}
+
+/**
+ * Removes the images of every ended run other than `endingId` that no live run
+ * still needs, by way of removeRunImages, which keeps an image while a live run
+ * uses that run's stacks. The ending run counts as ended: it lets go of its
+ * stacks first. Asks docker for its images once, so only the ended runs that
+ * still have one are looked at. Reports only those it removed or was refused.
+ */
+export async function sweepEndedRunImages(endingId: string, exec: Exec = realExec, runs: StackRun[] = []): Promise<(ImageReport & { run: string })[]> {
+  const others = runs.filter(r => r.id !== endingId)
+  const ended = others.filter(r => TERMINAL_STATUSES.includes(r.status))
+  if (!ended.length) return []
+  let names: string[] = []
+  const labelledFor = new Set<string>()
+  try {
+    names = (await exec('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}'])).split('\n').map(s => s.trim()).filter(n => n && !n.includes('<none>'))
+    const ids = [...new Set((await exec('docker', ['images', '--filter', `label=${RUN_LABEL}`, '--format', '{{.ID}}'])).split('\n').map(s => s.trim()).filter(Boolean))]
+    if (ids.length) {
+      for (const line of (await exec('docker', ['image', 'inspect', '--format', `{{index .Config.Labels "${RUN_LABEL}"}}`, ...ids])).split('\n')) {
+        if (line.trim()) labelledFor.add(line.trim().toLowerCase())
+      }
+    }
+  } catch {
+    return []
+  }
+  const out: (ImageReport & { run: string })[] = []
+  for (const r of ended) {
+    if (!labelledFor.has(r.id.toLowerCase()) && !names.some(n => imageNamedFor(r.id, n))) continue
+    const images = await removeRunImages(r, exec, others)
+    if (images?.removed.length || images?.refused.length) out.push({ run: r.id, ...images })
+  }
+  return out
+}
+
+/**
+ * Prunes the build cache down to RUN_BUILD_CACHE_MAX (default 40GB; 0 or off
+ * turns it off), least recently used first. BuildKit never prunes what a build
+ * in progress holds, so a run building at the same time keeps its layers.
+ * Docker before 28 names the flag `--keep-storage`. Never throws.
+ */
+export async function capBuildCache(exec: Exec = realExec): Promise<TeardownReport['buildCache']> {
+  const max = (process.env.RUN_BUILD_CACHE_MAX ?? '40GB').trim()
+  if (!max || max === '0' || /^off$/i.test(max)) return undefined
+  const prune = (flag: string) => exec('docker', ['builder', 'prune', '-f', flag, max])
+  try {
+    let out: string
+    try {
+      out = await prune('--max-used-space')
+    } catch (err) {
+      if (!/unknown flag/i.test(String(err instanceof Error ? err.message : err))) throw err
+      out = await prune('--keep-storage')
+    }
+    const reclaimed = out.match(/Total:\s*(\S+)/)?.[1]
+    return { max, ...(reclaimed ? { reclaimed } : {}) }
+  } catch (err) {
+    return { max, error: String(err instanceof Error ? err.message : err).slice(0, 300) }
+  }
 }
 
 /**
