@@ -6,7 +6,7 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 
 ## What it does
 
-**Runbook A: ticket to evidence-backed PR.** Eight agent steps, each reviewed by a monitor that votes continue, retry or abort:
+**Runbook A: ticket to evidence-backed PR.** Its agent steps, each reviewed by a monitor that votes continue, retry or abort:
 
 | Step | Agent | Output |
 |---|---|---|
@@ -15,6 +15,8 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 | Stand Up Stack | `sdlc-stack-provisioner` | The product stack running locally from the recipe |
 | Failing Test | `sdlc-test-author` | A parameterised test that reproduces the bug and fails |
 | Implement Fix | `sdlc-fix-implementer` | Minimal root-cause fix; tests are locked by the plugin hook |
+| Code Review | `sdlc-ce-review` | Findings verified and graded; blockers fixed and committed; `review.md` |
+| Alepo Review | `sdlc-alepo-review` | Alepo's `developer-workflow` review skill, read from `$ALEPO_SKILLS_DIR`: mechanical findings fixed and committed, judgment calls listed in the brief for the Dev Done approval; `alepo-review.md` |
 | Verify + Regression | `sdlc-verifier` | Every new test row passes, nothing that passed before breaks |
 | Browser Trace | `sdlc-trace-capture` | Screenshots and console for UI-facing changes |
 | Security Review | `sdlc-security-review` | Graded findings and a verdict on the diff |
@@ -29,6 +31,7 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 | Plan | `sdlc-ce-plan` | `plan.md` and `qa-plan.md`: numbered cases, each automated or manual, mapped to the acceptance criteria |
 | Implement Fix | `sdlc-ce-work` | The automated cases as real tests, written first; the fix; local commits on the run branch |
 | Code Review | `sdlc-ce-review` | Findings verified and graded; blockers fixed and committed; `review.md` |
+| Alepo Review | `sdlc-alepo-review` | As in Runbook A; its judgment calls reach the person at the Update Stack approval |
 | Update Stack | `sdlc-stack-update` | The image rebuilt from the worktree and redeployed in place, proved by image id and health |
 | Automated QA | `sdlc-qa-automated` | QA plan cases, registry suites, gates and Playwright against the fixed build, as junit XML |
 | Manual QA | `sdlc-qa-manual` | Every manual case performed in a real browser: screenshot per state, verdict per case, exploratory probes; a FAIL sends the run back to Implement Fix |
