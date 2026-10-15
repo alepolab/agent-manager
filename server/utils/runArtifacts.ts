@@ -143,10 +143,47 @@ export const RUN_AUDIT_FILE = 'audit.jsonl'
 /** Something a person did to a run. The runner's own decisions - verdicts,
  *  skips, reworks - are already on the step records; these are not. */
 export interface RunAuditEvent {
-  type: 'approve' | 'answer' | 'note' | 'restart' | 'stop' | 'dismiss' | 'review'
+  type: 'approve' | 'answer' | 'note' | 'restart' | 'stop' | 'dismiss' | 'review' | 'reject' | 'rework'
   actor?: string
   stepId?: string
   text?: string
+  /**
+   * Whose run it is, when the actor is someone else. With a team hierarchy a
+   * lead may stop, steer or decide for their team's runs; the trail has to say
+   * so in as many words, or a reader sees "@bob approved" on @alice's run and
+   * cannot tell a lead's call from a mistake.
+   */
+  onBehalfOf?: string
+  /** Why they could: as the starter's lead, or by their role (operator, the gate's reviewer). */
+  authority?: 'lead' | 'role'
+  /** The role they acted with, when `authority` is 'role'. */
+  role?: string
+  /** One readable sentence, written for the cases above: "@bob stopped the run on @alice's behalf, as @alice's lead". */
+  line?: string
+}
+
+const AUDIT_VERB: Record<RunAuditEvent['type'], string> = {
+  approve: 'approved at the gate',
+  answer: 'answered the question',
+  note: 'steered the run with a note',
+  restart: 'restarted a step',
+  stop: 'stopped the run',
+  dismiss: 'dismissed the run',
+  review: 'decided the review',
+  reject: 'rejected at the gate',
+  rework: 'sent the work back',
+}
+
+/**
+ * The explicit line for an action taken on someone else's run, or undefined
+ * for one's own. Pure, so the test pins the wording a reviewer will read.
+ */
+export function onBehalfLine(event: Pick<RunAuditEvent, 'type' | 'actor' | 'onBehalfOf' | 'authority' | 'role'>): string | undefined {
+  if (!event.onBehalfOf || !event.actor) return undefined
+  const how = event.authority === 'lead'
+    ? `as @${event.onBehalfOf}'s lead`
+    : `by role${event.role ? ` (${event.role})` : ''}`
+  return `@${event.actor} ${AUDIT_VERB[event.type]} on @${event.onBehalfOf}'s behalf, ${how}`
 }
 
 /**
@@ -161,7 +198,8 @@ export interface RunAuditEvent {
 export async function appendRunAudit(runId: string, event: RunAuditEvent): Promise<void> {
   try {
     await mkdir(runArtifactsDir(runId), { recursive: true })
-    await appendFile(join(runArtifactsDir(runId), RUN_AUDIT_FILE), `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`, 'utf-8')
+    const line = event.line ?? onBehalfLine(event)
+    await appendFile(join(runArtifactsDir(runId), RUN_AUDIT_FILE), `${JSON.stringify({ ts: new Date().toISOString(), ...event, ...(line ? { line } : {}) })}\n`, 'utf-8')
   } catch (err) {
     log.warn('run audit append failed', { runId, type: event.type, error: err instanceof Error ? err.message : String(err) })
   }

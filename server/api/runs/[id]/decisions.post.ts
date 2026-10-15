@@ -4,7 +4,7 @@ import { applyReviewDecisions, ReviewError } from '../../../utils/runReview'
 import { currentUser } from '../../../utils/session'
 import { appendRunAudit } from '../../../utils/runArtifacts'
 import type { ReviewDecision } from '../../../../shared/types/runReview'
-import { requireRunAccess } from '../../../utils/runAccess'
+import { auditActor, requireRunAccess } from '../../../utils/runAccess'
 
 /** Runs whose decisions are being applied right now. See the handler. */
 const applying = new Set<string>()
@@ -64,7 +64,7 @@ export default defineEventHandler(async (event) => {
     // review in order with everything else a person did to the run.
     await appendRunAudit(id, {
       type: 'review',
-      actor: user?.login,
+      ...(await auditActor(event)),
       stepId: run.question?.stepId,
       text: [`${result.approved} approved, ${result.skipped} skipped`, body?.note?.trim()].filter(Boolean).join(' - '),
     })

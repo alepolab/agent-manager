@@ -1,8 +1,7 @@
 import { respondToRun } from '../../../utils/workflowRunner'
 import { getRun } from '../../../utils/workflowRunStore'
 import { appendRunAudit } from '../../../utils/runArtifacts'
-import { currentUser } from '../../../utils/session'
-import { requireRunAccess } from '../../../utils/runAccess'
+import { auditActor, requireRunAccess } from '../../../utils/runAccess'
 
 export default defineEventHandler(async (event) => {
   await requireRunAccess(event, 'answerGate', 'lead')
@@ -23,7 +22,7 @@ export default defineEventHandler(async (event) => {
   if (before && (before.question?.stepId !== run.question?.stepId || before.status !== run.status)) {
     await appendRunAudit(id, {
       type: 'answer',
-      actor: (await currentUser(event))?.login,
+      ...(await auditActor(event)),
       stepId: before.question?.stepId || before.currentStepIds[0],
       text: body.reply,
     })

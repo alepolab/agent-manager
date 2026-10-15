@@ -3,7 +3,8 @@ import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
-import { requireRunAccess } from '../../../utils/runAccess'
+import { auditActor, requireRunAccess } from '../../../utils/runAccess'
+import { appendRunAudit } from '../../../utils/runArtifacts'
 
 /**
  * Send the work back to an earlier step, with an instruction.
@@ -84,13 +85,16 @@ export default defineEventHandler(async (event) => {
   // rework does: the run is paused at a gate and is being handed to another
   // step, which is not the same event as an operator restarting a dead run.
   try {
-    return await restartRun(
+    const restarted = await restartRun(
       id,
       stepId,
       `Sent back from "${from}" by ${user?.login ?? 'a reviewer'} (rework ${reworks} of 2): ${note}`,
       before.startedBy,
       { fromRunner: true },
     )
+    // After the restart, so a send-back that never happened is not on the record.
+    await appendRunAudit(id, { type: 'rework', ...(await auditActor(event)), stepId, text: note })
+    return restarted
   } catch (err: any) {
     // Roll the count back: a restart that never happened is not a rework, and
     // leaving it incremented would silently spend one of the two attempts.
