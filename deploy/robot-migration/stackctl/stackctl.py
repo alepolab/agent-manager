@@ -85,7 +85,7 @@ def kcadm(stack, *args):
 
 def kc_redirects(stack):
     port = STACKS[stack]['app_port']
-    deadline = time.time() + 600
+    deadline = time.time() + 1200  # Keycloak under libfaketime on a loaded host can take over 10 min
     while True:
         try:
             kcadm(stack, 'config', 'credentials', '--server', 'http://localhost:8080', '--realm', 'master',
