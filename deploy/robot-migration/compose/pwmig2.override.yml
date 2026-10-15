@@ -85,6 +85,9 @@ services:
       LD_PRELOAD: ${KC_LD_PRELOAD:-}
       FAKETIME_TIMESTAMP_FILE: /faketime/ts
       FAKETIME_DONT_FAKE_MONOTONIC: "1"
+      # Its H2 file is 400+ MB; on this loaded host opening it outlasts the pool's default 5 s wait, and
+      # Keycloak exited and restarted in a loop (pwmig2-keycloak, 2026-10-15). Wait up to 5 minutes instead.
+      QUARKUS_DATASOURCE_JDBC_ACQUISITION_TIMEOUT: 300s
     volumes:
       - keycloak-data:/opt/keycloak/data/h2
       - *faketime
