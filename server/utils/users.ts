@@ -25,8 +25,18 @@ export interface UserProfile {
   jiraEmail?: string
   /** Encrypted; never returned to the browser. */
   jiraToken?: string
-  /** Encrypted; refreshed on every login. */
+  /** Encrypted. From GitHub sign-in, refreshed on every one - or pasted on the
+   *  Profile page, which sign-in then leaves alone (`githubTokenSource`). */
   githubToken?: string
+  /**
+   * Where `githubToken` came from. A token a person pasted is theirs to replace:
+   * sign-in used to overwrite whatever was stored, which would have silently
+   * swapped a fine-grained token for the broad sign-in one at the next login.
+   */
+  githubTokenSource?: 'sign-in' | 'pasted'
+  /** The GitHub account the token acts as. Differs from `login` for a password
+   *  account, whose login is not a GitHub one; commits are attributed to this. */
+  githubLogin?: string
   /** Encrypted. The developer's own Claude credential: an OAuth token from
    *  `claude setup-token`, or a workspace-scoped API key. Every agent this
    *  person starts - pipeline steps, /cli chat, Studio - runs on it. */
@@ -117,10 +127,21 @@ export function toPublic(p: UserProfile): PublicProfile {
 }
 
 /** Merge a patch into the profile. Plain-text token fields are encrypted here, once. */
-export async function saveProfile(login: string, patch: Partial<UserProfile> & { jiraTokenPlain?: string, githubTokenPlain?: string, anthropicTokenPlain?: string }): Promise<UserProfile> {
+export async function saveProfile(login: string, patch: Partial<UserProfile> & { jiraTokenPlain?: string, githubTokenPlain?: string, anthropicTokenPlain?: string, fromSignIn?: boolean }): Promise<UserProfile> {
   await mkdir(usersDir(), { recursive: true })
-  const { jiraTokenPlain, githubTokenPlain, anthropicTokenPlain, ...rest } = patch
+  const { jiraTokenPlain, anthropicTokenPlain, fromSignIn, ...restWithGithub } = patch
+  let { githubTokenPlain, ...rest } = restWithGithub
   const current = (await getProfile(login)) ?? { login, updatedAt: 0 }
+  if (fromSignIn) {
+    if (current.githubTokenSource === 'pasted') {
+      // The person chose this token; signing in does not get to replace it, nor
+      // the account it acts as. Name and avatar still refresh.
+      githubTokenPlain = undefined
+      delete rest.githubId
+    } else if (githubTokenPlain) {
+      Object.assign(rest, { githubTokenSource: 'sign-in', githubLogin: login })
+    }
+  }
   const next: UserProfile = { ...current, ...rest, login, updatedAt: Date.now() }
   if (jiraTokenPlain !== undefined) next.jiraToken = jiraTokenPlain ? encrypt(jiraTokenPlain) : undefined
   if (githubTokenPlain !== undefined) next.githubToken = githubTokenPlain ? encrypt(githubTokenPlain) : undefined
@@ -200,14 +221,14 @@ const ACTIONS_BOT_EMAIL = '41898282+github-actions[bot]@users.noreply.github.com
  * not be left guessing. GIT_BOT_NAME and GIT_BOT_EMAIL override that floor for
  * a deployment with its own bot.
  */
-export function gitIdentity(profile?: Pick<UserProfile, 'login' | 'name' | 'githubId'>): Record<string, string> {
+export function gitIdentity(profile?: Pick<UserProfile, 'login' | 'name' | 'githubId' | 'githubLogin'>): Record<string, string> {
   const name = profile
     ? (profile.name?.trim() || profile.login)
     : (process.env.GIT_BOT_NAME?.trim() || ACTIONS_BOT_NAME)
   const email = profile
     ? (profile.githubId
-        ? `${profile.githubId}+${profile.login}@users.noreply.github.com`
-        : `${profile.login}@users.noreply.github.com`)
+        ? `${profile.githubId}+${profile.githubLogin ?? profile.login}@users.noreply.github.com`
+        : `${profile.githubLogin ?? profile.login}@users.noreply.github.com`)
     : (process.env.GIT_BOT_EMAIL?.trim() || ACTIONS_BOT_EMAIL)
   return {
     GIT_AUTHOR_NAME: name,
@@ -320,6 +341,53 @@ export function claudeCredentialProblem(env: Record<string, string | undefined>,
     : 'No Claude credential reached this agent. The person it runs as - whoever started it, or the owner of the watch or schedule that did - needs one on their Profile page.'
 }
 
+/**
+ * Who a GitHub token acts as, asked of GitHub. Throws a message fit to show the
+ * person who pasted it: a token GitHub rejects is refused at the Profile page,
+ * not discovered by a run's first push.
+ */
+export async function githubTokenOwner(token: string, fetchImpl: typeof fetch = fetch): Promise<{ login: string, id: number }> {
+  let res: Response
+  try {
+    res = await fetchImpl('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-manager' },
+    })
+  } catch (err) {
+    throw new Error(`Could not reach GitHub to check the token (${err instanceof Error ? err.message : String(err)}). Nothing was saved; try again.`)
+  }
+  if (res.status === 401) throw new Error('GitHub rejected this token: it is wrong, expired or revoked. Nothing was saved.')
+  if (!res.ok) throw new Error(`GitHub answered HTTP ${res.status} when checking the token. Nothing was saved.`)
+  const me = await res.json() as { login?: string, id?: number }
+  if (!me.login || typeof me.id !== 'number') throw new Error('GitHub did not say whose token this is. Nothing was saved.')
+  return { login: me.login, id: me.id }
+}
+
+/**
+ * Store a GitHub token the person pasted, after GitHub says whose it is, and
+ * keep it across sign-ins. Commits are then attributed to that account - which
+ * for a password account is the only GitHub identity it has.
+ */
+export async function savePastedGithubToken(login: string, token: string, fetchImpl: typeof fetch = fetch): Promise<UserProfile> {
+  const clean = token.replace(/\s+/g, '')
+  const owner = await githubTokenOwner(clean, fetchImpl)
+  return saveProfile(login, { githubTokenPlain: clean, githubTokenSource: 'pasted', githubLogin: owner.login, githubId: owner.id })
+}
+
+/**
+ * Remove a pasted GitHub token. The account it acted as goes with it unless it
+ * is the person's own GitHub login; the next GitHub sign-in stores theirs again.
+ */
+export async function removePastedGithubToken(login: string): Promise<UserProfile> {
+  const p = await getProfile(login)
+  const ownAccount = p?.githubLogin === login
+  return saveProfile(login, {
+    githubTokenPlain: '',
+    githubTokenSource: undefined,
+    githubLogin: ownAccount ? login : undefined,
+    ...(ownAccount ? {} : { githubId: undefined }),
+  })
+}
+
 export async function envForUser(login: string | undefined, fetchImpl: typeof fetch = fetch): Promise<Record<string, string>> {
   // The commit identity first, and unconditionally. An anonymous run — auth
   // disabled, or a watch dispatch with no starter — still commits, and these
@@ -341,7 +409,7 @@ export async function envForUser(login: string | undefined, fetchImpl: typeof fe
       // Same token, now also where docker looks for it. Gated on the same
       // verdict: writing a credential file for a token GitHub has already
       // rejected would turn a clear 401 into a confusing one.
-      env.DOCKER_CONFIG = await dockerConfigFor(login, t)
+      env.DOCKER_CONFIG = await dockerConfigFor(login, t, p.githubLogin)
     } else {
       // The host's own gh login (mounted into the container) applies instead;
       // said once per token, loudly, because the developer should replace it.
@@ -410,10 +478,12 @@ const GHCR = 'ghcr.io'
  * so it is written 0600 into the users directory, never into a run's artifacts
  * directory, which is kept as evidence and travels into pull request bodies.
  */
-async function dockerConfigFor(login: string, token: string): Promise<string> {
+async function dockerConfigFor(login: string, token: string, githubLogin?: string): Promise<string> {
   const dir = join(credentialDir(login), `${safe(login)}.docker`)
   await mkdir(dir, { recursive: true })
-  const auth = Buffer.from(`${login}:${token}`).toString('base64')
+  // The registry user is the account the token belongs to, which for a password
+  // account's pasted token is not its login here.
+  const auth = Buffer.from(`${githubLogin ?? login}:${token}`).toString('base64')
   await writeFile(join(dir, 'config.json'), JSON.stringify({ auths: { [GHCR]: { auth } } }), { mode: credentialFileMode() })
   await chmod(join(dir, 'config.json'), credentialFileMode())
   return dir
