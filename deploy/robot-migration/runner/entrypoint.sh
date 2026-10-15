@@ -40,6 +40,7 @@ if [[ -d $L2/.git ]]; then
   [[ -e $L2/node_modules ]] || ln -s "$S/node_modules" "$L2/node_modules"
   grep -qx node_modules "$L2/.git/info/exclude" 2>/dev/null || echo node_modules >> "$L2/.git/info/exclude"
 fi
+/opt/pwmig/opt-setup.sh || log "opt-setup failed; the optimization lanes wait"   # optimization lanes (only once installed)
 /opt/pwmig/wire-push.sh   # the suite's push URL: the deploy key when there is one (pw deploy-key), else disabled
 
 # The skills' scripts and references are the suite's own copies (its .claude/skills/, kept current by git),

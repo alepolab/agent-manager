@@ -1,10 +1,10 @@
 #!/bin/bash
-# Points the suite checkouts' push URL (lane 1's, and lane 2's when it exists) at the deploy key in
+# Points the suite checkouts' push URL (lane 1's, and lane 2's and the optimization lanes' when they exist) at the deploy key in
 # /data/am/deploy-key, when there is one. Without a key the push URL stays disabled, so nothing can be
 # pushed from this container.
 set -euo pipefail
 d=/data/am/deploy-key
-for S in /work/ase-crm-testPlaywright-workflow /work/ase-crm-testPlaywright-lane2; do
+for S in /work/ase-crm-testPlaywright-workflow /work/ase-crm-testPlaywright-lane2 /work/ase-crm-testPlaywright-opt1 /work/ase-crm-testPlaywright-opt2; do
 [[ -d $S/.git ]] || continue
 if [[ -f $d/id_ed25519 && -f $d/known_hosts ]]; then
   url=$(git -C "$S" remote get-url origin)               # https://github.com/<owner>/<repo>.git

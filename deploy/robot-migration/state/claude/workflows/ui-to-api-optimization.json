@@ -1,0 +1,141 @@
+{
+  "name": "UI to API optimization",
+  "description": "Optimizes one test folder of the ase-crm Playwright suite on branch optimization. Each test that drives the browser is split into API/DB setup and data checks plus a minimal UI test that keeps every UI assertion. A test that cannot be split stays exactly as it is. The analyst plans from the code only, with no stack. The converter rewrites the tests, proves with scripts/assertion-ledger.mjs that no assertion was lost, runs the changed specs green on the lane's stack (shared with the Robot migration, under its lock, never moving the clock), and commits. The pusher merges into optimization and pushes it. Rules: docs/optimization/README.md. Start each run with the prompt \"Optimize tests/<testFolder>\".",
+  "steps": [
+    {
+      "id": "analyse",
+      "agentSlug": "ui-api-analyst",
+      "label": "Plan the split (code only)",
+      "next": [
+        "convert"
+      ],
+      "produces": [
+        "plan.md"
+      ],
+      "maxVisits": 2
+    },
+    {
+      "id": "convert",
+      "agentSlug": "ui-api-converter",
+      "label": "Convert, prove & commit",
+      "approval": true,
+      "autoApproveWhenReady": true,
+      "testsUnlocked": true,
+      "next": [
+        "push-branch"
+      ],
+      "maxVisits": 2
+    },
+    {
+      "id": "push-branch",
+      "agentSlug": "opt-branch-pusher",
+      "label": "Deliver to optimization",
+      "approval": true,
+      "autoApproveWhenReady": true,
+      "next": [
+        "tell-progress"
+      ],
+      "maxVisits": 1
+    },
+    {
+      "id": "tell-progress",
+      "agentSlug": "sdlc-notifier",
+      "label": "Tell Teams the progress",
+      "next": [],
+      "runWhen": {
+        "artifact": "progress.json"
+      },
+      "notify": {
+        "channel": "robot-migration",
+        "message": "UI → API optimization: a test folder was optimized and pushed to optimization."
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "name": "projectDir",
+      "required": true,
+      "default": "/work/ase-crm-testPlaywright-opt1",
+      "description": "The lane's own clone of the suite (branch optimization). Run branches are cut in it."
+    },
+    {
+      "name": "testFolder",
+      "required": true,
+      "description": "Test folder relative to tests/, e.g. catalog/policies/tax. Only that folder, not its subfolders."
+    },
+    {
+      "name": "include",
+      "description": "Spec files of testFolder for this run, comma separated. The queue precheck sets it: the next 15 specs still to do."
+    },
+    {
+      "name": "laneArea",
+      "description": "testFolder with / as ~. The queue's laneKey, so two lanes never take the same folder."
+    },
+    {
+      "name": "crmSourceDir",
+      "required": true,
+      "default": "/work/ase-crm",
+      "description": "Checkout of the CRM source (backend controllers), read to find endpoints for new helpers."
+    },
+    {
+      "name": "crmStack",
+      "default": "ui",
+      "description": "Stack for docker/stacks/stack.sh test-env (ui|ui2). Shared with the migration, under its lock."
+    },
+    {
+      "name": "appUrl",
+      "required": true,
+      "default": "http://localhost:8083",
+      "description": "The live ase-crm app."
+    },
+    {
+      "name": "keycloakUrl",
+      "required": true,
+      "default": "http://localhost:8280",
+      "description": "Keycloak for the app (realm alepo)."
+    },
+    {
+      "name": "dbHost",
+      "required": true,
+      "default": "localhost:3308",
+      "description": "The app database (crm14_db), host:port."
+    },
+    {
+      "name": "deliver",
+      "required": true,
+      "default": "local",
+      "description": "local = merge the run branch into optimization of localCheckout and push it."
+    },
+    {
+      "name": "runCheckout",
+      "default": "in-place",
+      "description": "in-place = every run works in projectDir on its own branch fix/run-<id> cut from baseBranch."
+    },
+    {
+      "name": "baseBranch",
+      "default": "optimization",
+      "description": "Branch run branches are cut from and delivered to."
+    },
+    {
+      "name": "localCheckout",
+      "default": "/work/ase-crm-testPlaywright-opt1",
+      "description": "Same as projectDir (in-place); also the node_modules source."
+    },
+    {
+      "name": "autonomous",
+      "default": "yes",
+      "description": "yes = the agents decide with their own recommendation and record each decision; gates open by themselves on a clean hand-over."
+    },
+    {
+      "name": "pushAfterDeliver",
+      "default": "yes",
+      "description": "yes = push optimization to GitHub after each merge (deploy key)."
+    },
+    {
+      "name": "progressToTeams",
+      "default": "yes",
+      "description": "yes = post one line to Teams after each push."
+    }
+  ],
+  "notifyChannel": "robot-migration"
+}

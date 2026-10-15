@@ -1,0 +1,32 @@
+{
+  "enabled": false,
+  "pausedReason": "new queue: start opt1 alone for the two pilot folders, review their ledgers, then add lane opt2",
+  "defaults": {
+    "autoRun": true,
+    "startedBy": "local",
+    "parameters": {
+      "projectDir": "/work/ase-crm-testPlaywright-opt1",
+      "localCheckout": "/work/ase-crm-testPlaywright-opt1",
+      "crmSourceDir": "/work/ase-crm",
+      "crmStack": "ui",
+      "appUrl": "http://localhost:8083",
+      "keycloakUrl": "http://localhost:8280",
+      "dbHost": "localhost:3308",
+      "deliver": "local",
+      "runCheckout": "in-place",
+      "baseBranch": "optimization",
+      "autonomous": "yes"
+    },
+    "precheck": {
+      "command": "/opt/pwmig/opt-sync.sh pull \"$PWD\" >&2 || true; avail=$(df --output=avail -BG /data | tail -1 | tr -dc 0-9); [ \"$avail\" -ge 15 ] || { echo \"only ${avail} GB free on the docker disk (need 15)\" >&2; exit 1; }; node scripts/ui-remaining.mjs \"tests/$PARAM_testFolder\" --max 15",
+      "parameter": "include"
+    },
+    "laneKey": "laneArea"
+  },
+  "lanes": [
+    {
+      "name": "opt1"
+    }
+  ],
+  "items": []
+}

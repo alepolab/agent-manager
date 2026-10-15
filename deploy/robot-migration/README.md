@@ -103,6 +103,21 @@ Two folders at once, each on its own CRM stack (`pwmig2-*`, ports 8084/3309/9004
 - **Delivery:** both lanes deliver to GitHub's `workflow/main`, one at a time, through `/opt/pwmig/main-sync.sh`. The queue's precheck fast-forwards each clone before its run starts.
 - **Failures:** a failed run in either lane still pauses the whole queue.
 
+## UI → API optimization (a second workflow on the same stacks)
+Workflow `ui-to-api-optimization` goes through the suite one test folder at a time, on branch `optimization`. Each test that drives the browser becomes API/DB setup and data checks plus a minimal UI test that keeps every UI assertion. A test that can't be split stays as it is. The rules are in the suite's `docs/optimization/README.md`.
+- **Steps:**
+  1. `ui-api-analyst` plans from the code only (no stack, no clock).
+  2. `ui-api-converter` rewrites the tests, runs them on the lane's stack under `flock $CRM_LOCK`, and must pass `scripts/assertion-ledger.mjs`. It never moves the clock.
+  3. `opt-branch-pusher` merges into `optimization` and pushes it (`/opt/pwmig/opt-sync.sh`), then Teams is told.
+- **Stacks:** it shares `ui` and `ui2` with the migration. The two workflows wait for each other through the stack lock, and both queues may run at once.
+- **Clones:** `/work/ase-crm-testPlaywright-opt1` (stack `ui`) and `-opt2` (`ui2`), made by `/opt/pwmig/opt-setup.sh`. It runs every boot once the workflow file is installed, or by hand without a restart. The script needs the deploy key and `optimization` on GitHub.
+- **Queue items:** add them with `node /opt/pwmig/opt-seed-queue.mjs /work/ase-crm-testPlaywright-opt1 /data/am/claude/workflow-queues/robot-to-playwright-migration.json /data/am/claude/workflow-queues/ui-to-api-optimization.json --write`.
+  - It adds only folders the migration has finished, one item per 15 UI specs, pilots first.
+  - Re-run it as the migration finishes more folders.
+  - Prefer `PUT /api/workflows/ui-to-api-optimization/queue` while the queue runs.
+- **Precheck:** `opt-sync.sh pull` fast-forwards `optimization` and merges new `workflow/main` work into it. Then `scripts/ui-remaining.mjs` gives the next 15 specs; empty output means the item is done.
+- **Second lane:** after the pilots, add `{"name": "opt2", "parameters": {"projectDir": "/work/ase-crm-testPlaywright-opt2", "localCheckout": "/work/ase-crm-testPlaywright-opt2", "crmStack": "ui2", "appUrl": "http://localhost:8084", "keycloakUrl": "http://localhost:8281", "dbHost": "localhost:3309"}}` to its `lanes`. `laneKey` is `laneArea` (the folder), so two lanes never take the same folder.
+
 ## Removing it completely
 `pw down`, then:
 
