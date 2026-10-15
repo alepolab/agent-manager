@@ -138,8 +138,17 @@ export async function saveProfile(login: string, patch: Partial<UserProfile> & {
       // the account it acts as. Name and avatar still refresh.
       githubTokenPlain = undefined
       delete rest.githubId
-    } else if (githubTokenPlain) {
-      Object.assign(rest, { githubTokenSource: 'sign-in', githubLogin: login })
+    } else {
+      // Signed in with GitHub as `login`: that is the account they act as.
+      rest.githubLogin = login
+      if (githubTokenPlain) rest.githubTokenSource = 'sign-in'
+      else if (current.githubToken) {
+        // Identity-only sign-in brings no token. One an earlier, broader sign-in
+        // left behind goes now: kept, it would still grant the repository access
+        // this instance has stopped asking for.
+        githubTokenPlain = ''
+        rest.githubTokenSource = undefined
+      }
     }
   }
   const next: UserProfile = { ...current, ...rest, login, updatedAt: Date.now() }

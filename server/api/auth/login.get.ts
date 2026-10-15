@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { authSession, authDisabled } from '../../utils/session'
+import { signInScopes } from '../../utils/githubSignIn'
 
 /** Start the GitHub OAuth dance. With AUTH_DISABLED there is nothing to do. */
 export default defineEventHandler(async (event) => {
@@ -13,12 +14,9 @@ export default defineEventHandler(async (event) => {
   const url = new URL('https://github.com/login/oauth/authorize')
   url.searchParams.set('client_id', clientId)
   url.searchParams.set('redirect_uri', `${base}/api/auth/callback`)
-  // read:packages is not optional for this pipeline: the products' application
-  // images live in GHCR, and the stack-provisioner pulls them with the signed-in
-  // developer's token. Without it a run reaches Stand Up Stack and halts on
-  // "cannot pull ghcr.io/alepolab/<product>" — a 403 from the registry that
-  // looks like a missing image rather than a missing scope.
-  url.searchParams.set('scope', 'read:org repo read:packages read:user user:email')
+  // Repository access too, unless this instance signs people in for identity
+  // only (GITHUB_SIGNIN_SCOPE=identity); see githubSignIn.ts.
+  url.searchParams.set('scope', signInScopes())
   url.searchParams.set('state', state)
   return sendRedirect(event, url.toString())
 })

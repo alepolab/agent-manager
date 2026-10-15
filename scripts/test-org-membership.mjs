@@ -59,11 +59,18 @@ assert.ok(membershipFailureDetail({ status: 403, org: 'other-org', login })
 // scope had never been requested, and the registry's 403 reads like a missing image.
 {
   const login = readFileSync(new URL('../server/api/auth/login.get.ts', import.meta.url), 'utf8')
-  const scope = login.match(/set\('scope', '([^']+)'\)/)?.[1]
-  assert.ok(scope, 'the login route sets an OAuth scope')
+  assert.match(login, /set\('scope', signInScopes\(\)\)/, 'the login route sets an OAuth scope, from githubSignIn.ts')
+  const { signInScopes } = await import('../server/utils/githubSignIn.ts')
+  // Default: sign-in supplies the run's token, so it asks for what a run needs.
+  delete process.env.GITHUB_SIGNIN_SCOPE
+  const scope = signInScopes()
   for (const needed of ['read:org', 'repo', 'read:packages', 'read:user', 'user:email']) {
     assert.ok(scope.split(' ').includes(needed), `the OAuth scope requests ${needed}`)
   }
+  // Identity only: runs use a PAT, but membership is still checked at sign-in.
+  process.env.GITHUB_SIGNIN_SCOPE = 'identity'
+  assert.ok(signInScopes().split(' ').includes('read:org'), 'identity-only sign-in still asks for read:org, which the membership check needs')
+  delete process.env.GITHUB_SIGNIN_SCOPE
 }
 
 console.log('orgMembership: all assertions passed')
