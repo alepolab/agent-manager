@@ -1,7 +1,10 @@
 import { detectSdkSession, loadSdkSessionMessages } from '../../../utils/sdkSessionStorage'
+import { requireSessionAccess } from '../../../utils/sessionOwners'
 
 export default defineEventHandler(async (event) => {
   const sessionId = getRouterParam(event, 'sessionId')
+  // Yours, your team's, or - unplaced - anyone's: see sessionOwners.ts.
+  if (sessionId) await requireSessionAccess(event, sessionId)
 
   if (!sessionId) {
     throw createError({

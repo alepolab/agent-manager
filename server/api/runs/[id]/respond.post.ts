@@ -1,10 +1,11 @@
 import { respondToRun } from '../../../utils/workflowRunner'
 import { getRun } from '../../../utils/workflowRunStore'
 import { appendRunAudit } from '../../../utils/runArtifacts'
-import { currentUser, requireCapability } from '../../../utils/session'
+import { currentUser } from '../../../utils/session'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 export default defineEventHandler(async (event) => {
-  await requireCapability(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ reply: string }>(event)
   if (!body?.reply?.trim()) throw createError({ statusCode: 400, message: 'reply is required' })

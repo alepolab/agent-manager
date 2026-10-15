@@ -88,6 +88,9 @@ export interface ProviderQueryOptions {
    *  the v2 chat socket; it was simply never declared here, so both ends
    *  type-errored while the feature worked at runtime. */
   outputStyleId?: string
+  /** The signed-in developer. Their Claude credential is the one the query
+   *  runs on; without one the query is refused. */
+  login?: string
 }
 
 /**

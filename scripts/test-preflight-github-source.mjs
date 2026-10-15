@@ -68,7 +68,8 @@ delete process.env.AGENT_GH_TOKEN
 
 // callAgent builds its environment through the same function, so the two cannot drift.
 const caller = readFileSync(new URL('../server/utils/agentCaller.ts', import.meta.url), 'utf8')
-assert.match(caller, /\n {6}env: \{ \.\.\.launchEnv\(await agentEnvFor\(\), userEnv\) \},/, 'callAgent builds the env with launchEnv')
+assert.match(caller, /\n {2}const env = launchEnv\(await agentEnvFor\(\), userEnv\)\n/, 'callAgent builds the env with launchEnv')
+assert.match(caller, /\n {6}env: \{ \.\.\.env \},/, 'and launches with that same env')
 
 // ── gh missing or signed out, but a token is in the run's environment: no false warning, no name ──
 _resetGithubSources()

@@ -136,6 +136,26 @@ export function normalizeSDKMessage(
     })
   }
 
+  // An assistant message the SDK wrote itself because the API call failed -
+  // above all a rejected Claude credential. It arrives as an assistant message,
+  // not as stream deltas, so nothing else here shows it, and the chat ended in
+  // silence: an empty reply, $0, and no word of why.
+  if (sdkMessage.type === 'assistant' && sdkMessage.error) {
+    const text = (sdkMessage.message?.content ?? [])
+      .filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('\n').trim()
+    const hint = sdkMessage.error === 'authentication_failed'
+      ? ' Your Claude credential was rejected: replace it on the Profile page.'
+      : ''
+    messages.push({
+      kind: 'error',
+      id: randomUUID(),
+      sessionId,
+      timestamp,
+      content: `${text || `Claude Code reported ${sdkMessage.error}.`}${hint}`,
+      isError: true,
+    })
+  }
+
   // Handle result (final result with full content)
   // Only check for explicit result type - don't use 'result' in sdkMessage as it's too broad
   if (sdkMessage.type === 'result') {

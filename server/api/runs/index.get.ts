@@ -1,6 +1,7 @@
 import { isTestRun } from '../../../shared/types/run.ts'
 import { summariseRun } from '../../../shared/utils/runSummary.ts'
 import { listRuns } from '../../utils/workflowRunStore'
+import { visibleRuns } from '../../utils/runAccess'
 
 /**
  * Every workflow run, newest first, across all workflows.
@@ -20,7 +21,8 @@ import { listRuns } from '../../utils/workflowRunStore'
  */
 export default defineEventHandler(async (event) => {
   const q = getQuery(event)
-  const runs = await listRuns()
+  // Yours and your team's, or every run when you are not placed in a team.
+  const runs = await visibleRuns(event, await listRuns())
   const list = q.tests === '1' ? runs : runs.filter(r => !isTestRun(r))
   return q.summary === '1' ? list.map(summariseRun) : list
 })

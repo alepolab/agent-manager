@@ -24,6 +24,10 @@ process.env.AGENT_USERS_DIR = join(root, 'users')
 process.env.JIRA_BASE_URL = 'https://jira.test'
 process.env.JIRA_EMAIL = 'dev@example.test'
 process.env.JIRA_API_TOKEN = 'not-a-real-token'
+// Local mode, where the host's Claude login stands, so the Claude credential
+// check passes and every assertion below is about the check it names. That
+// check has its own test: scripts/test-claude-credential.mjs.
+process.env.AUTH_DISABLED = '1'
 mkdirSync(process.env.CLAUDE_DIR, { recursive: true })
 
 const { runPreflight, preflightFailure } = await import('../server/utils/preflight.ts')

@@ -1,5 +1,6 @@
 import { startTestRun, TestRunError } from '../../../utils/workflowRunner'
-import { currentUser, requireCapability } from '../../../utils/session'
+import { currentUser } from '../../../utils/session'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 /**
  * Run one step of a finished run again, on its own branch, with no side
@@ -7,7 +8,7 @@ import { currentUser, requireCapability } from '../../../utils/session'
  * drawer's current, possibly unsaved, config for that step.
  */
 export default defineEventHandler(async (event) => {
-  await requireCapability(event, 'runEngine')
+  await requireRunAccess(event, 'runEngine')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ stepId?: unknown, stepOverride?: unknown }>(event)
   if (typeof body?.stepId !== 'string' || !body.stepId) throw createError({ statusCode: 400, message: 'Say which step to test.' })

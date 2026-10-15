@@ -28,7 +28,11 @@ import { credentialsFor } from './ticketNotifier.ts'
 import { isJiraPostingEnabled } from './jiraCredentials.ts'
 import { getChannel } from './channels.ts'
 import { fetchExistingTickets, EXISTING_TICKETS_ARTIFACT } from './existingTickets.ts'
-import { agentEnvFor } from './agentCaller.ts'
+import { agentEnvFor, launchEnv } from './agentCaller.ts'
+import { claudeCredentialProblem } from './users.ts'
+import { osUserFor, osUserProblem, runAsUsers, unreachableFor } from './osUsers.ts'
+import { agentRunsRoot } from './runArtifacts.ts'
+import { workspaceRootFor } from './workspace.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -58,7 +62,10 @@ export function preflightFailure(report: PreflightReport | undefined): string | 
  * Runs every applicable check. Never throws: a check that cannot answer its own
  * question reports `fail` with the error, which is the honest outcome.
  */
-export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fetchImpl: typeof fetch = fetch): Promise<PreflightReport> {
+export async function runPreflight(
+  run: WorkflowRun, steps: PreflightSteps[], fetchImpl: typeof fetch = fetch,
+  { launchesAgents = true }: { launchesAgents?: boolean } = {},
+): Promise<PreflightReport> {
   const checks: PreflightCheck[] = []
   const add = (name: string, level: PreflightLevel, detail: string) => { checks.push({ name, level, detail }) }
   const guard = async (name: string, fn: () => Promise<PreflightCheck | null>) => {
@@ -74,6 +81,35 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
   // drafting agent is told to file into.
   const jiraProject = run.product?.projects?.[0]
   const unlockedStep = steps.find(s => s.testsUnlocked)
+
+  // ── a Claude credential of the starter's own: no agent launches without one ──
+  // Before anything else that costs time: the agents would each be refused at
+  // launch, and the run would fail at its first step rather than here.
+  await guard('Claude credential', async () => {
+    if (!launchesAgents) return { name: 'Claude credential', level: 'skip', detail: 'this runner launches no Claude agents' }
+    const env = launchEnv(await agentEnvFor(run.startedBy), {})
+    const problem = claudeCredentialProblem(env, run.startedBy)
+    if (problem) return { name: 'Claude credential', level: 'fail', detail: problem }
+    const whose = run.startedBy ? `@${run.startedBy}'s` : "the host's"
+    const kind = env.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription token' : env.ANTHROPIC_API_KEY ? 'API key' : 'login'
+    return { name: 'Claude credential', level: 'ok', detail: `agents run on ${whose} ${kind}` }
+  })
+
+  // ── the developer's own Unix user, when agents run as theirs ──
+  await guard('agent user', async () => {
+    if (!runAsUsers()) return null
+    if (!launchesAgents) return { name: 'agent user', level: 'skip', detail: 'this runner launches no agents' }
+    const problem = osUserProblem(run.startedBy)
+    if (problem) return { name: 'agent user', level: 'fail', detail: problem }
+    // Where its agents will work, asked as their user: the checkout (or, with
+    // none, their own workspace) and the root every run's artifacts live under.
+    const workdir = run.projectDir?.trim() || workspaceRootFor(run.startedBy)
+    const blocked = unreachableFor(run.startedBy!, { enter: [agentRunsRoot()], write: [workdir] })
+    if (blocked) {
+      return { name: 'agent user', level: 'fail', detail: `${blocked}, so every shell command its agents run would fail. An operator must grant it (sudo scripts/provision-developer.sh ${run.startedBy}) or move the directory somewhere its user can reach.` }
+    }
+    return { name: 'agent user', level: 'ok', detail: `agents run as ${osUserFor(run.startedBy!)} in ${workdir}` }
+  })
 
   // ── the guardrails: without them no agent may touch a product repository ──
   await guard('guardrail hooks', async () => {

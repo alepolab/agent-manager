@@ -1,9 +1,12 @@
 import { defaultBudget, getRun, listRuns } from '../../../utils/workflowRunStore.ts'
 import { budgetBrief } from '../../../../shared/utils/budgetBrief.ts'
 import { computeUsage } from '../../../utils/workflowRunner.ts'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 /** What a person needs to decide a budget pause - see shared/utils/budgetBrief.ts. */
 export default defineEventHandler(async (event) => {
+  // Yours, your team's, or - unplaced - anyone's: see runAccess.ts.
+  await requireRunAccess(event)
   const run = await getRun(getRouterParam(event, 'id')!)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
   const fresh = defaultBudget()

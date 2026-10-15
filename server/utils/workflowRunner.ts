@@ -29,7 +29,10 @@ import { claimableStack, stackBusyElsewhere, stackIsUp, stackProjectOf, STACK_US
  * the runner; whether THIS machine has a checkout, a docker daemon or the
  * plugin installed is what scripts/test-preflight.mjs is for.
  */
-let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport> = realPreflight
+// A stubbed agent caller launches no Claude, so it needs no credential; only the
+// real one is asked for the starter's. The launch itself refuses regardless.
+let preflight: (run: WorkflowRun, steps: PreflightSteps[]) => Promise<PreflightReport>
+  = (run, steps) => realPreflight(run, steps, fetch, { launchesAgents: agentCaller === callAgent })
 export function setPreflight(fn: typeof preflight) { preflight = fn }
 import { existsSync } from 'node:fs'
 import { appendFile, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -856,13 +859,18 @@ async function runMonitor(
   output: string,
   projectDir: string | undefined,
   artifactsDir: string,
+  startedBy: string | undefined,
 ): Promise<{ verdict: 'CONTINUE' | 'RETRY' | 'ABORT', review: string }> {
   if (!step.monitorSlug) return { verdict: 'CONTINUE', review: '' }
   try {
+    // The starter's env, as the step it reviews had: monitors used to run on the
+    // instance's Claude credential, which no longer reaches any agent.
+    const env = await envResolver(startedBy).catch(() => ({}))
     const raw = await agentCaller(
       step.monitorSlug,
       monitorPrompt({ label: step.label, agentSlug: step.agentSlug, input, output, artifactsDir }),
       projectDir,
+      { env, login: startedBy },
     )
     const { output: review } = normalizeAgentResult(raw)
     const verdict = parseVerdict(review)
@@ -1084,7 +1092,7 @@ export async function ensureChangeBrief(run: WorkflowRun): Promise<'present' | '
       const input = `${resume ? await whereArtifactsAre(run) : artifactHeader(runArtifactsDir(run.id), run.product, run.startedBy, run.id, run.projectDir ? { dir: run.projectDir, branch: run.branch } : undefined, run.parameters)}${feedback}The change this run made${run.ticketKey ? ` for ${run.ticketKey}` : ''} is waiting for a person to approve it, ${outdated ? `and the reviewer's brief was written before your commits changed it. Rewrite \`${CHANGE_BRIEF_FILE}\` in the run artifacts directory now, so it describes the change as it now is,` : `and there is no reviewer's brief for it. Write \`${CHANGE_BRIEF_FILE}\` into the run artifacts directory now,`} exactly as "The reviewer's brief" in your instructions describes, from what the change is: the ticket, plan.md, meta.json, the reports in the artifacts directory, and \`git log\` / \`git diff\` of ${run.branch ?? 'the run branch'} against ${run.baseBranch ?? 'its base'}.${questions}
 
 That file is the whole of this task. Do not edit, stage or commit anything in the repository, do not run the test suites again, and do not end with PIPELINE-ASK.`
-      await agentCaller(maker.agentSlug, input, run.projectDir, { env, ...(resume ? { resume } : {}) })
+      await agentCaller(maker.agentSlug, input, run.projectDir, { env, login: run.startedBy, ...(resume ? { resume } : {}) })
       const parsed = parseDecisionBrief(await readFile(file, 'utf8').catch(() => null))
       if (answersAll(parsed) && !await briefOutdated(run, maker, file)) {
         log.info('change brief written for a gate', { runId: run.id, by: maker.agentSlug, resumed: !!resume })
@@ -1456,7 +1464,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         logLine(l, run, rec, `duplicate check could not run: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, login: run.startedBy, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
@@ -1748,7 +1756,7 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     }
 
     if (step.monitorSlug) {
-      const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id))
+      const { verdict, review } = await runMonitor(step, rec, input, output, run.projectDir, runArtifactsDir(run.id), run.startedBy)
       if (verdict === 'ABORT') {
         markFailed(l.state, id)
         Object.assign(rec, { status: 'failed', model, error: 'Monitor aborted the workflow' })

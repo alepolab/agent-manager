@@ -6,9 +6,8 @@
 import { promises as fs, createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { join } from 'path'
-import { homedir } from 'os'
 
-import { getClaudeDir } from './claudeDir'
+import { getClaudeDir, projectsDirCandidates } from './claudeDir'
 import { resolveModelMeta, DEFAULT_CONTEXT_WINDOW } from './models.ts'
 
 export interface ClaudeCodeProject {
@@ -222,10 +221,30 @@ async function applyCustomProjectNames(projects: ClaudeCodeProject[]): Promise<v
 }
 
 /**
- * Get the Claude projects directory path
+ * Every directory transcripts may be in: the server's own and, when agents run
+ * as their developers, each developer's (projectsDirCandidates). A project two
+ * of them worked in has a folder in each, and is one project here.
  */
-function getClaudeProjectsDir(): string {
-  return join(homedir(), '.claude', 'projects')
+function getClaudeProjectsDirs(): string[] {
+  return projectsDirCandidates()
+}
+
+/** A project's session transcripts, from every directory that has a folder for it. */
+async function projectJsonlFiles(projectName: string): Promise<string[]> {
+  const out: string[] = []
+  for (const root of getClaudeProjectsDirs()) {
+    const dir = join(root, projectName)
+    const files = await fs.readdir(dir).catch(() => [] as string[])
+    for (const file of files) {
+      if (file.endsWith('.jsonl') && !file.startsWith('agent-')) out.push(join(dir, file))
+    }
+  }
+  return out
+}
+
+/** The ids of a project's sessions: its transcript files, in every directory. */
+export async function projectSessionIds(projectName: string): Promise<string[]> {
+  return (await projectJsonlFiles(projectName)).map(f => f.slice(f.lastIndexOf('/') + 1, -'.jsonl'.length))
 }
 
 /**
@@ -237,7 +256,6 @@ async function extractProjectDirectory(projectName: string): Promise<string> {
     return projectDirectoryCache.get(projectName)!
   }
 
-  const projectDir = join(getClaudeProjectsDir(), projectName)
   const cwdCounts = new Map<string, number>()
   let latestTimestamp = 0
   let latestCwd: string | null = null
@@ -249,17 +267,13 @@ async function extractProjectDirectory(projectName: string): Promise<string> {
   let extractedPath: string = ''
 
   try {
-    await fs.access(projectDir)
-
-    const files = await fs.readdir(projectDir)
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'))
+    const jsonlFiles = await projectJsonlFiles(projectName)
 
     if (jsonlFiles.length === 0) {
       extractedPath = projectName.replace(/-/g, '/')
     } else {
       // Process JSONL files to collect cwd values
-      for (const file of jsonlFiles.slice(0, 3)) { // Limit to first 3 files for performance
-        const jsonlFile = join(projectDir, file)
+      for (const jsonlFile of jsonlFiles.slice(0, 3)) { // Limit to first 3 files for performance
         const fileStream = createReadStream(jsonlFile)
         const rl = createInterface({
           input: fileStream,
@@ -352,30 +366,28 @@ async function generateDisplayName(projectName: string, actualProjectDir: string
  * Get all Claude Code projects
  */
 export async function getClaudeCodeProjects(): Promise<ClaudeCodeProject[]> {
-  const claudeDir = getClaudeProjectsDir()
   const projects: ClaudeCodeProject[] = []
 
   try {
-    await fs.access(claudeDir)
+    const names = new Set<string>()
+    for (const root of getClaudeProjectsDirs()) {
+      const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
+      for (const e of entries) if (e.isDirectory()) names.add(e.name)
+    }
 
-    const entries = await fs.readdir(claudeDir, { withFileTypes: true })
-    const directories = entries.filter(e => e.isDirectory())
-
-    for (const entry of directories) {
+    for (const name of names) {
+      const entry = { name }
       const actualProjectDir = await extractProjectDirectory(entry.name)
       const displayName = await generateDisplayName(entry.name, actualProjectDir)
 
       // Get session count and last activity
-      const projectDir = join(claudeDir, entry.name)
-      const files = await fs.readdir(projectDir)
-      const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-'))
+      const jsonlFiles = await projectJsonlFiles(entry.name)
 
       let lastActivity: string | undefined
       if (jsonlFiles.length > 0) {
         // Get modification time of most recent file
         const filesWithStats = await Promise.all(
-          jsonlFiles.slice(0, 5).map(async (file) => {
-            const filePath = join(projectDir, file)
+          jsonlFiles.slice(0, 5).map(async (filePath) => {
             const stats = await fs.stat(filePath)
             return { mtime: stats.mtime }
           })
@@ -536,11 +548,8 @@ export async function getClaudeCodeSessions(
   hasMore: boolean
   total: number
 }> {
-  const projectDir = join(getClaudeProjectsDir(), projectName)
-
   try {
-    const files = await fs.readdir(projectDir)
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'))
+    const jsonlFiles = await projectJsonlFiles(projectName)
 
     if (jsonlFiles.length === 0) {
       return { sessions: [], hasMore: false, total: 0 }
@@ -549,8 +558,7 @@ export async function getClaudeCodeSessions(
     // Sort files by modification time (newest first)
     const filesWithStats = await Promise.all(
       jsonlFiles.map(async (file) => {
-        const filePath = join(projectDir, file)
-        const stats = await fs.stat(filePath)
+        const stats = await fs.stat(file)
         return { file, mtime: stats.mtime }
       })
     )
@@ -559,8 +567,7 @@ export async function getClaudeCodeSessions(
     const allSessions = new Map<string, ClaudeCodeSession>()
 
     // Collect sessions from all files
-    for (const { file } of filesWithStats) {
-      const jsonlFile = join(projectDir, file)
+    for (const { file: jsonlFile } of filesWithStats) {
       const result = await parseJsonlSessions(jsonlFile)
 
       result.sessions.forEach((session, id) => {
@@ -624,11 +631,8 @@ export async function getClaudeCodeSessionMessages(
     contextWindow: number
   }
 }> {
-  const projectDir = join(getClaudeProjectsDir(), projectName)
-
   try {
-    const files = await fs.readdir(projectDir)
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'))
+    const jsonlFiles = await projectJsonlFiles(projectName)
 
     if (jsonlFiles.length === 0) {
       return { messages: [], total: 0, hasMore: false }
@@ -637,8 +641,7 @@ export async function getClaudeCodeSessionMessages(
     const messages: ClaudeCodeMessage[] = []
 
     // Process all JSONL files to find messages for this session
-    for (const file of jsonlFiles) {
-      const jsonlFile = join(projectDir, file)
+    for (const jsonlFile of jsonlFiles) {
       const fileStream = createReadStream(jsonlFile)
       const rl = createInterface({
         input: fileStream,
@@ -737,15 +740,11 @@ export async function getClaudeCodeSessionMessages(
  * Delete a session from a project
  */
 export async function deleteClaudeCodeSession(projectName: string, sessionId: string): Promise<boolean> {
-  const projectDir = join(getClaudeProjectsDir(), projectName)
-
   // Remove from custom names store
   await deleteSessionName(sessionId)
 
   try {
-    await fs.access(projectDir)
-    const files = await fs.readdir(projectDir)
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'))
+    const jsonlFiles = await projectJsonlFiles(projectName)
 
     if (jsonlFiles.length === 0) {
       return false
@@ -754,8 +753,7 @@ export async function deleteClaudeCodeSession(projectName: string, sessionId: st
     let deleted = false
 
     // Process all JSONL files to find and remove messages for this session
-    for (const file of jsonlFiles) {
-      const jsonlFile = join(projectDir, file)
+    for (const jsonlFile of jsonlFiles) {
       const content = await fs.readFile(jsonlFile, 'utf8')
       const lines = content.split('\n').filter(line => line.trim())
 
@@ -803,15 +801,11 @@ export async function deleteClaudeCodeSession(projectName: string, sessionId: st
  * (Note: This is expensive as it modifies history. Alternatively, we could use a sidecar DB)
  */
 export async function renameClaudeCodeSession(projectName: string, sessionId: string, newSummary: string): Promise<boolean> {
-  const projectDir = join(getClaudeProjectsDir(), projectName)
-
   // Save to persistent custom names store
   await setSessionName(sessionId, newSummary)
 
   try {
-    await fs.access(projectDir)
-    const files = await fs.readdir(projectDir)
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl') && !file.startsWith('agent-'))
+    const jsonlFiles = await projectJsonlFiles(projectName)
 
     if (jsonlFiles.length === 0) {
       return false
@@ -821,8 +815,7 @@ export async function renameClaudeCodeSession(projectName: string, sessionId: st
     let lastFileForSession = ''
 
     // Process all JSONL files to find and update the summary for this session
-    for (const file of jsonlFiles) {
-      const jsonlFile = join(projectDir, file)
+    for (const jsonlFile of jsonlFiles) {
       const content = await fs.readFile(jsonlFile, 'utf8')
       const lines = content.split('\n').filter(line => line.trim())
 
@@ -873,13 +866,13 @@ export async function renameClaudeCodeSession(projectName: string, sessionId: st
  * Delete a Claude Code project (folder)
  */
 export async function deleteClaudeCodeProject(projectName: string): Promise<boolean> {
-  const projectDir = join(getClaudeProjectsDir(), projectName)
-  
   // Remove from custom names store
   await deleteProjectName(projectName)
 
   try {
-    await fs.rm(projectDir, { recursive: true, force: true })
+    for (const root of getClaudeProjectsDirs()) {
+      await fs.rm(join(root, projectName), { recursive: true, force: true })
+    }
     return true
   } catch (error) {
     console.error(`Error deleting project ${projectName}:`, error)

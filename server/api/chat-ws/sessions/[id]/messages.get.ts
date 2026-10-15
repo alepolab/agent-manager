@@ -1,4 +1,5 @@
 import { loadSessionMessages } from '../../../../utils/chatSessionStorage'
+import { requireSessionAccess } from '../../../../utils/sessionOwners'
 
 /**
  * GET /api/chat/sessions/:id/messages
@@ -6,6 +7,8 @@ import { loadSessionMessages } from '../../../../utils/chatSessionStorage'
  */
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
+  // Yours, your team's, or - unplaced - anyone's: see sessionOwners.ts.
+  if (id) await requireSessionAccess(event, id)
 
   if (!id) {
     throw createError({

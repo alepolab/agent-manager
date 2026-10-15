@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Role } from '~~/shared/types/role'
+import type { Level, Placement } from '~~/shared/types/hierarchy'
 import { errorToast } from '~/utils/errorToast'
 
 /**
@@ -22,6 +23,9 @@ interface RolesResponse {
   default: Role
   available: Role[]
   labels: Record<Role, string>
+  placements: Record<string, Placement>
+  levels: Level[]
+  levelLabels: Record<Level, string>
 }
 
 const { can, me } = useUser()
@@ -57,13 +61,50 @@ onMounted(refresh)
 const rows = computed(() => {
   const d = data.value
   if (!d) return []
-  const logins = new Set([...d.profiles.map(p => p.login), ...Object.keys(d.roles)])
+  // Placed people too: someone who leads or is led must be on the page that
+  // says so, whether or not they have signed in or hold a role.
+  const logins = new Set([...d.profiles.map(p => p.login), ...Object.keys(d.roles), ...Object.keys(d.placements)])
   return [...logins].sort((a, b) => a.localeCompare(b)).map(login => ({
     login,
     profile: d.profiles.find(p => p.login === login) ?? null,
     role: d.roles[login] ?? null,
+    placement: d.placements[login] ?? null,
   }))
 })
+
+/** Who may lead this person: anyone placed at a higher level than theirs. */
+function leadsFor(login: string, level: Level | undefined) {
+  const d = data.value
+  if (!d || !level) return []
+  return Object.entries(d.placements)
+    .filter(([other, p]) => other !== login && p.level > level)
+    .map(([other, p]) => ({ login: other, level: p.level }))
+    .sort((a, b) => a.login.localeCompare(b.login))
+}
+
+/**
+ * Place someone in the hierarchy, or take them out. The server refuses a lead
+ * below the person they would lead, a loop, or removing someone who still
+ * leads others, with a message that says which; it is shown as it comes.
+ */
+async function setPlacement(login: string, level: Level | null, lead?: string) {
+  saving.value = login
+  try {
+    const res = await $fetch<{ placements: Record<string, Placement> }>('/api/hierarchy', {
+      method: 'PUT', body: { login, level, lead: lead || null },
+    })
+    if (data.value) data.value.placements = res.placements
+    toast.add({
+      title: level ? `${login} is L${level}${lead ? `, led by ${lead}` : ''}` : `${login} is out of the hierarchy - sees every run`,
+      color: 'success',
+    })
+  } catch (e) {
+    toast.add(errorToast(`Could not place ${login}`, e))
+    await refresh()
+  } finally {
+    saving.value = null
+  }
+}
 
 const unlistedCount = computed(() => rows.value.filter(r => r.role === null).length)
 
@@ -121,6 +162,11 @@ function seen(at: number) {
         drive a run, and which gates are theirs to answer. Anyone not listed here is an operator, because that
         is the default - a missing roles file must never lock the team out of its own pipeline.
       </p>
+      <p class="t-ui leading-relaxed text-label">
+        A level and a lead decide whose work they see. An L1 sees and acts on their own runs and chats; an L2
+        on theirs and their L1s'; an L3 on everyone below them. Someone with no level is outside the hierarchy
+        and sees every run, as everyone did before levels existed.
+      </p>
 
       <div v-if="error" class="rounded-xl px-4 py-3 flex items-center gap-3" style="background: rgba(248, 113, 113, 0.06); border: 1px solid rgba(248, 113, 113, 0.12);">
         <UIcon name="i-lucide-alert-circle" class="size-4 shrink-0" style="color: var(--error);" />
@@ -146,6 +192,8 @@ function seen(at: number) {
               <tr class="text-label">
                 <th class="text-left font-normal pb-2">Person</th>
                 <th class="text-left font-normal pb-2">Role</th>
+                <th class="text-left font-normal pb-2">Level</th>
+                <th class="text-left font-normal pb-2">Lead</th>
                 <th class="text-left font-normal pb-2 hidden md:table-cell">What they can do</th>
               </tr>
             </thead>
@@ -180,12 +228,41 @@ function seen(at: number) {
                     {{ r.role ?? 'No role set - acting as operator' }}
                   </span>
                 </td>
+                <td class="py-2.5 pr-3">
+                  <select
+                    v-if="can('configure')"
+                    class="field-select"
+                    :aria-label="`Level for ${r.login}`"
+                    :value="r.placement?.level ?? ''"
+                    :disabled="saving === r.login"
+                    @change="setPlacement(r.login, (Number(($event.target as HTMLSelectElement).value) || null) as Level | null, r.placement?.lead)"
+                  >
+                    <option value="">None - sees every run</option>
+                    <option v-for="l in data.levels" :key="l" :value="l" :title="data.levelLabels[l]">L{{ l }}</option>
+                  </select>
+                  <span v-else>{{ r.placement ? `L${r.placement.level}` : 'None' }}</span>
+                </td>
+                <td class="py-2.5 pr-3">
+                  <select
+                    v-if="can('configure') && r.placement"
+                    class="field-select"
+                    :aria-label="`Lead for ${r.login}`"
+                    :value="r.placement.lead ?? ''"
+                    :disabled="saving === r.login"
+                    @change="setPlacement(r.login, r.placement.level, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option value="">No lead - top of a team</option>
+                    <option v-for="l in leadsFor(r.login, r.placement.level)" :key="l.login" :value="l.login">@{{ l.login }} (L{{ l.level }})</option>
+                  </select>
+                  <span v-else class="text-label">{{ r.placement?.lead ? `@${r.placement.lead}` : '-' }}</span>
+                </td>
                 <td class="py-2.5 text-label hidden md:table-cell">
                   {{ data.labels[r.role ?? data.default] }}
+                  <span v-if="r.placement"> {{ data.levelLabels[r.placement.level] }}</span>
                 </td>
               </tr>
               <tr v-if="!rows.length">
-                <td colspan="3" class="py-4 text-label">
+                <td colspan="5" class="py-4 text-label">
                   Nobody has signed in on this instance yet.
                 </td>
               </tr>

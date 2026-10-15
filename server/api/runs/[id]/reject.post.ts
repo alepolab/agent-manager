@@ -1,8 +1,9 @@
 import { stopRun } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
-import { requireCapability, currentUser } from '../../../utils/session'
+import { currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { requireRunAccess } from '../../../utils/runAccess'
 
 /**
  * Refuse at a gate.
@@ -26,7 +27,7 @@ import { requireGateRole } from '../../../utils/gateRole'
  * nothing, and the whole value of a human gate is the judgement behind it.
  */
 export default defineEventHandler(async (event) => {
-  await requireCapability(event, 'answerGate')
+  await requireRunAccess(event, 'answerGate', 'lead')
   const id = getRouterParam(event, 'id')!
   const body = await readBody<{ note?: string }>(event).catch(() => ({} as { note?: string }))
   const note = body?.note?.trim()

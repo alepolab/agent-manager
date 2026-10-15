@@ -9,8 +9,11 @@ import { resolveTools, resolveMaxTurns, resolveMaxDurationMs } from './agentTool
 import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
-import { envForUser } from './users.ts'
+import { CLAUDE_CREDENTIAL_VARS, claudeCredentialProblem, envForUser } from './users.ts'
+import { osUserProblem, runAsUsers, SAFE_DIRECTORY_CONFIG, spawnAs } from './osUsers.ts'
+import { recordSessionOwner } from './sessionOwners.ts'
 import type { AgentFrontmatter } from '~/types'
+import { workspaceRootFor } from './workspace.ts'
 
 /**
  * Absolute path to the shipped `engineering/scripts` directory, handed to every
@@ -38,7 +41,12 @@ import type { AgentFrontmatter } from '~/types'
  * developer.
  */
 export function launchEnv(base: Record<string, string>, userEnv: Record<string, string>): Record<string, string> {
-  return { ...base, ...userEnv }
+  const env = { ...base, ...userEnv }
+  // envForUser blanks the credentials it does not use, so the instance's own
+  // cannot sit underneath a developer's. Blank is how it says "unset": drop it,
+  // rather than hand Claude Code a variable set to nothing.
+  for (const v of CLAUDE_CREDENTIAL_VARS) if (env[v] === '') delete env[v]
+  return env
 }
 
 /**
@@ -47,9 +55,59 @@ export function launchEnv(base: Record<string, string>, userEnv: Record<string, 
  * from this shell answers for the wrong process, and that is exactly how a run
  * finished its fix and then halted at `git commit`.
  */
+/**
+ * Names that hold a secret: the instance's own (the key every stored token is
+ * sealed under, the OAuth client secret, the API token that signs anyone in as
+ * a developer, the Slack webhook, the login password hash) and anything else
+ * named like one. Matched by pattern, not listed, because a host carries
+ * secrets nobody here put there - a parent Claude Code session's messaging
+ * token, an npm token in a shell profile - and a list only ever covers the
+ * ones somebody thought of.
+ */
+const SECRET_NAME = /SECRET|PASSW(OR)?D|PRIVATE_KEY|API_KEY|(^|_)TOKEN($|_)|WEBHOOK|COOKIE|CREDENTIAL|_HASH$|^AGENT_MANAGER_/i
+
+/** Comma-separated names an operator lets through anyway: a registry token a
+ *  build needs, or the instance's Jira token for developers who have none. */
+export const AGENT_ENV_PASSTHROUGH = 'AGENT_ENV_PASSTHROUGH'
+
+/**
+ * The server's environment minus its secrets: what every agent starts from.
+ *
+ * It used to be all of process.env. An agent's commands land in step logs and
+ * evidence artifacts - one already wrote GITHUB_CLIENT_SECRET into a stack
+ * report by running `env` - and with AGENT_MANAGER_SECRET among them, any
+ * agent on a shared instance held the key to every developer's stored GitHub,
+ * Jira and Claude tokens.
+ *
+ * Everything else passes, deliberately not an allowlist: a host's toolchain
+ * (JAVA_11_HOME, SDKMAN_*, CATALINA_HOME, NVM_*...) is what the product builds
+ * need, and differs per host in ways no list here would keep up with.
+ *
+ * Credentials an agent IS meant to have come back on top, by name, from
+ * envForUser (the starter's own) and agentEnvFor (AGENT_GH_TOKEN as GH_TOKEN).
+ * With auth disabled the host's Claude credential stays, as it is the only one.
+ *
+ * Note what this is not: agents run as the server's OS user, so a file the
+ * server can read - ~/.agent-manager/secret, the app's .env - an agent can
+ * read too. This keeps secrets out of what agents are handed and print; it
+ * does not wall them off from an agent that goes looking.
+ */
+export function agentBaseEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const passthrough = new Set((env[AGENT_ENV_PASSTHROUGH] ?? '').split(',').map(s => s.trim()).filter(Boolean))
+  const keepClaude = env.AUTH_DISABLED === '1'
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined) continue
+    const claudeCredential = (CLAUDE_CREDENTIAL_VARS as readonly string[]).includes(name)
+    if (SECRET_NAME.test(name) && !passthrough.has(name) && !(keepClaude && claudeCredential)) continue
+    out[name] = value
+  }
+  return out
+}
+
 export async function agentEnvFor(startedBy?: string): Promise<Record<string, string>> {
   return {
-    ...process.env as Record<string, string>,
+    ...agentBaseEnv(),
     // The commit identity — the starter's, or the bot as the floor. It used to
     // be the caller's job alone: callAgent spreads envForUser over this, so an
     // agent always had it, and preflight — which calls this and nothing else —
@@ -78,7 +136,27 @@ export async function agentEnvFor(startedBy?: string): Promise<Record<string, st
     GIT_CONFIG_COUNT: '1',
     GIT_CONFIG_KEY_0: 'commit.gpgsign',
     GIT_CONFIG_VALUE_0: 'false',
+    // Running as a developer, an agent works in checkouts the server cloned:
+    // another owner, which git refuses unless told to trust it.
+    ...(runAsUsers()
+      ? { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_1: SAFE_DIRECTORY_CONFIG.key, GIT_CONFIG_VALUE_1: SAFE_DIRECTORY_CONFIG.value }
+      : {}),
   }
+}
+
+/**
+ * Why an agent must not be launched for this login with this env, or null.
+ * Every launch asks - pipeline steps, chat, Studio, improve-instructions - so
+ * none can start on the instance's Claude login or as the server's own user.
+ */
+export function launchProblem(env: Record<string, string | undefined>, login: string | undefined): string | null {
+  return claudeCredentialProblem(env, login) ?? osUserProblem(login)
+}
+
+/** The SDK options that start the process as the developer, when agents run as them. */
+export function launchAs(login: string | undefined): { spawnClaudeCodeProcess?: ReturnType<typeof spawnAs> } {
+  const spawn = spawnAs(login)
+  return spawn ? { spawnClaudeCodeProcess: spawn } : {}
 }
 
 export function sdlcScriptsDir(): string {
@@ -288,6 +366,9 @@ export interface AgentCallOptions {
    * visits reading the same files and never wrote its plan.
    */
   resume?: string
+  /** Who this agent runs as, so a refusal for want of a Claude credential can
+   *  name the person who has to add one. */
+  login?: string
 }
 
 /** Floor between successive progress emissions when the active tool hasn't
@@ -356,13 +437,26 @@ export function shouldEmitProgress(
 export async function callAgent(
   agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
-  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume } = opts
+  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume, login } = opts
+  // Built once and asked about before launch: the env the agent gets is the env
+  // that must hold a credential. Asking any other would let a call that lost
+  // its developer's env reach the host's own Claude login instead.
+  const env = launchEnv(await agentEnvFor(), userEnv)
+  const refused = launchProblem(env, login)
+  if (refused) throw new Error(refused)
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
   signal?.addEventListener('abort', () => abortController.abort())
   const claudeDir = getClaudeDir()
-  const cwd = projectDir && existsSync(projectDir) ? projectDir : claudeDir
+  // With no project, an agent running as its developer starts in their own
+  // workspace: the server's Claude directory is closed to developers' users
+  // (install-run-as.sh), and a working directory its user cannot enter fails
+  // every shell command with exit 1 and nothing else.
+  const ownWorkspace = runAsUsers() && login ? workspaceRootFor(login) : undefined
+  const cwd = projectDir && existsSync(projectDir)
+    ? projectDir
+    : ownWorkspace && existsSync(ownWorkspace) ? ownWorkspace : claudeDir
 
   let systemAppend = `You are "${agentSlug}", a specialized agent.`
   let frontmatter: AgentFrontmatter | undefined
@@ -499,7 +593,8 @@ export async function callAgent(
       // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
       // including the no-credential one; a conditional env is exactly how a
       // variable goes missing in the configuration nobody tests.
-      env: { ...launchEnv(await agentEnvFor(), userEnv) },
+      env: { ...env },
+      ...launchAs(login),
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -538,7 +633,7 @@ export async function callAgent(
     // The one place the real, observed model comes from - never the request.
     if (message.type === 'system' && message.subtype === 'init') {
       modelRan = message.model
-      if (message.session_id && message.session_id !== sessionId) { sessionId = message.session_id; onSession?.(sessionId, cwd) }
+      if (message.session_id && message.session_id !== sessionId) { sessionId = message.session_id; onSession?.(sessionId, cwd); void recordSessionOwner(sessionId, login) }
       log.debug('agent model resolved', { agentSlug, modelRequested: declaredModel ?? '(sdk default)', modelRan })
     }
     if (message.type === 'assistant') {

@@ -1,7 +1,10 @@
 import { getRun, saveRun } from '../../utils/workflowRunStore'
 import { backfillSessions } from '../../utils/runSessions'
 import { isLiveStatus } from '../../../shared/types/run.ts'
+import { requireRunAccess } from '../../utils/runAccess'
 export default defineEventHandler(async (event) => {
+  // Yours, your team's, or - unplaced - anyone's: see runAccess.ts.
+  await requireRunAccess(event)
   const run = await getRun(getRouterParam(event, 'id')!)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
   // Runs recorded before steps carried their session get it from the transcripts

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
+import { developerProjectsDirs } from './osUsers.ts'
 
 let currentClaudeDir: string | null = null
 
@@ -66,17 +67,25 @@ export function resolveClaudeFile(dir: string, name: string, ext = '.json'): str
  * paid for twice.
  *
  * Candidates in order, because a developer's machine and the test suite have
- * them the other way round: the SDK's own configured directory, the HOME
- * default, then this app's directory (where CLAUDE_DIR is a temp dir a test
- * wrote a transcript into).
+ * them the other way round: the SDK's own directory (CLAUDE_CONFIG_DIR when
+ * set, else the HOME default - one or the other, as the SDK does), then this
+ * app's directory (where CLAUDE_DIR is a temp dir a test wrote a transcript
+ * into).
  */
 export function projectsDirCandidates(): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   const add = (dir: string) => { if (dir && !seen.has(dir)) { seen.add(dir); out.push(dir) } }
+  // The SDK writes to CLAUDE_CONFIG_DIR when it is set and to $HOME/.claude
+  // only when it is not - never both. Reading HOME anyway listed whatever else
+  // the account had done: on a shared VM, 4,504 sessions of other people's
+  // Claude Code work in this instance's /cli sidebar.
   if (process.env.CLAUDE_CONFIG_DIR) add(join(process.env.CLAUDE_CONFIG_DIR, 'projects'))
-  add(join(homedir(), '.claude', 'projects'))
+  else add(join(homedir(), '.claude', 'projects'))
   add(join(getClaudeDir(), 'projects'))
+  // Each developer's own, when their agents run as them: that is where the SDK,
+  // started with their CLAUDE_CONFIG_DIR, wrote their transcripts.
+  for (const dir of developerProjectsDirs()) add(dir)
   return out
 }
 

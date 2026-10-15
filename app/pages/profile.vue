@@ -5,6 +5,8 @@ const { me, load } = useUser()
 const toast = useToast()
 const jiraEmail = ref('')
 const jiraToken = ref('')
+const claudeToken = ref('')
+const savingClaude = ref(false)
 const savingLabs = ref(false)
 const saving = ref(false)
 const testing = ref(false)
@@ -42,6 +44,22 @@ async function save() {
   }
 }
 
+/** Every agent you start runs on this - pipeline steps, /cli chat, Studio. An
+ *  empty save clears it, which stops your runs and chats from starting. */
+async function saveClaude(clear = false) {
+  savingClaude.value = true
+  try {
+    await $fetch('/api/me', { method: 'PUT', body: { anthropicToken: clear ? '' : claudeToken.value } })
+    claudeToken.value = ''
+    await load()
+    toast.add({ title: clear ? 'Claude credential removed' : 'Claude credential saved', color: 'success' })
+  } catch (e) {
+    toast.add(errorToast('Could not save the Claude credential', e))
+  } finally {
+    savingClaude.value = false
+  }
+}
+
 async function testJira() {
   testing.value = true
   testResult.value = null
@@ -62,6 +80,27 @@ async function testJira() {
         <div>
           <div class="t-body font-medium" style="color: var(--text-primary);">{{ me.name || me.login }}</div>
           <div class="t-small text-label">@{{ me.login }} · GitHub token {{ me.profile.hasGithubToken ? 'stored' : (me.authDisabled ? 'not needed in local mode' : 'missing, sign in again') }}</div>
+        </div>
+      </div>
+
+      <div class="rounded-xl p-4 space-y-3" style="background: var(--surface-raised); border: 1px solid var(--border-subtle);">
+        <div class="t-ui font-medium" style="color: var(--text-primary);">Claude</div>
+        <p class="t-small text-label">
+          Every agent you start - runs, watches and schedules you own, chat, Studio - runs on your own Claude credential; this instance does not lend one.
+          Paste the token <code>claude setup-token</code> prints, or a workspace-scoped API key. It is stored encrypted and never shown again.
+        </p>
+        <div class="field-group">
+          <label class="field-label">
+            Token or API key
+            <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">
+              {{ me?.authDisabled ? 'not needed in local mode' : me?.profile.hasAnthropicToken ? `${me.profile.anthropicKind === 'apikey' ? 'API key' : 'subscription token'} stored; paste a new one to replace it` : 'not stored - your runs and chats will not start' }}
+            </span>
+          </label>
+          <input v-model="claudeToken" type="password" class="field-input w-full" placeholder="sk-ant-oat… or sk-ant-api…" autocomplete="off" />
+        </div>
+        <div class="flex items-center gap-2">
+          <UButton label="Save" size="sm" :loading="savingClaude" :disabled="!claudeToken.trim()" @click="saveClaude()" />
+          <UButton v-if="me?.profile.hasAnthropicToken" label="Remove" size="sm" variant="soft" color="error" :loading="savingClaude" @click="saveClaude(true)" />
         </div>
       </div>
 

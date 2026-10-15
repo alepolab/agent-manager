@@ -1,6 +1,7 @@
 import type { H3Event } from 'h3'
 import type { WorkflowRun } from '../../shared/types/run'
 import { currentRole } from './session'
+import { leadsStarterOf } from './runAccess'
 
 /**
  * 403 unless this gate is the caller's to answer.
@@ -27,12 +28,17 @@ export async function requireGateRole(event: H3Event, run: WorkflowRun): Promise
 
   const role = await currentRole(event)
   if (role === want || role === 'operator') return
+  // The starter's lead, at any distance, is a backstop the way an operator is:
+  // supervising someone's work includes deciding for it when the role the gate
+  // names is not at hand. Never the starter themselves - that review stays
+  // someone else's.
+  if (await leadsStarterOf(event, run)) return
 
   throw createError({
     statusCode: 403,
     // Names the owner, not just the refusal: "forbidden" against a control you
     // were shown is indistinguishable from a bug, and the person reading this
     // needs to know who to go and ask.
-    message: `This gate is ${want}'s decision to make. Your role is ${role}. Ask ${want}, or an operator.`,
+    message: `This gate is ${want}'s decision to make. Your role is ${role}. Ask ${want}, an operator, or the starter's lead.`,
   })
 }

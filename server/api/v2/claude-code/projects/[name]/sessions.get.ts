@@ -1,4 +1,5 @@
 import { getClaudeCodeSessions } from '../../../../../utils/claudeCodeHistory'
+import { scopedSessionPage } from '../../../../../utils/sessionOwners'
 
 export default defineEventHandler(async (event) => {
   const projectName = getRouterParam(event, 'name')
@@ -15,7 +16,8 @@ export default defineEventHandler(async (event) => {
   const offset = parseInt(query.offset as string) || 0
 
   try {
-    const result = await getClaudeCodeSessions(projectName, limit, offset)
+    // Scoped to the caller's own and their team's sessions when they are placed.
+    const result = await scopedSessionPage(event, (l, o) => getClaudeCodeSessions(projectName, l, o), limit, offset)
 
     return {
       sessions: result.sessions,
