@@ -77,8 +77,11 @@ services:
       - ase-exports:${ASE_EXPORTS_DIR:-/var/lib/ase/exports}
       - ase-imports:${ASE_IMPORTS_DIR:-/var/lib/ase/imports}
     environment:
-      # The JVM runs WITHOUT libfaketime unless stackctl turned the clock on (idle ~470% CPU with it).
+      # The JVM runs WITHOUT libfaketime unless stackctl turned the clock on (idle ~470% CPU with it before FAKETIME_FORCE_MONOTONIC_FIX=0).
       LD_PRELOAD: ${APP_LD_PRELOAD:-}
+      # 0: libfaketime's default monotonic fix makes the JVM's idle timed waits return at once and spin (2 cores per
+      # idle JVM in a lab test, 2026-10-16); with 0 an idle faked JVM uses the same CPU as an unfaked one.
+      FAKETIME_FORCE_MONOTONIC_FIX: "0"
       # Same issuer the browser in `am` uses (localhost:KC_PORT through the `ports` sidecar).
       KEYCLOAK_ISSUER_URI: http://localhost:${KC_PORT}/realms/alepo
       KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/alepo/protocol/openid-connect/certs
@@ -102,6 +105,7 @@ services:
       LD_PRELOAD: ${KC_LD_PRELOAD:-}
       FAKETIME_TIMESTAMP_FILE: /faketime/ts
       FAKETIME_DONT_FAKE_MONOTONIC: "1"
+      FAKETIME_FORCE_MONOTONIC_FIX: "0"
     volumes:
       # H2 data survives a recreate (clock on/off), so users and the crm-api secret stay put.
       - keycloak-data:/opt/keycloak/data/h2

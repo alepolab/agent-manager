@@ -65,6 +65,9 @@ services:
       - ase-imports:${ASE_IMPORTS_DIR:-/var/lib/ase/imports}
     environment:
       LD_PRELOAD: ${APP_LD_PRELOAD:-}
+      # 0: libfaketime's default monotonic fix makes the JVM's idle timed waits return at once and spin (2 cores per
+      # idle JVM in a lab test, 2026-10-16); with 0 an idle faked JVM uses the same CPU as an unfaked one.
+      FAKETIME_FORCE_MONOTONIC_FIX: "0"
       KEYCLOAK_ISSUER_URI: http://localhost:${KC_PORT}/realms/alepo
       KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/alepo/protocol/openid-connect/certs
     depends_on:
@@ -85,6 +88,7 @@ services:
       LD_PRELOAD: ${KC_LD_PRELOAD:-}
       FAKETIME_TIMESTAMP_FILE: /faketime/ts
       FAKETIME_DONT_FAKE_MONOTONIC: "1"
+      FAKETIME_FORCE_MONOTONIC_FIX: "0"
       # Its H2 file is 400+ MB; on this loaded host opening it outlasts the pool's default 5 s wait, and
       # Keycloak exited and restarted in a loop (pwmig2-keycloak, 2026-10-15). Wait up to 5 minutes instead.
       QUARKUS_DATASOURCE_JDBC_ACQUISITION_TIMEOUT: 300s

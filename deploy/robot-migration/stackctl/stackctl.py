@@ -9,7 +9,7 @@ and nothing else:
   POST /clock/on[?stack=S]   recreate S's app + keycloak under libfaketime, wait until the app answers and
                              reaches Keycloak. S is the suite's stack name: ui (project pwmig, the default)
                              or ui2 (project pwmig2, lane 2 of the queue)
-  POST /clock/off[?stack=S]  the same without libfaketime (the default: the JVM idles at ~470% CPU with it)
+  POST /clock/off[?stack=S]  the same without libfaketime (the default; before FAKETIME_FORCE_MONOTONIC_FIX=0 the JVM idled at ~470% CPU with it)
 
 One clock move runs at a time, and only one stack has its clock on at a time: two faked JVMs plus two
 faked Keycloaks would take most of this shared host's CPU. A clock-on waits up to 45 minutes for the
