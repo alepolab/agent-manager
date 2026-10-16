@@ -69,6 +69,21 @@ async function settledRun(status, branch) {
   assert.ok(exec.calls.some(c => c.args.join(' ') === 'branch -D scan/cccc'))
 }
 
+// ── its images go too, when it had a step that builds them ──
+{
+  const run = await store.createRun({ workflowSlug: 'wf', workflowName: 'WF', initialPrompt: 'go', watch: 'direct-invocation', steps: [{ stepId: 'v', label: 'Verify', agentSlug: 'sdlc-verifier' }] })
+  await store.saveRun({ ...run, status: 'completed' })
+  const short = run.id.toLowerCase().slice(0, 8)
+  const calls = []
+  const exec = async (cmd, args) => {
+    calls.push(args)
+    if (args[0] === 'images') return args.includes('--filter') ? '' : `localhost/agent-sdlc/ase-crm:${short}-verify\nase-crm:latest`
+    return ''
+  }
+  assert.equal(await store.deleteRun(run.id, { exec, runs: [] }), 'ok')
+  assert.deepEqual(calls.filter(a => a[0] === 'rmi').map(a => a[1]), [`localhost/agent-sdlc/ase-crm:${short}-verify`], 'THE GAP: a deleted run left its images on the disk')
+}
+
 // ── a run with no worktree of its own touches no git ──
 {
   const run = await store.createRun({ workflowSlug: 'wf', workflowName: 'WF', initialPrompt: 'go', watch: 'direct-invocation', steps: [] })

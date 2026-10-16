@@ -558,9 +558,17 @@ type StackNote = { project: string, claimedFrom?: string, /** Its stack was take
  *  on its own to a resumed session whose stack changed while it waited. */
 export function stackNote(runId: string, stack?: StackNote): string {
   const own = `sdlc-${runId.toLowerCase()}`
-  if (stack?.gone) return `Compose project for this run's stack: ${stack.project} - not up now: it was taken down while the run waited, and no other stack of this product was free to take over. Stand it up again under that name, the way the provisioner did, before you use it. (The verifier's own: ${own}-verify.)`
+  if (stack?.gone) return `Compose project for this run's stack: ${stack.project} - not up now: it was taken down while the run waited, and no other stack of this product was free to take over. Stand it up again under that name, the way the provisioner did, before you use it. If the image it ran is no longer on this machine (\`docker image inspect\` fails), build this checkout's HEAD the way the recipe says first, rather than pulling or guessing a tag: a run's images are removed when it ends. (The verifier's own: ${own}-verify.)`
   if (stack && stack.project !== own) return `Compose project for this run's stack: ${stack.project} - already up, taken over from run ${stack.claimedFrom ?? 'another run'} for the same product rather than standing up another. Check it is healthy and reuse it; do not bring it down or stand up a second one. It may be running a different build: deploy this run's own build into it before you test against it. Build once per commit: first look for an image of this checkout's HEAD (\`docker images --filter label=org.opencontainers.image.revision=<full HEAD sha>\`) and deploy it if there is one; when you do build, pass \`--label org.opencontainers.image.revision=<full HEAD sha>\`, so the next run at this commit deploys yours instead of building again, and can be handed this stack without an agent at all. (The verifier's own: ${own}-verify.)`
   return `Compose project for any stack this run stands up: ${own} (the verifier's own: ${own}-verify).`
+}
+
+/** The line that tells a step how to name the images it builds, so the
+ *  runner can remove them when the run ends (runTeardown.ts). Images named by
+ *  ticket number or by nothing at all stayed for good and filled the disk. */
+export function imageNote(runId: string): string {
+  const short = runId.toLowerCase().slice(0, 8)
+  return `Every image you build or tag in this run carries the run id in its tag (\`<name>:${short}-<purpose>\`, or the full id) and the label \`--label agent-manager.run=${runId}\`, whatever else the recipe or this brief adds. The runner removes this run's images by that label and id when the run ends; one named any other way stays on the disk for good.`
 }
 
 /** Prepended to every step's input. The only channel an agent has for
@@ -581,6 +589,7 @@ export function artifactHeader(dir: string, product?: ProductMatch, startedBy?: 
           // run's stacks by exactly this name when it ends, and a stack under
           // any other name stays running for ever. See runTeardown.ts.
           stackNote(runId, stack),
+          imageNote(runId),
           '',
           `These files are served by Agent Manager at ${appUrl}/api/runs/${runId}/artifacts`,
           `and shown on the run page at ${appUrl}/runs/${runId}. Link that in a pull`,

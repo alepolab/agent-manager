@@ -1322,7 +1322,7 @@ that does not pass its own tests proves nothing worth having.
 1. **Build from the fixed checkout**, tagged locally:
 
 \`\`\`
-docker build -t localhost/agent-sdlc/<repo>:<run id> <checkout path>
+docker build -t localhost/agent-sdlc/<repo>:<run id> --label agent-manager.run=<run id> <checkout path>
 \`\`\`
 
 2. **Deploy it alongside the baseline — never over it.** The compose file is
@@ -2442,7 +2442,7 @@ ${CHANGE_BRIEF}`,
 Build the product's image the way its own build does — the deployment repo's compose build target when it declares one, otherwise the repository's Dockerfile:
 
 \`\`\`
-docker build -t localhost/agent-sdlc/<repo>:<run id> <working checkout>
+docker build -t localhost/agent-sdlc/<repo>:<run id> --label agent-manager.run=<run id> <working checkout>
 \`\`\`
 
 The \`localhost/\` prefix is load-bearing on this host's rootless podman: a bare name is normalised to a docker.io registry path and invites a pull for an image that exists only here. Confirm the tag resolves before deploying, and quote the result:
