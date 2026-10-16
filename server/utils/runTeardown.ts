@@ -15,7 +15,10 @@
  *   it is never touched. A project comes down with its volumes (`down -v`)
  *   when its last live user lets go of it: the run's own, or one it took over
  *   from a run that has since ended. A project is never torn down twice, so
- *   the last user is the only one left to drop its volumes.
+ *   the last user is the only one left to drop its volumes. A failed run's
+ *   stack comes down without them, and its images stay: a failed run is
+ *   restarted, and the restart stands its stack up again from both. They go
+ *   when it is deleted, or RUN_FAILED_KEEP_DAYS (3) after it failed.
  * - the images the run built: tagged with its id, or labelled
  *   `agent-manager.run=<run id>` (every step's header asks for both). Removed
  *   with `docker rmi` and never forced, so the daemon refuses any image a
@@ -57,9 +60,15 @@ export interface TeardownReport {
   stacks: { project: string, removed: boolean, /** Its named volumes went with it: this run was its last user. */ volumes?: boolean, error?: string }[]
   worktree?: { path: string, removed: boolean, reason?: string }
   images?: ImageReport
-  /** Images of other ended runs, kept at their endings because a live run used their stack, which none does now. */
-  endedRunImages?: (ImageReport & { run: string })[]
+  /** Images of other ended runs, kept at their endings because a live run used their stack, which none does now; and the volumes their stacks left. */
+  endedRunImages?: (ImageReport & { run: string, volumes?: VolumeReport })[]
   buildCache?: { max: string, reclaimed?: string, error?: string }
+}
+
+export interface VolumeReport {
+  removed: string[]
+  /** The daemon refused: a container, stopped or not, still holds it. */
+  refused: { volume: string, error: string }[]
 }
 
 export interface ImageReport {
@@ -100,7 +109,24 @@ export function runProjectNames(runId: string): string[] {
 /** The compose project a run's stack steps use: the one it claimed, else its own. */
 export const stackProjectOf = (run: Pick<WorkflowRun, 'id' | 'stackProject'>): string => run.stackProject ?? `sdlc-${run.id.toLowerCase()}`
 
-type StackRun = Pick<WorkflowRun, 'id' | 'status' | 'stackProject' | 'product'> & Partial<Pick<WorkflowRun, 'projectDir'>>
+type StackRun = Pick<WorkflowRun, 'id' | 'status' | 'stackProject' | 'product'> & Partial<Pick<WorkflowRun, 'projectDir' | 'endedAt'>>
+
+/** How long a failed run keeps its images and its stack's volumes for a restart. RUN_FAILED_KEEP_DAYS overrides it. */
+const failedKeepMs = () => {
+  const days = Number(process.env.RUN_FAILED_KEEP_DAYS)
+  return (process.env.RUN_FAILED_KEEP_DAYS?.trim() && days >= 0 ? days : 3) * 86_400_000
+}
+
+/**
+ * Whether a failed run still keeps what a restart needs: its images and its
+ * stack's volumes. A failed run is restarted from where it stopped, and before
+ * runs gave these back, the restart found both: `compose up` under the same
+ * name picked up the volumes, and the image it ran was still on disk. Kept for
+ * a grace period, not for good, or failed runs nobody restarts fill the disk.
+ */
+export function keptForRestart(run: Partial<Pick<WorkflowRun, 'status' | 'endedAt'>>, now = Date.now()): boolean {
+  return run.status === 'failed' && (run.endedAt ?? now) + failedKeepMs() > now
+}
 
 /** A compose project named for a run. A shared stack never carries such a name. */
 const RUN_PROJECT = /^sdlc-[0-9a-f-]+$/
@@ -181,11 +207,14 @@ const STACK_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-ui$)/
  *  nothing, and is not made to ask docker at its ending. */
 const IMAGE_AGENTS = /^sdlc-(stack-|verifier$|qa-|trace-capture$|scanner-|test-author$|fix-implementer$|feature-(test-author|implementer)$|ce-(work|review)$|alepo-review$|pr-follow-up$|smoke-check$)/
 
+/** Whether any of a run's steps can leave a compose stack, so its deletion has volumes to look for. */
+export const runStandsUpStacks = (run: Pick<WorkflowRun, 'steps'>): boolean => run.steps.some(s => STACK_AGENTS.test(s.agentSlug))
+
 /** Whether any of a run's steps builds images, so its ending or deletion has images to look for. */
 export const runBuildsImages = (run: Pick<WorkflowRun, 'steps'>): boolean => run.steps.some(s => IMAGE_AGENTS.test(s.agentSlug))
 
 export async function teardownRun(
-  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status' | 'stackClaimedFrom'>>,
+  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status' | 'stackClaimedFrom' | 'endedAt'>>,
   exec: Exec = realExec,
   /** Every run, to see who else uses a stack. Read from the store when not given. */
   runs?: StackRun[],
@@ -221,7 +250,8 @@ export async function teardownRun(
     // with it. That holds for one it took over too - the run it came from has
     // ended, and once the project is gone no later teardown can find them.
     // Only a project named for a run: a shared stack never is.
-    const volumes = isOwnProject(run.id, project) || RUN_PROJECT.test(project)
+    // A failed run keeps them for its restart (keptForRestart); the sweep takes them later.
+    const volumes = !keptForRestart(run) && (isOwnProject(run.id, project) || RUN_PROJECT.test(project))
     try {
       await exec('docker', ['compose', '-p', project, 'down', ...(volumes ? ['-v'] : []), '--remove-orphans'])
       report.stacks.push({ project, removed: true, volumes })
@@ -231,7 +261,11 @@ export async function teardownRun(
   }
 
   // ── the images it built ──
-  if (runBuildsImages(run)) report.images = await removeRunImages(run, exec, await everyone())
+  if (runBuildsImages(run)) {
+    report.images = keptForRestart(run)
+      ? { removed: [], refused: [], kept: `kept: a failed run is restarted from here; removed when it is deleted, or ${failedKeepMs() / 86_400_000} days after it failed` }
+      : await removeRunImages(run, exec, await everyone())
+  }
   // Images an ended run kept at its ending, because a live run still used its
   // stack, are removed by nobody at that run's ending. Looking only at the run
   // this one took its stack from, and at runs that took this one's, missed
@@ -347,17 +381,21 @@ export async function removeRunImages(
 }
 
 /**
- * Removes the images of every ended run other than `endingId` that no live run
- * still needs, by way of removeRunImages, which keeps an image while a live run
- * uses that run's stacks. The ending run counts as ended: it lets go of its
- * stacks first. Asks docker for its images once, so only the ended runs that
- * still have one are looked at. Reports only those it removed or was refused.
+ * Gives back what every ended run other than `endingId` kept and no live run
+ * still needs: its images (by way of removeRunImages, which keeps one while a
+ * live run uses that run's stacks) and the volumes its stacks left behind - a
+ * failed run's, which came down without them, and a verifier's own project's.
+ * A failed run inside its grace period (keptForRestart) is left alone. The
+ * ending run counts as ended: it lets go of its stacks first. Asks docker for
+ * its images and volumes once, so only the ended runs that still have one are
+ * looked at. Reports only those it removed or was refused.
  */
-export async function sweepEndedRunImages(endingId: string, exec: Exec = realExec, runs: StackRun[] = []): Promise<(ImageReport & { run: string })[]> {
+export async function sweepEndedRunImages(endingId: string, exec: Exec = realExec, runs: StackRun[] = [], now = Date.now()): Promise<(ImageReport & { run: string, volumes?: VolumeReport })[]> {
   const others = runs.filter(r => r.id !== endingId)
-  const ended = others.filter(r => TERMINAL_STATUSES.includes(r.status))
+  const ended = others.filter(r => TERMINAL_STATUSES.includes(r.status) && !keptForRestart(r, now))
   if (!ended.length) return []
   let names: string[] = []
+  let volumes: { name: string, project: string }[] = []
   const labelledFor = new Set<string>()
   try {
     names = (await exec('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}'])).split('\n').map(s => s.trim()).filter(n => n && !n.includes('<none>'))
@@ -367,16 +405,59 @@ export async function sweepEndedRunImages(endingId: string, exec: Exec = realExe
         if (line.trim()) labelledFor.add(line.trim().toLowerCase())
       }
     }
+    volumes = (await exec('docker', ['volume', 'ls', '--filter', 'label=com.docker.compose.project', '--format', '{{.Name}}\t{{.Label "com.docker.compose.project"}}'])).split('\n')
+      .map(l => l.trim().split('\t')).filter(([n, p]) => n && p?.startsWith('sdlc-')).map(([name, project]) => ({ name: name!, project: project! }))
   } catch {
     return []
   }
-  const out: (ImageReport & { run: string })[] = []
+  const out: (ImageReport & { run: string, volumes?: VolumeReport })[] = []
   for (const r of ended) {
-    if (!labelledFor.has(r.id.toLowerCase()) && !names.some(n => imageNamedFor(r.id, n))) continue
-    const images = await removeRunImages(r, exec, others)
-    if (images?.removed.length || images?.refused.length) out.push({ run: r.id, ...images })
+    const own = volumes.filter(v => isOwnProject(r.id, v.project))
+    const hasImages = labelledFor.has(r.id.toLowerCase()) || names.some(n => imageNamedFor(r.id, n))
+    if (!hasImages && !own.length) continue
+    const images = hasImages ? await removeRunImages(r, exec, others) : { removed: [], refused: [] } as ImageReport
+    let vol: VolumeReport | undefined
+    // Only volumes of a project nobody live uses: a stack handed on is still somebody's.
+    if (own.length && !own.some(v => stackUsers(v.project, others, r.id).length)) {
+      vol = { removed: [], refused: [] }
+      for (const v of own) {
+        try {
+          await exec('docker', ['volume', 'rm', v.name])
+          vol.removed.push(v.name)
+        } catch (err) {
+          vol.refused.push({ volume: v.name, error: String(err instanceof Error ? err.message : err).slice(0, 300) })
+        }
+      }
+    }
+    if (images?.removed.length || images?.refused.length || vol?.removed.length || vol?.refused.length) out.push({ run: r.id, ...(images ?? { removed: [], refused: [] }), ...(vol ? { volumes: vol } : {}) })
   }
   return out
+}
+
+/**
+ * Removes the volumes a run's own compose projects left behind once they were
+ * taken down: a failed run's stack comes down without them. Never forced: a
+ * volume a container still holds is refused and reported. Deleting a run is
+ * the last chance to find them. Never throws; undefined when docker cannot be asked.
+ */
+export async function removeRunVolumes(run: Pick<WorkflowRun, 'id'>, exec: Exec = realExec): Promise<VolumeReport | undefined> {
+  let own: string[] = []
+  try {
+    own = (await exec('docker', ['volume', 'ls', '--filter', 'label=com.docker.compose.project', '--format', '{{.Name}}\t{{.Label "com.docker.compose.project"}}'])).split('\n')
+      .map(l => l.trim().split('\t')).filter(([n, p]) => n && p && isOwnProject(run.id, p)).map(([n]) => n!)
+  } catch {
+    return undefined
+  }
+  const report: VolumeReport = { removed: [], refused: [] }
+  for (const v of own) {
+    try {
+      await exec('docker', ['volume', 'rm', v])
+      report.removed.push(v)
+    } catch (err) {
+      report.refused.push({ volume: v, error: String(err instanceof Error ? err.message : err).slice(0, 300) })
+    }
+  }
+  return report
 }
 
 /**

@@ -19,11 +19,11 @@ const id = ID.toLowerCase()
 const stackSteps = [{ agentSlug: 'sdlc-stack-provisioner' }, { agentSlug: 'sdlc-verifier' }]
 
 /** Answers docker and git as they would, and records every call. */
-function fakeExec({ projects = [], dirty = '', failDown = [], images = [], labelled = [], inUse = [], revisions = {}, heads = {} } = {}) {
+function fakeExec({ projects = [], dirty = '', failDown = [], images = [], labelled = [], inUse = [], revisions = {}, heads = {}, volumes = [] } = {}) {
   const calls = []
   const exec = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts?.cwd })
-    if (cmd === 'docker' && args[1] === 'ls') return JSON.stringify(projects.map(Name => ({ Name })))
+    if (cmd === 'docker' && args[0] === 'compose' && args[1] === 'ls') return JSON.stringify(projects.map(Name => ({ Name })))
     // images: every repo:tag; labelled: [{ id, names }] carrying agent-manager.run (a label filter
     // names one run, so `labelled` may be { [runId]: [...] }); inUse: names or ids a container runs
     if (cmd === 'docker' && args[0] === 'images') {
@@ -40,6 +40,12 @@ function fakeExec({ projects = [], dirty = '', failDown = [], images = [], label
       return args.slice(args.indexOf('--format') + 2).map(runOf).join('\n')
     }
     if (cmd === 'docker' && args[0] === 'builder') return 'Total:\t1.5GB\n'
+    // volumes: [{ name, project }] carrying com.docker.compose.project; inUse may name one
+    if (cmd === 'docker' && args[0] === 'volume' && args[1] === 'ls') return volumes.map(v => `${v.name}\t${v.project}`).join('\n')
+    if (cmd === 'docker' && args[0] === 'volume' && args[1] === 'rm') {
+      if (inUse.includes(args[2])) throw new Error(`Error response from daemon: remove ${args[2]}: volume is in use`)
+      return args[2]
+    }
     if (cmd === 'docker' && args[0] === 'image' && args[1] === 'inspect') return `${revisions[args.at(-1)] ?? ''}\n`
     if (cmd === 'git' && args[0] === 'rev-parse') return `${heads[opts?.cwd] ?? ''}\n`
     if (cmd === 'docker' && args[0] === 'ps') return inUse.includes(args.at(-1).replace('ancestor=', '')) ? 'c0ffee\n' : ''
@@ -58,6 +64,7 @@ function fakeExec({ projects = [], dirty = '', failDown = [], images = [], label
   exec.downed = () => calls.filter(c => c.args.includes('down')).map(c => c.args[2])
   exec.withVolumes = () => calls.filter(c => c.args.includes('down') && c.args.includes('-v')).map(c => c.args[2])
   exec.rmi = () => calls.filter(c => c.args[0] === 'rmi').map(c => c.args[1])
+  exec.volumesRemoved = () => calls.filter(c => c.args[0] === 'volume' && c.args[1] === 'rm').map(c => c.args[2])
   return exec
 }
 
@@ -130,6 +137,10 @@ const root = mkdtempSync(join(tmpdir(), 'teardown-'))
   assert.match(r.worktree.reason, /restarted from here/)
   assert.ok(!exec.calls.some(c => c.cmd === 'git'), 'git is not asked to remove it')
   assert.deepEqual(exec.downed(), [`sdlc-${id}`], 'its stack still comes down')
+  assert.deepEqual(exec.withVolumes(), [], 'THE REVIEW: without its volumes - its restart stands the stack up again from them')
+  assert.equal(r.stacks[0].volumes, false)
+  assert.deepEqual(exec.rmi(), [], 'and its images stay for the restart')
+  assert.match(r.images.kept, /failed run is restarted from here.*3 days after it failed/)
 }
 {
   const wt = join(root, 'ase-crm@fix-ASECRM-4-abcdef12')
@@ -294,9 +305,55 @@ const OTHER = 'abcdef12-0000-4000-8000-000000000000' // shares this run's first 
   // even one that never touched that stack: what an earlier teardown kept.
   const E = '88888888-9999-4aaa-bbbb-cccccccccccc'
   const stray = fakeExec({ labelled: { [E]: [{ id: 'imgE', names: ['ghcr.io/alepolab/ase-crm:local-e'] }] }, images: [`x:${E.slice(0, 8)}`] })
-  const rS = await teardownRun({ id: ID, status: 'completed', steps: [{ agentSlug: 'sdlc-test-author' }] }, stray, [{ id: E, status: 'failed' }, { id: ID, status: 'completed' }])
+  const rS = await teardownRun({ id: ID, status: 'completed', steps: [{ agentSlug: 'sdlc-test-author' }] }, stray, [{ id: E, status: 'stopped', endedAt: Date.now() - 3600_000 }, { id: ID, status: 'completed' }])
   assert.deepEqual(stray.rmi().sort(), ['ghcr.io/alepolab/ase-crm:local-e', `x:${E.slice(0, 8)}`].sort())
   assert.equal(rS.endedRunImages[0].run, E)
+}
+{
+  // A failed run keeps its images and its stack's volumes for RUN_FAILED_KEEP_DAYS,
+  // then any later ending gives them back; a completed run's verifier project
+  // left volumes too (00febed9's -verify volumes were still on disk).
+  const F = '99999999-aaaa-4bbb-8ccc-dddddddddddd'
+  const C = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  const labelled = { [F]: [{ id: 'imgF', names: [`localhost/agent-sdlc/ase-crm:${F.slice(0, 8)}-fix`] }] }
+  const volumes = [
+    { name: `sdlc-${F}_db`, project: `sdlc-${F}` },
+    { name: `sdlc-${C}-verify_documents`, project: `sdlc-${C}-verify` },
+    { name: 'infra_mariadb', project: 'infra' },
+  ]
+  const day = 86_400_000
+  const ending = { id: ID, status: 'completed', steps: [{ agentSlug: 'sdlc-verifier' }] }
+
+  // Failed an hour ago: inside the grace period, nothing of F's goes; C's leftover volumes do.
+  const fresh = fakeExec({ labelled, volumes })
+  const rF = await teardownRun(ending, fresh, [{ id: F, status: 'failed', endedAt: Date.now() - 3600_000 }, { id: C, status: 'completed', endedAt: Date.now() - day }, ending])
+  assert.deepEqual(fresh.rmi(), [], 'a failed run inside its grace period keeps its images')
+  assert.deepEqual(fresh.volumesRemoved(), [`sdlc-${C}-verify_documents`], 'only the completed run\'s leftover volumes go, and never a shared stack\'s')
+  assert.deepEqual(rF.endedRunImages.map(x => x.run), [C])
+
+  // Failed four days ago: its images and volumes go.
+  const old = fakeExec({ labelled, volumes })
+  const rO = await teardownRun(ending, old, [{ id: F, status: 'failed', endedAt: Date.now() - 4 * day }, ending])
+  assert.deepEqual(old.rmi(), [`localhost/agent-sdlc/ase-crm:${F.slice(0, 8)}-fix`])
+  assert.deepEqual(old.volumesRemoved(), [`sdlc-${F}_db`])
+  assert.deepEqual(rO.endedRunImages[0].volumes.removed, [`sdlc-${F}_db`])
+
+  // RUN_FAILED_KEEP_DAYS=0 keeps nothing.
+  process.env.RUN_FAILED_KEEP_DAYS = '0'
+  const none = fakeExec({ projects: [`sdlc-${id}`] })
+  const rN = await teardownRun({ id: ID, status: 'failed', steps: stackSteps }, none, [])
+  assert.deepEqual(none.withVolumes(), [`sdlc-${id}`])
+  delete process.env.RUN_FAILED_KEEP_DAYS
+
+  // A volume of a project a live run still uses stays, whoever's it was.
+  const claimed = fakeExec({ volumes })
+  await teardownRun(ending, claimed, [{ id: F, status: 'failed', endedAt: Date.now() - 4 * day }, { id: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff', status: 'paused', stackProject: `sdlc-${F}` }, ending])
+  assert.ok(!claimed.volumesRemoved().includes(`sdlc-${F}_db`), 'a stack handed on is still somebody\'s')
+
+  // A volume a container still holds is refused, not forced, and reported.
+  const held = fakeExec({ volumes: [volumes[1]], inUse: [volumes[1].name] })
+  const rH = await teardownRun(ending, held, [{ id: C, status: 'completed', endedAt: Date.now() - day }, ending])
+  assert.match(rH.endedRunImages[0].volumes.refused[0].error, /in use/)
 }
 {
   // The build cache is capped at every ending that built something, and not at one that built nothing.

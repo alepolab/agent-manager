@@ -7,7 +7,7 @@ import { agentManagerSettings } from './appSettings.ts'
 import { runWorkspace } from './workspace.ts'
 import { summarizeRunCost } from './costReport.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
-import { removeRunImages, removeRunWorktree, runBuildsImages, type Exec } from './runTeardown.ts'
+import { removeRunImages, removeRunVolumes, removeRunWorktree, runBuildsImages, runStandsUpStacks, type Exec } from './runTeardown.ts'
 import { createLogger } from './log.ts'
 // Relative, not the ~~ alias: this is a VALUE import, so it survives to
 // runtime, and the plain-node test scripts that import this module directly
@@ -232,6 +232,9 @@ export async function deleteRun(id: string, opts: { exec?: Exec, /** Every run, 
     // ending, or one whose stack another run still used then, keeps them until now.
     const images = runBuildsImages(run) ? await removeRunImages(run, opts.exec, opts.runs) : undefined
     if (images?.removed.length || images?.refused.length) createLogger('runner').info('deleted run\'s images', { runId: id, ...images })
+    // And the volumes its stack left: a failed run's comes down without them, for its restart.
+    const volumes = runStandsUpStacks(run) ? await removeRunVolumes(run, opts.exec) : undefined
+    if (volumes?.removed.length || volumes?.refused.length) createLogger('runner').info('deleted run\'s volumes', { runId: id, ...volumes })
   }
   await rm(runPath(id), { force: true })
   await rm(join(runArtifactsDir(id), '..'), { recursive: true, force: true })
