@@ -10,7 +10,7 @@ function slugify(name: string): string {
 }
 
 export default defineEventHandler(async (event) => {
-  await requireCapability(event, 'configure')
+  await requireCapability(event, 'editWorkflows')
   const body = await readBody<WorkflowPayload>(event)
   if (!body.name?.trim()) {
     throw createError({ statusCode: 400, message: 'name is required' })

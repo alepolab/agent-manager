@@ -22,6 +22,7 @@
 import { spawn, execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { userInfo } from 'node:os'
 import { promisify } from 'node:util'
 import { execFile } from 'node:child_process'
 
@@ -186,7 +187,31 @@ export async function grantDeveloper(dir: string, login: string | undefined): Pr
   // run's directory, everything already in it, and its default for what comes.
   await execFileP('setfacl', ['-m', `u:${user}:x,o::---`, dirname(dir)])
   await execFileP('setfacl', ['-R', '-m', `u:${user}:rwX,m::rwx,o::---`, dir])
-  await execFileP('setfacl', ['-R', '-d', '-m', `u::rwx,u:${user}:rwx,g::---,m::rwx,o::---`, dir])
+  // The server named too: `u::` is whoever creates a file, and for what the
+  // agent writes that is the developer's user. Without its own entry the
+  // server could not open the shots/ folder or the triage.json its own agent
+  // had just written, and reported the file as never written.
+  await execFileP('setfacl', ['-R', '-d', '-m', `u::rwx,u:${userInfo().username}:rwx,u:${user}:rwx,g::---,m::rwx,o::---`, dir])
+}
+
+/**
+ * Lets the server back into what a developer's agent wrote under `dir`, run as
+ * that developer, since only a file's owner may change its ACL. Covers what the
+ * default ACL cannot: a directory granted before the server was named in it,
+ * and a file created with a narrow mode (0600 from `cp` out of /tmp, a 0700
+ * mkdir) whose mask shuts out every named user. Never throws; resolves when done.
+ */
+export function reopenForServer(dir: string, login: string | undefined, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  if (!runAsUsers() || !login) return Promise.resolve()
+  return new Promise((resolve) => {
+    // Exits non-zero for the server's own files, which the developer cannot
+    // change and the server can already read; the rest are still set.
+    const fix = spawn('sudo', runAsArgv(login, 'setfacl', ['-R', '-m', `u:${userInfo().username}:rwX,m::rwX`, dir]), { env: { PATH: env.PATH, AM_PATH: env.PATH }, stdio: 'ignore' })
+    const timer = setTimeout(() => { fix.kill(); resolve() }, 30_000)
+    timer.unref?.()
+    fix.on('error', () => { clearTimeout(timer); resolve() })
+    fix.on('close', () => { clearTimeout(timer); resolve() })
+  })
 }
 
 /**

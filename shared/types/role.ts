@@ -31,17 +31,19 @@ export interface Capabilities {
   runEngine: boolean
   /** Start a run. */
   startRun: boolean
-  /** Edit workflows, watches, agents, skills, commands, settings, team config. */
+  /** Create and edit workflows. Deleting one, and their schedules and groups, stays `configure`. */
+  editWorkflows: boolean
+  /** Delete workflows; edit watches, schedules, workflow groups, agents, skills, commands, settings, team config. */
   configure: boolean
   /** Read every run, not only the ones addressed to them. */
   readAllRuns: boolean
 }
 
 const CAPABILITIES: Record<Role, Capabilities> = {
-  developer: { answerGate: true, runEngine: false, startRun: true, configure: false, readAllRuns: true },
-  qa: { answerGate: true, runEngine: false, startRun: false, configure: false, readAllRuns: true },
-  manager: { answerGate: false, runEngine: false, startRun: false, configure: false, readAllRuns: true },
-  operator: { answerGate: true, runEngine: true, startRun: true, configure: true, readAllRuns: true },
+  developer: { answerGate: true, runEngine: false, startRun: true, editWorkflows: true, configure: false, readAllRuns: true },
+  qa: { answerGate: true, runEngine: false, startRun: false, editWorkflows: true, configure: false, readAllRuns: true },
+  manager: { answerGate: false, runEngine: false, startRun: false, editWorkflows: false, configure: false, readAllRuns: true },
+  operator: { answerGate: true, runEngine: true, startRun: true, editWorkflows: true, configure: true, readAllRuns: true },
 }
 
 export function capabilitiesFor(role: Role): Capabilities {
@@ -59,8 +61,8 @@ export function rolesWith(capability: keyof Capabilities): Role[] {
 
 /** The one-line description of each role, for the Team page and the role picker. */
 export const ROLE_LABEL: Record<Role, string> = {
-  developer: 'Decides at the diff gate on runs; cannot drive the pipeline.',
-  qa: 'Verifies evidence and answers the verification gate.',
+  developer: 'Builds and runs workflows, decides at the diff gate; cannot drive a run.',
+  qa: 'Builds workflows, verifies evidence and answers the verification gate.',
   manager: 'Reads progress across runs. Changes nothing.',
   operator: 'Runs the pipeline: workflows, watches, restarts, settings.',
 }

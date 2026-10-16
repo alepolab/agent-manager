@@ -71,8 +71,8 @@ export const SETTINGS_TABS: NavTab[] = [
  * this list decides what a person is OFFERED.
  */
 export const NAV_BY_ROLE: Record<string, string[]> = {
-  developer: ['/', '/notifications', '/runs', '/agents', '/skills', '/commands'],
-  qa: ['/', '/notifications', '/runs'],
+  developer: ['/', '/notifications', '/runs', '/agents', '/workflows', '/skills', '/commands'],
+  qa: ['/', '/notifications', '/runs', '/workflows'],
   manager: ['/', '/runs'],
 }
 

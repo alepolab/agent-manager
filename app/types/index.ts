@@ -273,6 +273,12 @@ export interface WorkflowStep {
    * backstop for a role nobody on this instance holds.
    */
   gateRole?: Role
+  /**
+   * With `approval`: the run artifact the reviewer reads to decide (e.g.
+   * `review.md`), shown inside the gate. Relative images and links in it name
+   * artifacts of the same run.
+   */
+  reviewDoc?: string
   /** Canvas position, persisted so branches and loops keep their layout. */
   position?: { x: number, y: number }
   /**

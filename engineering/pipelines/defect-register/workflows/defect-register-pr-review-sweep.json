@@ -1,0 +1,46 @@
+{
+  "name": "Defect register — PR review sweep",
+  "description": "Run on a schedule. Finds defect-register PRs with review feedback nobody has answered, and starts one responder run per PR.",
+  "parameters": [
+    {
+      "name": "stateDir",
+      "description": "The pipeline's working folder, shared across its runs: backlog, triage verdicts, ranked.md, fixes.",
+      "default": "~/defect-register"
+    },
+    {
+      "name": "productRepo",
+      "description": "The product repository, owner/name.",
+      "default": "alepolab/ase-crm"
+    },
+    {
+      "name": "prAuthor",
+      "description": "The GitHub login the pipeline opens PRs as; its replies count as answers.",
+      "default": "vivekojha-alepo"
+    }
+  ],
+  "steps": [
+    {
+      "id": "scout",
+      "agentSlug": "defect-register-pr-scout",
+      "label": "Find unanswered reviews",
+      "next": [
+        "respond-each"
+      ],
+      "produces": [
+        "prs.json",
+        "sweep-report.md"
+      ]
+    },
+    {
+      "id": "respond-each",
+      "agentSlug": "sdlc-auto-dispatcher",
+      "label": "Answer each PR",
+      "next": [],
+      "triggerWorkflow": {
+        "source": "prs.json",
+        "slug": "defect-register-pr-review"
+      }
+    }
+  ],
+  "createdAt": "2026-10-16T12:00:00.000Z"
+}

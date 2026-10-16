@@ -30,6 +30,18 @@ export interface WorkflowParameter {
   description?: string
   required?: boolean
   default?: string
+  /**
+   * `file`: the run dialog offers an upload beside the text box, and the value
+   * is the uploaded file's path on this host (server/utils/uploads.ts). Still a
+   * path, so a typed one and a default work as before. Absent means text.
+   */
+  type?: 'text' | 'file'
+  /** For a file input: the picker's `accept`, e.g. `.html,.htm`. A hint, not a check. */
+  accept?: string
+}
+
+export function isFileParameter(param: Pick<WorkflowParameter, 'type'> | undefined): boolean {
+  return param?.type === 'file'
 }
 
 export interface ResolvedParameters {

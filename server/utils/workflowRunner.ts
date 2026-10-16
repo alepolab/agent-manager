@@ -44,6 +44,7 @@ import {
   runArtifactsDir, initRunArtifacts, writeStepArtifact, finalizeRunArtifacts, artifactHeader, stackNote,
   markArtifactsUnusable, resolveRunArtifact, writeArtifactJson, readArtifactEntries,
 } from './runArtifacts.ts'
+import { reopenForServer } from './osUsers.ts'
 import { createLogger, preview } from './log.ts'
 import { notifyTicketOutcome } from './ticketNotifier.ts'
 import { runJiraStep, type JiraStepConfig } from './jiraSteps.ts'
@@ -1719,6 +1720,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     // Checked before the monitor, so a step that left out a file is sent back
     // for that exact file instead of paying for a model to notice. A skip is
     // exempt: a step with nothing to do has nothing to write.
+    // What the agent wrote as the developer's user, readable to the server
+    // before it checks for it: an unreadable file used to read as unwritten.
+    await reopenForServer(runArtifactsDir(run.id), run.startedBy)
     if (!skip && step.produces?.length) {
       const contents: Record<string, string | null> = {}
       for (const name of step.produces) {
@@ -2654,6 +2658,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // `gateRole` stays everyone's, which is the old behaviour and the honest
     // default for a workflow that never said.
     const gateRole = (step as { gateRole?: Role } | undefined)?.gateRole
+    const reviewDoc = (step as { reviewDoc?: string } | undefined)?.reviewDoc?.trim()
     // A gated step that consumes an artifact asks a different question. "Approve
     // this step" acts on every entry in that file, and a step downstream of it
     // may start one child run per entry - so the honest question is which
@@ -2674,6 +2679,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
         : `${run.ticketKey ? `${run.ticketKey}: approve` : 'Approve'} "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}${typeof why === 'string' && why.trim() ? ` Why \`${run.blastRadius}\`: ${why.trim()}` : ''}`,
       ...(gateRole ? { role: gateRole } : {}),
       ...(artifact ? { artifact } : {}),
+      ...(reviewDoc ? { reviewDoc } : {}),
     }
     run.status = artifact ? 'awaiting_review' : 'paused'
     run.currentStepIds = []
@@ -3629,6 +3635,21 @@ export function resumeAwaitingSlot(): Promise<unknown> {
 export async function resumeInterruptedRuns(only?: Set<string>): Promise<{ resumed: string[], paused: string[], skipped: string[], waiting: string[], swept: string[] }> {
   const out = { resumed: [] as string[], paused: [] as string[], skipped: [] as string[], waiting: [] as string[], swept: [] as string[] }
   const all = await listRuns()
+  // Joining parents, including one an older server marked interrupted: its
+  // children may all have settled while no server was up to hear the last one.
+  if (!only) {
+    for (const run of all) {
+      const stranded = run.status === 'interrupted' && run.steps.some(s => s.status === 'waiting' && s.childRunIds?.length)
+      if (run.status !== 'joining' && !stranded) continue
+      if (stranded) {
+        run.status = 'joining'
+        await saveRun(run)
+        log.info('a joining parent marked interrupted is joining again', { runId: run.id })
+      }
+      await resumeJoinIfReady(run.id).catch(err =>
+        log.warn('resuming a joining parent failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
+    }
+  }
   // The full boot pass only; a pass for runs waiting on a slot has none to sweep.
   if (!only) for (const run of all) {
     // Not one this process is still unwinding: publish/afterUnwound own that.
@@ -4466,7 +4487,12 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.deferredRework = undefined
   run.pid = process.pid
   run.bootId = BOOT_ID
-  if (startedBy) run.startedBy = startedBy
+  // The run stays its starter's. Whoever restarts it is recorded in the audit
+  // log; making them the owner moved the run onto their Unix user, their
+  // GitHub token and their workspace root, while its worktree stayed in the
+  // starter's home - an operator restarting a developer's fix failed at once
+  // with "@vivek has no Unix user". Only a run nobody owns is adopted.
+  if (startedBy && !run.startedBy) run.startedBy = startedBy
   run.currentStepIds = []
   run.nextStepIds = [stepId, ...readyFailed]
   await publish(run)

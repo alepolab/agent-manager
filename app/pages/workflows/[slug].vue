@@ -28,7 +28,7 @@ const { can } = useUser()
  * permanent - but a page that silently discards your edits on reload is a worse
  * answer than one that does not accept them.
  */
-const readOnly = computed(() => !can('configure'))
+const readOnly = computed(() => !can('editWorkflows'))
 const workflowRun = useWorkflowRun(slug)
 const { run, runs, logs, attach, show, refresh: refreshRun, start } = workflowRun
 const { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond } = useRunActionToasts(workflowRun)
@@ -431,7 +431,7 @@ const parallelHint = computed(() => graph.value.entries.length > 1
       </div>
 
       <!-- Each of these maps to a route that already refuses the wrong role:
-           Run needs `startRun`, Save and Delete need `configure`. They rendered
+           Run needs `startRun`, Save `editWorkflows`, Delete `configure`. They rendered
            for everyone regardless, so the only way to learn you could not use
            one was to press it and read the 403. -->
       <div class="flex items-center gap-2">
@@ -458,8 +458,8 @@ const parallelHint = computed(() => graph.value.entries.length > 1
         <!-- Said out loud rather than left as an absence: a page with its controls
              quietly removed is indistinguishable from a broken one, and the
              pipeline definition is worth reading before answering a gate on it. -->
-        <span v-if="!can('configure')" class="t-small text-label">
-          Read-only - changing a workflow is an operator's job.
+        <span v-if="!can('editWorkflows')" class="t-small text-label">
+          Read-only - your role cannot change workflows.
         </span>
       </div>
     </div>

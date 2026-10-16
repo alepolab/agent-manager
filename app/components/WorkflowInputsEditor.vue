@@ -94,6 +94,30 @@ const inputValue = (e: Event) => (e.target as HTMLInputElement).value
               <span class="field-label mb-0">Required</span>
             </label>
           </div>
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 cursor-pointer shrink-0">
+              <input
+                type="checkbox"
+                class="shrink-0"
+                :checked="param.type === 'file'"
+                :disabled="readOnly"
+                @change="(e) => { updateParameter(index, (e.target as HTMLInputElement).checked ? { type: 'file' } : { type: undefined, accept: undefined }) }"
+              >
+              <span class="field-label mb-0">File</span>
+            </label>
+            <input
+              v-if="param.type === 'file'"
+              :value="param.accept"
+              :disabled="readOnly"
+              placeholder="accepted types (optional), e.g. .html,.htm"
+              class="field-input flex-1"
+              @input="(e) => { updateParameter(index, { accept: inputValue(e) || undefined }) }"
+            >
+          </div>
+          <span v-if="param.type === 'file'" class="field-hint">
+            The run dialog offers an upload for this one. The file is saved on the server and the
+            agents are given its path; a path typed here or as the default still works.
+          </span>
           <span v-if="param.name.trim() === RESERVED_PARAM_PROJECT_DIR" class="field-hint">
             Reserved name: this one becomes the run's project folder, and replaces that field
             in the run dialog. Everything else is stated to the agents as text.

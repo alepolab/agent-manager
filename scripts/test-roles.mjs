@@ -13,7 +13,7 @@
  *   node scripts/test-roles.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -30,6 +30,12 @@ const { listRoles, roleFor, setRole, effectiveRole } = await import('../server/u
     assert.equal(can(role, 'answerGate'), true, `${role} must be able to answer a gate`)
     assert.equal(can(role, 'runEngine'), false, `${role} must not be able to drive the run`)
     assert.equal(can(role, 'configure'), false, `${role} must not be able to configure the pipeline`)
+    assert.equal(can(role, 'editWorkflows'), true, `${role} must be able to create and edit workflows`)
+  }
+  // Creating and editing a workflow is editWorkflows; deleting one stays configure.
+  for (const [route, capability] of [['index.post.ts', 'editWorkflows'], ['[slug].put.ts', 'editWorkflows'], ['[slug].delete.ts', 'configure']]) {
+    const src = readFileSync(new URL(`../server/api/workflows/${route}`, import.meta.url), 'utf8')
+    assert.match(src, new RegExp(`requireCapability\\(event, '${capability}'\\)`), `workflows/${route} must need ${capability}`)
   }
   // A manager reads. Every write is somebody else's.
   const manager = capabilitiesFor('manager')

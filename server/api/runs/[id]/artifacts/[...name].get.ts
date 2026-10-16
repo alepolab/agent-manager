@@ -2,6 +2,8 @@ import { readFile, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { artifactContentType, runArtifactsDir } from '../../../../utils/runArtifacts'
 import { requireRunAccess } from '../../../../utils/runAccess'
+import { reopenForServer } from '../../../../utils/osUsers'
+import { getRun } from '../../../../utils/workflowRunStore'
 
 /** 512 KB is plenty for any report or xunit file; a bigger file is truncated with a marker. */
 const MAX_BYTES = 512 * 1024
@@ -22,6 +24,15 @@ export default defineEventHandler(async (event) => {
   }
   let size: number
   try { size = (await stat(full)).size } catch { throw createError({ statusCode: 404, message: 'Artifact not found' }) }
+  // Written by the agent as the developer's user and not yet opened to the
+  // server (see reopenForServer): opened once here, rather than a 500.
+  const read = async () => {
+    try { return await readFile(full) } catch (err: any) {
+      if (err?.code !== 'EACCES') throw err
+      await reopenForServer(root, (await getRun(id))?.startedBy)
+      return await readFile(full)
+    }
+  }
   const type = artifactContentType(name)
   if (type) {
     if (size > MAX_BINARY_BYTES) {
@@ -30,9 +41,9 @@ export default defineEventHandler(async (event) => {
     setHeader(event, 'content-type', type)
     // Truncating an image produces a broken one rather than a shorter one, so
     // the whole file goes or none of it does.
-    return await readFile(full)
+    return await read()
   }
-  const buf = await readFile(full)
+  const buf = await read()
   setHeader(event, 'content-type', 'text/plain; charset=utf-8')
   const text = buf.subarray(0, MAX_BYTES).toString('utf8')
   return size > MAX_BYTES ? `${text}\n\n[truncated: ${size} bytes total, first ${MAX_BYTES} shown]` : text

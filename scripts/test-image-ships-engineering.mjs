@@ -77,6 +77,7 @@ const NOT_SHIPPED = new Set([
   'docs',       // written for people reading the repo, not for the running app
   'templates',  // authoring aids for the plugin itself
   'run-as',     // installed onto a host, root-owned, by scripts/install-run-as.sh; the image runs as one user
+  'pipelines',  // copied into a host's CLAUDE_DIR by each pipeline's own install.sh; the app reads the copy
 ])
 const known = new Set([...SHIPPED.map(([d]) => d), ...NOT_SHIPPED])
 const unaccounted = readdirSync(join(root, 'engineering'), { withFileTypes: true })

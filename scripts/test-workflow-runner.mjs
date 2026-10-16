@@ -2316,6 +2316,44 @@ assert.deepEqual(envsSeen[4], {}, 'no starter, no identity env')
   assert.deepEqual(summary4.map(c => [c.id, c.status]), [['doomed', 'failed'], ['healthy', 'completed']],
     'and children.json records each outcome, so a rollup can act on the failures')
   assert.ok(summary4.find(c => c.id === 'doomed').error, 'with the failure itself, not just its status')
+
+  // ── 34e. A restart while the parent is joining ───────────────────────────
+  // A deploy mid fan-out marked the parent interrupted. The boot resume skips a
+  // run with a waiting step and the join only advances a `joining` one, so it
+  // sat there after all twelve of its children finished.
+  calls.length = 0
+  let release
+  const held = new Promise(res => { release = res })
+  runner.setAgentCaller(async (agentSlug) => {
+    calls.push(agentSlug)
+    if (agentSlug === 'agent-child') await held
+    return `output of ${agentSlug}`
+  })
+  let f5 = await runner.startRun({
+    workflow: fanFlow(LIST, 'fan-restart'), initialPrompt: 'scan them', watch: 'direct-invocation',
+    autoRun: true, startedBy: 'dev', parameters: { repos: ['one', 'two'].join(LF) },
+  })
+  f5 = await runner.waitForSettled(f5.id, TIMEOUT)
+  assert.equal(f5.status, 'joining')
+
+  // A server that went away while it joined: another boot, a dead pid.
+  await store.saveRun({ ...f5, bootId: 'an-earlier-boot', pid: 999999 })
+  assert.equal((await store.getRun(f5.id)).status, 'joining',
+    'a joining parent is not interrupted by a restart: it runs nothing itself')
+
+  // The record an older server left: interrupted, its join step still waiting.
+  await store.saveRun({ ...f5, status: 'interrupted', bootId: 'an-earlier-boot', pid: 999999 })
+  release()
+  const kids5 = f5.steps.find(s => s.stepId === 'f').childRunIds
+  await Promise.all(kids5.map(id => runner.waitForSettled(id, TIMEOUT)))
+  await new Promise(res => setTimeout(res, 100))
+  assert.equal((await store.getRun(f5.id)).status, 'interrupted', 'the children settling alone does not wake it')
+
+  await runner.resumeInterruptedRuns()
+  const done5 = await waitForStatus(f5.id, 'completed')
+  assert.match(done5.steps.find(s => s.stepId === 'f').output, /2 children finished\./,
+    'the boot resume joins the children it finds settled')
+  assert.equal(done5.steps.find(s => s.stepId === 'r').status, 'completed', 'and the rollup runs')
 }
 
 rmSync(process.env.CLAUDE_DIR, { recursive: true, force: true })
