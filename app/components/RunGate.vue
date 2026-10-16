@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { HOLD } from '~~/shared/types/workflowGroup'
 import { parkedDecision, type WorkflowRun } from '~~/shared/types/run'
+import { PERSON_SEND_BACK_LIMIT } from '~~/shared/utils/runDecisions'
 
 /**
  * A run's open decision: the question, whose it is, the evidence being
@@ -88,7 +89,7 @@ function chooseOption(text: string) {
            record (question.askedAt) and was rendered nowhere, so neither the
            reviewer nor anyone watching could see a gate going stale. -->
       <p class="t-small text-label">
-        Waiting {{ waitingLabel }}<template v-if="(run.reworks ?? 0) > 0"> · sent back {{ run.reworks }} of 2 times already</template>
+        Waiting {{ waitingLabel }}<template v-if="PERSON_SEND_BACK_LIMIT - reworksLeft > 0"> · sent back by a person {{ PERSON_SEND_BACK_LIMIT - reworksLeft }} of {{ PERSON_SEND_BACK_LIMIT }} times already</template><template v-if="(run.reworks ?? 0) > PERSON_SEND_BACK_LIMIT - reworksLeft"> · {{ (run.reworks ?? 0) - (PERSON_SEND_BACK_LIMIT - reworksLeft) }} by its steps</template>
       </p>
       <!-- Whose decision this is. Said out loud when it is not yours, because a
            panel with the controls quietly removed is indistinguishable from a

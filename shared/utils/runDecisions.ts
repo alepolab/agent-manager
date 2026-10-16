@@ -69,3 +69,23 @@ export function humanWaitMs(run: WorkflowRun): number {
   const open = run.question ? Math.max(0, Date.now() - run.question.askedAt) : 0
   return decided + open
 }
+
+/**
+ * How many times a person may send one run back from a gate. Agents' send-backs
+ * have allowances of their own (`reworksBy.ci`, `.verification`, `.review`).
+ */
+export const PERSON_SEND_BACK_LIMIT = 2
+
+/**
+ * The send-backs a person has made on this run: what PERSON_SEND_BACK_LIMIT is
+ * applied to. Not `reworks`, which counts every send-back, agents' too: a run
+ * that one red check and one verifier finding had sent back reached its first
+ * gate with both of the reviewer's spent, and no Send back offered (ASECRM-350).
+ * A run recorded before `reworksBy.person` was kept counts its sent-back
+ * decisions instead.
+ */
+export function personSendBacks(run: Pick<WorkflowRun, 'reworksBy' | 'decisions'>): number {
+  const kept = run.reworksBy?.person
+  if (typeof kept === 'number') return kept
+  return (run.decisions ?? []).filter(d => d.verdict === 'sent-back').length
+}
