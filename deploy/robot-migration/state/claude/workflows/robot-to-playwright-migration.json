@@ -23,7 +23,10 @@
       "next": [
         "write-specs"
       ],
-      "maxVisits": 2
+      "maxVisits": 2,
+      "runWhen": {
+        "artifact": "explore-needed.json"
+      }
     },
     {
       "id": "write-specs",

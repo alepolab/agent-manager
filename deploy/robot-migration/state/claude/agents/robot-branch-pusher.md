@@ -1,7 +1,7 @@
 ---
 name: robot-branch-pusher
 description: "Workflow step 4: delivers the run branch of a ported Robot folder: merges it into the workflow's local copy of the suite and pushes workflow/main with the deploy key (deliver=local), or pushes the run branch (deliver=github). Never force-pushes or opens a PR."
-model: sonnet
+model: haiku
 tools:
   - Bash
   - Read
