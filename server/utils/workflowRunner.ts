@@ -4487,7 +4487,12 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.deferredRework = undefined
   run.pid = process.pid
   run.bootId = BOOT_ID
-  if (startedBy) run.startedBy = startedBy
+  // The run stays its starter's. Whoever restarts it is recorded in the audit
+  // log; making them the owner moved the run onto their Unix user, their
+  // GitHub token and their workspace root, while its worktree stayed in the
+  // starter's home - an operator restarting a developer's fix failed at once
+  // with "@vivek has no Unix user". Only a run nobody owns is adopted.
+  if (startedBy && !run.startedBy) run.startedBy = startedBy
   run.currentStepIds = []
   run.nextStepIds = [stepId, ...readyFailed]
   await publish(run)

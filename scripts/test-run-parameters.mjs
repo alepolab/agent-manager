@@ -118,6 +118,20 @@ writeFileSync(
     'and it is still there at all - a strip that overshot would have taken it')
 }
 
+// An operator restarting a developer's run does not take it over: the run's
+// Unix user, token and worktree are its starter's.
+{
+  runner.setAgentCaller(async agentSlug => `output of ${agentSlug}`)
+  let run = await runner.startRun({
+    workflow, initialPrompt: 'go', watch: 'direct-invocation', autoRun: true,
+    parameters: { jira_project: 'DEVOPS' }, startedBy: 'a-developer',
+  })
+  run = await runner.waitForSettled(run.id, TIMEOUT)
+  run = await runner.restartRun(run.id, 'b', 'again', 'an-operator')
+  run = await runner.waitForSettled(run.id, TIMEOUT)
+  assert.equal(run.startedBy, 'a-developer', 'the run stays its starter\'s after an operator restarts it')
+}
+
 // ══ 4. what a dispatched child inherits ═══════════════════════════════════
 {
   const wfDir = join(process.env.CLAUDE_DIR, 'workflows')
