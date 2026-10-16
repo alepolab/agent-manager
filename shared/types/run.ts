@@ -440,6 +440,8 @@ export interface WorkflowRun {
    * rather than being resumed into the same wall again.
    */
   interruptions?: number
+  /** Times the run has retried on its own after a login failure (AUTH_RETRY_LIMIT). Reset the moment a step completes. */
+  authRetries?: number
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   /**
    * Why the run is stopped on the operator: a step's question, a step that needs
@@ -465,7 +467,7 @@ export interface WorkflowRun {
      *  grant one more is the developer's call, or a step handed the run to a
      *  step that cannot run yet (`handoff`). */
     reason?: 'budget' | 'rework' | 'auth' | 'quota' | 'handoff'
-    /** For a `quota` pause: when the provider said the quota resets. The run resumes on its own then. */
+    /** For a `quota` pause: when the provider said the quota resets. For an `auth` pause: when it tries again. The run resumes on its own then. */
     resumeAt?: number
     /** The provider named the reset time; false when resumeAt is the 15-minute guess, and its retry is a probe. */
     resetStated?: boolean
