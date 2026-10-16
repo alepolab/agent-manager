@@ -399,7 +399,7 @@ export interface WorkflowRun {
   blastRadius?: string
   /** The branch the run branch was cut from and the pull request targets (see server/utils/branchPolicy.ts). */
   baseBranch?: string
-  /** How many times a step sent the run back to an earlier step; bounded, so two steps cannot ping-pong forever. */
+  /** How many times the run was sent back to an earlier step, by a step or a person; the run total. */
   reworks?: number
   /**
    * Send-backs spent per trigger, which is what the bound is actually applied to.
@@ -409,10 +409,11 @@ export interface WorkflowRun {
    * once, left nothing for the second red check and stopped the run on a person
    * for something routine. `ci` is the PR-checks step; `verification` is the
    * verifier and the security review, which share one allowance because both are
-   * answering the same question about the same commit. `reworks` above stays the
-   * run total, for display and for anything already reading it.
+   * answering the same question about the same commit. `person` is a reviewer's
+   * send-backs from a gate (personSendBacks). `reworks` above stays the run
+   * total, for display and for anything already reading it.
    */
-  reworksBy?: { ci?: number, verification?: number, review?: number }
+  reworksBy?: { ci?: number, verification?: number, review?: number, person?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
   /** Agent-raised send-backs, oldest first. See SendBack. */
@@ -439,6 +440,8 @@ export interface WorkflowRun {
    * rather than being resumed into the same wall again.
    */
   interruptions?: number
+  /** Times the run has retried on its own after a login failure (AUTH_RETRY_LIMIT). Reset the moment a step completes. */
+  authRetries?: number
   preflight?: { at: number, checks: { name: string, level: 'ok' | 'warn' | 'fail' | 'skip', detail: string }[] }
   /**
    * Why the run is stopped on the operator: a step's question, a step that needs
@@ -464,7 +467,7 @@ export interface WorkflowRun {
      *  grant one more is the developer's call, or a step handed the run to a
      *  step that cannot run yet (`handoff`). */
     reason?: 'budget' | 'rework' | 'auth' | 'quota' | 'handoff'
-    /** For a `quota` pause: when the provider said the quota resets. The run resumes on its own then. */
+    /** For a `quota` pause: when the provider said the quota resets. For an `auth` pause: when it tries again. The run resumes on its own then. */
     resumeAt?: number
     /** The provider named the reset time; false when resumeAt is the 15-minute guess, and its retry is a probe. */
     resetStated?: boolean

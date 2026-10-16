@@ -3,6 +3,7 @@ import { HOLD } from '~~/shared/types/workflowGroup'
 import type { WorkflowRun, CostAggregate } from '~~/shared/types/run'
 import { GATE_VERDICT, statusWord } from '~/utils/runStatus'
 import { runElapsedMs } from '~~/shared/utils/runClock'
+import { PERSON_SEND_BACK_LIMIT, personSendBacks } from '~~/shared/utils/runDecisions'
 import { humanWaitMs } from '~~/shared/utils/runDecisions'
 
 /**
@@ -64,7 +65,8 @@ const decisions = computed(() => runs.value
   .sort((a, b) => b.at - a.at))
 
 const reworked = computed(() => runs.value.filter(r => (r.reworks ?? 0) > 0))
-const atCap = computed(() => runs.value.filter(r => (r.reworks ?? 0) >= 2))
+/** Runs a person can no longer send back: their own send-backs, not the steps', are what is capped. */
+const atCap = computed(() => runs.value.filter(r => personSendBacks(r) >= PERSON_SEND_BACK_LIMIT))
 
 const settled = computed(() => runs.value.filter(r => r.endedAt))
 
@@ -145,7 +147,7 @@ const withDecisions = computed(() => runs.value.filter(r => (r.decisions?.length
       <div class="stat-row__cell">
         <div class="stat-row__key">Sent back</div>
         <div class="stat-row__value">{{ reworked.length }} <small>of {{ runs.length }}</small></div>
-        <div class="stat-row__note">{{ atCap.length }} at the limit of 2</div>
+        <div class="stat-row__note">{{ atCap.length }} at a reviewer's limit of {{ PERSON_SEND_BACK_LIMIT }}</div>
       </div>
       <div class="stat-row__cell">
         <div class="stat-row__key">Spend</div>

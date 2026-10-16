@@ -1,6 +1,7 @@
 import type { WorkflowRun } from '~~/shared/types/run'
 import { needsJustification } from '~~/shared/utils/oversight'
 import { gateIsMine } from '~~/shared/utils/notifications'
+import { PERSON_SEND_BACK_LIMIT, personSendBacks } from '~~/shared/utils/runDecisions'
 import { sendBackCandidates, suggestSendBack, type DecisionBrief } from '~~/shared/utils/decisionBrief'
 import { noteSubmitAction, sendBackPreselect } from '~/utils/gateSubmit'
 
@@ -40,7 +41,8 @@ export function useGateAnswer(run: Ref<WorkflowRun>, emit: GateEmits) {
   /** Where a send-back goes. The reviewer picks; the run never guesses. Candidates are steps that have run. */
   const reworkTarget = ref('')
   const reworkCandidates = computed(() => sendBackCandidates(run.value.steps, run.value.question?.stepId))
-  const reworksLeft = computed(() => 2 - (run.value.reworks ?? 0))
+  /** The reviewer's own send-backs left: steps sending the run back to each other spend allowances of their own. */
+  const reworksLeft = computed(() => PERSON_SEND_BACK_LIMIT - personSendBacks(run.value))
   const canSendBack = computed(() => isApproval.value && !runnerPause.value && reworkCandidates.value.length > 0 && reworksLeft.value > 0)
 
   /**

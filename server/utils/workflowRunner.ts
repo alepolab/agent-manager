@@ -1212,6 +1212,47 @@ export async function resumeQuotaPaused(now = Date.now()): Promise<string[]> {
   return resumed
 }
 
+/**
+ * Runs paused on a login failure try again on their own this many times before
+ * they wait for a person. ASECRM-544, 387 and 373 paused within two minutes of
+ * each other on "Not logged in" while the server's Claude login was between
+ * tokens; it was refreshed six minutes later, and the three stayed paused
+ * until someone pressed Continue.
+ */
+export const AUTH_RETRY_LIMIT = 3
+/** How long a login-paused run waits before trying again. RUN_AUTH_RETRY_MINUTES overrides it. */
+const authRetryMs = () => Math.max(0.01, Number(process.env.RUN_AUTH_RETRY_MINUTES) || 5) * 60_000
+
+const authTimers = new Map<number, ReturnType<typeof setTimeout>>()
+export function scheduleAuthRetry(at: number): void {
+  if (authTimers.has(at)) return
+  const t = setTimeout(() => {
+    authTimers.delete(at)
+    void resumeAuthPaused().catch(err => log.warn('retrying runs paused on the login failed', { error: err instanceof Error ? err.message : String(err) }))
+  }, Math.max(1000, at - Date.now()))
+  t.unref?.()
+  authTimers.set(at, t)
+}
+
+/**
+ * Continues every run paused on a login failure whose retry time has passed,
+ * oldest first; one whose time is still to come gets its timer. A pause with no
+ * retry time has spent its retries and is a person's. Also called at boot, so a
+ * restart does not strand them.
+ */
+export async function resumeAuthPaused(now = Date.now()): Promise<string[]> {
+  const resumed: string[] = []
+  const paused = (await listRuns()).filter(r => r.status === 'paused' && r.question?.reason === 'auth' && r.question.resumeAt)
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+  for (const r of paused) {
+    const at = r.question!.resumeAt!
+    if (at > now) { scheduleAuthRetry(at); continue }
+    await continueRun(r.id).catch(err => log.warn('could not retry a run paused on the login', { runId: r.id, error: err instanceof Error ? err.message : String(err) }))
+    resumed.push(r.id)
+  }
+  return resumed
+}
+
 /** A step that needs the operator: `PIPELINE-ASK: <question>` on its own line. */
 export function parseAsk(output: string): string | null {
   const m = output.match(/^PIPELINE-ASK:\s*(.+)$/m)
@@ -1775,8 +1816,10 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
 
     markCompleted(l.graph, l.state, id)
     // Progress clears the interruption count: only CONSECUTIVE restarts with
-    // nothing achieved in between are the loop worth pausing on.
+    // nothing achieved in between are the loop worth pausing on. The same for
+    // the login retries: a step that reached the model proves the login works.
     run.interruptions = 0
+    run.authRetries = 0
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
   } catch (err) {
@@ -2735,10 +2778,25 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
   if (l.authFailure) {
     const { stepId, message } = l.authFailure
     l.authFailure = undefined
+    const label = stepOf(l, stepId)?.label ?? stepId
+    // A login that lapses for a few minutes (a token refreshed late) comes back
+    // on its own; a server started without the Anthropic settings does not.
+    // Retry the first on a timer, and leave the second to a person.
+    const tried = run.authRetries ?? 0
+    const retryAt = tried < AUTH_RETRY_LIMIT ? Date.now() + authRetryMs() : undefined
     run.status = 'paused'
-    run.question = {
-      stepId, kind: 'approval', reason: 'auth', askedAt: Date.now(),
-      text: `"${stepOf(l, stepId)?.label ?? stepId}" could not reach the model: ${message}. This is the server's own credentials, not the run's work - check how the server was started (its environment needs the Anthropic settings), then Continue to run the step again. Nothing was lost.`,
+    run.question = retryAt
+      ? {
+          stepId, kind: 'approval', reason: 'auth', resumeAt: retryAt, askedAt: Date.now(),
+          text: `"${label}" could not reach the model: ${message}. This is the server's own credentials, not the run's work. The run tries again on its own at ${new Date(retryAt).toLocaleString()} (retry ${tried + 1} of ${AUTH_RETRY_LIMIT}); Continue to try now. Nothing was lost.`,
+        }
+      : {
+          stepId, kind: 'approval', reason: 'auth', askedAt: Date.now(),
+          text: `"${label}" could not reach the model: ${message}. It has tried again ${tried} times on its own without reaching it. This is the server's own credentials, not the run's work - check how the server was started (its environment needs the Anthropic settings) and its Claude login, then Continue to run the step again. Nothing was lost.`,
+        }
+    if (retryAt) {
+      run.authRetries = tried + 1
+      scheduleAuthRetry(retryAt)
     }
     run.currentStepIds = []
     run.nextStepIds = [stepId]
@@ -3466,6 +3524,7 @@ async function launchParked(run: WorkflowRun): Promise<LaunchOutcome> {
       // and rolls the count back when the restart refuses at once. Refused here,
       // later, it never happened either, and must not spend one of the two.
       if (p.handOver && back.reworks) back.reworks -= 1
+      if (p.handOver && back.reworksBy?.person) back.reworksBy.person -= 1
       back.error = `Waited for a slot, then could not ${p.action}: ${err instanceof Error ? err.message : String(err)}`
       await publish(back)
     }

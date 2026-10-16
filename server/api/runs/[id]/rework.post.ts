@@ -1,7 +1,7 @@
 import { restartRun } from '../../../utils/workflowRunner'
 import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
-import { recordDecision } from '../../../../shared/utils/runDecisions'
+import { PERSON_SEND_BACK_LIMIT, personSendBacks, recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
 
 /**
@@ -57,14 +57,16 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'That is the step waiting on you. Approve it, or send it back to an earlier one.' })
   }
 
-  const reworks = (before.reworks ?? 0) + 1
-  if (reworks > 2) {
-    // The agent path fails the run here. A person gets told instead, because a
+  // A person's own send-backs, not the run total: the steps' send-backs to each
+  // other spend their own allowances, and must not spend the reviewer's.
+  const sentBack = personSendBacks(before) + 1
+  if (sentBack > PERSON_SEND_BACK_LIMIT) {
+    // The agent path pauses and asks here. A person gets told instead, because a
     // reviewer who has sent the same work back twice is making a judgement about
     // the run as a whole, and ending it should be their explicit act (`reject`).
     throw createError({
       statusCode: 409,
-      message: `This run has already been sent back ${before.reworks} times, which is the limit. Approve it, or reject it with your reasons.`,
+      message: `This run has already been sent back ${sentBack - 1} times from its gates, which is the limit. Approve it, or reject it with your reasons.`,
     })
   }
 
@@ -76,7 +78,8 @@ export default defineEventHandler(async (event) => {
   // to be built while `question.askedAt` still exists, since the restart clears
   // the question it supersedes.
   recordDecision(before, 'sent-back', user?.login ?? 'a reviewer', note, stepId)
-  before.reworks = reworks
+  before.reworks = (before.reworks ?? 0) + 1
+  ;(before.reworksBy ??= {}).person = sentBack
   await saveRun(before)
 
   // `fromRunner` bypasses the settled-status check, exactly as the runner's own
@@ -86,7 +89,7 @@ export default defineEventHandler(async (event) => {
     return await restartRun(
       id,
       stepId,
-      `Sent back from "${from}" by ${user?.login ?? 'a reviewer'} (rework ${reworks} of 2): ${note}`,
+      `Sent back from "${from}" by ${user?.login ?? 'a reviewer'} (rework ${sentBack} of ${PERSON_SEND_BACK_LIMIT}): ${note}`,
       before.startedBy,
       { fromRunner: true },
     )
@@ -94,7 +97,11 @@ export default defineEventHandler(async (event) => {
     // Roll the count back: a restart that never happened is not a rework, and
     // leaving it incremented would silently spend one of the two attempts.
     const current = await getRun(id)
-    if (current) { current.reworks = before.reworks - 1; await saveRun(current) }
+    if (current) {
+      current.reworks = before.reworks - 1
+      ;(current.reworksBy ??= {}).person = sentBack - 1
+      await saveRun(current)
+    }
     if (typeof err?.status === 'number') throw createError({ statusCode: err.status, message: err.message })
     throw err
   }

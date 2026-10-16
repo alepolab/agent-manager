@@ -273,7 +273,7 @@ const occupy = async (who) => {
   const b = await occupy('dev17')
   // As rework.post.ts records it.
   const file = join(process.env.CLAUDE_DIR, 'workflow-runs', `${g.id}.json`)
-  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf-8')), reworks: 1 }))
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf-8')), reworks: 1, reworksBy: { person: 1 } }))
   const sent = await runner.restartRun(g.id, 'a', 'Sent back from "Ship" by dev16 (rework 1 of 2): narrow it', g.startedBy, { fromRunner: true })
   assert.equal(sent.status, 'queued')
   preflightFails = true
@@ -289,6 +289,7 @@ const occupy = async (who) => {
   assert.equal(back.status, 'paused', 'back at its gate')
   assert.match(back.error, /could not restart: Preflight/)
   assert.equal(back.reworks ?? 0, 0, 'THE REGRESSION: a send-back that never ran spent one of the two')
+  assert.equal(back.reworksBy?.person ?? 0, 0, 'nor the reviewer\'s own count')
   await runner.stopRun?.(g.id).catch(() => {})
 }
 
