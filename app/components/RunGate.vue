@@ -102,6 +102,8 @@ function chooseOption(text: string) {
          those decisions, not the one-line banner and the single Approve button
          below: approving the step acts on every entry, which is the thing the
          reviewer is here to prevent. -->
+    <!-- The document the workflow says this gate is decided on. -->
+    <RunGateDocument v-if="run.question?.reviewDoc && !run.parked" :run-id="run.id" :name="run.question.reviewDoc" />
     <RunDecisionPanel v-if="reviewing" :run="run" />
     <!-- What the reviewer is actually approving. The gate used to show a step
          label and one line of agent prose, with the measured change, the test

@@ -286,6 +286,9 @@ const done = computed(() => run.value.steps.filter(s => SETTLED_STATUSES.has(s.s
         </p>
       </section>
 
+      <!-- The document the workflow says this gate is decided on. -->
+      <RunGateDocument v-if="question?.reviewDoc" :run-id="run.id" :name="question.reviewDoc" />
+
       <!-- A budget pause: what granting more buys, and what stopping keeps. -->
       <RunBudgetBrief v-else-if="question?.reason === 'budget'" :run="run" />
 

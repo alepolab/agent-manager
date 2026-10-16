@@ -89,7 +89,8 @@
         "slug": "defect-register-fix-group",
         "join": true
       },
-      "approval": true
+      "approval": true,
+      "reviewDoc": "review.md"
     },
     {
       "id": "report",

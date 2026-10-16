@@ -2658,6 +2658,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // `gateRole` stays everyone's, which is the old behaviour and the honest
     // default for a workflow that never said.
     const gateRole = (step as { gateRole?: Role } | undefined)?.gateRole
+    const reviewDoc = (step as { reviewDoc?: string } | undefined)?.reviewDoc?.trim()
     // A gated step that consumes an artifact asks a different question. "Approve
     // this step" acts on every entry in that file, and a step downstream of it
     // may start one child run per entry - so the honest question is which
@@ -2678,6 +2679,7 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
         : `${run.ticketKey ? `${run.ticketKey}: approve` : 'Approve'} "${label}" to run it.${gateRole ? ` This gate is ${gateRole}'s decision.` : ''} ${oversightReason(run.blastRadius)}${typeof why === 'string' && why.trim() ? ` Why \`${run.blastRadius}\`: ${why.trim()}` : ''}`,
       ...(gateRole ? { role: gateRole } : {}),
       ...(artifact ? { artifact } : {}),
+      ...(reviewDoc ? { reviewDoc } : {}),
     }
     run.status = artifact ? 'awaiting_review' : 'paused'
     run.currentStepIds = []

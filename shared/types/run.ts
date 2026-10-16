@@ -497,6 +497,11 @@ export interface WorkflowRun {
      * decided - one of which the deciding endpoint then has to keep in step.
      */
     artifact?: string
+    /**
+     * Copied from the gated step's `reviewDoc`: the run artifact the reviewer
+     * reads to decide, shown in the gate rather than left under Artifacts.
+     */
+    reviewDoc?: string
   }
   projectDir?: string
   /**

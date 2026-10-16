@@ -77,7 +77,7 @@ provide(BUILD_STACK_KEY, {
   }),
   setRejoin: (at, rejoin) => edit(() => setBlocks(E.setRejoin(props.blocks, at, rejoin))),
   setCondition: (id, artifact) => patchStep(id, { runWhen: artifact.trim() ? { artifact: artifact.trim() } : undefined }),
-  clearApproval: id => patchStep(id, { approval: undefined, gateRole: undefined }),
+  clearApproval: id => patchStep(id, { approval: undefined, gateRole: undefined, reviewDoc: undefined }),
 })
 </script>
 

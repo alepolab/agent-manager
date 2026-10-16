@@ -56,7 +56,7 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
       <p v-else class="text-label">Runs in the pipeline itself, with no model call.</p>
       <div class="field-group">
         <label class="flex items-center gap-2">
-          <input type="checkbox" :checked="!!step.approval" :disabled="readOnly" @change="(e) => { emit('patch', (e.target as HTMLInputElement).checked ? { approval: true } : { approval: undefined, gateRole: undefined }) }">
+          <input type="checkbox" :checked="!!step.approval" :disabled="readOnly" @change="(e) => { emit('patch', (e.target as HTMLInputElement).checked ? { approval: true } : { approval: undefined, gateRole: undefined, reviewDoc: undefined }) }">
           Ask for approval before this step runs
         </label>
         <span class="field-hint">The run pauses on the run page until it is approved, even when running to completion. Use it for steps with an outward effect, such as pushing and opening the pull request.</span>
@@ -67,6 +67,11 @@ const agentOptions = computed(() => props.agents.map(a => ({ value: a.slug, labe
           <option value="">Anyone who can answer gates</option>
           <option v-for="r in ROLES" :key="r" :value="r">{{ r }}</option>
         </select>
+      </div>
+      <div v-if="step.approval" class="field-group">
+        <label class="field-label">What the approver reads <span class="t-small font-normal ml-1" style="color: var(--text-disabled);">optional</span></label>
+        <input class="field-input font-mono" :value="step.reviewDoc ?? ''" :disabled="readOnly" placeholder="review.md" @change="(e) => { emit('patch', { reviewDoc: (e.target as HTMLInputElement).value.trim() || undefined }) }">
+        <span class="field-hint">A file an earlier step writes into the run's artifacts. It is shown in the gate, with its images, so the approver does not have to find it.</span>
       </div>
     </div>
 

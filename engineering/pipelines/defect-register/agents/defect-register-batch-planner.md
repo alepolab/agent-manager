@@ -35,6 +35,6 @@ You decide which groups this batch fixes, and you set out the evidence a person 
   - **The register expected** and **develop does**: one or two plain sentences each;
   - **Why triage says it is a bug**: the root cause as `path:line`, and the failing tests;
   - **Checked for a move**: the `moveSearch` - where triage looked and what it found. When it is thin (one place looked, or none), say so plainly: that is the group most worth a second look;
-  - **Screenshots**: their paths (or the `screenshotNote` when there are none).
+  - **Screenshots**: copy each one into `review-shots/` in the run artifacts directory (from `<stateDir>/triage/<area>/shots/` or the triage run's artifacts) and embed it as `![<what it shows>](review-shots/<file>.png)`, so it shows inline in the gate. Where there is none, give the `screenshotNote`.
 
 If nothing is left to fix, write `batch.json` as `[]` and say so in both files: the fan-out then starts nothing.
