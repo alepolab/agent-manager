@@ -56,6 +56,18 @@ echo "== app and billing"
 $P up -d app billing
 for i in $(seq 1 100); do [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:18081/v3/api-docs)" = 200 ] && break; sleep 5; done
 
+echo "== Keycloak admin, from inside the app"
+# KeycloakAdminService derives the admin URL from the issuer, localhost:19091,
+# which inside dr-app is the container itself: every login sync failed with
+# "Keycloak could not be reached". A forwarder in the app's network namespace
+# answers there. Recreated with the app, whose namespace it joins.
+docker rm -f dr-keycloak-forward >/dev/null 2>&1 || true
+docker run -d --name dr-keycloak-forward --restart unless-stopped --network container:dr-app \
+  alpine/socat TCP-LISTEN:19091,fork,reuseaddr TCP:dr-keycloak:8080 >/dev/null
+sleep 2
+printf '  admin API from dr-app (401 without a token is right): %s\n' \
+  "$(docker run --rm --network container:dr-app curlimages/curl -s -m 10 -o /dev/null -w '%{http_code}' http://localhost:19091/admin/realms/alepo/users)"
+
 echo "== status"
 for u in http://localhost:18081/v3/api-docs http://localhost:18081/ http://localhost:19091/realms/alepo http://localhost:18107/; do
   printf '  %-40s %s\n' "$u" "$(curl -s -m5 -o /dev/null -w '%{http_code}' "$u")"
