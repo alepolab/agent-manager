@@ -140,6 +140,21 @@ export function stackUsers(project: string, runs: StackRun[], except?: string): 
     && (stackProjectOf(r) === project || runProjectNames(r.id).includes(project)))
 }
 
+/**
+ * The failed runs, inside their grace period (keptForRestart), whose restart
+ * will want `project` back: its volumes, and the images it ran. Not users -
+ * nothing runs in the stack for them, so it can come down - but nothing they
+ * restart from may be removed. A failed run that had taken over another run's
+ * stack holds that stack, not its own: the review of 101f030 found the sweep
+ * removing a taken-over stack's volumes, and its builder's images, during the
+ * failed taker's grace period, because a failed run is terminal and so never
+ * counted as anybody's user.
+ */
+export function restartHolders(project: string, runs: StackRun[], except?: string, now = Date.now()): StackRun[] {
+  return runs.filter(r => r.id !== except && keptForRestart(r, now)
+    && (stackProjectOf(r) === project || runProjectNames(r.id).includes(project)))
+}
+
 /** How many free stacks claimableStack inspects for one already on the run's commit. */
 export const PREFER_PROBES = 3
 
@@ -250,8 +265,10 @@ export async function teardownRun(
     // with it. That holds for one it took over too - the run it came from has
     // ended, and once the project is gone no later teardown can find them.
     // Only a project named for a run: a shared stack never is.
-    // A failed run keeps them for its restart (keptForRestart); the sweep takes them later.
-    const volumes = !keptForRestart(run) && (isOwnProject(run.id, project) || RUN_PROJECT.test(project))
+    // A failed run keeps them for its restart (keptForRestart), and so does a
+    // stack a failed run inside its grace period took over; the sweep takes them later.
+    const holders = restartHolders(project, await everyone(), run.id)
+    const volumes = !keptForRestart(run) && !holders.length && (isOwnProject(run.id, project) || RUN_PROJECT.test(project))
     try {
       await exec('docker', ['compose', '-p', project, 'down', ...(volumes ? ['-v'] : []), '--remove-orphans'])
       report.stacks.push({ project, removed: true, volumes })
@@ -273,7 +290,7 @@ export async function teardownRun(
   // and 39 ended runs' images were still on disk two days after the fix that
   // was meant to remove them. Any ending looks at every ended run instead.
   if (runBuildsImages(run) || run.steps.some(s => STACK_AGENTS.test(s.agentSlug))) {
-    const swept = await sweepEndedRunImages(run.id, exec, await everyone())
+    const swept = await sweepEndedRunImages(run, exec, await everyone())
     if (swept.length) report.endedRunImages = swept
   }
   if (runBuildsImages(run)) report.buildCache = await capBuildCache(exec)
@@ -318,6 +335,9 @@ export async function removeRunImages(
   const projects = [...new Set([...runProjectNames(run.id), ...(run.stackProject ? [run.stackProject] : [])])]
   const users = [...new Set(projects.flatMap(p => stackUsers(p, everyone, run.id).map(u => u.id.slice(0, 8))))]
   if (users.length) return { removed: [], refused: [], kept: `kept: run ${users.join(', ')} still uses this run's stack` }
+  // Its images may be what a failed run that took its stack over restarts from.
+  const holders = [...new Set(projects.flatMap(p => restartHolders(p, everyone, run.id).map(u => u.id.slice(0, 8))))]
+  if (holders.length) return { removed: [], refused: [], kept: `kept: failed run ${holders.join(', ')} is restarted from this run's stack` }
 
   let named: string[] = []
   let labelled: { id: string, names: string[] }[] = []
@@ -390,8 +410,17 @@ export async function removeRunImages(
  * its images and volumes once, so only the ended runs that still have one are
  * looked at. Reports only those it removed or was refused.
  */
-export async function sweepEndedRunImages(endingId: string, exec: Exec = realExec, runs: StackRun[] = [], now = Date.now()): Promise<(ImageReport & { run: string, volumes?: VolumeReport })[]> {
+export async function sweepEndedRunImages(
+  ending: string | (Pick<WorkflowRun, 'id'> & Partial<Pick<WorkflowRun, 'status' | 'endedAt' | 'stackProject'>>),
+  exec: Exec = realExec, runs: StackRun[] = [], now = Date.now(),
+): Promise<(ImageReport & { run: string, volumes?: VolumeReport })[]> {
+  const endingId = typeof ending === 'string' ? ending : ending.id
   const others = runs.filter(r => r.id !== endingId)
+  // The ending run uses nothing any more, but a failed one restarts from the
+  // stack it held: it counts among the holders, never among the users.
+  const pool: StackRun[] = typeof ending !== 'string' && keptForRestart(ending, now)
+    ? [...others, { ...ending, status: 'failed' } as StackRun]
+    : others
   const ended = others.filter(r => TERMINAL_STATUSES.includes(r.status) && !keptForRestart(r, now))
   if (!ended.length) return []
   let names: string[] = []
@@ -415,10 +444,10 @@ export async function sweepEndedRunImages(endingId: string, exec: Exec = realExe
     const own = volumes.filter(v => isOwnProject(r.id, v.project))
     const hasImages = labelledFor.has(r.id.toLowerCase()) || names.some(n => imageNamedFor(r.id, n))
     if (!hasImages && !own.length) continue
-    const images = hasImages ? await removeRunImages(r, exec, others) : { removed: [], refused: [] } as ImageReport
+    const images = hasImages ? await removeRunImages(r, exec, pool) : { removed: [], refused: [] } as ImageReport
     let vol: VolumeReport | undefined
     // Only volumes of a project nobody live uses: a stack handed on is still somebody's.
-    if (own.length && !own.some(v => stackUsers(v.project, others, r.id).length)) {
+    if (own.length && !own.some(v => stackUsers(v.project, pool, r.id).length || restartHolders(v.project, pool, r.id, now).length)) {
       vol = { removed: [], refused: [] }
       for (const v of own) {
         try {
@@ -436,15 +465,19 @@ export async function sweepEndedRunImages(endingId: string, exec: Exec = realExe
 
 /**
  * Removes the volumes a run's own compose projects left behind once they were
- * taken down: a failed run's stack comes down without them. Never forced: a
+ * taken down: a failed run's stack comes down without them. Not those of a
+ * project another run still uses or a failed run restarts from. Never forced: a
  * volume a container still holds is refused and reported. Deleting a run is
  * the last chance to find them. Never throws; undefined when docker cannot be asked.
  */
-export async function removeRunVolumes(run: Pick<WorkflowRun, 'id'>, exec: Exec = realExec): Promise<VolumeReport | undefined> {
+export async function removeRunVolumes(run: Pick<WorkflowRun, 'id'>, exec: Exec = realExec, runs?: StackRun[]): Promise<VolumeReport | undefined> {
+  // Never a project another run still uses, or a failed run will restart from.
+  const everyone = runs ?? (await import('./workflowRunStore.ts').then(m => m.listRuns()).catch(() => [])) ?? []
+  const busy = (project: string) => stackUsers(project, everyone, run.id).length > 0 || restartHolders(project, everyone, run.id).length > 0
   let own: string[] = []
   try {
     own = (await exec('docker', ['volume', 'ls', '--filter', 'label=com.docker.compose.project', '--format', '{{.Name}}\t{{.Label "com.docker.compose.project"}}'])).split('\n')
-      .map(l => l.trim().split('\t')).filter(([n, p]) => n && p && isOwnProject(run.id, p)).map(([n]) => n!)
+      .map(l => l.trim().split('\t')).filter(([n, p]) => n && p && isOwnProject(run.id, p) && !busy(p)).map(([n]) => n!)
   } catch {
     return undefined
   }

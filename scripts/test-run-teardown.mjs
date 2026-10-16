@@ -356,6 +356,53 @@ const OTHER = 'abcdef12-0000-4000-8000-000000000000' // shares this run's first 
   assert.match(rH.endedRunImages[0].volumes.refused[0].error, /in use/)
 }
 {
+  // The review of 101f030: a failed run that had taken over another run's stack
+  // restarts from THAT stack. A completed, B failed an hour ago holding sdlc-<A>.
+  const A = 'cccccccc-dddd-4eee-8fff-000000000000'
+  const B = 'dddddddd-eeee-4fff-8000-111111111111'
+  const projectA = `sdlc-${A}`
+  const labelled = { [A]: [{ id: 'imgA2', names: [`localhost/agent-sdlc/ase-crm:${A.slice(0, 8)}-fix`] }] }
+  const volumes = [{ name: `${projectA}_db`, project: projectA }]
+  const runA = { id: A, status: 'completed', endedAt: Date.now() - 2 * 3600_000 }
+  const runB = { id: B, status: 'failed', endedAt: Date.now() - 3600_000, stackProject: projectA, stackClaimedFrom: A }
+
+  // B's own ending: the stack comes down without -v, and nothing of A's goes.
+  const atB = fakeExec({ projects: [projectA], labelled, volumes })
+  const rB = await teardownRun({ ...runB, steps: stackSteps }, atB, [runA, runB])
+  assert.deepEqual(atB.downed(), [projectA])
+  assert.deepEqual(atB.withVolumes(), [])
+  assert.deepEqual(atB.volumesRemoved(), [], 'THE REVIEW: the sweep removed the taken-over stack\'s volumes during the failed taker\'s grace period')
+  assert.deepEqual(atB.rmi(), [], 'and the images it ran, which were its builder\'s')
+
+  // Any later ending, while B is in its grace period: still nothing.
+  const later = fakeExec({ labelled, volumes })
+  await teardownRun({ id: ID, status: 'completed', steps: [{ agentSlug: 'sdlc-verifier' }] }, later, [runA, runB, { id: ID, status: 'completed' }])
+  assert.deepEqual([...later.volumesRemoved(), ...later.rmi()], [])
+
+  // The other order: B failed first while A waited at a gate, then A completes.
+  // A is the stack's last live user, but B will restart from it: down without -v, A's images kept.
+  const atA = fakeExec({ projects: [projectA], labelled, volumes })
+  const rA = await teardownRun({ ...runA, steps: stackSteps }, atA, [runA, runB])
+  assert.deepEqual(atA.downed(), [projectA])
+  assert.deepEqual(atA.withVolumes(), [], 'a stack a failed run restarts from loses no volumes')
+  assert.deepEqual(atA.rmi(), [])
+  assert.match(rA.images.kept, new RegExp(`failed run ${B.slice(0, 8)} is restarted from`))
+
+  // Once B's grace period is over, the sweep gives both back.
+  const after = fakeExec({ labelled, volumes })
+  await teardownRun({ id: ID, status: 'completed', steps: [{ agentSlug: 'sdlc-verifier' }] }, after, [runA, { ...runB, endedAt: Date.now() - 4 * 86_400_000 }, { id: ID, status: 'completed' }])
+  assert.deepEqual(after.volumesRemoved(), [`${projectA}_db`])
+  assert.deepEqual(after.rmi(), [`localhost/agent-sdlc/ase-crm:${A.slice(0, 8)}-fix`])
+
+  // Deleting A while B is in its grace period leaves the volumes B restarts from.
+  const { removeRunVolumes } = await import('../server/utils/runTeardown.ts')
+  const del = fakeExec({ volumes })
+  const v = await removeRunVolumes(runA, del, [runA, runB])
+  assert.deepEqual(v.removed, [], 'removeRunVolumes guards like removeRunImages')
+  const delLater = fakeExec({ volumes })
+  assert.deepEqual((await removeRunVolumes(runA, delLater, [runA])).removed, [`${projectA}_db`])
+}
+{
   // The build cache is capped at every ending that built something, and not at one that built nothing.
   const exec = fakeExec()
   const r = await teardownRun({ id: ID, steps: [{ agentSlug: 'sdlc-verifier' }] }, exec, [])

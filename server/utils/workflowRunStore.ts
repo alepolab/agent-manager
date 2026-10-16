@@ -233,7 +233,7 @@ export async function deleteRun(id: string, opts: { exec?: Exec, /** Every run, 
     const images = runBuildsImages(run) ? await removeRunImages(run, opts.exec, opts.runs) : undefined
     if (images?.removed.length || images?.refused.length) createLogger('runner').info('deleted run\'s images', { runId: id, ...images })
     // And the volumes its stack left: a failed run's comes down without them, for its restart.
-    const volumes = runStandsUpStacks(run) ? await removeRunVolumes(run, opts.exec) : undefined
+    const volumes = runStandsUpStacks(run) ? await removeRunVolumes(run, opts.exec, opts.runs) : undefined
     if (volumes?.removed.length || volumes?.refused.length) createLogger('runner').info('deleted run\'s volumes', { runId: id, ...volumes })
   }
   await rm(runPath(id), { force: true })
