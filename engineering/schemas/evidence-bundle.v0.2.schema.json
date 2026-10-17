@@ -1,0 +1,662 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alepo.internal/schemas/evidence-bundle.v0.2.schema.json",
+  "title": "Evidence bundle v0.2",
+  "description": "A superset of v0.1: every v0.1 requirement is kept and every v0.1 bundle validates here unchanged. v0.2 adds optional provenance fields - which risk policy the gates ran under, how many reviewers and whether an adversarial pass were required, the verdict panel's members and their results, the approvals taken at gates, the plugin lock the run used, and manifest_sha256: the sha256 of the bundle's canonical JSON (keys sorted at every depth, no whitespace) with manifest_sha256 itself left out, so a bundle edited after assembly no longer matches its own digest. Computed and checked by engineering/scripts/evidence-hash.mjs.",
+  "type": "object",
+  "required": [
+    "ticket",
+    "watch",
+    "work_type",
+    "product",
+    "blast_radius",
+    "identity",
+    "context_packet_hash",
+    "intent_sha",
+    "plan_sha",
+    "model",
+    "plugin_version",
+    "stack",
+    "oracle",
+    "fix",
+    "oracle_after",
+    "regression",
+    "cost",
+    "summary_md"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ticket": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]+-[0-9]+$"
+    },
+    "watch": {
+      "type": "string",
+      "description": "The id of the watch (registry/watches.yaml) that dispatched this run. A run started directly, not by a watcher, MUST use the reserved literal \"direct-invocation\" here — never null and never omitted. The field always answers \"what triggered this?\"; the reserved literal is how a manual run answers that question honestly instead of leaving it unanswerable."
+    },
+    "work_type": {
+      "type": "string",
+      "enum": [
+        "bug",
+        "feature",
+        "change_request",
+        "infra",
+        "docs",
+        "security"
+      ]
+    },
+    "class": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Bug class. Required for bugs, null otherwise. Only the automatable classes reach the build loop.",
+      "enum": [
+        "parsing",
+        "dates",
+        "validation",
+        "state",
+        "protocol",
+        "leak",
+        "capacity",
+        "degradation",
+        null
+      ]
+    },
+    "product": {
+      "type": "string"
+    },
+    "blast_radius": {
+      "type": "string",
+      "enum": [
+        "docs",
+        "ui_parsing",
+        "schema",
+        "protocol",
+        "money",
+        "deployment"
+      ],
+      "description": "What is at risk if the change is wrong. \"deployment\" covers changes whose failure mode is in how the system is deployed or operated - compose mounts, topology, provisioning - rather than in code behaviour."
+    },
+    "identity": {
+      "type": "string",
+      "description": "The agent account that authored. Must not be an account able to approve."
+    },
+    "context_packet_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "intent_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "spec_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Required when the watch declares requires: [spec]."
+    },
+    "plan_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "model": {
+      "type": "string"
+    },
+    "plugin_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "description": "Full semver (MAJOR.MINOR.PATCH, optional -prerelease/+build), matching the \"version\" field of the installed plugin's .claude-plugin/plugin.json. A placeholder such as \"unknown\", \"n/a\", or \"TBD\" is not a version and must not validate — if the plugin.json lookup fails, the run must halt rather than write a placeholder here."
+    },
+    "stack": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The stack the change was verified on, or null when intake recorded stack_required: false and provisioning stood nothing up.",
+      "required": [
+        "profile",
+        "topology"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "topology": {
+          "type": "string"
+        },
+        "liquibase_tag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "oracle": {
+      "$ref": "#/$defs/oracle_run",
+      "description": "The oracle BEFORE the fix. Its verdict must be FAIL — an oracle that passed on unfixed code did not reproduce the problem — unless the ticket asked only for a test and `mutation_proof` shows every deliberate break turned it red."
+    },
+    "fix": {
+      "type": "object",
+      "required": [
+        "repos",
+        "files_changed",
+        "lines_changed",
+        "test_dirs_unlocked"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "repo",
+              "commits",
+              "pr"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "repo": {
+                "type": "string",
+                "pattern": "^[^/]+/[^/]+$"
+              },
+              "commits": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 7
+                }
+              },
+              "pr": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        },
+        "merge_order": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Required when more than one repo is present."
+        },
+        "files_changed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lines_changed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "test_dirs_unlocked": {
+          "type": "boolean",
+          "description": "True only if a human unlocked the test lock by commenting. The unlock and its reason ride in the bundle so a reviewer sees it."
+        },
+        "unlock_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "oracle_after": {
+      "$ref": "#/$defs/oracle_run",
+      "description": "The same oracle AFTER the fix. Its verdict must be PASS, over the same number of runs."
+    },
+    "regression": {
+      "type": "object",
+      "required": [
+        "suite",
+        "passed",
+        "failed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "suite": {
+          "type": "string"
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "xunit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "trace": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Playwright trace artifact, or null when the product declares no ui_trace and the change has no UI surface."
+    },
+    "adversarial": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Required for money and protocol labels; null otherwise.",
+      "additionalProperties": false,
+      "properties": {
+        "report": {
+          "type": "string"
+        },
+        "two_node_rerun": {
+          "type": "boolean"
+        },
+        "pattern_search": {
+          "type": "string"
+        },
+        "mutation_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "attempts",
+        "wall_clock_min"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "wall_clock_min": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "summary_md": {
+      "type": "string",
+      "description": "The one-screen human summary. First thing in the PR body."
+    },
+    "security": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Verdict of the security review step. Absent or null when the workflow has no such step.",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "high",
+        "medium",
+        "low"
+      ],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL"
+          ]
+        },
+        "high": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "medium": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "deployment": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Deployment facts the PR step recorded: whether schema migration files changed and how the change is rolled back.",
+      "additionalProperties": false,
+      "required": [
+        "migration_changed",
+        "rollback"
+      ],
+      "properties": {
+        "migration_changed": {
+          "type": "boolean"
+        },
+        "rollback": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "risk_policy_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The `version` of the risk policy (shared/utils/riskPolicy.ts) the run's gates were evaluated under."
+    },
+    "reviewers_required": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many people the policy row for this blast_radius required at a gate."
+    },
+    "adversarial_required": {
+      "type": "boolean",
+      "description": "Whether the policy row required an adversarial review, independent of whether `adversarial` below carries one."
+    },
+    "verdict_panel": {
+      "type": "object",
+      "description": "The reviewers (agents) that judged the change and what each found.",
+      "required": [
+        "members",
+        "loops"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "agent",
+              "result",
+              "evidence_path"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "agent": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The agent slug that reviewed."
+              },
+              "criterion": {
+                "type": "string",
+                "description": "What this member was asked to judge, when the panel splits criteria between members."
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "ABSTAIN"
+                ]
+              },
+              "evidence_path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The artifact, relative to the run directory, holding this member's report."
+              }
+            }
+          }
+        },
+        "loops": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times the panel sent the work back before this result."
+        }
+      }
+    },
+    "approvals": {
+      "type": "array",
+      "description": "Every human approval taken at a gate on the run, oldest first.",
+      "items": {
+        "type": "object",
+        "required": [
+          "gate",
+          "approver",
+          "at",
+          "minutes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "gate": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The gated step's label."
+          },
+          "approver": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Login of the person who approved."
+          },
+          "at": {
+            "type": "string",
+            "description": "ISO-8601 time of the approval."
+          },
+          "minutes": {
+            "type": "number",
+            "minimum": 0,
+            "description": "How long the gate waited for a person."
+          }
+        }
+      }
+    },
+    "plugin_lock": {
+      "type": "object",
+      "description": "The resolved plugin set the run used (name to version or commit), as the lock file recorded it. Free-form object: its shape is the lock file's, not this schema's."
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "sha256 (hex) of the bundle's canonical JSON without this field. See the schema description."
+    }
+  },
+  "allOf": [
+    {
+      "description": "A bug must carry its class.",
+      "if": {
+        "properties": {
+          "work_type": {
+            "const": "bug"
+          }
+        },
+        "required": [
+          "work_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "class": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "class"
+        ]
+      }
+    },
+    {
+      "description": "Money and protocol changes must carry an adversarial verification report.",
+      "if": {
+        "properties": {
+          "blast_radius": {
+            "enum": [
+              "money",
+              "protocol"
+            ]
+          }
+        },
+        "required": [
+          "blast_radius"
+        ]
+      },
+      "then": {
+        "properties": {
+          "adversarial": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "adversarial"
+        ]
+      }
+    },
+    {
+      "description": "Schema, protocol and money changes must have been verified on a running stack.",
+      "if": {
+        "properties": {
+          "blast_radius": {
+            "enum": [
+              "schema",
+              "protocol",
+              "money"
+            ]
+          }
+        },
+        "required": [
+          "blast_radius"
+        ]
+      },
+      "then": {
+        "properties": {
+          "stack": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "description": "An unlocked test directory must say why.",
+      "if": {
+        "properties": {
+          "fix": {
+            "properties": {
+              "test_dirs_unlocked": {
+                "const": true
+              }
+            },
+            "required": [
+              "test_dirs_unlocked"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "fix": {
+            "properties": {
+              "unlock_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "unlock_reason"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "oracle_run": {
+      "type": "object",
+      "required": [
+        "kind",
+        "path",
+        "runs",
+        "verdict"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "parameterised_test",
+            "acceptance_tests",
+            "verification_check",
+            "doc_build",
+            "reproduction"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "rows": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Table rows for a parameterised test. One row is the failure mode this field exists to expose."
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 3,
+          "description": "Three-run determinism minimum; 200 for races. A verdict from a single run is not evidence."
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "FAIL",
+            "PASS",
+            "FLAKY"
+          ]
+        },
+        "xunit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mutation_proof": {
+          "type": "object",
+          "required": [
+            "mutants",
+            "killed"
+          ],
+          "additionalProperties": false,
+          "description": "For a ticket that asks only for a test, whose oracle passes on unchanged code: the deliberate breaks of the covered behaviour that the oracle was run against. It stands in for a red pre-fix run only when every break was caught.",
+          "properties": {
+            "mutants": {
+              "type": "integer",
+              "minimum": 3
+            },
+            "killed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "report": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

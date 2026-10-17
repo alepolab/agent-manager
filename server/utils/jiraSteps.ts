@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isJiraPostingEnabled, jiraAuthHeader } from './jiraCredentials.ts'
+import { agentManagerSettings, settingString } from './appSettings.ts'
 import { credentialsFor, notifyTicketOutcome } from './ticketNotifier.ts'
 import { runArtifactsDir } from './runArtifacts.ts'
 import { createFromArtifact } from './jiraCreate.ts'
@@ -42,7 +43,17 @@ export interface JiraStepConfig {
    * have yet is left alone and the step says so.
    */
   fields?: Record<string, string>
+  /**
+   * Set the ticket's Agent Stage - the pipeline's own progress marker, distinct
+   * from the project's status - to this value. Through the field Settings' Jira
+   * field map names under `agentStage` when there is one, else as a comment
+   * saying so, so a project without the custom field still carries the fact.
+   */
+  stage?: string
 }
+
+/** The settings key the Agent Stage field is mapped under. */
+export const AGENT_STAGE_FIELD_KEY = 'agentStage'
 
 /**
  * Synonyms the estate's projects use for the states this pipeline moves a
@@ -109,6 +120,7 @@ export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchIm
     rest = moved.rest
   }
   if (rest && Object.keys(rest).length) lines.push(await setIssueFields(run, key, rest, fetchImpl))
+  if (cfg.stage) lines.push(await setAgentStage(run, key, cfg.stage, fetchImpl))
   if (cfg.attach) lines.push(await attachArtifacts(run, key, fetchImpl))
   if (cfg.comment) {
     // The notifier renders, records the artifact and posts only when enabled.
@@ -118,7 +130,32 @@ export async function runJiraStep(run: WorkflowRun, cfg: JiraStepConfig, fetchIm
     lines.push(result.posted ? `Comment posted on ${key}.` : `Comment recorded, not posted: ${result.reason}.`)
     run.ticketCommented = true
   }
-  return lines.join('\n') || 'Nothing configured for this Jira step: set a status to move to, the outcome comment, or ticket creation, in the workflow builder.'
+  return lines.join('\n') || 'Nothing configured for this Jira step: set a status to move to, an Agent Stage, the outcome comment, or ticket creation, in the workflow builder.'
+}
+
+/**
+ * Records the ticket's Agent Stage. The field map in Settings
+ * (agentManager.jira.fieldMap.agentStage) names the Jira field; set, the
+ * value goes there through the same editable-field path other fields use.
+ * Unset, the stage is posted as a comment: a project with no such field still
+ * gets the fact, in words, where the people watching the ticket will see it.
+ */
+async function setAgentStage(run: WorkflowRun, key: string, stage: string, fetchImpl: FetchLike): Promise<string> {
+  const mapped = settingString(agentManagerSettings().jira?.fieldMap?.[AGENT_STAGE_FIELD_KEY])
+  if (mapped) {
+    const line = await setIssueFields(run, key, { [mapped]: stage }, fetchImpl)
+    return line.includes('not editable') || line.includes('Could not') ? `${line} Agent Stage ${stage} was not recorded on the field.` : `Agent Stage set to ${stage} via "${mapped}". ${line}`.trim()
+  }
+  if (!isJiraPostingEnabled()) return `Would comment "Agent Stage: ${stage}" on ${key}; not done: JIRA_POST_ENABLED is not 1 on this instance.`
+  const creds = await credentialsFor(run)
+  const res = await fetchImpl(`${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}/comment`, {
+    method: 'POST',
+    headers: { Authorization: jiraAuthHeader(creds), Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body: plainTextToAdf(`Agent Stage: ${stage} (run ${run.id}, ${run.workflowName})`) }),
+  })
+  return res.ok
+    ? `Agent Stage ${stage} recorded on ${key} as a comment (no Agent Stage field is mapped in Settings).`
+    : `Could not record Agent Stage ${stage} on ${key} (HTTP ${res.status}).`
 }
 
 /**

@@ -29,6 +29,8 @@ export function recordDecision(
   by: string,
   note?: string,
   target?: string,
+  /** Minutes of attention the person reports having spent; recorded as given, never invented. */
+  minutes?: number,
 ): RunDecision | null {
   const question = run.question
   // No question means no gate was waiting, so there is no decision to record —
@@ -49,6 +51,7 @@ export function recordDecision(
     ...(note ? { note } : {}),
     ...(target ? { target } : {}),
     ...(run.blastRadius ? { blastRadius: run.blastRadius } : {}),
+    ...(typeof minutes === 'number' && Number.isFinite(minutes) && minutes >= 0 ? { minutes } : {}),
   }
   run.decisions = [...(run.decisions ?? []), decision]
   return decision
@@ -61,6 +64,11 @@ export function recordDecision(
  * run's wall clock minus `activeMs` says how long it was not executing, but not
  * why. This says how much of that was a person.
  */
+/** Minutes people reported spending on this run's gates, summed over the decisions that said. */
+export function humanMinutes(run: Pick<WorkflowRun, 'decisions'>): number {
+  return (run.decisions ?? []).reduce((sum, d) => sum + (d.minutes ?? 0), 0)
+}
+
 export function humanWaitMs(run: WorkflowRun): number {
   const decided = (run.decisions ?? []).reduce((sum, d) => sum + d.waitedMs, 0)
   // A gate open right now has not been decided, so it is in no decision yet;

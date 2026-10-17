@@ -4,13 +4,15 @@ import { appendRunAudit } from '../../../utils/runArtifacts'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { auditDecision } from '../../../utils/auditLog'
+import { minutesOf } from '../../../utils/decisionMinutes'
 
 /** Continue a paused run. `note` reaches the step being approved, or whichever step starts next. */
 export default defineEventHandler(async (event) => {
   // The gate itself: a reviewer's whole job, and a manager's non-job.
   await requireCapability(event, 'answerGate')
   const id = getRouterParam(event, 'id')!
-  const body = await readBody<{ note?: string }>(event).catch(() => ({} as { note?: string }))
+  const body = await readBody<{ note?: string, minutes?: number }>(event).catch(() => ({} as { note?: string, minutes?: number }))
   // Read first: continueRun clears the question, and the question is what says
   // whether this click approved a step or answered one - and it carries the
   // `askedAt` that is the only record of how long this gate waited for a person.
@@ -24,7 +26,7 @@ export default defineEventHandler(async (event) => {
   // handed to continueRun so it lands on the record the runner keeps writing.
   // A clone: recordDecision appends to the run it is given.
   const decision = before?.question?.kind === 'approval'
-    ? recordDecision(structuredClone(before), 'approved', user?.login ?? 'a reviewer', body?.note?.trim())
+    ? recordDecision(structuredClone(before), 'approved', user?.login ?? 'a reviewer', body?.note?.trim(), undefined, minutesOf(body))
     : null
   let run
   try {
@@ -41,6 +43,9 @@ export default defineEventHandler(async (event) => {
     throw err
   }
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
+  // The instance-wide chain, beside the run's own audit.jsonl below. Only an
+  // approval that took effect reaches this line (a refused one threw above).
+  if (decision && before) await auditDecision(before, decision)
   // Gated on the question having moved, not on the status having moved. A run
   // can stay `paused` across two consecutive approval gates - only
   // question.stepId changes - so approving one gate and landing straight on

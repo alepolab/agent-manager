@@ -5,7 +5,9 @@ import { join } from 'node:path'
 import { listRuns, getRun, saveRun } from './workflowRunStore.ts'
 import { PLACEHOLDER_PR, runArtifactsDir } from './runArtifacts.ts'
 import { productByKey } from './registry.ts'
+import { smeSlaTick } from './smeSla.ts'
 import type { WorkflowRun, RunCi } from '~~/shared/types/run'
+import { isTestRun } from '../../shared/types/run.ts'
 
 const execFileP = promisify(execFile)
 
@@ -120,12 +122,71 @@ export async function requestReviewsOnce(now = Date.now()): Promise<number> {
   return requested
 }
 
+export type MergeReader = (prUrl: string) => Promise<{ merged: boolean, mergeCommit?: string, baseBranch?: string }>
+const realMergeReader: MergeReader = async (prUrl) => {
+  const { stdout } = await execFileP('gh', ['pr', 'view', prUrl, '--json', 'state,mergeCommit,baseRefName'], { timeout: 30_000 })
+  const parsed = JSON.parse(stdout || '{}')
+  return { merged: parsed?.state === 'MERGED', mergeCommit: parsed?.mergeCommit?.oid ?? undefined, baseBranch: parsed?.baseRefName ?? undefined }
+}
+let mergeReader: MergeReader = realMergeReader
+/** Test seam. */
+export function setMergeReader(fn: MergeReader) { mergeReader = fn }
+
+export type VerificationStarter = (s: { issueKey: string, pr: string, revision?: string, branch?: string, watch: string, startedBy?: string, productKey?: string }) => Promise<{ run: { id: string } }>
+let verificationStarter: VerificationStarter | null = null
+/** Set at boot (server/plugins/ciPoller.ts) to the real Runbook V starter; a test substitutes its own. Null means "detect, never start". */
+export function setVerificationStarter(fn: VerificationStarter | null) { verificationStarter = fn }
+
+/**
+ * A run's pull request has merged: start Runbook V for its ticket, once.
+ *
+ * Polled beside the checks for runs that finished with a PR within the
+ * lookback window. The run records `verification` the moment the merge is
+ * seen - with the verification run's id when one started, or the reason none
+ * did - so a PR is never verified twice, and a refusal is on the record
+ * rather than retried every minute. Returns how many merges were seen.
+ */
+export async function detectMergedOnce(now = Date.now()): Promise<number> {
+  let seen = 0
+  for (const run of await listRuns()) {
+    if (run.status !== 'completed' && run.status !== 'failed') continue
+    if (isTestRun(run) || !run.ticketKey) continue
+    if ((run.endedAt ?? run.startedAt) < now - 7 * LOOKBACK_MS) continue
+    if (run.verification) continue
+    const urls = await prUrlsOf(run)
+    if (!urls.length) continue
+    const url = urls[0]!
+    let merge: Awaited<ReturnType<MergeReader>>
+    try { merge = await mergeReader(url) } catch { continue }
+    if (!merge.merged) continue
+    seen++
+    const fresh = await getRun(run.id)
+    if (!fresh || fresh.verification) continue
+    let verification: NonNullable<WorkflowRun['verification']>
+    if (!verificationStarter) {
+      verification = { pr: url, mergedAt: now, reason: 'no verification starter is wired on this instance' }
+    } else {
+      try {
+        const { run: v } = await verificationStarter({ issueKey: fresh.ticketKey!, pr: url, revision: merge.mergeCommit, branch: merge.baseBranch, watch: `ci-poller:${fresh.id}`, startedBy: fresh.startedBy, productKey: fresh.product?.name })
+        verification = { pr: url, mergedAt: now, runId: v.id }
+      } catch (err) {
+        verification = { pr: url, mergedAt: now, reason: err instanceof Error ? err.message : String(err) }
+      }
+    }
+    await saveRun({ ...fresh, verification })
+  }
+  return seen
+}
+
 let timer: ReturnType<typeof setInterval> | null = null
 export function startCiPoller(seconds = Number(process.env.CI_POLL_SECONDS) || DEFAULT_CI_POLL_SECONDS): void {
   if (timer) return
   timer = setInterval(() => {
     void pollOnce().catch(err => console.error('[ciPoller]', err))
     void requestReviewsOnce().catch(err => console.error('[ciPoller] review requests', err))
+    // The SME SLA rides this cadence rather than owning a timer of its own.
+    void smeSlaTick().catch(err => console.error('[ciPoller] sme sla', err))
+    void detectMergedOnce().catch(err => console.error('[ciPoller] merge detection', err))
   }, seconds * 1000)
   timer.unref?.()
 }

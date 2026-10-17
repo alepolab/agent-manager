@@ -200,7 +200,7 @@
         },
         "owners": {
           "type": "object",
-          "description": "Owner group per blast-radius label. money and protocol must be named for any product that has such paths.",
+          "description": "Owner group per blast-radius label. money and protocol must be named for any product that has such paths. product_sme, architect and qa_lead are people (GitHub logins), not groups: they are who agent-manager routes a gate to.",
           "minProperties": 1,
           "additionalProperties": false,
           "properties": {
@@ -218,6 +218,23 @@
             },
             "docs": {
               "type": "string"
+            },
+            "product_sme": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$" },
+              "description": "GitHub logins asked, in turn, to answer this product's review and plan gates (agent-manager's SME routing). Optional; absent means gates are not routed to a named person."
+            },
+            "architect": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$",
+              "description": "GitHub login asked when a risk tier calls for a specialist reviewer and none is named for it."
+            },
+            "qa_lead": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$",
+              "description": "GitHub login asked to answer this product's QA and verification gates."
             }
           }
         },

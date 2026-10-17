@@ -1,5 +1,6 @@
 import type { Role } from './role'
 import type { DecisionBrief } from '../utils/decisionBrief'
+import type { SmeAssignment } from './sme'
 
 export type WorkflowRunStatus =
   /**
@@ -358,6 +359,13 @@ export interface RunDecision {
   blastRadius?: string
   /** Not a person's answer: the runner carried an earlier approval to this gate (see shared/utils/gateCarryOver.ts). `by` names whose. */
   auto?: true
+  /**
+   * Minutes of a person's attention this decision cost, as they reported it in
+   * the decision body. Distinct from `waitedMs`, which is how long the run sat
+   * waiting; a reviewer who read the diff for ten minutes of a four-hour wait
+   * spent ten. Absent when nobody said.
+   */
+  minutes?: number
 }
 
 export interface WorkflowRun {
@@ -413,9 +421,16 @@ export interface WorkflowRun {
    * send-backs from a gate (personSendBacks). `reworks` above stays the run
    * total, for display and for anything already reading it.
    */
-  reworksBy?: { ci?: number, verification?: number, review?: number, person?: number }
+  reworksBy?: { ci?: number, verification?: number, review?: number, person?: number, /** A verdict panel's send-backs, bounded by its own `maxLoops`. */ panel?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
+  /**
+   * Who each gate was routed to (server/utils/smeDirectory.ts), oldest first.
+   * One entry per gate that fired; a gate that fires again after a send-back
+   * gets a new entry. Absent on an instance with no SME directory configured,
+   * which is every instance until someone fills `owners.product_sme`.
+   */
+  smeAssignments?: SmeAssignment[]
   /** Agent-raised send-backs, oldest first. See SendBack. */
   sendBacks?: SendBack[]
   /**
@@ -462,6 +477,13 @@ export interface WorkflowRun {
      * workflow that never said.
      */
     role?: Role
+    /**
+     * GitHub login of the person this gate was routed to, copied from the
+     * matching `smeAssignments` entry so the Home list and notifications can
+     * name a person without a second lookup. A courtesy, like `role` is an
+     * authorisation: anyone the role allows may still answer.
+     */
+    assignee?: string
     /** An approval raised by the runner itself: the budget is spent and continuing
      *  grants another allowance, or a step has spent its send-backs and whether to
      *  grant one more is the developer's call, or a step handed the run to a
@@ -614,6 +636,12 @@ export interface WorkflowRun {
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
   ci?: RunCi
+  /**
+   * The CI poller saw this run's pull request merge, and what it did about it:
+   * started Runbook V (`runId`), or could not (`reason`). Written once; its
+   * presence is what stops the poller starting a second verification.
+   */
+  verification?: { pr: string, mergedAt: number, runId?: string, reason?: string }
   /** Pull requests whose product reviewers have been asked to review, by URL: asked once each. */
   reviewRequested?: string[]
   /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */
@@ -648,6 +676,21 @@ export interface WorkflowRun {
   /** Random id of the server process that owns this run. In a container every
    *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
   bootId?: string
+  /**
+   * Where this run's steps ran, when not on the host: the sandbox image, the
+   * image id Docker reported when the run started, and the egress profile in
+   * force (server/utils/runner/). Decided once at start and recorded here so a
+   * later reader knows what the run's Claude Code process could reach. Absent
+   * means every step ran on the host, which is the default.
+   */
+  sandbox?: { image: string, digest?: string, egressProfile: string }
+  /**
+   * A person continued this run past the daily spend cap (server/utils/runEvents.ts's
+   * breaker): the queue may launch it although the cap is still reached. Set
+   * by continueRun on a queued run whose question is the cap's; never on a run
+   * that was not held.
+   */
+  spendCapWaived?: boolean
   /** Set on a run that tests one step of another run. Never set on a real run. See TestOf. */
   testOf?: TestOf
   /** The runner arms nothing after this step and settles the run when it settles. Set on test runs. */

@@ -81,7 +81,7 @@ function replay() {
           </span>
           <span class="flex items-center gap-1.5 t-small text-label truncate">
             <UIcon :name="STEP_KIND_ICON[kind]" class="size-3.5 shrink-0" />
-            {{ STEP_KIND_LABEL[kind] }}<template v-if="kind === 'agent'"> · {{ step.agentSlug }}</template>
+            {{ STEP_KIND_LABEL[kind] }}<template v-if="kind === 'agent'"> · {{ step.agentSlug }}</template><template v-else-if="kind === 'panel'"> · {{ wf?.panel?.members?.length ?? 0 }} {{ (wf?.panel?.members?.length ?? 0) === 1 ? 'member' : 'members' }}</template>
             <template v-if="wf?.monitorSlug"> · Check</template>
             <template v-if="step.status === 'skipped' && step.skipReason"> · skipped: {{ step.skipReason }}</template>
           </span>

@@ -1,4 +1,5 @@
 import { fromStack, stepIdsOf, toStack, type StackBlock, type StackNode } from './workflowStack.ts'
+import { DEFAULT_PANEL_BUDGET_TOKENS, DEFAULT_PANEL_MAX_LOOPS, PANEL_AGENT_SLUG } from './verdictPanel.ts'
 
 /**
  * The edits the stack builder can make. Every function returns a new array and
@@ -210,7 +211,7 @@ export function canSave<T extends StackNode>(blocks: StackBlock[], steps: T[]): 
   }
 }
 
-export type ActionKind = 'agent' | 'jira' | 'jira-create' | 'notify' | 'loop'
+export type ActionKind = 'agent' | 'jira' | 'jira-create' | 'notify' | 'loop' | 'panel'
 
 /** The runner-executed step kinds and the agent slug each is stored under. */
 export const ACTION_AGENT: Record<Exclude<ActionKind, 'agent'>, string> = {
@@ -218,6 +219,7 @@ export const ACTION_AGENT: Record<Exclude<ActionKind, 'agent'>, string> = {
   'jira-create': 'sdlc-jira-creator',
   'notify': 'sdlc-notifier',
   'loop': 'sdlc-auto-dispatcher',
+  'panel': PANEL_AGENT_SLUG,
 }
 
 export const ACTION_LABEL: Record<ActionKind, string> = {
@@ -226,15 +228,18 @@ export const ACTION_LABEL: Record<ActionKind, string> = {
   'jira-create': 'Create Jira tickets',
   'notify': 'Post to a channel',
   'loop': 'Loop over items',
+  'panel': 'Verdict panel',
 }
 
 export interface NewStep {
   id: string
   agentSlug: string
   label: string
+  kind?: 'panel'
   jira?: { action?: 'create' }
   notify?: { channel: string }
   triggerWorkflow?: Record<string, never>
+  panel?: { members: { agentSlug: string, criterion?: string }[], budgetTokens: number, maxLoops: number }
 }
 
 /** `label` names an agent step (the agent's display name); the slug stands in without one. */
@@ -248,5 +253,8 @@ export function newStep(kind: ActionKind, opts: { agentSlug?: string, id?: strin
   if (kind === 'jira') return { ...base, jira: {} }
   if (kind === 'jira-create') return { ...base, jira: { action: 'create' } }
   if (kind === 'notify') return { ...base, notify: { channel: '' } }
+  // A panel starts with the shipped three reviewers; the builder has no member
+  // editor yet, so the defaults are the ones Runbook A ships with.
+  if (kind === 'panel') return { ...base, kind: 'panel', panel: { members: [{ agentSlug: 'sdlc-panel-verifier' }, { agentSlug: 'sdlc-skeptic' }, { agentSlug: 'sdlc-specialist-security' }], budgetTokens: DEFAULT_PANEL_BUDGET_TOKENS, maxLoops: DEFAULT_PANEL_MAX_LOOPS } }
   return { ...base, triggerWorkflow: {} }
 }

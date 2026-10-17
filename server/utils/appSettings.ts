@@ -20,12 +20,76 @@ export interface AgentManagerSettings {
     defaultProject?: string
     /** Appended as "For vis: <name>" on a posted or rendered comment. */
     forVisName?: string
+    /**
+     * Pipeline facts to Jira field names, e.g. `{ "agentStage": "Agent Stage" }`.
+     * A Jira step with `stage` sets that field when the map names it; without
+     * the entry, the stage goes on the ticket as a comment instead.
+     */
+    fieldMap?: Record<string, string>
   }
   gates?: {
     /** A later gate takes a person's earlier approval instead of asking again (Dev Done → PR step → QA Done; see shared/utils/gateCarryOver.ts). Default true. */
     carryEarlierApproval?: boolean
   }
+  /**
+   * SME routing (server/utils/smeDirectory.ts). All optional; with nothing
+   * here and no `owners.product_sme` in the registry, no gate is routed to
+   * anyone and the app behaves exactly as before.
+   */
+  sme?: {
+    /** Open gates one person may hold before routing moves on. Default 4. */
+    wipCap?: number
+    /** Who an unanswered gate escalates to after 24h, by registry product key. */
+    podLeads?: Record<string, string>
+  }
+  /**
+   * Jira custom-field ids by logical name (server/utils/jiraFieldSync.ts), e.g.
+   * `{ agentStage: 'customfield_10234' }`. A name with no id is never written.
+   */
+  jiraFieldMap?: Partial<Record<JiraLogicalField, string>>
+  /** Shared secret the signed webhook intake (POST /api/v1/intake) checks X-Alepo-Signature against. Unset: the route refuses every call. */
+  intakeSecret?: string
+  /** The workflow an accepted intake starts. Unset: intakes are recorded and nothing starts. */
+  intakeWorkflow?: string
+  /**
+   * Where a step's Claude Code process runs (server/utils/runner/index.ts):
+   * 'host' (default, unchanged behaviour), 'sandbox' (every step in a
+   * container), or 'policy' (the risk policy's `sandbox` column decides).
+   * AGENT_RUNNER_MODE overrides.
+   */
+  runnerMode?: 'host' | 'sandbox' | 'policy'
+  /** The sandbox container's image and limits (server/utils/runner/sandbox.ts). */
+  sandbox?: {
+    image?: string
+    cpus?: string
+    memory?: string
+    pidsLimit?: number
+    /** A name for the egress arrangement in force, recorded on each sandboxed run; see engineering/docs/runner.md. */
+    egressProfile?: string
+  }
+  /**
+   * The daily spend circuit breaker (server/utils/runEvents.ts): USD this
+   * instance may spend on runs per UTC day before new runs queue on a budget
+   * question, and optional per-product caps keyed by product name.
+   * AGENT_DAILY_SPEND_USD_CAP overrides the instance figure. Absent: no cap.
+   */
+  dailySpendUsdCap?: number
+  dailySpendUsdCapByProduct?: Record<string, number>
+  /** This instance's name in exported telemetry (the `pod` tag). AGENT_MANAGER_POD overrides. */
+  pod?: string
 }
+
+/** The fields the Jira sync knows how to fill. */
+export type JiraLogicalField =
+  | 'agentStage' | 'riskClass' | 'changeType' | 'product' | 'impactedRepos'
+  | 'agentSession' | 'evidenceManifest' | 'smeMinutes'
+  | 'codeCommitted' | 'ciApproved' | 'codeReviewed' | 'atddReviewed'
+
+export const JIRA_LOGICAL_FIELDS: JiraLogicalField[] = [
+  'agentStage', 'riskClass', 'changeType', 'product', 'impactedRepos',
+  'agentSession', 'evidenceManifest', 'smeMinutes',
+  'codeCommitted', 'ciApproved', 'codeReviewed', 'atddReviewed',
+]
 
 /**
  * The precedence rule, in one place: an environment variable set to a

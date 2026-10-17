@@ -3,6 +3,8 @@ import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { auditDecision } from '../../../utils/auditLog'
+import { minutesOf } from '../../../utils/decisionMinutes'
 
 /**
  * Refuse at a gate.
@@ -28,7 +30,7 @@ import { requireGateRole } from '../../../utils/gateRole'
 export default defineEventHandler(async (event) => {
   await requireCapability(event, 'answerGate')
   const id = getRouterParam(event, 'id')!
-  const body = await readBody<{ note?: string }>(event).catch(() => ({} as { note?: string }))
+  const body = await readBody<{ note?: string, minutes?: number }>(event).catch(() => ({} as { note?: string, minutes?: number }))
   const note = body?.note?.trim()
   if (!note) {
     throw createError({ statusCode: 400, message: 'Say why you are sending this back; the reason is the point of the gate.' })
@@ -46,7 +48,7 @@ export default defineEventHandler(async (event) => {
   const step = before.steps.find(s => s.stepId === before.question!.stepId)
   // Built from `before`, which still has the question stopRun is about to make
   // unreachable. Carried onto the stopped run below rather than saved twice.
-  const decision = recordDecision(before, 'rejected', user?.login ?? 'a reviewer', note)
+  const decision = recordDecision(before, 'rejected', user?.login ?? 'a reviewer', note, undefined, minutesOf(body))
   const run = await stopRun(id)
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
   if (decision) run.decisions = [...(run.decisions ?? []), decision]
@@ -55,5 +57,6 @@ export default defineEventHandler(async (event) => {
   // crashed one on the run page and in the record. Attribute it instead.
   run.error = `Rejected at "${step?.label ?? before.question.stepId}" by ${user?.login ?? 'a reviewer'}: ${note}`
   await saveRun(run)
+  if (decision) await auditDecision(run, decision)
   return run
 })

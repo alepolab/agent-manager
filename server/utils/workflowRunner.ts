@@ -13,7 +13,9 @@ import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps,
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, productByRepo, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
-import { onRunTransition } from './notify.ts'
+import { onRunTransition, notifyRunMessage } from './notify.ts'
+import { assignOpenGate } from './smeDirectory.ts'
+import { syncJiraFieldsOnTransition } from './jiraFieldSync.ts'
 import { envForUser } from './users.ts'
 import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
@@ -56,8 +58,14 @@ import { carriedDecision, earlierApprovalFor } from '../../shared/utils/gateCarr
 import { carriesEarlierApproval } from './appSettings.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/runHistory.ts'
+import { isPanelStep, PANEL_AGENT_SLUG, uncachedTokens, type PanelConfig } from '../../shared/utils/verdictPanel.ts'
+import { runPanel } from './panelStep.ts'
+import { recordRunEvent } from './gateRecords.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
+import { appendAudit } from './auditLog.ts'
+import { decideRunner } from './runner/index.ts'
+import { runEvents, otelAttributesFor, spendCapHit } from './runEvents.ts'
 import type { ProductMatch, WorkflowRun, RunDecision, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
 
 /** The step whose drafts the duplicate check marks before, and holds after. */
@@ -108,7 +116,7 @@ interface WorkflowLike {
   group?: string
   /** See Workflow.notifyChannel - where this workflow's run transitions are announced. */
   notifyChannel?: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[], kind?: 'agent' | 'panel', panel?: PanelConfig, /** See WorkflowStep.records. */ records?: string, gateRole?: Role }[]
 }
 
 export interface StartRunOpts {
@@ -192,6 +200,8 @@ interface Live {
   coldRetried?: Set<string>
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
+  /** A verdict panel spent more than its own token budget; runWave pauses and asks before the run goes on. */
+  panelBudget?: { stepId: string, spent: number, cap: number }
   /** Steps whose `runWhen` condition is waived for one evaluation, because an
    *  operator restarted them by name. Same concession as the extra visit a
    *  restart grants: a predicate guards automatic scheduling, not a person's
@@ -423,6 +433,30 @@ async function afterUnwound(runId: string): Promise<void> {
   await next.catch(() => {})
 }
 
+/**
+ * What publish() last saw of each run, so the gate and settle events fire on
+ * the TRANSITION and not on every publish of the same state. In memory only:
+ * a restart re-emits at most one gate.requested for a run already waiting,
+ * which a consumer deduplicates on (run_id, step_id, asked_at).
+ */
+const lastSeen = new Map<string, { status: WorkflowRun['status'], askedAt?: number }>()
+
+function emitTransitionEvents(run: WorkflowRun): void {
+  if (isTestRun(run)) return
+  const prev = lastSeen.get(run.id)
+  const waiting = isWaitingOnAPerson(run.status) && !!run.question
+  const wasWaiting = prev ? isWaitingOnAPerson(prev.status) && prev.askedAt !== undefined : false
+  if (waiting && (!wasWaiting || prev?.askedAt !== run.question!.askedAt)) void runEvents.gateRequested(run)
+  if (wasWaiting && !waiting && prev?.askedAt !== undefined && prev.askedAt !== run.question?.askedAt) {
+    // The decision that closed it, when one was recorded after the question was asked.
+    const decision = [...(run.decisions ?? [])].reverse().find(d => d.at >= prev!.askedAt!)
+    void runEvents.gateAnswered(run, { by: decision?.by ?? run.startedBy, verdict: decision?.verdict ?? 'continued', stepId: decision?.stepId, askedAt: prev.askedAt, at: decision?.at ?? Date.now() })
+  }
+  if (TERMINAL_STATUSES.includes(run.status) && prev?.status !== run.status) void runEvents.settled(run)
+  lastSeen.set(run.id, { status: run.status, askedAt: waiting ? run.question!.askedAt : undefined })
+  if (TERMINAL_STATUSES.includes(run.status)) lastSeen.delete(run.id)
+}
+
 async function publish(run: WorkflowRun) {
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -433,6 +467,7 @@ async function publish(run: WorkflowRun) {
   if (run.status === 'running') startRunClock(run)
   else settleRunClock(run)
   run.usage = computeUsage(run)
+  emitTransitionEvents(run)
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
     await saveRun(run)
@@ -526,7 +561,7 @@ async function publish(run: WorkflowRun) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
     // A test run tells no one: no Slack message, no channel notification.
-    if (!isTestRun(run)) onRunTransition(run)
+    if (!isTestRun(run)) { onRunTransition(run); syncJiraFieldsOnTransition(run) }
     // A settled run has given its slot back, so whatever is waiting in its
     // group can start. Here rather than in notify.ts, which cannot reach
     // startRun without an import cycle. Not awaited: the drain starts runs of
@@ -549,6 +584,17 @@ async function publish(run: WorkflowRun) {
         .then(() => mightHaveWaiting() ? drainRunQueue(launchQueuedRun) : 0)
         .catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
     }
+    // The ending, on the instance audit chain, for the same reason the
+    // teardown below is here: every terminal status passes this line. Once per
+    // run - a stopped run whose agent fails afterwards publishes 'stopped'
+    // twice - so the claim is a process-local set, like `starting`.
+    if (TERMINAL_STATUSES.includes(run.status) && !auditedEndings.has(run.id)) {
+      auditedEndings.add(run.id)
+      void appendAudit({
+        actor: 'runner', kind: 'run-end', ref: run.id,
+        payload: { ticket: run.ticketKey, workflow: run.workflowSlug, status: run.status, blastRadius: run.blastRadius, branch: run.branch, error: run.error },
+      })
+    }
     // A run with an outcome gives back the stacks it stood up and its worktree.
     // Here, where every ending passes - completed, failed and stopped alike -
     // rather than as a last workflow step, which a failed run never reaches.
@@ -559,7 +605,7 @@ async function publish(run: WorkflowRun) {
     if (TERMINAL_STATUSES.includes(run.status) && !isTestRun(run)) {
       const ended = run
       void teardownRun(ended)
-        .then(report => (report.stacks.length || report.worktree || report.images || report.endedRunImages || report.buildCache) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
+        .then(report => (report.stacks.length || report.worktree || report.images || report.endedRunImages || report.buildCache || report.sandbox) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
         .catch(err => log.warn('tearing a run down failed', { runId: ended.id, error: err instanceof Error ? err.message : String(err) }))
     }
     // A child of a joining parent has reached its outcome, so the parent may
@@ -582,6 +628,8 @@ async function publish(run: WorkflowRun) {
 // block until its children are done - which is a wait measured in whole
 // pipelines. It settles again, for real, when resumeJoinIfReady drives it on.
 const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'awaiting_review', 'joining', 'completed', 'failed', 'stopped']
+/** Runs whose ending publish() has already put on the audit chain. A restart clears the entry so the next ending is recorded too. */
+const auditedEndings = new Set<string>()
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
@@ -598,8 +646,8 @@ const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stop
  * found later with no automatic send-back at all. The Alepo review shares it:
  * it is a second look at the same approach, before anything is verified.
  */
-const reworkBucket = (agentSlug?: string): 'ci' | 'verification' | 'review' =>
-  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' || agentSlug === 'sdlc-alepo-review' ? 'review' : 'verification'
+const reworkBucket = (agentSlug?: string): 'ci' | 'verification' | 'review' | 'panel' =>
+  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' || agentSlug === 'sdlc-alepo-review' ? 'review' : agentSlug === PANEL_AGENT_SLUG ? 'panel' : 'verification'
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
@@ -1262,7 +1310,23 @@ export function parseAsk(output: string): string | null {
 
 const TEST_RUN_NOTE = 'This is a test run of one step. Do not push, open pull requests, post messages or change tickets; describe what you would do instead.'
 
+/**
+ * One step, plus its `step.finished` event. The event is emitted here, around
+ * the whole visit, rather than at each of executeNode's dozen exits: a step
+ * that is still `running` or `waiting` when the call returns has not finished
+ * (it asked a question, or was stopped mid-flight) and gets no event.
+ */
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
+  const before = recOf(run, id)?.visits ?? 0
+  try {
+    return await executeNodeVisit(l, run, id, override)
+  } finally {
+    const rec = recOf(run, id)
+    if (rec && rec.visits > before && rec.status !== 'running' && rec.status !== 'waiting' && rec.status !== 'pending') void runEvents.stepFinished(run, rec)
+  }
+}
+
+async function executeNodeVisit(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
   const step = stepOf(l, id)
   const rec = recOf(run, id)
   if (!step || !rec) return false
@@ -1298,7 +1362,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const stack = step.agentSlug === 'sdlc-stack-provisioner' && !run.stackProject ? await claimStack(run, true)
     : STACK_USING_AGENTS.test(step.agentSlug) && run.product ? await claimStack(run, false).catch(() => 'up' as const)
     : 'up'
-  const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
+  // A panel never resumes anything: each member is a fresh session of its own,
+  // and the implementer's session in particular must never reach it.
+  const resume = isPanelStep(step) ? undefined : (l.resumeFrom[id] ?? inheritedSession(l, run, id))
   delete l.resumeFrom[id]
   // A resumed session was told its stack once; if that stack went while the
   // run waited, it is told again.
@@ -1453,6 +1519,100 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     return true
   }
 
+  // A verdict panel is several agents, not one, and the runner is its chair:
+  // it briefs each member from the run's own artifacts and the registry (never
+  // from an earlier step's output), runs each in a fresh session, parses and
+  // validates each verdict, and turns the set into one CONTINUE or RETRY. A
+  // fail sends the run back to the implementation step with the findings, by
+  // the same hand-over an agent's PIPELINE-REWORK uses, bounded by the panel's
+  // own maxLoops (see carryOutRework). See server/utils/panelStep.ts.
+  if (isPanelStep(step)) {
+    const cfg = step.panel
+    const ac = new AbortController()
+    l.aborts.set(id, ac)
+    logLine(l, run, rec, `step started, visit ${rec.visits}`)
+    try {
+      if (!cfg) throw new Error(`panel step "${step.label}" has no panel configuration`)
+      const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+      const panel = await runPanel({
+        run, stepLabel: step.label, cfg, env: userEnv, signal: ac.signal,
+        callAgent: (slug, input, dir, opts) => agentCaller(slug, input, dir, opts),
+        logLine: line => logLine(l, run, rec, line),
+        onSession: (slug, sessionId, cwd) => {
+          // The latest member's session is the one the card links to; every
+          // member's own is in panel/<agentSlug>.json.
+          Object.assign(rec, { sessionId, sessionProject: cwd.replace(/[^A-Za-z0-9]/g, '-') })
+          void publish(run)
+          void import('./claudeCodeHistory.ts').then(m => m.setSessionName(sessionId, `${run.ticketKey ?? run.workflowSlug} · ${step.label} · ${slug} · run ${run.id.slice(0, 8)}`)).catch(() => {})
+        },
+      })
+      l.outputs[id] = panel.output
+      Object.assign(rec, { status: 'completed', output: panel.output, model: panel.model, usage: panel.usage, completedAt: Date.now() })
+      if (panel.overBudget) {
+        l.panelBudget = { stepId: id, spent: uncachedTokens([panel.usage]), cap: cfg.budgetTokens }
+      }
+      if (panel.verdict === 'pass') {
+        Object.assign(rec, { monitorVerdict: 'CONTINUE', monitorNote: panel.output })
+        recordCheck(rec, 'CONTINUE', panel.output)
+        markCompleted(l.graph, l.state, id)
+        run.interruptions = 0
+        run.authRetries = 0
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return true
+      }
+      // FAIL: the findings go back to the step that made the change.
+      Object.assign(rec, { monitorVerdict: 'RETRY', monitorNote: panel.output })
+      recordCheck(rec, 'RETRY', panel.output)
+      const target = panelReworkTarget(l, run, id, cfg)
+      if (!target) {
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', error: `The panel failed the change and no earlier step of this run can take the findings back: name one with panel.reworkTarget.` })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+      const instruction = `The verdict panel failed the change. Address every finding below, then end with your report; the panel sits again on the result.\n\n${panel.findings}`
+      const pending = l.rework
+      if (!pending) l.rework = { from: id, target: target.stepId, instruction }
+      else if (pending.target === target.stepId) pending.instruction += `\n\nAlso, from "${rec.label}": ${instruction}`
+      else pending.instruction += `\n\nAlso raised in the same wave, by "${rec.label}" against "${target.label}": ${instruction}`
+      logLine(l, run, rec, `panel failed the change; sending the run back to ${target.label}`)
+      log.info('panel sent the run back', () => ({ runId: run.id, stepId: id, target: target.stepId, failing: panel.results.filter(r => !r.verdict || r.verdict.verdict === 'fail').map(r => r.agentSlug) }))
+      markCompleted(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      // The same two environment faults an agent step hands to runWave.
+      if (!l.stopped && isAuthFailure(message)) {
+        l.state.visits[id] = refundVisit(l.state.visits[id])
+        l.state.status[id] = 'pending'
+        armNode(l.state, id)
+        Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+        l.authFailure ??= { stepId: id, message }
+        logLine(l, run, rec, `could not reach the model: ${message}`)
+        return true
+      }
+      const until = l.stopped ? null : quotaResetAt(message)
+      if (until) {
+        l.state.visits[id] = refundVisit(l.state.visits[id])
+        l.state.status[id] = 'pending'
+        armNode(l.state, id)
+        Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+        if (!l.quotaFailure || until > l.quotaFailure.until) l.quotaFailure = { stepId: l.quotaFailure?.stepId ?? id, message, until }
+        scheduleQuotaResume(until)
+        logLine(l, run, rec, `the model's quota is spent until ${new Date(until).toLocaleTimeString()}: ${message}`)
+        return true
+      }
+      markFailed(l.state, id)
+      Object.assign(rec, { status: 'failed', error: l.stopped ? 'Stopped by operator' : message, completedAt: Date.now() })
+      log.error('panel step failed', { runId: run.id, stepId: id, error: message })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return false
+    } finally {
+      l.aborts.delete(id)
+    }
+  }
+
   // A stack the runner claimed for this run needs no agent when it is healthy
   // and already runs this checkout's commit: the runner checks that and writes
   // the report itself, in seconds. Anything else is the agent's, told which
@@ -1497,7 +1657,15 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         logLine(l, run, rec, `duplicate check could not run: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    void runEvents.stepStarted(run, rec)
+    // Where the step's Claude Code process runs: decided once per run
+    // (finishRun) and recorded as run.sandbox; absent means the host. The tags
+    // ride into Claude Code's own telemetry as OTEL_RESOURCE_ATTRIBUTES.
+    const placement: Pick<AgentCallOptions, 'sandbox' | 'otelAttributes'> = {
+      otelAttributes: otelAttributesFor(run),
+      ...(run.sandbox && run.projectDir ? { sandbox: { runId: run.id, stepId: id, image: run.sandbox.image, budget: run.budget, repos: run.product?.repos } } : {}),
+    }
+    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...placement, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
@@ -1925,6 +2093,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     l.aborts.delete(id)
     l.steer.delete(id)
   }
+}
+
+/**
+ * The step a failing panel sends the run back to: the one `panel.reworkTarget`
+ * names by label, else the nearest earlier step whose agent makes changes
+ * (CHANGE_MAKERS), else the nearest earlier plain agent step. Null when there
+ * is none, which fails the panel step rather than sending the run nowhere.
+ */
+function panelReworkTarget(l: Live, run: WorkflowRun, panelId: string, cfg: PanelConfig): RunStep | null {
+  const at = run.steps.findIndex(s => s.stepId === panelId)
+  const earlier = run.steps.slice(0, Math.max(0, at)).reverse()
+  if (cfg.reworkTarget) {
+    const want = cfg.reworkTarget.trim().toLowerCase()
+    return run.steps.find(s => s.stepId !== panelId && (s.label.toLowerCase() === want || s.agentSlug.toLowerCase() === want)) ?? null
+  }
+  const plain = (s: RunStep) => { const w = stepOf(l, s.stepId); return !!w && !w.jira && !w.notify && !w.triggerWorkflow && !isPanelStep(w) }
+  return earlier.find(s => CHANGE_MAKERS.test(s.agentSlug)) ?? earlier.find(plain) ?? null
 }
 
 /**
@@ -2716,7 +2901,13 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // naming a completed step as what comes next reads as work still to do.
     run.nextStepIds = gated
     l.running = false
-    log.info('run waits for a person', { runId: run.id, stepId: gate, artifact })
+    // Who, by name. Null on an instance with no SME directory, in which case the
+    // gate reads exactly as it did. See server/utils/smeDirectory.ts.
+    const assigned = await assignOpenGate(run, { label, gateRole })
+    if (assigned && !artifact) {
+      run.question.text += ` Routed to @${assigned.assignee}${assigned.delegatedFrom ? ` (covering for @${assigned.delegatedFrom})` : ''}.`
+    }
+    log.info('run waits for a person', { runId: run.id, stepId: gate, artifact, assignee: assigned?.assignee })
     await publish(run)
     if (!artifact) void ensureChangeBrief(run)
     return run
@@ -2817,6 +3008,29 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     l.widen = undefined
     l.rework = undefined
   }
+
+  // A verdict panel spent more than its own budget. The verdict stands - the
+  // members that sat have spoken - but the run pauses before it spends more,
+  // exactly as the run budget does, and a send-back the panel raised waits on
+  // the record until the person continues (see deferredRework at the top).
+  if (l.panelBudget && !isTestRun(run)) {
+    const { stepId, spent, cap } = l.panelBudget
+    l.panelBudget = undefined
+    if (l.rework && !l.waiting) { run.deferredRework = l.rework; l.rework = undefined }
+    const fresh = defaultBudget()
+    run.status = 'paused'
+    run.question = {
+      stepId, kind: 'approval', reason: 'budget', askedAt: Date.now(),
+      text: `"${stepOf(l, stepId)?.label ?? stepId}" spent ${spent.toLocaleString()} uncached tokens over its ${cap.toLocaleString()} token panel budget. Continue to accept the spend and go on (the run gets another ${fresh.maxTokens.toLocaleString()} tokens), or stop the run here.`,
+    }
+    run.currentStepIds = []
+    run.nextStepIds = run.deferredRework ? [run.deferredRework.target] : readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
+    l.running = false
+    log.warn('run paused on the panel budget', { runId: run.id, stepId, spent, cap })
+    await publish(run)
+    return run
+  }
+  l.panelBudget = undefined
 
   // A step is waiting on the operator: nothing else starts until they answer.
   if (l.widen) {
@@ -3346,6 +3560,14 @@ async function beginRun(
     // findRunInWorkspace can see it, so the reservation has done its job.
     starting.delete(workspace)
   }
+  // The instance audit chain (auditLog.ts): one line per run that began, here
+  // because every start path - direct, watch, schedule, child, queue drain -
+  // passes through beginRun once the record exists. Not awaited: an audit
+  // write must never delay or fail a start, and appendAudit never throws.
+  void appendAudit({
+    actor: run.startedBy ?? 'runner', kind: 'run-start', ref: run.id,
+    payload: { ticket: run.ticketKey, workflow: run.workflowSlug, watch: run.watch, projectDir: run.projectDir, baseCommit: run.baseCommit },
+  })
 
   // THE SPLIT, and it is the same instant the reservation above is released:
   // the record is on disk as `running`, so inFlightForGroup counts it and the
@@ -3399,6 +3621,18 @@ async function finishRun(workflow: WorkflowLike, run: WorkflowRun): Promise<Work
     log.warn('run failed preflight; no agent ran', { runId: run.id, reason: blocked })
     return run
   }
+
+  // Where this run's steps run. Decided once, here, with the classification
+  // intake may already have given the run (resolveStart reads meta.json), and
+  // recorded on the run so every step and every later reader agree.
+  // A test run stays on the host: it re-runs one step on a throwaway branch.
+  if (!isTestRun(run)) {
+    const { choice, sandbox } = await decideRunner(run)
+    run.sandbox = sandbox
+    if (choice.kind === 'sandbox' || choice.reason.includes('falling back')) run.preflight?.checks.push({ name: 'runner', level: choice.kind === 'sandbox' ? 'ok' : 'warn', detail: choice.reason })
+    await saveRun(run)
+  }
+  void runEvents.started(run)
 
   const graph = buildGraph(workflow.steps)
   const l: Live = {
@@ -3551,6 +3785,14 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   if (!run) return 'failed'
   if (run.status !== 'queued') return 'deferred'
   if (run.parked) return launchParked(run)
+  // Held by the daily spend cap: it waits, costing no slot, until the cap no
+  // longer applies (a new UTC day, a raised cap) or a person waived it.
+  if (run.question?.reason === 'budget' && !run.spendCapWaived) {
+    const still = spendCapHit(await listRuns(), run.product?.name)
+    if (still) return 'deferred'
+    run.question = undefined
+    await saveRun(run)
+  }
 
   const wf = await loadWorkflowSteps(run.workflowSlug)
   if (!wf) return fail(run, `the workflow "${run.workflowSlug}" was deleted while this run waited for a slot`)
@@ -3611,7 +3853,22 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
  * ignoring the cap means never waiting for it, not never counting against it.
  */
 export async function startOrQueue(opts: StartRunOpts): Promise<{ run: WorkflowRun, queued: boolean }> {
-  const { workspace } = await resolveStart(opts)
+  const resolved = await resolveStart(opts)
+  const { workspace } = resolved
+  // The daily spend circuit breaker: over the cap, a new run is queued with a
+  // budget question rather than started, and a person is told. Checked here,
+  // on the automated path only - a person clicking Start is present and sees
+  // the cap on the run page; a watch at 2am is not. Checked before admit() so
+  // the group's slot is not taken by a run that will not work.
+  const capHit = spendCapHit(await listRuns(), resolved.product?.name)
+  if (capHit) {
+    const run = await enqueueRun(opts)
+    run.question = { stepId: run.steps[0]?.stepId ?? '', kind: 'approval', reason: 'budget', askedAt: Date.now(), text: `${capHit} The run waits in the queue until tomorrow (UTC), or until somebody continues it past the cap.` }
+    await publish(run)
+    log.warn('run held by the daily spend cap', { runId: run.id, workflowSlug: run.workflowSlug, product: resolved.product?.name ?? '(none)', reason: capHit })
+    void notifyRunMessage(run, `${run.workflowName}: HELD — ${capHit}`)
+    return { run, queued: true }
+  }
   return admit({
     group: opts.workflow.group?.trim() || DEFAULT_GROUP_ID,
     // Refuses when anything is already AIMED at this directory, queued runs
@@ -3793,6 +4050,18 @@ export async function continueRun(
   const grantApproval = opts.grantApproval ?? true
   if (!opts.admitted) {
     const stored = await getRun(runId)
+    // A run the daily spend cap is holding in the queue: continuing is the
+    // person's say-so to run it past the cap. It stays queued and takes its
+    // turn through the drain like any other; only the hold is lifted.
+    if (stored?.status === 'queued' && stored.question?.reason === 'budget' && !stored.spendCapWaived) {
+      stored.spendCapWaived = true
+      stored.question = undefined
+      if (opts.decision) stored.decisions = [...(stored.decisions ?? []), opts.decision]
+      await saveRun(stored)
+      log.info('daily spend cap waived for a queued run', { runId, by: opts.decision?.by ?? '(unknown)' })
+      void drainRunQueue(launchQueuedRun).catch(err => log.warn('draining the run queue failed', { runId, error: err instanceof Error ? err.message : String(err) }))
+      return stored
+    }
     if (stored && (stored.status === 'paused' || stored.status === 'awaiting_review') && !live.get(runId)?.running) {
       // Refused before it is recorded, exactly as the unparked path refuses it.
       const q = stored.question
@@ -3900,7 +4169,16 @@ export async function continueRun(
     // approval would override the decision it was supposed to carry out.
     // Without it, the condition is re-tested and the step is skipped by the
     // ordinary path, with the ordinary sentence naming the file.
-    else if (grantApproval) l.approved.add(run.question.stepId)
+    else if (grantApproval) {
+      l.approved.add(run.question.stepId)
+      // A gate that records an event (Runbook V's G5 records verification.pass)
+      // records it the moment a person approves it: the approval is the fact,
+      // and the Jira step that follows is how the ticket hears about it.
+      const gated = stepOf(l, run.question.stepId)
+      if (gated?.records) {
+        await recordRunEvent(run, { event: gated.records, stepId: gated.id, label: gated.label, by: opts.decision?.by ?? run.startedBy ?? 'a reviewer', ...(note?.trim() ? { note: note.trim() } : {}) })
+      }
+    }
     if (note?.trim() && run.question.stepId) l.notes[run.question.stepId] = note.trim()
   } else if (note?.trim()) {
     l.nextNote = note.trim()
@@ -4088,10 +4366,12 @@ async function carryOutRework(l: Live, run: WorkflowRun, w: { from: string, targ
   // counted against the send-backs: nothing was sent back.
   if (blockedBy(l.graph, l.state, w.target).length) return refuseHandOver(l, run, { from: w.from, target: w.target, instruction: w.instruction })
   const bucket = reworkBucket(raiser?.agentSlug)
+  // A panel bounds its own loops: maxLoops send-backs, then a person.
+  const limit = bucket === 'panel' && raiser && isPanelStep(raiser) && raiser.panel ? raiser.panel.maxLoops : REWORK_LIMIT
   run.reworks = (run.reworks ?? 0) + 1
   const by = (run.reworksBy ??= {})
   const spent = by[bucket] = (by[bucket] ?? 0) + 1
-  if (spent > REWORK_LIMIT) {
+  if (spent > limit) {
     // Paused and asked, not failed. The branch, its commits and an open PR are
     // all still good, and one more attempt is usually the right answer - so
     // throwing the run away here costs far more than asking does. Deliberately
@@ -4122,7 +4402,7 @@ async function carryOutRework(l: Live, run: WorkflowRun, w: { from: string, targ
   recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${raiser?.agentSlug ?? w.from}` })
   await publish(run)
   log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, bucket, spent })
-  return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${REWORK_LIMIT}): ${w.instruction}`, run.startedBy, { fromRunner: true })
+  return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${limit}): ${w.instruction}`, run.startedBy, { fromRunner: true })
 }
 
 /** The forward predecessors of `stepId` that have not completed: what stops it being armed. None for an entry. */
@@ -4508,6 +4788,8 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.status = 'running'
   run.error = undefined
   run.endedAt = undefined
+  // A restarted run will end again, and that ending is a new fact for the chain.
+  auditedEndings.delete(run.id)
   // A question the restarted step asked before is answered by the restart
   // itself; left on the record it showed "Waiting for you" on a running run
   // that nobody could answer.

@@ -380,7 +380,10 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 // ── Runbook A: every step monitored, ids stable across syncs ─────────────
 {
   const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
-  assert.ok(runbook.steps.every(s => s.monitorSlug === 'sdlc-step-monitor'), 'every Runbook A step is monitored')
+  // A panel is its own monitor: the runner aggregates its members' verdicts
+  // into the step's CONTINUE or RETRY, so a monitor over it would judge a
+  // judgement. Every other step is monitored.
+  assert.ok(runbook.steps.every(s => s.kind === 'panel' || s.monitorSlug === 'sdlc-step-monitor'), 'every Runbook A step is monitored')
   const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
   const first = materializeTemplateSteps(runbook, slugs)
   const again = materializeTemplateSteps(runbook, slugs, first.map(s => s.id))
@@ -790,7 +793,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
 //    unreachable and the run would jump straight to the terminal one.
 {
   const runbook = WORKFLOW_TEMPLATES.find(t => t.id === 'runbook-a-jira-to-diff')
-  const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))
+  const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : []), ...(s.panel?.members ?? []).map(m => [m.agentSlug, m.agentSlug])]))
   const steps = materializeTemplateSteps(runbook, slugs)
   const byLabel = Object.fromEntries(steps.map(s => [s.label, s]))
   const id = label => byLabel[label].id
@@ -799,11 +802,23 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.equal(trackers.length, 5, 'In Progress, Dev Done, Ready for QA, QA In Progress, QA Done')
   assert.equal(new Set(trackers.map(s => s.id)).size, 5, 'five steps sharing one agent template are still five distinct steps')
 
-  assert.deepEqual(byLabel['Implement Fix'].next, [id('Code Review')], 'the fix is reviewed before anything else')
-  assert.equal(byLabel['Code Review'].agentSlug, 'sdlc-ce-review')
-  assert.deepEqual(byLabel['Code Review'].next, [id('Alepo Review')], 'Code Review hands to the Alepo review')
-  assert.equal(byLabel['Alepo Review'].agentSlug, 'sdlc-alepo-review')
-  assert.deepEqual(byLabel['Alepo Review'].next, [id('Jira: Dev Done')], 'and the reviewed fix hands to Jira, not straight to verification')
+  assert.deepEqual(byLabel['Implement Fix'].next, [id('Verdict panel')], 'the fix is judged by the panel before anything else')
+  const panel = byLabel['Verdict panel']
+  assert.equal(panel.kind, 'panel', 'the panel is a panel step, not an agent')
+  assert.equal(panel.agentSlug, 'sdlc-verdict-panel', 'stored under the placeholder slug the runner never calls')
+  assert.ok(AGENT_TEMPLATES.find(a => a.id === 'sdlc-verdict-panel'), 'the placeholder agent template ships, so team sync seeds the slug')
+  assert.deepEqual(panel.panel.members.map(m => m.agentSlug), ['sdlc-panel-verifier', 'sdlc-skeptic', 'sdlc-specialist-security'],
+    'verifier, skeptic and security specialist sit; the protocol specialist is seated by the runner on protocol and money changes')
+  for (const m of [...panel.panel.members.map(m => m.agentSlug), 'sdlc-specialist-protocol']) {
+    assert.ok(AGENT_TEMPLATES.find(a => a.id === m), `${m} is a shipped agent template`)
+  }
+  assert.equal(panel.panel.maxLoops, 2, 'two automatic send-backs, then a person - the same count the standing rules teach')
+  assert.ok(panel.panel.budgetTokens > 0)
+  assert.equal(panel.monitorSlug, undefined, 'the panel is its own monitor')
+  assert.deepEqual(panel.next, [id('Jira: Dev Done')], 'and the judged fix hands to Jira, not straight to verification')
+  // The old reviewers still ship: runs in flight and Runbooks B and C name them.
+  for (const a of ['sdlc-ce-review', 'sdlc-alepo-review']) assert.ok(AGENT_TEMPLATES.find(t => t.id === a), `${a} still ships for existing runs`)
+  assert.ok(!runbook.steps.some(s => s.label === 'Code Review' || s.label === 'Alepo Review'), 'Runbook A no longer carries the two review steps')
   assert.deepEqual(byLabel['Jira: Dev Done'].next, [id('Jira: Ready for QA')])
   assert.deepEqual(byLabel['Jira: Ready for QA'].next, [id('Jira: QA In Progress')])
   assert.deepEqual([...byLabel['Jira: QA In Progress'].next].sort(), [id('Verify + Regression'), id('Browser Trace'), id('Security Review')].sort(),
@@ -837,7 +852,7 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.notEqual(resynced.find(s => !unchanged(s)).id, byLabel['Jira: Ready for QA'].id,
     'and only the step it never had gets a new one')
   const rByLabel = Object.fromEntries(resynced.map(s => [s.label, s]))
-  assert.deepEqual(rByLabel['Alepo Review'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
+  assert.deepEqual(rByLabel['Verdict panel'].next, [rByLabel['Jira: Dev Done'].id], 'edges follow the kept ids')
 }
 
 // Runbook B reviews the feature the same way, before verification fans out.
@@ -882,17 +897,17 @@ const slugs = { alpha: 'agent-alpha', beta: 'agent-beta', gamma: 'agent-gamma' }
   assert.match(AGENT_TEMPLATES.find(a => a.id === 'sdlc-ce-review').body, /A fix you commit changes the change[^\n]*rewrite `change-brief\.json`/)
 }
 
-// The Alepo review: straight after Code Review in all three runbooks, reading
-// Alepo's own review skill from disk, and handing judgment calls to the person
-// at the next gate instead of stopping the run for them.
+// The Alepo review: straight after Code Review in Runbooks B and C (Runbook A
+// replaced the pair with the verdict panel), reading Alepo's own review skill
+// from disk, and handing judgment calls to the person at the next gate instead
+// of stopping the run for them.
 {
   const { toStack } = await import('../shared/utils/workflowStack.ts')
   const after = {
-    'runbook-a-jira-to-diff': ['Jira: Dev Done'],
     'runbook-b-feature-request-to-pr': ['Verify + Regression', 'Browser Trace', 'Security Review'],
     'runbook-c-ce-ticket-to-pr': ['Update Stack'],
   }
-  const any = new Set(Object.keys(after).flatMap(id => [...labelsOf(id)]))
+  const any = new Set([...Object.keys(after), 'runbook-a-jira-to-diff'].flatMap(id => [...labelsOf(id)]))
   for (const [templateId, nextLabels] of Object.entries(after)) {
     const runbook = WORKFLOW_TEMPLATES.find(t => t.id === templateId)
     const slugs = Object.fromEntries(runbook.steps.flatMap(s => [[s.agentTemplateId, s.agentTemplateId], ...(s.monitorSlug ? [[s.monitorSlug, s.monitorSlug]] : [])]))

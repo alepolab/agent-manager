@@ -60,7 +60,8 @@ export function buildNotifications(
 ): NotificationItem[] {
   const gates: NotificationItem[] = runs
     // A quota pause resumes itself at the reset time: nobody owes it a decision.
-    .filter(r => !r.dismissed && isWaitingOnAPerson(r.status) && r.question?.reason !== 'quota')
+    // A run the daily spend cap holds in the queue asks too: continue it past the cap, or leave it until tomorrow.
+    .filter(r => !r.dismissed && ((isWaitingOnAPerson(r.status) && r.question?.reason !== 'quota') || (r.status === 'queued' && r.question?.reason === 'budget')))
     .map(r => ({
       kind: 'gate',
       id: `run:${r.id}`,
@@ -70,6 +71,10 @@ export function buildNotifications(
       ask: gateAsk(r),
       askedAt: r.question?.askedAt ?? r.startedAt,
       role: r.question?.role,
+      ...optional('assignee', r.question?.assignee),
+      // Routed to a named person: theirs first, by name, before the role rule.
+      // Not exclusive, since the role still decides who MAY answer, so a gate
+      // routed to someone else stays `mine` for anyone the role allows.
       mine: gateIsMine(r.question?.role, viewer),
       blastRadius: r.blastRadius,
       review: r.status === 'awaiting_review',
