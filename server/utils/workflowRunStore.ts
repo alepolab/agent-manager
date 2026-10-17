@@ -144,6 +144,7 @@ export async function createRun(input: NewRunInput): Promise<WorkflowRun> {
     parameters: input.parameters,
     product: input.product,
     startedBy: input.startedBy,
+    ...(input.machine ? { machine: input.machine } : {}),
     parentRunId: input.parentRunId,
     baseCommit: input.baseCommit,
     steps: input.steps.map(s => ({
@@ -327,8 +328,10 @@ export async function loadWorkflowSteps(slug: string): Promise<{ slug: string, n
  *  counts against, and `notifyChannel` is who hears about it - absent, it falls
  *  through to a channel literally named `default`. newRunInput threads both
  *  correctly, so the only way to lose them is at the call site. */
-export function toWorkflowLike<T extends { slug: string, name: string, group?: string, notifyChannel?: string, steps: any[] }>(
+export function toWorkflowLike<T extends { slug: string, name: string, group?: string, notifyChannel?: string, machineId?: string, steps: any[] }>(
   wf: T,
-): { slug: string, name: string, group?: string, notifyChannel?: string, steps: any[] } {
-  return { slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, steps: wf.steps }
+): { slug: string, name: string, group?: string, notifyChannel?: string, machineId?: string, steps: any[] } {
+  // Spread rather than listed: a workflow saved before machines existed has no
+  // key, and the shape test compares the result key for key.
+  return { slug: wf.slug, name: wf.name, group: wf.group, notifyChannel: wf.notifyChannel, ...(wf.machineId !== undefined ? { machineId: wf.machineId } : {}), steps: wf.steps }
 }

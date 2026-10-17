@@ -17,6 +17,8 @@ import { onRunTransition } from './notify.ts'
 import { envForUser } from './users.ts'
 import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
+import { machineForRun, getMachine } from './machines.ts'
+import { prepareRemoteStep } from './remoteAgent.ts'
 import { captureBaseline, headCommitTime } from './gitFacts.ts'
 import { baseBranchFor, describeBranchChoice } from './branchPolicy.ts'
 import { artifactsWritable, branchExists, checkoutDirFor, cloneRepo, ensureRunBranch, ensureTestWorktrees, findCheckout, isWorkingCheckout, keepAgentDirOutOfGit, remoteBranchExists, removeTestWorktrees, restoreRunWorktrees, worktreeDirFor } from './workspace.ts'
@@ -108,6 +110,8 @@ interface WorkflowLike {
   group?: string
   /** See Workflow.notifyChannel - where this workflow's run transitions are announced. */
   notifyChannel?: string
+  /** See Workflow.machineId - the registered machine this workflow's runs execute on. */
+  machineId?: string
   steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
 }
 
@@ -137,6 +141,8 @@ export interface StartRunOpts {
    *  dispatch step reports it against its own entry. Threaded straight to
    *  createRun, like `watch`. */
   parameters?: Record<string, string>
+  /** See WorkflowRun.machine - a machine's id, or `local`, chosen at the start; absent lets the workflow and the instance default decide. */
+  machineId?: string
 }
 
 /** In-memory scheduling state, keyed by run id. Lost on restart — which is
@@ -1497,7 +1503,15 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         logLine(l, run, rec, `duplicate check could not run: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    // The step on its machine, when the run has one: the checkout and the
+    // evidence directory are carried over first, and back in the `finally`
+    // below whatever the step did - a failed step's half-written evidence is
+    // still evidence. A machine removed or switched off since the run started
+    // fails the step with that reason; the operator picks another and restarts.
+    const remote = await remoteStepFor(run, line => logLine(l, run, rec, line))
+    let raw: AgentCallOutput = ''
+    try {
+    raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), ...(remote ? { machine: remote.machine } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
@@ -1517,6 +1531,12 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
       })
       void publish(run)
     } })
+    } finally {
+      if (remote) {
+        try { for (const line of await remote.finish()) logLine(l, run, rec, line) }
+        catch (err) { logLine(l, run, rec, `Results could not be copied back from ${remote.machine.name}: ${err instanceof Error ? err.message : String(err)}`) }
+      }
+    }
     const { output, model, usage } = normalizeAgentResult(raw)
     const durationMs = Date.now() - (rec.startedAt ?? Date.now())
     // Held whatever the gate decided: a draft marked as a possible duplicate is
@@ -3214,6 +3234,8 @@ interface ResolvedStart {
   ticketKey?: string
   workspace: string
   parameters?: Record<string, string>
+  /** See WorkflowRun.machine. */
+  machine?: { id: string, name: string }
 }
 
 async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
@@ -3259,7 +3281,32 @@ async function resolveStart(opts: StartRunOpts): Promise<ResolvedStart> {
       parameters = { ...parameters, branch: baseBranchFor(undefined, undefined, product.branches).base }
     }
   }
-  return { product, projectDir, ticketKey, parameters, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }) }
+  // Where the agents execute, decided once for the whole run: the SDK sessions
+  // a step resumes live on the machine it ran on. A machine that is not there
+  // or is switched off refuses the start here, in one line, rather than the
+  // first step failing to connect after preflight said everything was fine.
+  const machine = await machineForRun({ requested: opts.machineId, workflow: opts.workflow.machineId })
+  return {
+    product, projectDir, ticketKey, parameters, workspace: runWorkspace({ projectDir, startedBy: opts.startedBy }),
+    ...(machine ? { machine: { id: machine.id, name: machine.name } } : {}),
+  }
+}
+
+/**
+ * The machine a step runs on, with its files already there, or null for this
+ * server. The run's snapshot names the machine; the registry is read again
+ * here because the connection details (host, key, paths) are the registry's,
+ * and an edit there should reach the next step rather than the next run.
+ */
+async function remoteStepFor(run: WorkflowRun, log: (line: string) => void) {
+  if (!run.machine) return null
+  const machine = await getMachine(run.machine.id)
+  if (!machine) throw new Error(`this run executes on machine "${run.machine.name}", which is no longer configured; add it back in Settings → Machines, or clone the run onto another`)
+  if (!machine.enabled) throw new Error(`machine "${machine.name}" is switched off; enable it in Settings → Machines and restart the step`)
+  log(`Running on ${machine.name} (${machine.user ? `${machine.user}@` : ''}${machine.host})`)
+  const prepared = await prepareRemoteStep(machine, { id: run.id, projectDir: run.projectDir, branch: run.branch, baseBranch: run.baseBranch, baseCommit: run.baseCommit, artifactsDir: runArtifactsDir(run.id) })
+  for (const line of prepared.lines) log(line)
+  return prepared
 }
 
 /** The run record's fields, shared by the start-now and queue-it paths so the
@@ -3280,6 +3327,7 @@ function newRunInput(opts: StartRunOpts, resolved: ResolvedStart) {
     ticketKey: resolved.ticketKey,
     projectDir: resolved.projectDir,
     parameters: resolved.parameters ?? opts.parameters,
+    machine: resolved.machine,
     parentRunId: opts.parentRunId,
     steps: opts.workflow.steps.map(s => ({ stepId: s.id, label: s.label, agentSlug: s.agentSlug })),
   }

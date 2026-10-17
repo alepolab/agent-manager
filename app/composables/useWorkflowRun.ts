@@ -72,12 +72,12 @@ export function useWorkflowRun(slug: string) {
     if (latest && isLiveStatus(latest.status)) { run.value = latest; listen(latest.id) }
   }
 
-  async function start(initialPrompt: string, projectDir?: string, autoRun = false, parameters?: Record<string, string>) {
+  async function start(initialPrompt: string, projectDir?: string, autoRun = false, parameters?: Record<string, string>, machineId?: string) {
     loading.value = true
     error.value = null
     try {
       const started = await $fetch<WorkflowRun>(`/api/workflows/${slug}/runs`, {
-        method: 'POST', body: { initialPrompt, projectDir, autoRun, parameters },
+        method: 'POST', body: { initialPrompt, projectDir, autoRun, parameters, ...(machineId ? { machineId } : {}) },
       })
       run.value = started
       listen(started.id)

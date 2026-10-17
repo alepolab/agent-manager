@@ -10,6 +10,9 @@ import { buildAgentSystemPrompt } from './agentSystemPrompt.ts'
 import { pipelineHooks } from './agentHooks.ts'
 import { createLogger, preview } from './log.ts'
 import { envForUser } from './users.ts'
+import type { Machine } from './machines.ts'
+import { keyFileFor } from './machines.ts'
+import { localRoots, remotePathFor, remoteSpawner } from './remoteAgent.ts'
 import type { AgentFrontmatter } from '~/types'
 
 /**
@@ -288,6 +291,13 @@ export interface AgentCallOptions {
    * visits reading the same files and never wrote its plan.
    */
   resume?: string
+  /**
+   * Run the Claude Code process on this registered machine instead of beside
+   * this server (see remoteAgent.ts). The caller has already carried the
+   * checkout and the evidence directory over; this only spawns there and
+   * re-roots the working directory.
+   */
+  machine?: Machine
 }
 
 /** Floor between successive progress emissions when the active tool hasn't
@@ -356,13 +366,19 @@ export function shouldEmitProgress(
 export async function callAgent(
   agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
-  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume } = opts
+  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume, machine } = opts
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
   signal?.addEventListener('abort', () => abortController.abort())
   const claudeDir = getClaudeDir()
-  const cwd = projectDir && existsSync(projectDir) ? projectDir : claudeDir
+  const localCwd = projectDir && existsSync(projectDir) ? projectDir : claudeDir
+  // On a machine the process starts in the machine's copy of that directory.
+  // Everything that reads files here - the agent file, the skills inlined into
+  // the system prompt - still reads this server's copy: the prompt is built
+  // here and travels with the call.
+  const remote = machine ? { cwd: remotePathFor(machine, localCwd, localRoots()), keyFile: await keyFileFor(machine) } : undefined
+  const cwd = remote?.cwd ?? localCwd
 
   let systemAppend = `You are "${agentSlug}", a specialized agent.`
   let frontmatter: AgentFrontmatter | undefined
@@ -376,7 +392,7 @@ export async function callAgent(
       agentName: parsed.frontmatter.name,
       agentBody: parsed.body,
       skills: parsed.frontmatter.skills,
-      cwd,
+      cwd: localCwd,
     })
   }
 
@@ -406,6 +422,7 @@ export async function callAgent(
   log.debug('agent call starting', () => ({
     agentSlug,
     cwd,
+    machine: machine?.name ?? '(this server)',
     modelRequested: declaredModel ?? '(sdk default)',
     modelSource: override ? 'settings override' : frontmatter?.model ? 'agent file' : 'sdk default',
     toolCount: toolsOption ? toolsOption.length : '(sdk default)',
@@ -532,6 +549,9 @@ export async function callAgent(
       settingSources: [],
       hooks,
       ...(resume ? { resume } : {}),
+      // The process on the machine, when the step runs there: ssh carries the
+      // same stdio protocol, so nothing above this line knows the difference.
+      ...(machine && remote ? { spawnClaudeCodeProcess: remoteSpawner(machine, { remoteCwd: remote.cwd, keyFile: remote.keyFile }) } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend },
     },
   })) {

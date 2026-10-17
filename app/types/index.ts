@@ -447,6 +447,14 @@ export interface Workflow {
    * file ships inside the distributable image.
    */
   notifyChannel?: string
+  /**
+   * The registered machine this workflow's runs execute on (Settings →
+   * Machines). Absent falls back to the instance default; the literal
+   * `local` pins the workflow to this server even when a default is set.
+   * An id, not a host: the machine's connection details live outside the
+   * config tree, with the other secrets.
+   */
+  machineId?: string
   createdAt: string
   lastRunAt?: string
   filePath: string
@@ -463,6 +471,31 @@ export interface WorkflowPayload {
   group?: string
   /** See Workflow.notifyChannel. Sent as '' to clear it, like `group`. */
   notifyChannel?: string
+  /** See Workflow.machineId. Sent as '' to clear it, like `group`. */
+  machineId?: string
+}
+
+/** A registered machine as the browser sees it: never the key. See server/utils/machines.ts. */
+export interface Machine {
+  id: string
+  name: string
+  host: string
+  port?: number
+  user?: string
+  hasPrivateKey: boolean
+  keyPath?: string
+  claudePath?: string
+  workspaceRoot?: string
+  runsRoot?: string
+  appRoot?: string
+  claudeDir?: string
+  transport: 'sync' | 'shared'
+  env?: Record<string, string>
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+  updatedBy?: string
+  lastCheck?: { at: number, ok: boolean, detail: string, claudeVersion?: string, gitVersion?: string, rsync?: boolean, workspaceWritable?: boolean }
 }
 
 export interface StepExecution {

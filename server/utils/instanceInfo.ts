@@ -26,6 +26,7 @@ import { getClaudeDir } from './claudeDir.ts'
 import { workspaceRoot } from './workspace.ts'
 import { agentRunsRoot } from './runArtifacts.ts'
 import { usersDir } from './users.ts'
+import { machinesFile } from './machines.ts'
 import { DEFAULT_CI_POLL_SECONDS } from './ciPoller.ts'
 
 /** Environment variables that override a field editable on the Settings page. */
@@ -56,7 +57,7 @@ export interface InstanceInfo {
   /** Env var name -> its value, for the vars currently overriding a saved setting. */
   pinned: Record<string, string>
   automations: { name: string, envVar: string, enabled: boolean, detail?: string }[]
-  paths: { claudeDir: string, agentRunsDir: string, workspaceRoot: string, usersDir: string }
+  paths: { claudeDir: string, agentRunsDir: string, workspaceRoot: string, usersDir: string, machinesFile: string }
   secrets: { name: string, set: boolean }[]
   identity: { authDisabled: boolean, githubOrg: string | null, managerUrl: string | null, clientIdSet: boolean }
 }
@@ -94,6 +95,7 @@ export function instanceInfo(): InstanceInfo {
       agentRunsDir: agentRunsRoot(),
       workspaceRoot: workspaceRoot(),
       usersDir: usersDir(),
+      machinesFile: machinesFile(),
     },
     secrets: SECRET_VARS.map(name => ({ name, set: envValue(name) !== undefined })),
     identity: {

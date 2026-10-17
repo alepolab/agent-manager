@@ -9,7 +9,7 @@
 export interface InstanceInfo {
   pinned: Record<string, string>
   automations: { name: string, envVar: string, enabled: boolean, detail?: string }[]
-  paths: { claudeDir: string, agentRunsDir: string, workspaceRoot: string, usersDir: string }
+  paths: { claudeDir: string, agentRunsDir: string, workspaceRoot: string, usersDir: string, machinesFile: string }
   secrets: { name: string, set: boolean }[]
   identity: { authDisabled: boolean, githubOrg: string | null, managerUrl: string | null, clientIdSet: boolean }
 }

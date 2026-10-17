@@ -36,7 +36,7 @@ const { onReject, onRework, onNote, onRestart, onStop, onContinue, onRespond } =
 // so it is needed before the drawer mounts.
 const { fetchAll: fetchSchedules, forWorkflow } = useSchedules()
 const scheduleRows = forWorkflow(slug)
-const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string> } | undefined>()
+const runInitial = ref<{ prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string>, machineId?: string } | undefined>()
 
 /** One-shot intents from the Runs page and workflow cards (?run=, ?clone=, ?start=1).
  *  Consumed then removed from the URL so a reload does not repeat them. */
@@ -48,7 +48,7 @@ function applyQueryIntent() {
   }
   if (typeof q.clone === 'string') {
     const src = runs.value.find(r => r.id === q.clone)
-    runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun, parameters: src.parameters } : undefined
+    runInitial.value = src ? { prompt: src.initialPrompt, projectDir: src.projectDir, autoRun: src.autoRun, parameters: src.parameters, machineId: src.machine?.id } : undefined
     showRunModal.value = true
     mode.value = 'run'
   }
@@ -60,7 +60,7 @@ function applyQueryIntent() {
 }
 function cloneRun() {
   if (!run.value) return
-  runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun, parameters: run.value.parameters }
+  runInitial.value = { prompt: run.value.initialPrompt, projectDir: run.value.projectDir, autoRun: run.value.autoRun, parameters: run.value.parameters, machineId: run.value.machine?.id }
   showRunModal.value = true
 }
 
@@ -131,6 +131,11 @@ const group = ref('')
  *  called `default`, then SLACK_WEBHOOK_URL - sent as '' rather than omitted
  *  because the PUT is a shallow merge. */
 const notifyChannel = ref('')
+/** Where this workflow's agents execute. '' means the instance default, `local`
+ *  this server, else a machine's id - sent as '' rather than omitted because
+ *  the PUT is a shallow merge. */
+const machineId = ref('')
+const { machines, defaultMachineId, load: loadMachines } = useMachines()
 const groups = ref<{ id: string, name: string, maxConcurrent: number, inFlight: number, waiting: number, implicit: boolean }[]>([])
 const saving = ref(false)
 const lastModified = ref<number | null>(null)
@@ -164,6 +169,7 @@ function applyWorkflow(data: Workflow) {
   description.value = data.description
   group.value = data.group ?? ''
   notifyChannel.value = data.notifyChannel ?? ''
+  machineId.value = data.machineId ?? ''
   layOut()
   savedBlocks.value = JSON.stringify(blocks.value)
   // A reload can drop the step the drawer was showing.
@@ -176,6 +182,7 @@ onMounted(async () => {
   try {
     applyWorkflow(await fetchOne(slug))
     groups.value = await $fetch<typeof groups.value>('/api/workflow-groups').catch(() => [])
+    void loadMachines({ silent: true })
   } catch {
     toast.add({ title: 'Workflow not found', color: 'error' })
     router.push('/workflows')
@@ -204,12 +211,13 @@ const parametersDirty = computed(() =>
  *  dirty. One computed now feeds both, so they cannot disagree again. */
 const anyDirty = computed(() => isDirty.value || parametersDirty.value
   || group.value !== (workflow.value?.group ?? '')
-  || notifyChannel.value !== (workflow.value?.notifyChannel ?? ''))
+  || notifyChannel.value !== (workflow.value?.notifyChannel ?? '')
+  || machineId.value !== (workflow.value?.machineId ?? ''))
 useUnsavedChanges(anyDirty)
 
 const workflowContent = (w: Workflow) => ({
   name: w.name, description: w.description, steps: w.steps,
-  parameters: w.parameters ?? [], group: w.group ?? '', notifyChannel: w.notifyChannel ?? '',
+  parameters: w.parameters ?? [], group: w.group ?? '', notifyChannel: w.notifyChannel ?? '', machineId: w.machineId ?? '',
 })
 // The same full check the leave guard uses: a background reload must not drop
 // edits to inputs, group or channel either.
@@ -297,6 +305,7 @@ async function save() {
       parameters: workflowParameters.value.filter(p => p.name.trim()),
       group: group.value,
       notifyChannel: notifyChannel.value,
+      machineId: machineId.value,
       lastModified: lastModified.value ?? undefined,
     } as any)
     lastModified.value = (saved as any).lastModified ?? null
@@ -334,10 +343,10 @@ async function deleteWorkflow() {
   }
 }
 
-async function startRun(prompt: string, projectDir?: string, autoRun = false, parameters?: Record<string, string>) {
+async function startRun(prompt: string, projectDir?: string, autoRun = false, parameters?: Record<string, string>, runMachineId?: string) {
   showRunModal.value = false
   if (!workflow.value) return
-  await start(prompt, projectDir, autoRun, parameters)
+  await start(prompt, projectDir, autoRun, parameters, runMachineId)
   // Read here, or nowhere: the composable records why a start failed and this
   // page used to drop it, so a refused start looked like nothing happening.
   const why = workflowRun.error.value
@@ -538,6 +547,9 @@ const parallelHint = computed(() => graph.value.entries.length > 1
           v-model:parameters="workflowParameters"
           v-model:group="group"
           v-model:notify-channel="notifyChannel"
+          v-model:machine-id="machineId"
+          :machines="machines"
+          :default-machine-id="defaultMachineId"
           :workflow-slug="slug"
           :workflow-name="name"
           :saved-parameters="savedParameters"
@@ -594,6 +606,9 @@ const parallelHint = computed(() => graph.value.entries.length > 1
           v-model:parameters="workflowParameters"
           v-model:group="group"
           v-model:notify-channel="notifyChannel"
+          v-model:machine-id="machineId"
+          :machines="machines"
+          :default-machine-id="defaultMachineId"
           :workflow-slug="slug"
           :workflow-name="name"
           :saved-parameters="savedParameters"
@@ -622,6 +637,9 @@ const parallelHint = computed(() => graph.value.entries.length > 1
       :open="showRunModal"
       :initial="runInitial"
       :parameters="workflowParameters"
+      :machines="machines"
+      :default-machine-id="defaultMachineId"
+      :workflow-machine-id="workflow?.machineId"
       @update:open="showRunModal = $event"
       @start="startRun"
     />

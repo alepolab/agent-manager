@@ -14,7 +14,7 @@ export default defineEventHandler(async (event) => {
   // answers the verification gate on work someone else began.
   await requireCapability(event, 'startRun')
   const slug = getRouterParam(event, 'slug')!
-  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string, parameters?: Record<string, string> }>(event)
+  const body = await readBody<{ initialPrompt: string, autoRun?: boolean, projectDir?: string, productKey?: string, parameters?: Record<string, string>, machineId?: string }>(event)
   if (!body?.initialPrompt?.trim()) {
     throw createError({ statusCode: 400, message: 'initialPrompt is required' })
   }
@@ -133,6 +133,10 @@ export default defineEventHandler(async (event) => {
         projectDir,
         parameters,
         startedBy: user?.login,
+        // Where this run's agents execute, when the start said: a machine's id,
+        // or `local` to stay on this server whatever the workflow and the
+        // instance default say. Absent lets those decide.
+        ...(typeof body.machineId === 'string' && body.machineId.trim() ? { machineId: body.machineId.trim() } : {}),
       })
     } catch (err) {
       // A start that got past the check above but lost the race to a

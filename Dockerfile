@@ -26,7 +26,10 @@ FROM oven/bun:1.3-slim
 
 WORKDIR /app
 
-# Runtime dependencies: python3 for agent scripts, curl for the healthcheck, git for pipeline steps
+# Runtime dependencies: python3 for agent scripts, curl for the healthcheck, git for pipeline steps.
+# openssh-client and rsync carry a step to a registered machine and its results
+# back (server/utils/remoteAgent.ts); without them every run on a machine fails
+# at its first step with a spawn error that says nothing about packages.
 # A JDK is in the image because the products the pipeline tests are Java or
 # generate code with Java tools: a real run halted with 'generate:api requires
 # Java, which is not installed', and an earlier one only passed because the
@@ -41,6 +44,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     chromium \
     fonts-liberation \
+    openssh-client \
+    rsync \
     && rm -rf /var/lib/apt/lists/*
 # Temurin 17, pinned and checksummed: the base image's Debian carries no JDK 17
 # package. Installed under /opt so a host-mounted JDK on PATH still wins.

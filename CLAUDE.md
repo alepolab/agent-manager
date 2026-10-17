@@ -39,7 +39,7 @@ bun run typecheck    # Run TypeScript type checking
 - `/team` - Drift against the alepo-engineering plugin, Apply team standards
 - `/profile` - Per-developer Jira credentials
 - `/login` - GitHub sign-in (skipped when AUTH_DISABLED=1)
-- `/settings` - Global settings
+- `/settings` - Global settings; `/settings/machines` registers the remote machines a run's agents can execute on (see `docs/remote-machines.md`)
 
 **Composables** (`app/composables/`):
 The app uses a centralized CRUD pattern via `useCrud.ts` which provides standard `fetchAll`, `fetchOne`, `create`, `update`, `remove` operations. Domain-specific composables wrap this:
@@ -51,6 +51,7 @@ The app uses a centralized CRUD pattern via `useCrud.ts` which provides standard
 - `useGithubImports.ts` - Import skills from GitHub repos
 - `useMarketplace.ts` - Browse and install plugins from marketplace
 - `useUser.ts` - Signed-in developer from `/api/me`
+- `useMachines.ts` - Registered machines and the instance default, for the Machines page and the run/workflow pickers
 - `useChatV2Handler.ts` - The `/cli` chat client: WebSocket, streaming, permission prompts
 - `useSessionStore.ts` - Session-keyed message store behind the chat
 - `useContextMonitor.ts` - Token and cost tracking for the chat
@@ -66,6 +67,8 @@ The Agent Studio (`/agents/[slug]` page with test panel) uses SSE (Server-Sent E
 - `relationships.ts` - Extract relationships between agents/commands/skills by scanning frontmatter (`agent:` field) and body text for references
 - `github.ts` - Clone, scan, and import skills from GitHub repos
 - `marketplace.ts` - Fetch and install plugins from marketplace sources
+- `machines.ts` - Remote machines a run's agents execute on: the registry (`~/.agent-manager/machines.json`, keys sealed), validation, ssh arguments, the connection probe
+- `remoteAgent.ts` - Running one agent call on a machine: path re-rooting, the forwarded environment, the SDK's `spawnClaudeCodeProcess` hook over ssh, and the git+rsync push before a step and pull after it
 
 **API Routes** (`server/api/`):
 All CRUD routes follow REST conventions:
@@ -81,6 +84,7 @@ Special endpoints:
 - `GET /api/agents/[slug]/skills` - List skills assigned to an agent
 - `POST /api/github/import` - Import skills from GitHub
 - `POST /api/marketplace/install` - Install plugin from marketplace
+- `GET/POST /api/machines`, `PUT/DELETE /api/machines/[id]`, `POST /api/machines/[id]/check`, `PUT /api/machines/default` - Remote machines a run executes on
 
 ### Data Model
 
