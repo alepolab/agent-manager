@@ -143,5 +143,6 @@ export async function requireCapability(event: H3Event, capability: keyof Capabi
 
 /** Paths that must work without a session: health, the auth dance itself. */
 export function isPublicApiPath(path: string): boolean {
-  return path === '/api/health' || path.startsWith('/api/auth/') || path === '/api/config'
+  // The webhook intake authenticates by HMAC over the body (server/utils/intake.ts), not by a session.
+  return path === '/api/health' || path.startsWith('/api/auth/') || path === '/api/config' || path === '/api/v1/intake'
 }
