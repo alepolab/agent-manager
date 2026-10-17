@@ -80,6 +80,8 @@ export function planTemplateResolution(
   // them on its own - do it explicitly here.
   for (const step of template.steps) {
     if (step.monitorSlug) resolveId(step.monitorSlug)
+    // Panel members are agents too, named nowhere else in the template.
+    for (const m of step.panel?.members ?? []) resolveId(m.agentSlug)
   }
 
   return { steps, resolved, toCreate }

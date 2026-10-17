@@ -44,6 +44,7 @@ export const STEP_KIND_LABEL: Record<StepKind, string> = {
   'jira-create': 'Create Jira tickets',
   'notify': 'Post to a channel',
   'loop': 'Loop over items',
+  'panel': 'Verdict panel',
 }
 
 export const STEP_KIND_ICON: Record<StepKind, string> = {
@@ -52,6 +53,7 @@ export const STEP_KIND_ICON: Record<StepKind, string> = {
   'jira-create': 'i-lucide-ticket-plus',
   'notify': 'i-lucide-send',
   'loop': 'i-lucide-repeat',
+  'panel': 'i-lucide-gavel',
 }
 
 /** A step's usage as a run card shows it, "12,345 tok · $0.42"; '' when it reported none. */

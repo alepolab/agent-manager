@@ -10,7 +10,7 @@ const open = ref(false)
 const pickingAgent = ref(false)
 const q = ref('')
 const shown = computed(() => props.agents.filter(a => `${a.name} ${a.slug}`.toLowerCase().includes(q.value.toLowerCase())))
-const RUNNER: ActionKind[] = ['jira', 'jira-create', 'notify', 'loop']
+const RUNNER: ActionKind[] = ['jira', 'jira-create', 'notify', 'loop', 'panel']
 function choose(c: PickerChoice) { emit('choose', c); open.value = false; pickingAgent.value = false; q.value = '' }
 </script>
 
