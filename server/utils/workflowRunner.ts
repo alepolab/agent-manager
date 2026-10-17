@@ -56,6 +56,9 @@ import { carriedDecision, earlierApprovalFor } from '../../shared/utils/gateCarr
 import { carriesEarlierApproval } from './appSettings.ts'
 import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter } from '../../shared/utils/workflowParameters.ts'
 import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/runHistory.ts'
+import { isPanelStep, PANEL_AGENT_SLUG, uncachedTokens, type PanelConfig } from '../../shared/utils/verdictPanel.ts'
+import { runPanel } from './panelStep.ts'
+import { recordRunEvent } from './runEvents.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
 import type { ProductMatch, WorkflowRun, RunDecision, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
@@ -108,7 +111,7 @@ interface WorkflowLike {
   group?: string
   /** See Workflow.notifyChannel - where this workflow's run transitions are announced. */
   notifyChannel?: string
-  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[] }[]
+  steps: { id: string, agentSlug: string, label: string, next?: string[], monitorSlug?: string, maxVisits?: number, approval?: boolean, contextMode?: 'predecessors' | 'ancestors', jira?: JiraStepConfig, testsUnlocked?: boolean, continuesSession?: boolean, runWhen?: { artifact: string }, triggerWorkflow?: TriggerWorkflowConfig, notify?: NotifyStepConfig, produces?: string[], kind?: 'agent' | 'panel', panel?: PanelConfig, /** See WorkflowStep.records. */ records?: string, gateRole?: Role }[]
 }
 
 export interface StartRunOpts {
@@ -4038,7 +4041,16 @@ export async function continueRun(
     // approval would override the decision it was supposed to carry out.
     // Without it, the condition is re-tested and the step is skipped by the
     // ordinary path, with the ordinary sentence naming the file.
-    else if (grantApproval) l.approved.add(run.question.stepId)
+    else if (grantApproval) {
+      l.approved.add(run.question.stepId)
+      // A gate that records an event (Runbook V's G5 records verification.pass)
+      // records it the moment a person approves it: the approval is the fact,
+      // and the Jira step that follows is how the ticket hears about it.
+      const gated = stepOf(l, run.question.stepId)
+      if (gated?.records) {
+        await recordRunEvent(run, { event: gated.records, stepId: gated.id, label: gated.label, by: opts.decision?.by ?? run.startedBy ?? 'a reviewer', ...(note?.trim() ? { note: note.trim() } : {}) })
+      }
+    }
     if (note?.trim() && run.question.stepId) l.notes[run.question.stepId] = note.trim()
   } else if (note?.trim()) {
     l.nextNote = note.trim()

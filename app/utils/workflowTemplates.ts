@@ -35,7 +35,7 @@ export interface WorkflowTemplateStep {
   /** See WorkflowStep.contextMode. */
   contextMode?: 'predecessors' | 'ancestors'
   /** See WorkflowStep.jira. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string, fields?: Record<string, string> }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string, fields?: Record<string, string>, stage?: string }
   /** See WorkflowStep.testsUnlocked. */
   testsUnlocked?: boolean
   /** See WorkflowStep.produces. */
@@ -48,6 +48,15 @@ export interface WorkflowTemplateStep {
   /** See WorkflowStep.notify. The channel names a row in Settings on the
    *  instance, not anything in this file. */
   notify?: { channel: string, message?: string }
+  /** See WorkflowStep.records. */
+  records?: string
+  /** See WorkflowStep.kind. */
+  kind?: 'agent' | 'panel'
+  /**
+   * See WorkflowStep.panel. Members name AGENT templates (resolved through the
+   * same map `agentTemplateId` is), not steps.
+   */
+  panel?: { members: { agentSlug: string, criterion?: string }[], budgetTokens: number, maxLoops: number, reworkTarget?: string }
 }
 
 export interface WorkflowTemplate {
@@ -174,6 +183,22 @@ export function materializeTemplateSteps(
     if (step.notify !== undefined) materialized.notify = step.notify
     if (step.continuesSession) materialized.continuesSession = true
     if (step.gateRole !== undefined) materialized.gateRole = step.gateRole
+    if (step.records) materialized.records = step.records
+    if (step.kind === 'panel' || step.panel) {
+      materialized.kind = 'panel'
+      if (step.panel) {
+        // Members resolve through the agent map like monitorSlug does; one that
+        // resolves to nothing is dropped and named nowhere, exactly as a dangling
+        // monitorSlug is. A panel left with no members is still a panel: the
+        // runner refuses to run it and says so, rather than passing silently.
+        materialized.panel = {
+          ...step.panel,
+          members: step.panel.members
+            .map(m => ({ ...m, agentSlug: agentSlugByTemplateId[m.agentSlug] ?? '' }))
+            .filter(m => m.agentSlug),
+        }
+      }
+    }
     return materialized
   })
 }
@@ -183,6 +208,7 @@ export const RUNBOOK_FILES: Record<string, string> = {
   'runbook-a-jira-to-diff': 'runbook-a-ticket-to-evidence-backed-pr',
   'runbook-c-ce-ticket-to-pr': 'runbook-c-ce-ticket-to-qa-proven-pr',
   'runbook-b-feature-request-to-pr': 'runbook-b-feature-request-to-evidence-backed-pr',
+  'runbook-v-verify-after-merge': 'runbook-v-verify-after-merge',
   'scan-security-to-dispatch': 'scan-security-to-dispatch',
   'scan-functional-to-dispatch': 'scan-functional-to-dispatch',
   'scan-tech-debt-to-dispatch': 'scan-tech-debt-to-dispatch',
@@ -374,6 +400,31 @@ export const workflowTemplates: WorkflowTemplate[] = [
       { agentTemplateId: 'sdlc-evidence-and-pr', id: 'evidence-bundle-pr', label: 'Evidence Bundle + PR', next: ['pr-checks-review'], contextMode: 'ancestors', approval: true, monitorSlug: 'sdlc-step-monitor', gateRole: 'developer' },
       { agentTemplateId: 'sdlc-pr-follow-up', id: 'pr-checks-review', label: 'PR Checks + Review', next: ['jira-in-review'], contextMode: 'ancestors', maxVisits: 3, monitorSlug: 'sdlc-step-monitor' },
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-in-review', label: 'Jira: In Review', next: [], jira: { transition: 'In Review', comment: true }, monitorSlug: 'sdlc-step-monitor' },
+    ],
+  },
+  {
+    id: 'runbook-v-verify-after-merge',
+    name: 'Runbook V — Verify after merge',
+    description: 'Started when a pull request merges (the CI poller, or POST /api/v1/runs with stage verify): writes the verification brief, deploys the merged revision to a staging stack, runs the registry\'s regression suites into junit and screenshots, and stops at G5 for QA\'s sign-off, which records verification.pass and moves the ticket\'s Agent Stage to VERIFIED.',
+    icon: 'i-lucide-badge-check',
+    parameters: [
+      { name: 'branch', description: 'The branch the pull request merged into. Leave it blank for the product\'s development branch from the registry; the run checks it out in a worktree of its own at its current tip.' },
+      { name: 'pr', description: 'The merged pull request\'s URL, when the run was started for one. Quoted in the brief and the ticket comment.' },
+      { name: 'revision', description: 'The merge commit, when known. The brief is written about this revision; left blank it is the tip of the branch.' },
+    ],
+    steps: [
+      // What QA verifies against, written from the merged change itself - never
+      // from the run that made it.
+      { agentTemplateId: 'sdlc-verification-brief', id: 'verification-brief', label: 'Verification brief', produces: ['verification-brief.md'], next: ['deploy-staging'], monitorSlug: 'sdlc-step-monitor' },
+      // The same provisioner the other runbooks use, on a worktree at the merged
+      // revision: it stands the stack up under this run's name and reports it.
+      { agentTemplateId: 'sdlc-stack-provisioner', id: 'deploy-staging', label: 'Deploy to staging', produces: ['stack-report.md'], next: ['regression'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-regression-runner', id: 'regression', label: 'Regression suites', produces: ['regression.xml', 'regression-report.md'], next: ['g5-sign-off'], contextMode: 'ancestors', monitorSlug: 'sdlc-step-monitor' },
+      // G5: QA's gate, and the one step that writes to the ticket. Approving it
+      // records verification.pass (the event other channels hear) and the Jira
+      // step then sets Agent Stage=VERIFIED - through the field map in Settings
+      // when there is one, else as a comment.
+      { agentTemplateId: 'sdlc-jira-tracker', id: 'g5-sign-off', label: 'G5 verification sign-off', next: [], approval: true, gateRole: 'qa', records: 'verification.pass', jira: { stage: 'VERIFIED', comment: true }, monitorSlug: 'sdlc-step-monitor' },
     ],
   },
   {
