@@ -25,6 +25,32 @@ export interface AgentManagerSettings {
     /** A later gate takes a person's earlier approval instead of asking again (Dev Done → PR step → QA Done; see shared/utils/gateCarryOver.ts). Default true. */
     carryEarlierApproval?: boolean
   }
+  /**
+   * Where a step's Claude Code process runs (server/utils/runner/index.ts):
+   * 'host' (default, unchanged behaviour), 'sandbox' (every step in a
+   * container), or 'policy' (the risk policy's `sandbox` column decides).
+   * AGENT_RUNNER_MODE overrides.
+   */
+  runnerMode?: 'host' | 'sandbox' | 'policy'
+  /** The sandbox container's image and limits (server/utils/runner/sandbox.ts). */
+  sandbox?: {
+    image?: string
+    cpus?: string
+    memory?: string
+    pidsLimit?: number
+    /** A name for the egress arrangement in force, recorded on each sandboxed run; see engineering/docs/runner.md. */
+    egressProfile?: string
+  }
+  /**
+   * The daily spend circuit breaker (server/utils/runEvents.ts): USD this
+   * instance may spend on runs per UTC day before new runs queue on a budget
+   * question, and optional per-product caps keyed by product name.
+   * AGENT_DAILY_SPEND_USD_CAP overrides the instance figure. Absent: no cap.
+   */
+  dailySpendUsdCap?: number
+  dailySpendUsdCapByProduct?: Record<string, number>
+  /** This instance's name in exported telemetry (the `pod` tag). AGENT_MANAGER_POD overrides. */
+  pod?: string
 }
 
 /**

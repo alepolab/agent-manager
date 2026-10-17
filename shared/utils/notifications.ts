@@ -60,7 +60,8 @@ export function buildNotifications(
 ): NotificationItem[] {
   const gates: NotificationItem[] = runs
     // A quota pause resumes itself at the reset time: nobody owes it a decision.
-    .filter(r => !r.dismissed && isWaitingOnAPerson(r.status) && r.question?.reason !== 'quota')
+    // A run the daily spend cap holds in the queue asks too: continue it past the cap, or leave it until tomorrow.
+    .filter(r => !r.dismissed && ((isWaitingOnAPerson(r.status) && r.question?.reason !== 'quota') || (r.status === 'queued' && r.question?.reason === 'budget')))
     .map(r => ({
       kind: 'gate',
       id: `run:${r.id}`,

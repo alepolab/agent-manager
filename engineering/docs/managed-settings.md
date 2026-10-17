@@ -192,3 +192,35 @@ No installation issues found.
 Neither is strictly better; ship both, and use `verify-enforcement.mjs` to
 find out which (if either) is actually in force on a given machine, in a
 given repo, right now.
+
+## Telemetry env for Claude Code (added with the run-events work)
+
+Agent Manager exports its own run events itself (`engineering/docs/telemetry.md`). Claude
+Code's native OpenTelemetry export is separate and is turned on by Claude Code settings. The
+exporter variables are honoured from managed settings and from `~/.claude/settings.json`,
+and ignored in a repository's `.claude/settings.json` / `.claude/settings.local.json`, so
+they belong in the managed tier (`/etc/claude-code/managed-settings.json` on Linux) or in
+the instance's own `~/.claude/settings.json` — not in the per-repo file this document's
+installer writes.
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector.internal:4318",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer <token>",
+    "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=alepo,deployment.environment=pipeline"
+  }
+}
+```
+
+Agent Manager appends the run's tags (`jira.key`, `run_id`, `product`, `origin`,
+`blast_radius`, `workflow`, `pod`) to `OTEL_RESOURCE_ATTRIBUTES` on every step's process
+env, keeping whatever the block above sets. In sandbox mode the same variables are on the
+container env allowlist (`server/utils/runner/sandbox.ts`). The step process does not read
+the managed file from inside a sandbox — the staged config dir has no `managed-settings.json`
+— so for sandboxed steps set these as environment variables on the Agent Manager process
+instead; they cross the allowlist unchanged.

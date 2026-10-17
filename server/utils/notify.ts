@@ -169,6 +169,26 @@ async function transitionPost(run: WorkflowRun): Promise<(() => Promise<void>) |
 }
 
 /**
+ * One message about a run, to wherever its transitions go, outside the
+ * status-transition dedupe: for the moments that are not a status change but
+ * still need a person, such as a run held by the daily spend cap. Never
+ * throws; nothing configured means nothing sent.
+ */
+export async function notifyRunMessage(run: WorkflowRun, text: string): Promise<void> {
+  try {
+    for (const name of [run.notifyChannel, 'default']) {
+      if (!name) continue
+      const channel = await getChannel(name).catch(() => null)
+      if (channel) { await sendToChannel(channel, `${text}\n${runLink(run, baseUrl())}`); return }
+    }
+    const url = process.env.SLACK_WEBHOOK_URL
+    if (url) await poster(url, { text: `${text}\n${runLink(run, baseUrl())}` })
+  } catch (err) {
+    console.error('[notify] run message failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+/**
  * Returns the delivery promise, which no production caller awaits — publish()
  * must never block on a webhook. It is returned so a test can await the send
  * instead of racing it: resolving a NAMED channel reads from disk, so delivery

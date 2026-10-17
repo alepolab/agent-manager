@@ -58,6 +58,8 @@ const realExec: Exec = async (cmd, args, opts) =>
 
 export interface TeardownReport {
   stacks: { project: string, removed: boolean, /** Its named volumes went with it: this run was its last user. */ volumes?: boolean, error?: string }[]
+  /** Sandbox containers of this run still present at its ending (server/utils/runner/sandbox.ts), one line each. */
+  sandbox?: string[]
   worktree?: { path: string, removed: boolean, reason?: string }
   images?: ImageReport
   /** Images of other ended runs, kept at their endings because a live run used their stack, which none does now; and the volumes their stacks left. */
@@ -229,13 +231,23 @@ export const runStandsUpStacks = (run: Pick<WorkflowRun, 'steps'>): boolean => r
 export const runBuildsImages = (run: Pick<WorkflowRun, 'steps'>): boolean => run.steps.some(s => IMAGE_AGENTS.test(s.agentSlug))
 
 export async function teardownRun(
-  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status' | 'stackClaimedFrom' | 'endedAt'>>,
+  run: Pick<WorkflowRun, 'id' | 'branch' | 'projectDir' | 'steps' | 'stackProject'> & Partial<Pick<WorkflowRun, 'status' | 'stackClaimedFrom' | 'endedAt' | 'sandbox'>>,
   exec: Exec = realExec,
   /** Every run, to see who else uses a stack. Read from the store when not given. */
   runs?: StackRun[],
 ): Promise<TeardownReport> {
   const report: TeardownReport = { stacks: [] }
   if (process.env.RUN_TEARDOWN_DISABLED === '1') return report
+
+  // ── sandbox containers ──
+  // A sandboxed step's container is `--rm` and foreground, so it is normally
+  // gone with the SDK process. One that is not - the docker client was killed
+  // mid-pull, or the daemon lagged - is this run's by label, and goes now.
+  // Only a run that ran sandboxed asks docker; the host path costs nothing.
+  if (run.sandbox) {
+    const lines = await import('./runner/sandbox.ts').then(m => m.reapSandboxContainers(run.id, (c, a) => exec(c, a))).catch(() => [] as string[])
+    if (lines.length) report.sandbox = lines
+  }
 
   // ── stacks ──
   const mine = new Set([...runProjectNames(run.id), ...(run.stackProject ? [run.stackProject] : [])])
@@ -307,7 +319,7 @@ export async function teardownRun(
     report.worktree = await removeRunWorktree(run, exec)
   }
 
-  if (report.stacks.length || report.worktree || report.images || report.endedRunImages) log.info('run torn down', { runId: run.id, ...report })
+  if (report.stacks.length || report.worktree || report.images || report.endedRunImages || report.sandbox) log.info('run torn down', { runId: run.id, ...report })
   return report
 }
 
