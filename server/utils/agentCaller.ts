@@ -42,6 +42,54 @@ export function launchEnv(base: Record<string, string>, userEnv: Record<string, 
 }
 
 /**
+ * `env` with OTEL_RESOURCE_ATTRIBUTES carrying `attrs` as well as whatever it
+ * already held. The variable is comma-separated `key=value` with no spaces;
+ * a value is percent-encoded where it would break that. Ours win on a key
+ * both name, since the run's tags are the point.
+ */
+export function withOtelAttributes(env: Record<string, string>, attrs?: Record<string, string>): Record<string, string> {
+  if (!attrs || !Object.keys(attrs).length) return env
+  const merged = new Map<string, string>()
+  for (const pair of (env.OTEL_RESOURCE_ATTRIBUTES ?? '').split(',')) {
+    const i = pair.indexOf('=')
+    if (i > 0) merged.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim())
+  }
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null || v === '') continue
+    merged.set(k, encodeURIComponent(String(v)).replace(/%20/g, '_'))
+  }
+  return { ...env, OTEL_RESOURCE_ATTRIBUTES: [...merged].map(([k, v]) => `${k}=${v}`).join(',') }
+}
+
+/** The one variable withOtelAttributes adds, for spreading over the launch env; empty when there are no tags. */
+function otelEnv(attrs?: Record<string, string>): Record<string, string> {
+  if (!attrs || !Object.keys(attrs).length) return {}
+  const merged = withOtelAttributes({ OTEL_RESOURCE_ATTRIBUTES: process.env.OTEL_RESOURCE_ATTRIBUTES ?? '' }, attrs)
+  return { OTEL_RESOURCE_ATTRIBUTES: merged.OTEL_RESOURCE_ATTRIBUTES! }
+}
+
+/**
+ * The SDK options for a sandboxed call, and the cleanup that goes with them.
+ * The runner module is loaded on demand so a host-only install never touches
+ * it, and so the plain-node tests that import this file need no docker.
+ */
+async function sandboxRunner(sandbox: NonNullable<AgentCallOptions['sandbox']>, worktree: string): Promise<{ options: Record<string, unknown>, dispose: () => Promise<void> }> {
+  const sb = await import('./runner/sandbox.ts')
+  const configDir = await sb.stageSandboxConfig(sandbox.runId)
+  await sb.ensureSandboxNetwork()
+  return {
+    options: {
+      spawnClaudeCodeProcess: sb.spawnSandboxed(
+        { runId: sandbox.runId, stepId: sandbox.stepId, worktree, budget: sandbox.budget, repos: sandbox.repos, image: sandbox.image },
+        configDir,
+        sb.engineeringDirFor(sdlcScriptsDir()),
+      ),
+    },
+    dispose: () => sb.removeSandboxConfig(configDir),
+  }
+}
+
+/**
  * The environment every pipeline agent runs in. Exported because preflight has
  * to ask git the same questions the AGENTS will ask it: a `commit.gpgsign` read
  * from this shell answers for the wrong process, and that is exactly how a run
@@ -288,6 +336,24 @@ export interface AgentCallOptions {
    * visits reading the same files and never wrote its plan.
    */
   resume?: string
+  /**
+   * Run this step's Claude Code process in a sandbox container rather than on
+   * the host (server/utils/runner/sandbox.ts). The SDK still drives it from
+   * here: only the spawn changes. Absent means the host, as always.
+   */
+  sandbox?: {
+    runId: string
+    stepId: string
+    image: string
+    budget?: { maxMinutes?: number }
+    repos?: string[]
+  }
+  /**
+   * Resource attributes for Claude Code's own OpenTelemetry export
+   * (OTEL_RESOURCE_ATTRIBUTES), so its metrics carry the run's tags. Merged
+   * with whatever the host already sets. See server/utils/runEvents.ts.
+   */
+  otelAttributes?: Record<string, string>
 }
 
 /** Floor between successive progress emissions when the active tool hasn't
@@ -356,7 +422,10 @@ export function shouldEmitProgress(
 export async function callAgent(
   agentSlug: string, input: string, projectDir?: string, opts: AgentCallOptions = {},
 ): Promise<AgentCallResult> {
-  const { signal, env: userEnv = {}, onProgress, onSteer, onSession, resume } = opts
+  const { signal, env: given = {}, onProgress, onSteer, onSession, resume, sandbox, otelAttributes } = opts
+  // The run's tags ride into Claude Code's own telemetry with the starter's
+  // env, which launchEnv spreads over the base: one env, built in one place.
+  const userEnv = { ...given, ...otelEnv(otelAttributes) }
   // The runner's stop aborts this controller; the SDK then ends the CLI process.
   const abortController = new AbortController()
   if (signal?.aborted) abortController.abort()
@@ -484,6 +553,16 @@ export async function callAgent(
     onProgress(progress)
   }
 
+  // Identity for git, gh and jira: the starter's own tokens when they have a
+  // profile, else the bot token, else whatever the host holds. Unconditional,
+  // where it used to be spread only when a token or a user profile existed:
+  // SDLC_SCRIPTS_DIR has to reach the agent on every path, including the
+  // no-credential one. OTEL_RESOURCE_ATTRIBUTES carries the run's tags into
+  // Claude Code's own telemetry, merged with anything the host already set.
+  // The sandbox runner replaces only the spawn: the SDK still owns the protocol,
+  // the hooks and the result. Staged per call and removed in `finally`.
+  const runner = sandbox ? await sandboxRunner(sandbox, cwd) : null
+
   // The loop keeps its own indentation inside the try: the assembler test reads
   // this block by shape and expects `env: {` at the depth it has always had.
   try {
@@ -491,15 +570,8 @@ export async function callAgent(
     prompt: messages(),
     options: {
       cwd,
-      // A bot identity for git and gh, when one is configured, so agent pushes
-      // and PRs are not attributed to whoever runs the server.
-      // Identity for git, gh and jira: the starter's own tokens when they have
-      // a profile, else the bot token, else whatever the host holds.
-      // Unconditional, where it used to be spread only when a token or a user
-      // profile existed. SDLC_SCRIPTS_DIR has to reach the agent on every path,
-      // including the no-credential one; a conditional env is exactly how a
-      // variable goes missing in the configuration nobody tests.
       env: { ...launchEnv(await agentEnvFor(), userEnv) },
+      ...(runner ? runner.options : {}),
       abortController,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -612,6 +684,7 @@ export async function callAgent(
     if (deadline) clearTimeout(deadline)
     finished = true
     kick()
+    if (runner) await runner.dispose()
   }
   // Final flush so the last observed turn/tool is never lost to the
   // throttle floor - only when there was ever anything to report (see
