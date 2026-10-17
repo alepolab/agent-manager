@@ -42,6 +42,9 @@ const form = reactive({
   version_source: '',
 })
 
+/** owners.* keys this form does not edit, kept verbatim across a save. */
+const routingOwners = ref<Record<string, unknown>>({})
+
 const lines = (s: string) => s.split('\n').map(v => v.trim()).filter(Boolean)
 const list = (s: string) => s.split(/[\n,]/).map(v => v.trim()).filter(Boolean)
 
@@ -62,6 +65,9 @@ function fill() {
   form.stack.liquibase = p.stack?.liquibase === true
   for (const t of Object.keys(form.tests)) form.tests[t as keyof typeof form.tests] = p.tests?.[t] ?? ''
   for (const o of OWNER_LABELS) form.owners[o] = p.owners?.[o] ?? ''
+  // The people keys (product_sme, architect, qa_lead) have no field on this
+  // form yet; carried through untouched so saving the page cannot drop them.
+  routingOwners.value = Object.fromEntries(Object.entries(p.owners ?? {}).filter(([k]) => !(OWNER_LABELS as readonly string[]).includes(k)))
   form.modules = Object.entries(p.modules ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n')
   form.version_source = p.version_source ?? ''
 }
@@ -190,7 +196,7 @@ const product = computed(() => {
     branches: clean(form.branches),
     stack: { ...clean(form.stack), ...(form.stack.liquibase ? { liquibase: true } : {}) },
     tests: clean(form.tests),
-    owners: clean(form.owners),
+    owners: { ...clean(form.owners), ...routingOwners.value },
     ...(form.version_source.trim() ? { version_source: form.version_source.trim() } : {}),
   }
 })

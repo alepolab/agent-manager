@@ -56,6 +56,7 @@ const ALLOWED = new Map([
   ['me.put.ts', 'The caller\'s own profile. Every role must be able to set their own Jira credentials.'],
   ['me/jira-test.post.ts', 'Tests the caller\'s own stored credentials; reads nothing else.'],
   ['chat-ws/sessions/[id].delete.ts', 'Legacy no-op: throws 404 unconditionally and deletes nothing.'],
+  ['v1/intake.post.ts', 'Enforces something stricter itself: a webhook authenticated by HMAC-SHA256 over the raw body against agentManager.intakeSecret; refused outright when no secret is configured (server/utils/intake.ts).'],
 ])
 
 async function walk(dir) {

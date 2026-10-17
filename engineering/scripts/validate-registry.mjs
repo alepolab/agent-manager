@@ -334,7 +334,7 @@ for (const w of watches) {
   if (!w.max_blast_radius) continue
   const idx = ORDER.indexOf(w.max_blast_radius)
   const ownedSomewhere = Object.values(products).some(p =>
-    Object.keys(p.owners ?? {}).some(l => ORDER.indexOf(l) <= idx))
+    Object.keys(p.owners ?? {}).some(l => ORDER.includes(l) && ORDER.indexOf(l) <= idx))
   if (!ownedSomewhere) {
     fail(`watches.${w.id}`, `max_blast_radius ${w.max_blast_radius} but no product owns a label at or below it`)
   }

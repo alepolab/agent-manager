@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { listRuns, getRun, saveRun } from './workflowRunStore.ts'
 import { PLACEHOLDER_PR, runArtifactsDir } from './runArtifacts.ts'
 import { productByKey } from './registry.ts'
+import { smeSlaTick } from './smeSla.ts'
 import type { WorkflowRun, RunCi } from '~~/shared/types/run'
 
 const execFileP = promisify(execFile)
@@ -126,6 +127,8 @@ export function startCiPoller(seconds = Number(process.env.CI_POLL_SECONDS) || D
   timer = setInterval(() => {
     void pollOnce().catch(err => console.error('[ciPoller]', err))
     void requestReviewsOnce().catch(err => console.error('[ciPoller] review requests', err))
+    // The SME SLA rides this cadence rather than owning a timer of its own.
+    void smeSlaTick().catch(err => console.error('[ciPoller] sme sla', err))
   }, seconds * 1000)
   timer.unref?.()
 }

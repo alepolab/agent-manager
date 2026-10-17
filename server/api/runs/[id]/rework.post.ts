@@ -3,6 +3,7 @@ import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { PERSON_SEND_BACK_LIMIT, personSendBacks, recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { minutesOf } from '../../../utils/decisionMinutes'
 
 /**
  * Send the work back to an earlier step, with an instruction.
@@ -29,7 +30,7 @@ import { requireGateRole } from '../../../utils/gateRole'
 export default defineEventHandler(async (event) => {
   await requireCapability(event, 'answerGate')
   const id = getRouterParam(event, 'id')!
-  const body = await readBody<{ stepId?: string, note?: string }>(event).catch(() => ({} as { stepId?: string, note?: string }))
+  const body = await readBody<{ stepId?: string, note?: string, minutes?: number }>(event).catch(() => ({} as { stepId?: string, note?: string, minutes?: number }))
   const stepId = body?.stepId?.trim()
   const note = body?.note?.trim()
 
@@ -77,7 +78,7 @@ export default defineEventHandler(async (event) => {
   // the count and the decision have to be on disk first — and the decision has
   // to be built while `question.askedAt` still exists, since the restart clears
   // the question it supersedes.
-  recordDecision(before, 'sent-back', user?.login ?? 'a reviewer', note, stepId)
+  recordDecision(before, 'sent-back', user?.login ?? 'a reviewer', note, stepId, minutesOf(body))
   before.reworks = (before.reworks ?? 0) + 1
   ;(before.reworksBy ??= {}).person = sentBack
   await saveRun(before)
