@@ -178,11 +178,12 @@ export function stackForRun(workflowSteps: StackNode[] | null | undefined, runSt
   return r.ok ? { blocks: r.blocks } : { blocks: linear, note: r.reason }
 }
 
-export type StepKind = 'agent' | 'jira' | 'jira-create' | 'notify' | 'loop'
+export type StepKind = 'agent' | 'jira' | 'jira-create' | 'notify' | 'loop' | 'panel'
 
 /** What a step does, read from the config it carries. The agent slug is not consulted. */
-export function stepKind(step?: { jira?: { action?: string }, notify?: unknown, triggerWorkflow?: unknown }): StepKind {
+export function stepKind(step?: { kind?: string, panel?: unknown, jira?: { action?: string }, notify?: unknown, triggerWorkflow?: unknown }): StepKind {
   if (!step) return 'agent'
+  if (step.kind === 'panel' || step.panel) return 'panel'
   if (step.triggerWorkflow) return 'loop'
   if (step.notify) return 'notify'
   if (step.jira) return step.jira.action === 'create' ? 'jira-create' : 'jira'

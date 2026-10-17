@@ -192,6 +192,8 @@ interface Live {
   coldRetried?: Set<string>
   /** A step sent the run back to an earlier step with an instruction; runWave restarts from there. */
   rework?: { from: string, target: string, instruction: string }
+  /** A verdict panel spent more than its own token budget; runWave pauses and asks before the run goes on. */
+  panelBudget?: { stepId: string, spent: number, cap: number }
   /** Steps whose `runWhen` condition is waived for one evaluation, because an
    *  operator restarted them by name. Same concession as the extra visit a
    *  restart grants: a predicate guards automatic scheduling, not a person's
@@ -598,8 +600,8 @@ const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stop
  * found later with no automatic send-back at all. The Alepo review shares it:
  * it is a second look at the same approach, before anything is verified.
  */
-const reworkBucket = (agentSlug?: string): 'ci' | 'verification' | 'review' =>
-  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' || agentSlug === 'sdlc-alepo-review' ? 'review' : 'verification'
+const reworkBucket = (agentSlug?: string): 'ci' | 'verification' | 'review' | 'panel' =>
+  agentSlug === 'sdlc-pr-follow-up' ? 'ci' : agentSlug === 'sdlc-ce-review' || agentSlug === 'sdlc-alepo-review' ? 'review' : agentSlug === PANEL_AGENT_SLUG ? 'panel' : 'verification'
 
 /**
  * Resolves once the run reaches a settled status (paused/completed/failed/stopped),
@@ -1298,7 +1300,9 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
   const stack = step.agentSlug === 'sdlc-stack-provisioner' && !run.stackProject ? await claimStack(run, true)
     : STACK_USING_AGENTS.test(step.agentSlug) && run.product ? await claimStack(run, false).catch(() => 'up' as const)
     : 'up'
-  const resume = l.resumeFrom[id] ?? inheritedSession(l, run, id)
+  // A panel never resumes anything: each member is a fresh session of its own,
+  // and the implementer's session in particular must never reach it.
+  const resume = isPanelStep(step) ? undefined : (l.resumeFrom[id] ?? inheritedSession(l, run, id))
   delete l.resumeFrom[id]
   // A resumed session was told its stack once; if that stack went while the
   // run waited, it is told again.
@@ -1451,6 +1455,100 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     markCompleted(l.graph, l.state, id)
     try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
     return true
+  }
+
+  // A verdict panel is several agents, not one, and the runner is its chair:
+  // it briefs each member from the run's own artifacts and the registry (never
+  // from an earlier step's output), runs each in a fresh session, parses and
+  // validates each verdict, and turns the set into one CONTINUE or RETRY. A
+  // fail sends the run back to the implementation step with the findings, by
+  // the same hand-over an agent's PIPELINE-REWORK uses, bounded by the panel's
+  // own maxLoops (see carryOutRework). See server/utils/panelStep.ts.
+  if (isPanelStep(step)) {
+    const cfg = step.panel
+    const ac = new AbortController()
+    l.aborts.set(id, ac)
+    logLine(l, run, rec, `step started, visit ${rec.visits}`)
+    try {
+      if (!cfg) throw new Error(`panel step "${step.label}" has no panel configuration`)
+      const userEnv = await envResolver(run.startedBy).catch(() => ({}))
+      const panel = await runPanel({
+        run, stepLabel: step.label, cfg, env: userEnv, signal: ac.signal,
+        callAgent: (slug, input, dir, opts) => agentCaller(slug, input, dir, opts),
+        logLine: line => logLine(l, run, rec, line),
+        onSession: (slug, sessionId, cwd) => {
+          // The latest member's session is the one the card links to; every
+          // member's own is in panel/<agentSlug>.json.
+          Object.assign(rec, { sessionId, sessionProject: cwd.replace(/[^A-Za-z0-9]/g, '-') })
+          void publish(run)
+          void import('./claudeCodeHistory.ts').then(m => m.setSessionName(sessionId, `${run.ticketKey ?? run.workflowSlug} · ${step.label} · ${slug} · run ${run.id.slice(0, 8)}`)).catch(() => {})
+        },
+      })
+      l.outputs[id] = panel.output
+      Object.assign(rec, { status: 'completed', output: panel.output, model: panel.model, usage: panel.usage, completedAt: Date.now() })
+      if (panel.overBudget) {
+        l.panelBudget = { stepId: id, spent: uncachedTokens([panel.usage]), cap: cfg.budgetTokens }
+      }
+      if (panel.verdict === 'pass') {
+        Object.assign(rec, { monitorVerdict: 'CONTINUE', monitorNote: panel.output })
+        recordCheck(rec, 'CONTINUE', panel.output)
+        markCompleted(l.graph, l.state, id)
+        run.interruptions = 0
+        run.authRetries = 0
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return true
+      }
+      // FAIL: the findings go back to the step that made the change.
+      Object.assign(rec, { monitorVerdict: 'RETRY', monitorNote: panel.output })
+      recordCheck(rec, 'RETRY', panel.output)
+      const target = panelReworkTarget(l, run, id, cfg)
+      if (!target) {
+        markFailed(l.state, id)
+        Object.assign(rec, { status: 'failed', error: `The panel failed the change and no earlier step of this run can take the findings back: name one with panel.reworkTarget.` })
+        try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+        return false
+      }
+      const instruction = `The verdict panel failed the change. Address every finding below, then end with your report; the panel sits again on the result.\n\n${panel.findings}`
+      const pending = l.rework
+      if (!pending) l.rework = { from: id, target: target.stepId, instruction }
+      else if (pending.target === target.stepId) pending.instruction += `\n\nAlso, from "${rec.label}": ${instruction}`
+      else pending.instruction += `\n\nAlso raised in the same wave, by "${rec.label}" against "${target.label}": ${instruction}`
+      logLine(l, run, rec, `panel failed the change; sending the run back to ${target.label}`)
+      log.info('panel sent the run back', () => ({ runId: run.id, stepId: id, target: target.stepId, failing: panel.results.filter(r => !r.verdict || r.verdict.verdict === 'fail').map(r => r.agentSlug) }))
+      markCompleted(l.graph, l.state, id)
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      // The same two environment faults an agent step hands to runWave.
+      if (!l.stopped && isAuthFailure(message)) {
+        l.state.visits[id] = refundVisit(l.state.visits[id])
+        l.state.status[id] = 'pending'
+        armNode(l.state, id)
+        Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+        l.authFailure ??= { stepId: id, message }
+        logLine(l, run, rec, `could not reach the model: ${message}`)
+        return true
+      }
+      const until = l.stopped ? null : quotaResetAt(message)
+      if (until) {
+        l.state.visits[id] = refundVisit(l.state.visits[id])
+        l.state.status[id] = 'pending'
+        armNode(l.state, id)
+        Object.assign(rec, { status: 'pending', visits: l.state.visits[id], error: message, completedAt: undefined })
+        if (!l.quotaFailure || until > l.quotaFailure.until) l.quotaFailure = { stepId: l.quotaFailure?.stepId ?? id, message, until }
+        scheduleQuotaResume(until)
+        logLine(l, run, rec, `the model's quota is spent until ${new Date(until).toLocaleTimeString()}: ${message}`)
+        return true
+      }
+      markFailed(l.state, id)
+      Object.assign(rec, { status: 'failed', error: l.stopped ? 'Stopped by operator' : message, completedAt: Date.now() })
+      log.error('panel step failed', { runId: run.id, stepId: id, error: message })
+      try { await writeStepArtifact(run, rec, run.steps.indexOf(rec)) } catch { /* best effort */ }
+      return false
+    } finally {
+      l.aborts.delete(id)
+    }
   }
 
   // A stack the runner claimed for this run needs no agent when it is healthy
@@ -1925,6 +2023,23 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
     l.aborts.delete(id)
     l.steer.delete(id)
   }
+}
+
+/**
+ * The step a failing panel sends the run back to: the one `panel.reworkTarget`
+ * names by label, else the nearest earlier step whose agent makes changes
+ * (CHANGE_MAKERS), else the nearest earlier plain agent step. Null when there
+ * is none, which fails the panel step rather than sending the run nowhere.
+ */
+function panelReworkTarget(l: Live, run: WorkflowRun, panelId: string, cfg: PanelConfig): RunStep | null {
+  const at = run.steps.findIndex(s => s.stepId === panelId)
+  const earlier = run.steps.slice(0, Math.max(0, at)).reverse()
+  if (cfg.reworkTarget) {
+    const want = cfg.reworkTarget.trim().toLowerCase()
+    return run.steps.find(s => s.stepId !== panelId && (s.label.toLowerCase() === want || s.agentSlug.toLowerCase() === want)) ?? null
+  }
+  const plain = (s: RunStep) => { const w = stepOf(l, s.stepId); return !!w && !w.jira && !w.notify && !w.triggerWorkflow && !isPanelStep(w) }
+  return earlier.find(s => CHANGE_MAKERS.test(s.agentSlug)) ?? earlier.find(plain) ?? null
 }
 
 /**
@@ -2817,6 +2932,29 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     l.widen = undefined
     l.rework = undefined
   }
+
+  // A verdict panel spent more than its own budget. The verdict stands - the
+  // members that sat have spoken - but the run pauses before it spends more,
+  // exactly as the run budget does, and a send-back the panel raised waits on
+  // the record until the person continues (see deferredRework at the top).
+  if (l.panelBudget && !isTestRun(run)) {
+    const { stepId, spent, cap } = l.panelBudget
+    l.panelBudget = undefined
+    if (l.rework && !l.waiting) { run.deferredRework = l.rework; l.rework = undefined }
+    const fresh = defaultBudget()
+    run.status = 'paused'
+    run.question = {
+      stepId, kind: 'approval', reason: 'budget', askedAt: Date.now(),
+      text: `"${stepOf(l, stepId)?.label ?? stepId}" spent ${spent.toLocaleString()} uncached tokens over its ${cap.toLocaleString()} token panel budget. Continue to accept the spend and go on (the run gets another ${fresh.maxTokens.toLocaleString()} tokens), or stop the run here.`,
+    }
+    run.currentStepIds = []
+    run.nextStepIds = run.deferredRework ? [run.deferredRework.target] : readyNodes(l.graph, l.state).slice(0, MAX_CONCURRENCY)
+    l.running = false
+    log.warn('run paused on the panel budget', { runId: run.id, stepId, spent, cap })
+    await publish(run)
+    return run
+  }
+  l.panelBudget = undefined
 
   // A step is waiting on the operator: nothing else starts until they answer.
   if (l.widen) {
@@ -4088,10 +4226,12 @@ async function carryOutRework(l: Live, run: WorkflowRun, w: { from: string, targ
   // counted against the send-backs: nothing was sent back.
   if (blockedBy(l.graph, l.state, w.target).length) return refuseHandOver(l, run, { from: w.from, target: w.target, instruction: w.instruction })
   const bucket = reworkBucket(raiser?.agentSlug)
+  // A panel bounds its own loops: maxLoops send-backs, then a person.
+  const limit = bucket === 'panel' && raiser && isPanelStep(raiser) && raiser.panel ? raiser.panel.maxLoops : REWORK_LIMIT
   run.reworks = (run.reworks ?? 0) + 1
   const by = (run.reworksBy ??= {})
   const spent = by[bucket] = (by[bucket] ?? 0) + 1
-  if (spent > REWORK_LIMIT) {
+  if (spent > limit) {
     // Paused and asked, not failed. The branch, its commits and an open PR are
     // all still good, and one more attempt is usually the right answer - so
     // throwing the run away here costs far more than asking does. Deliberately
@@ -4122,7 +4262,7 @@ async function carryOutRework(l: Live, run: WorkflowRun, w: { from: string, targ
   recordSendBack(run, { from: w.from, target: w.target, instruction: w.instruction, by: `agent:${raiser?.agentSlug ?? w.from}` })
   await publish(run)
   log.info('run sent back; restarting', { runId: run.id, from: w.from, target: w.target, bucket, spent })
-  return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${REWORK_LIMIT}): ${w.instruction}`, run.startedBy, { fromRunner: true })
+  return restartRun(run.id, w.target, `Sent back by "${from}" (${bucket} rework ${spent} of ${limit}): ${w.instruction}`, run.startedBy, { fromRunner: true })
 }
 
 /** The forward predecessors of `stepId` that have not completed: what stops it being armed. None for an entry. */

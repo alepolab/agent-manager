@@ -413,7 +413,7 @@ export interface WorkflowRun {
    * send-backs from a gate (personSendBacks). `reworks` above stays the run
    * total, for display and for anything already reading it.
    */
-  reworksBy?: { ci?: number, verification?: number, review?: number, person?: number }
+  reworksBy?: { ci?: number, verification?: number, review?: number, person?: number, /** A verdict panel's send-backs, bounded by its own `maxLoops`. */ panel?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
   /** Agent-raised send-backs, oldest first. See SendBack. */
@@ -614,6 +614,12 @@ export interface WorkflowRun {
   /** Runner-owned totals over every step, recomputed on each publish. */
   usage?: RunUsage
   ci?: RunCi
+  /**
+   * The CI poller saw this run's pull request merge, and what it did about it:
+   * started Runbook V (`runId`), or could not (`reason`). Written once; its
+   * presence is what stops the poller starting a second verification.
+   */
+  verification?: { pr: string, mergedAt: number, runId?: string, reason?: string }
   /** Pull requests whose product reviewers have been asked to review, by URL: asked once each. */
   reviewRequested?: string[]
   /** Caps checked between waves. Defaults come from AGENT_RUN_MAX_MINUTES and AGENT_RUN_MAX_TOKENS. */

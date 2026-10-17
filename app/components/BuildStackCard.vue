@@ -31,6 +31,7 @@ onUnmounted(() => { if (timer) clearTimeout(timer) })
       <span class="block t-ui font-medium truncate" style="color: var(--text-primary);">{{ step.label }}</span>
       <span class="block t-small text-label truncate">
         <template v-if="kind === 'agent'">{{ ctx.agentName(step.agentSlug) }}</template>
+        <template v-else-if="kind === 'panel'">{{ step.panel?.members?.length ?? 0 }} {{ (step.panel?.members?.length ?? 0) === 1 ? 'member' : 'members' }}</template>
         <template v-if="step.monitorSlug"> · Check</template>
         <template v-if="step.produces?.length"> · {{ step.produces.length }} {{ step.produces.length === 1 ? 'file' : 'files' }}</template>
         <template v-if="(step.maxVisits ?? 0) > 1"> · retries up to {{ step.maxVisits }}</template>

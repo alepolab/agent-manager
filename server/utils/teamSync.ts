@@ -249,6 +249,7 @@ function runbookSteps(templateId: string, existing?: Array<string | { id: string
   for (const s of runbook.steps) {
     slugs[s.agentTemplateId] = s.agentTemplateId
     if (s.monitorSlug) slugs[s.monitorSlug] = s.monitorSlug
+    for (const m of s.panel?.members ?? []) slugs[m.agentSlug] = m.agentSlug
   }
   return { runbook, steps: materializeTemplateSteps(runbook, slugs, existing) }
 }
