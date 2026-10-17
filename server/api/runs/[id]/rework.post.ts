@@ -3,6 +3,7 @@ import { getRun, saveRun } from '../../../utils/workflowRunStore'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { PERSON_SEND_BACK_LIMIT, personSendBacks, recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { auditDecision } from '../../../utils/auditLog'
 
 /**
  * Send the work back to an earlier step, with an instruction.
@@ -77,10 +78,11 @@ export default defineEventHandler(async (event) => {
   // the count and the decision have to be on disk first — and the decision has
   // to be built while `question.askedAt` still exists, since the restart clears
   // the question it supersedes.
-  recordDecision(before, 'sent-back', user?.login ?? 'a reviewer', note, stepId)
+  const decision = recordDecision(before, 'sent-back', user?.login ?? 'a reviewer', note, stepId)
   before.reworks = (before.reworks ?? 0) + 1
   ;(before.reworksBy ??= {}).person = sentBack
   await saveRun(before)
+  if (decision) await auditDecision(before, decision)
 
   // `fromRunner` bypasses the settled-status check, exactly as the runner's own
   // rework does: the run is paused at a gate and is being handed to another

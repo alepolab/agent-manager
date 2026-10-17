@@ -228,3 +228,33 @@ export function appendAudit(input: AuditInput): Promise<AuditRecord | null> {
 export function resetAuditCache(): void {
   tail = null
 }
+
+// ── Decisions ────────────────────────────────────────────────────────────────
+
+/** The fields of a gate decision the chain records; a subset of RunDecision so this file need not import the run types. */
+export interface DecisionForAudit {
+  stepId: string
+  label?: string
+  verdict: string
+  by: string
+  note?: string
+  target?: string
+  blastRadius?: string
+}
+
+/**
+ * A person's gate decision on a run, as kind `decision`. Called by the three
+ * gate routes (continue, reject, rework) after the decision has been recorded
+ * on the run, so the chain and the run record agree. `ref` is the run id;
+ * the ticket is in the payload, which is what queryAudit's `ticket` filter
+ * matches on.
+ */
+export function auditDecision(run: { id: string, ticketKey?: string }, d: DecisionForAudit): Promise<AuditRecord | null> {
+  return appendAudit({
+    actor: d.by, kind: 'decision', ref: run.id,
+    payload: {
+      ticket: run.ticketKey, stepId: d.stepId, label: d.label, verdict: d.verdict,
+      by: d.by, blastRadius: d.blastRadius, note: d.note, target: d.target,
+    },
+  })
+}
