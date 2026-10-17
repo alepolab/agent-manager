@@ -29,7 +29,21 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const schema = JSON.parse(readFileSync(join(root, 'schemas/evidence-bundle.v0.1.schema.json'), 'utf8'))
+
+// Which schema to enforce. v0.1 unless EVIDENCE_BUNDLE_VERSION=0.2 (opt-in,
+// see docs/evidence-bundle.md): v0.2 is a strict superset, so a v0.1 bundle
+// passes it unchanged, but the default stays v0.1 until the producers that
+// write the new fields exist. Anything else is refused loudly rather than
+// falling back - a typo here must not quietly change which gate applies.
+const SCHEMA_VERSIONS = ['0.1', '0.2']
+export const SCHEMA_VERSION = process.env.EVIDENCE_BUNDLE_VERSION?.trim() || '0.1'
+if (!SCHEMA_VERSIONS.includes(SCHEMA_VERSION)) {
+  throw new Error(`EVIDENCE_BUNDLE_VERSION=${SCHEMA_VERSION} is not a known schema version (${SCHEMA_VERSIONS.join(', ')})`)
+}
+export function loadSchema(version = SCHEMA_VERSION) {
+  return JSON.parse(readFileSync(join(root, `schemas/evidence-bundle.v${version}.schema.json`), 'utf8'))
+}
+const schema = loadSchema()
 
 // ── Minimal JSON-Schema subset ─────────────────────────────────────────────
 // The same subset proven in validate-registry.mjs — required, types, enums,
@@ -120,9 +134,12 @@ function matchesIf(node, ifSchema) {
  * Validate one evidence bundle. Returns an array of problem strings — an
  * empty array means the bundle is valid evidence. Never throws on a
  * malformed bundle; reporting exactly that is what this function is for.
+ * `schema` defaults to the version EVIDENCE_BUNDLE_VERSION selected; a test
+ * passes loadSchema('0.2') to check the superset without setting the env.
  */
-export function validateBundle(bundle) {
+export function validateBundle(bundle, { schema: s = schema } = {}) {
   const problems = []
+  const schema = s
   validate(bundle, schema, 'bundle', schema.$defs, problems)
 
   for (const clause of schema.allOf ?? []) {

@@ -133,7 +133,8 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateBundle } from './validate-bundle.mjs'
+import { validateBundle, SCHEMA_VERSION } from './validate-bundle.mjs'
+import { stampManifest } from './evidence-hash.mjs'
 
 // ── Small file helpers — every one of these is the "did the evidence exist"
 // boundary. Nothing downstream may substitute a default for a missing read. ─
@@ -367,6 +368,19 @@ export async function assembleBundle(runDir) {
 
   setIfDefined(bundle, 'cost', meta.cost)
   setIfDefined(bundle, 'summary_md', summaryText)
+
+  // v0.2 (opt-in: EVIDENCE_BUNDLE_VERSION=0.2). The new fields are carried
+  // from meta.json the way every other meta field is - absent when nothing
+  // wrote them, never defaulted - and the digest is stamped last, over the
+  // finished bundle, so it covers everything above. Under v0.1 none of this
+  // runs: the v0.1 schema has additionalProperties: false, and a v0.1
+  // consumer must see exactly the bundle it always did.
+  if (SCHEMA_VERSION === '0.2') {
+    for (const k of ['risk_policy_version', 'reviewers_required', 'adversarial_required', 'verdict_panel', 'approvals', 'plugin_lock']) {
+      setIfDefined(bundle, k, meta[k])
+    }
+    Object.assign(bundle, stampManifest(bundle))
+  }
 
   const problems = [...assemblyProblems, ...validateBundle(bundle)]
   return { bundle, problems }
