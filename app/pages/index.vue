@@ -84,6 +84,8 @@ const mineToAnswer = (r: WorkflowRun) => {
   const want = r.question?.role
   return !want || !role.value || role.value === 'operator' || role.value === want
 }
+/** The SME routing named this viewer for the open gate. */
+const routedToMe = (r: WorkflowRun) => !!r.question?.assignee && r.question.assignee === me.value?.login
 const attention = computed(() => runs.value
   .filter(r => !r.dismissed && (isWaitingOnAPerson(r.status) || ['failed', 'interrupted'].includes(r.status) || r.ci?.status === 'failing'))
   // Only gates are laned. A failed or interrupted run is not addressed to
@@ -94,7 +96,9 @@ const attention = computed(() => runs.value
   // outranks somebody else's gate.
   .sort((a, b) => {
     const rank = (r: WorkflowRun) =>
-      isWaitingOnAPerson(r.status) && mineToAnswer(r) ? 0
+      // A gate routed to you by name comes before one your role may answer.
+      isWaitingOnAPerson(r.status) && routedToMe(r) ? -1
+      : isWaitingOnAPerson(r.status) && mineToAnswer(r) ? 0
       : r.status === 'failed' || r.status === 'interrupted' ? 1
       : r.ci?.status === 'failing' ? 2
       : 3
@@ -403,7 +407,10 @@ const minedEmpty = computed(() => (role.value === 'qa'
                 :to="`/runs/${r.id}`" class="inset-row__title focus-ring hover:underline"
                 :aria-label="`${statusWord(r.status)} — ${r.ticketKey || headline(r)}: ${ask(r)}`"
               ><span v-if="r.ticketKey" class="font-mono">{{ r.ticketKey }}</span><template v-else>{{ headline(r) }}</template></NuxtLink>
-              <span class="inset-row__sub" :title="ask(r)">{{ askLine(r) }}</span>
+              <span class="inset-row__sub" :title="ask(r)">
+                <span v-if="r.question?.assignee && isWaitingOnAPerson(r.status)" class="font-mono" :title="routedToMe(r) ? 'Routed to you' : `Routed to ${r.question.assignee}`">@{{ r.question.assignee }}{{ routedToMe(r) ? ' (you)' : '' }} ·</span>
+                {{ askLine(r) }}
+              </span>
             </span>
             <span
               v-if="r.blastRadius && riskOf(r) !== 'auto'"
