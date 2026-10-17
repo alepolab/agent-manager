@@ -235,3 +235,6 @@ export function notifyRunTransition(run: WorkflowRun): Promise<void> {
 export function onRunTransition(run: WorkflowRun): void {
   notifyRunTransition(run)
 }
+
+/** The same message, for callers that do not need the delivery result (the daily spend breaker in workflowRunner). */
+export async function notifyRunMessage(run: WorkflowRun, text: string): Promise<void> { await notifyAboutRun(run, text) }

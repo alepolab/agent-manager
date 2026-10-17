@@ -670,6 +670,21 @@ export interface WorkflowRun {
   /** Random id of the server process that owns this run. In a container every
    *  process is pid 1, so pid alone cannot tell a replaced owner from a live one. */
   bootId?: string
+  /**
+   * Where this run's steps ran, when not on the host: the sandbox image, the
+   * image id Docker reported when the run started, and the egress profile in
+   * force (server/utils/runner/). Decided once at start and recorded here so a
+   * later reader knows what the run's Claude Code process could reach. Absent
+   * means every step ran on the host, which is the default.
+   */
+  sandbox?: { image: string, digest?: string, egressProfile: string }
+  /**
+   * A person continued this run past the daily spend cap (server/utils/runEvents.ts's
+   * breaker): the queue may launch it although the cap is still reached. Set
+   * by continueRun on a queued run whose question is the cap's; never on a run
+   * that was not held.
+   */
+  spendCapWaived?: boolean
   /** Set on a run that tests one step of another run. Never set on a real run. See TestOf. */
   testOf?: TestOf
   /** The runner arms nothing after this step and settles the run when it settles. Set on test runs. */

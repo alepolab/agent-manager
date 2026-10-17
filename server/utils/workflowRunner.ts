@@ -13,7 +13,7 @@ import { defaultBudget, createRun, getRun, saveRun, listRuns, loadWorkflowSteps,
 import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, productByRepo, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
-import { onRunTransition } from './notify.ts'
+import { onRunTransition, notifyRunMessage } from './notify.ts'
 import { assignOpenGate } from './smeDirectory.ts'
 import { syncJiraFieldsOnTransition } from './jiraFieldSync.ts'
 import { envForUser } from './users.ts'
@@ -61,6 +61,8 @@ import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/ru
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
 import { appendAudit } from './auditLog.ts'
+import { decideRunner } from './runner/index.ts'
+import { runEvents, otelAttributesFor, spendCapHit } from './runEvents.ts'
 import type { ProductMatch, WorkflowRun, RunDecision, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
 
 /** The step whose drafts the duplicate check marks before, and holds after. */
@@ -426,6 +428,30 @@ async function afterUnwound(runId: string): Promise<void> {
   await next.catch(() => {})
 }
 
+/**
+ * What publish() last saw of each run, so the gate and settle events fire on
+ * the TRANSITION and not on every publish of the same state. In memory only:
+ * a restart re-emits at most one gate.requested for a run already waiting,
+ * which a consumer deduplicates on (run_id, step_id, asked_at).
+ */
+const lastSeen = new Map<string, { status: WorkflowRun['status'], askedAt?: number }>()
+
+function emitTransitionEvents(run: WorkflowRun): void {
+  if (isTestRun(run)) return
+  const prev = lastSeen.get(run.id)
+  const waiting = isWaitingOnAPerson(run.status) && !!run.question
+  const wasWaiting = prev ? isWaitingOnAPerson(prev.status) && prev.askedAt !== undefined : false
+  if (waiting && (!wasWaiting || prev?.askedAt !== run.question!.askedAt)) void runEvents.gateRequested(run)
+  if (wasWaiting && !waiting && prev?.askedAt !== undefined && prev.askedAt !== run.question?.askedAt) {
+    // The decision that closed it, when one was recorded after the question was asked.
+    const decision = [...(run.decisions ?? [])].reverse().find(d => d.at >= prev!.askedAt!)
+    void runEvents.gateAnswered(run, { by: decision?.by ?? run.startedBy, verdict: decision?.verdict ?? 'continued', stepId: decision?.stepId, askedAt: prev.askedAt, at: decision?.at ?? Date.now() })
+  }
+  if (TERMINAL_STATUSES.includes(run.status) && prev?.status !== run.status) void runEvents.settled(run)
+  lastSeen.set(run.id, { status: run.status, askedAt: waiting ? run.question!.askedAt : undefined })
+  if (TERMINAL_STATUSES.includes(run.status)) lastSeen.delete(run.id)
+}
+
 async function publish(run: WorkflowRun) {
   // The run clock, advanced here for the same reason finalizeRunArtifacts is
   // called here: every status transition in this file passes through publish(),
@@ -436,6 +462,7 @@ async function publish(run: WorkflowRun) {
   if (run.status === 'running') startRunClock(run)
   else settleRunClock(run)
   run.usage = computeUsage(run)
+  emitTransitionEvents(run)
   const prior = publishChains.get(run.id) ?? Promise.resolve()
   const next = prior.catch(() => {}).then(async () => {
     await saveRun(run)
@@ -573,7 +600,7 @@ async function publish(run: WorkflowRun) {
     if (TERMINAL_STATUSES.includes(run.status) && !isTestRun(run)) {
       const ended = run
       void teardownRun(ended)
-        .then(report => (report.stacks.length || report.worktree || report.images || report.endedRunImages || report.buildCache) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
+        .then(report => (report.stacks.length || report.worktree || report.images || report.endedRunImages || report.buildCache || report.sandbox) ? writeArtifactJson(ended.id, 'teardown.json', report) : undefined)
         .catch(err => log.warn('tearing a run down failed', { runId: ended.id, error: err instanceof Error ? err.message : String(err) }))
     }
     // A child of a joining parent has reached its outcome, so the parent may
@@ -1278,7 +1305,23 @@ export function parseAsk(output: string): string | null {
 
 const TEST_RUN_NOTE = 'This is a test run of one step. Do not push, open pull requests, post messages or change tickets; describe what you would do instead.'
 
+/**
+ * One step, plus its `step.finished` event. The event is emitted here, around
+ * the whole visit, rather than at each of executeNode's dozen exits: a step
+ * that is still `running` or `waiting` when the call returns has not finished
+ * (it asked a question, or was stopped mid-flight) and gets no event.
+ */
 async function executeNode(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
+  const before = recOf(run, id)?.visits ?? 0
+  try {
+    return await executeNodeVisit(l, run, id, override)
+  } finally {
+    const rec = recOf(run, id)
+    if (rec && rec.visits > before && rec.status !== 'running' && rec.status !== 'waiting' && rec.status !== 'pending') void runEvents.stepFinished(run, rec)
+  }
+}
+
+async function executeNodeVisit(l: Live, run: WorkflowRun, id: string, override?: string): Promise<boolean> {
   const step = stepOf(l, id)
   const rec = recOf(run, id)
   if (!step || !rec) return false
@@ -1513,7 +1556,15 @@ async function executeNode(l: Live, run: WorkflowRun, id: string, override?: str
         logLine(l, run, rec, `duplicate check could not run: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
+    void runEvents.stepStarted(run, rec)
+    // Where the step's Claude Code process runs: decided once per run
+    // (finishRun) and recorded as run.sandbox; absent means the host. The tags
+    // ride into Claude Code's own telemetry as OTEL_RESOURCE_ATTRIBUTES.
+    const placement: Pick<AgentCallOptions, 'sandbox' | 'otelAttributes'> = {
+      otelAttributes: otelAttributesFor(run),
+      ...(run.sandbox && run.projectDir ? { sandbox: { runId: run.id, stepId: id, image: run.sandbox.image, budget: run.budget, repos: run.product?.repos } } : {}),
+    }
+    const raw = await agentCaller(step.agentSlug, agentInput, run.projectDir, { signal: ac.signal, env: userEnv, ...placement, ...(resume ? { resume } : {}), onSteer: (deliver) => { l.steer.set(id, deliver) }, onSession: (sessionId, cwd) => {
       // The transcript is a normal Claude Code session, so it is readable on /cli;
       // named after the run so it is findable there among the developer's own.
       // Claude Code names the transcript folder by replacing every non-alphanumeric
@@ -3430,6 +3481,18 @@ async function finishRun(workflow: WorkflowLike, run: WorkflowRun): Promise<Work
     return run
   }
 
+  // Where this run's steps run. Decided once, here, with the classification
+  // intake may already have given the run (resolveStart reads meta.json), and
+  // recorded on the run so every step and every later reader agree.
+  // A test run stays on the host: it re-runs one step on a throwaway branch.
+  if (!isTestRun(run)) {
+    const { choice, sandbox } = await decideRunner(run)
+    run.sandbox = sandbox
+    if (choice.kind === 'sandbox' || choice.reason.includes('falling back')) run.preflight?.checks.push({ name: 'runner', level: choice.kind === 'sandbox' ? 'ok' : 'warn', detail: choice.reason })
+    await saveRun(run)
+  }
+  void runEvents.started(run)
+
   const graph = buildGraph(workflow.steps)
   const l: Live = {
     workflow, graph, state: initRunState(graph),
@@ -3581,6 +3644,14 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
   if (!run) return 'failed'
   if (run.status !== 'queued') return 'deferred'
   if (run.parked) return launchParked(run)
+  // Held by the daily spend cap: it waits, costing no slot, until the cap no
+  // longer applies (a new UTC day, a raised cap) or a person waived it.
+  if (run.question?.reason === 'budget' && !run.spendCapWaived) {
+    const still = spendCapHit(await listRuns(), run.product?.name)
+    if (still) return 'deferred'
+    run.question = undefined
+    await saveRun(run)
+  }
 
   const wf = await loadWorkflowSteps(run.workflowSlug)
   if (!wf) return fail(run, `the workflow "${run.workflowSlug}" was deleted while this run waited for a slot`)
@@ -3641,7 +3712,22 @@ export async function launchQueuedRun(queued: WorkflowRun): Promise<LaunchOutcom
  * ignoring the cap means never waiting for it, not never counting against it.
  */
 export async function startOrQueue(opts: StartRunOpts): Promise<{ run: WorkflowRun, queued: boolean }> {
-  const { workspace } = await resolveStart(opts)
+  const resolved = await resolveStart(opts)
+  const { workspace } = resolved
+  // The daily spend circuit breaker: over the cap, a new run is queued with a
+  // budget question rather than started, and a person is told. Checked here,
+  // on the automated path only - a person clicking Start is present and sees
+  // the cap on the run page; a watch at 2am is not. Checked before admit() so
+  // the group's slot is not taken by a run that will not work.
+  const capHit = spendCapHit(await listRuns(), resolved.product?.name)
+  if (capHit) {
+    const run = await enqueueRun(opts)
+    run.question = { stepId: run.steps[0]?.stepId ?? '', kind: 'approval', reason: 'budget', askedAt: Date.now(), text: `${capHit} The run waits in the queue until tomorrow (UTC), or until somebody continues it past the cap.` }
+    await publish(run)
+    log.warn('run held by the daily spend cap', { runId: run.id, workflowSlug: run.workflowSlug, product: resolved.product?.name ?? '(none)', reason: capHit })
+    void notifyRunMessage(run, `${run.workflowName}: HELD — ${capHit}`)
+    return { run, queued: true }
+  }
   return admit({
     group: opts.workflow.group?.trim() || DEFAULT_GROUP_ID,
     // Refuses when anything is already AIMED at this directory, queued runs
@@ -3823,6 +3909,18 @@ export async function continueRun(
   const grantApproval = opts.grantApproval ?? true
   if (!opts.admitted) {
     const stored = await getRun(runId)
+    // A run the daily spend cap is holding in the queue: continuing is the
+    // person's say-so to run it past the cap. It stays queued and takes its
+    // turn through the drain like any other; only the hold is lifted.
+    if (stored?.status === 'queued' && stored.question?.reason === 'budget' && !stored.spendCapWaived) {
+      stored.spendCapWaived = true
+      stored.question = undefined
+      if (opts.decision) stored.decisions = [...(stored.decisions ?? []), opts.decision]
+      await saveRun(stored)
+      log.info('daily spend cap waived for a queued run', { runId, by: opts.decision?.by ?? '(unknown)' })
+      void drainRunQueue(launchQueuedRun).catch(err => log.warn('draining the run queue failed', { runId, error: err instanceof Error ? err.message : String(err) }))
+      return stored
+    }
     if (stored && (stored.status === 'paused' || stored.status === 'awaiting_review') && !live.get(runId)?.running) {
       // Refused before it is recorded, exactly as the unparked path refuses it.
       const q = stored.question

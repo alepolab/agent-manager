@@ -76,6 +76,7 @@ assert.ok(schemas.some(f => f.startsWith('evidence-bundle.') && f.endsWith('.sch
 const NOT_SHIPPED = new Set([
   'docs',       // written for people reading the repo, not for the running app
   'templates',  // authoring aids for the plugin itself
+  'runner',     // the sandbox runner's own Dockerfile: a second image, built from the repo root, not something /app reads
 ])
 const known = new Set([...SHIPPED.map(([d]) => d), ...NOT_SHIPPED])
 const unaccounted = readdirSync(join(root, 'engineering'), { withFileTypes: true })
