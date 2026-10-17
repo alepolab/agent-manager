@@ -244,15 +244,18 @@ export const workflowTemplates: WorkflowTemplate[] = [
       // The fix is reviewed before Jira hears it is done: the board reads DEV DONE
       // and then READY FOR QA once the code is written and reviewed, which is what
       // a developer does by hand before asking anyone to test it.
-      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['code-review'], monitorSlug: 'sdlc-step-monitor' },
-      // The change reviewed the way ce-code-review does, before anyone approves it
-      // at Dev Done: verified P1/P2 findings fixed and committed here, a design
-      // that is wrong sent back to Implement Fix.
-      { agentTemplateId: 'sdlc-ce-review', id: 'code-review', label: 'Code Review', produces: ['review.md'], next: ['alepo-review'], monitorSlug: 'sdlc-step-monitor' },
-      // A second, fresh-context look by Alepo's own checklist (developer-workflow's
-      // review skill): mechanical findings fixed here, judgment calls handed to the
-      // person in the brief they read at Dev Done, which comes next.
-      { agentTemplateId: 'sdlc-alepo-review', id: 'alepo-review', label: 'Alepo Review', produces: ['alepo-review.md'], next: ['jira-dev-done'], monitorSlug: 'sdlc-step-monitor' },
+      { agentTemplateId: 'sdlc-fix-implementer', label: 'Implement Fix', next: ['verdict-panel'], monitorSlug: 'sdlc-step-monitor' },
+      // The change judged by a panel before anyone approves it at Dev Done, in
+      // place of the Code Review + Alepo Review pair (both agents still ship, for
+      // runs in flight and for Runbooks B and C). Each member sits in a fresh
+      // session over the ticket, the criteria, the diff range and the test
+      // commands - never the implementer's transcript - and ends with a JSON
+      // verdict. Any fail sends the run back to Implement Fix with the findings,
+      // twice; the third fail asks a person. The protocol specialist is seated by
+      // the runner when the blast radius is protocol or money (or the risk policy
+      // names it), so it is not listed here. See docs/verdict-panel.md.
+      { agentTemplateId: 'sdlc-verdict-panel', id: 'verdict-panel', label: 'Verdict panel', kind: 'panel', next: ['jira-dev-done'],
+        panel: { members: [{ agentSlug: 'sdlc-panel-verifier' }, { agentSlug: 'sdlc-skeptic' }, { agentSlug: 'sdlc-specialist-security' }], budgetTokens: 300_000, maxLoops: 2 } },
       // The outcome comment rides this step, not the last one: this is the moment the
       // code work is finished, which is what that comment describes.
       { agentTemplateId: 'sdlc-jira-tracker', id: 'jira-dev-done', label: 'Jira: Dev Done', next: ['jira-ready-for-qa'], jira: { transition: 'Dev Done', comment: true }, approval: true, gateRole: 'developer', monitorSlug: 'sdlc-step-monitor' },

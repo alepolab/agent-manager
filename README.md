@@ -15,8 +15,7 @@ One instance serves the team. Developers sign in with GitHub, add a Jira token o
 | Stand Up Stack | `sdlc-stack-provisioner` | The product stack running locally from the recipe |
 | Failing Test | `sdlc-test-author` | A parameterised test that reproduces the bug and fails |
 | Implement Fix | `sdlc-fix-implementer` | Minimal root-cause fix; tests are locked by the plugin hook |
-| Code Review | `sdlc-ce-review` | Findings verified and graded; blockers fixed and committed; `review.md` |
-| Alepo Review | `sdlc-alepo-review` | Alepo's `developer-workflow` review skill, read from `$ALEPO_SKILLS_DIR`: mechanical findings fixed and committed, judgment calls listed in the brief for the Dev Done approval; `alepo-review.md` |
+| Verdict panel | `sdlc-panel-verifier`, `sdlc-skeptic`, `sdlc-specialist-security` (+ `sdlc-specialist-protocol` on protocol/money changes) | Each member, in a fresh session given only the ticket, criteria, diff range and test commands, ends with a JSON verdict; any fail sends the run back to Implement Fix with the findings, twice, then asks a person. `panel/<agent>.json`. See [docs/verdict-panel.md](docs/verdict-panel.md) |
 | Verify + Regression | `sdlc-verifier` | Every new test row passes, nothing that passed before breaks |
 | Browser Trace | `sdlc-trace-capture` | Screenshots and console for UI-facing changes |
 | Security Review | `sdlc-security-review` | Graded findings and a verdict on the diff |
