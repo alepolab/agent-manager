@@ -277,7 +277,9 @@ export function spendCaps(): { instance?: number, byProduct: Record<string, numb
 }
 
 /** The UTC day a time falls on, `YYYY-MM-DD`. */
-export const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+export function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10)
+}
 
 /**
  * USD spent today, from the runs themselves: every run that worked today,
