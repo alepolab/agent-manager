@@ -14,6 +14,8 @@ import { runWorkspace, hasCheckout, browserSurface } from './workspace.ts'
 import { resolveProduct, productByKey, productByRepo, registeredProductKeys } from './registry.ts'
 import { resolveModelMeta } from './models.ts'
 import { onRunTransition } from './notify.ts'
+import { assignOpenGate } from './smeDirectory.ts'
+import { syncJiraFieldsOnTransition } from './jiraFieldSync.ts'
 import { envForUser } from './users.ts'
 import { callAgent, agentEnvFor, type AgentUsage, type AgentProgress, type AgentCallOptions } from './agentCaller.ts'
 import { AgentResultError, declaredModelOf } from './agentCaller.ts'
@@ -527,7 +529,7 @@ async function publish(run: WorkflowRun) {
       try { fn(run) } catch { /* a broken subscriber must not stop the run */ }
     }
     // A test run tells no one: no Slack message, no channel notification.
-    if (!isTestRun(run)) onRunTransition(run)
+    if (!isTestRun(run)) { onRunTransition(run); syncJiraFieldsOnTransition(run) }
     // A settled run has given its slot back, so whatever is waiting in its
     // group can start. Here rather than in notify.ts, which cannot reach
     // startRun without an import cycle. Not awaited: the drain starts runs of
@@ -2730,7 +2732,13 @@ async function runWave(l: Live, run: WorkflowRun): Promise<WorkflowRun> {
     // naming a completed step as what comes next reads as work still to do.
     run.nextStepIds = gated
     l.running = false
-    log.info('run waits for a person', { runId: run.id, stepId: gate, artifact })
+    // Who, by name. Null on an instance with no SME directory, in which case the
+    // gate reads exactly as it did. See server/utils/smeDirectory.ts.
+    const assigned = await assignOpenGate(run, { label, gateRole })
+    if (assigned && !artifact) {
+      run.question.text += ` Routed to @${assigned.assignee}${assigned.delegatedFrom ? ` (covering for @${assigned.delegatedFrom})` : ''}.`
+    }
+    log.info('run waits for a person', { runId: run.id, stepId: gate, artifact, assignee: assigned?.assignee })
     await publish(run)
     if (!artifact) void ensureChangeBrief(run)
     return run

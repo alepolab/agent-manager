@@ -36,6 +36,8 @@ export type NotificationItem =
     ask: string
     askedAt: number
     role?: Role
+    /** GitHub login of the person the gate was routed to (SME routing), when one was. */
+    assignee?: string
     mine: boolean
     blastRadius?: string
     /** The scan that filed this ticket, when one did. */

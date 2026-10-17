@@ -70,6 +70,10 @@ export function buildNotifications(
       ask: gateAsk(r),
       askedAt: r.question?.askedAt ?? r.startedAt,
       role: r.question?.role,
+      ...optional('assignee', r.question?.assignee),
+      // Routed to a named person: theirs first, by name, before the role rule.
+      // Not exclusive, since the role still decides who MAY answer, so a gate
+      // routed to someone else stays `mine` for anyone the role allows.
       mine: gateIsMine(r.question?.role, viewer),
       blastRadius: r.blastRadius,
       review: r.status === 'awaiting_review',

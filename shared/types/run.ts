@@ -1,5 +1,6 @@
 import type { Role } from './role'
 import type { DecisionBrief } from '../utils/decisionBrief'
+import type { SmeAssignment } from './sme'
 
 export type WorkflowRunStatus =
   /**
@@ -358,6 +359,13 @@ export interface RunDecision {
   blastRadius?: string
   /** Not a person's answer: the runner carried an earlier approval to this gate (see shared/utils/gateCarryOver.ts). `by` names whose. */
   auto?: true
+  /**
+   * Minutes of a person's attention this decision cost, as they reported it in
+   * the decision body. Distinct from `waitedMs`, which is how long the run sat
+   * waiting; a reviewer who read the diff for ten minutes of a four-hour wait
+   * spent ten. Absent when nobody said.
+   */
+  minutes?: number
 }
 
 export interface WorkflowRun {
@@ -416,6 +424,13 @@ export interface WorkflowRun {
   reworksBy?: { ci?: number, verification?: number, review?: number, person?: number }
   /** Every human decision taken at a gate on this run, oldest first. Append-only. */
   decisions?: RunDecision[]
+  /**
+   * Who each gate was routed to (server/utils/smeDirectory.ts), oldest first.
+   * One entry per gate that fired; a gate that fires again after a send-back
+   * gets a new entry. Absent on an instance with no SME directory configured,
+   * which is every instance until someone fills `owners.product_sme`.
+   */
+  smeAssignments?: SmeAssignment[]
   /** Agent-raised send-backs, oldest first. See SendBack. */
   sendBacks?: SendBack[]
   /**
@@ -462,6 +477,13 @@ export interface WorkflowRun {
      * workflow that never said.
      */
     role?: Role
+    /**
+     * GitHub login of the person this gate was routed to, copied from the
+     * matching `smeAssignments` entry so the Home list and notifications can
+     * name a person without a second lookup. A courtesy, like `role` is an
+     * authorisation: anyone the role allows may still answer.
+     */
+    assignee?: string
     /** An approval raised by the runner itself: the budget is spent and continuing
      *  grants another allowance, or a step has spent its send-backs and whether to
      *  grant one more is the developer's call, or a step handed the run to a

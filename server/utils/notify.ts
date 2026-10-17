@@ -169,6 +169,29 @@ async function transitionPost(run: WorkflowRun): Promise<(() => Promise<void>) |
 }
 
 /**
+ * One free-text message about a run, through the same channel chain a
+ * transition message takes (the workflow's channel, `default`, the env
+ * webhook). For the SME SLA notices (server/utils/smeSla.ts), which are not
+ * status transitions and so must not touch `lastNotified`. Resolves false when
+ * nothing is configured; never throws.
+ */
+export async function notifyAboutRun(run: WorkflowRun, text: string): Promise<boolean> {
+  try {
+    for (const name of [run.notifyChannel, 'default']) {
+      if (!name) continue
+      const channel = await getChannel(name).catch(() => null)
+      if (channel) { await sendToChannel(channel, `${text}\n${runLink(run, baseUrl())}`); return true }
+    }
+    const url = process.env.SLACK_WEBHOOK_URL
+    if (url) { await poster(url, { text: `${text}\n${runLink(run, baseUrl())}` }); return true }
+    return false
+  } catch (err) {
+    console.error('[notify] run message failed:', err instanceof Error ? err.message : err)
+    return false
+  }
+}
+
+/**
  * Returns the delivery promise, which no production caller awaits — publish()
  * must never block on a webhook. It is returned so a test can await the send
  * instead of racing it: resolving a NAMED channel reads from disk, so delivery

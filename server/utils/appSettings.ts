@@ -25,7 +25,39 @@ export interface AgentManagerSettings {
     /** A later gate takes a person's earlier approval instead of asking again (Dev Done → PR step → QA Done; see shared/utils/gateCarryOver.ts). Default true. */
     carryEarlierApproval?: boolean
   }
+  /**
+   * SME routing (server/utils/smeDirectory.ts). All optional; with nothing
+   * here and no `owners.product_sme` in the registry, no gate is routed to
+   * anyone and the app behaves exactly as before.
+   */
+  sme?: {
+    /** Open gates one person may hold before routing moves on. Default 4. */
+    wipCap?: number
+    /** Who an unanswered gate escalates to after 24h, by registry product key. */
+    podLeads?: Record<string, string>
+  }
+  /**
+   * Jira custom-field ids by logical name (server/utils/jiraFieldSync.ts), e.g.
+   * `{ agentStage: 'customfield_10234' }`. A name with no id is never written.
+   */
+  jiraFieldMap?: Partial<Record<JiraLogicalField, string>>
+  /** Shared secret the signed webhook intake (POST /api/v1/intake) checks X-Alepo-Signature against. Unset: the route refuses every call. */
+  intakeSecret?: string
+  /** The workflow an accepted intake starts. Unset: intakes are recorded and nothing starts. */
+  intakeWorkflow?: string
 }
+
+/** The fields the Jira sync knows how to fill. */
+export type JiraLogicalField =
+  | 'agentStage' | 'riskClass' | 'changeType' | 'product' | 'impactedRepos'
+  | 'agentSession' | 'evidenceManifest' | 'smeMinutes'
+  | 'codeCommitted' | 'ciApproved' | 'codeReviewed' | 'atddReviewed'
+
+export const JIRA_LOGICAL_FIELDS: JiraLogicalField[] = [
+  'agentStage', 'riskClass', 'changeType', 'product', 'impactedRepos',
+  'agentSession', 'evidenceManifest', 'smeMinutes',
+  'codeCommitted', 'ciApproved', 'codeReviewed', 'atddReviewed',
+]
 
 /**
  * The precedence rule, in one place: an environment variable set to a
