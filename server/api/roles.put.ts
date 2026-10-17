@@ -1,6 +1,7 @@
 import { requireCapability, currentUser } from '../utils/session'
 import { listRoles, setRole } from '../utils/roles'
 import { ROLES, type Role } from '../../shared/types/role'
+import { appendAudit } from '../utils/auditLog'
 
 /**
  * Give one login a role, or clear it back to the default.
@@ -21,6 +22,8 @@ export default defineEventHandler(async (event) => {
   if (me?.login === login && body.role !== 'operator' && body.role !== null) {
     throw createError({ statusCode: 400, message: 'You cannot take your own operator role away. Use "View as" to see what another role sees.' })
   }
-  await setRole(login, (body.role ?? null) as Role | null)
-  return { roles: await listRoles() }
+  const roles = await setRole(login, (body.role ?? null) as Role | null)
+  // Who can answer which gate is itself an audited fact.
+  await appendAudit({ actor: me?.login ?? 'unknown', kind: 'roles', ref: login, payload: { login, role: body.role ?? null } })
+  return { roles }
 })

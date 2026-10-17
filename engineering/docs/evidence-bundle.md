@@ -16,6 +16,37 @@
 
 # Evidence bundle
 
+## v0.2 (schema-only, opt-in)
+
+`schemas/evidence-bundle.v0.2.schema.json` is a strict superset of v0.1:
+every v0.1 requirement is kept, every v0.1 bundle validates against it
+unchanged, and the two differ only in optional fields that v0.1 (which is
+`additionalProperties: false`) refuses:
+
+| Field | What it records |
+|---|---|
+| `risk_policy_version` | The `version` of the risk policy (`shared/utils/riskPolicy.ts`, `GET /api/policy`) the run's gates ran under. |
+| `reviewers_required`, `adversarial_required` | What that policy's row for the bundle's `blast_radius` demanded. |
+| `verdict_panel` | `{ members: [{ agent, criterion?, result: PASS\|FAIL\|ABSTAIN, evidence_path }], loops }` — who judged the change, what each found, and how many send-backs it took. |
+| `approvals` | `[{ gate, approver, at, minutes }]` — every human approval at a gate, oldest first. |
+| `plugin_lock` | The resolved plugin set the run used; free-form, the lock file's own shape. |
+| `manifest_sha256` | sha256 of the bundle's canonical JSON (keys sorted at every depth, no whitespace) with this field left out. |
+
+`manifest_sha256` is what makes a bundle quoted in a PR body checkable: a
+bundle edited after assembly no longer matches its own digest.
+`scripts/evidence-hash.mjs` computes it (`node scripts/evidence-hash.mjs
+bundle.json`), stamps it (`--stamp`) and verifies it (`--verify`, exit 1 on a
+mismatch); `scripts/test-evidence-hash.mjs` holds the rule that a modified
+bundle fails.
+
+**The assembler still produces v0.1 by default.** `EVIDENCE_BUNDLE_VERSION=0.2`
+switches `assemble-bundle.mjs` and `validate-bundle.mjs` to the v0.2 schema; the
+assembler then carries the six fields above from `meta.json` (absent when
+nothing wrote them, as with every other meta field) and stamps
+`manifest_sha256` last, over the finished bundle. Nothing in the pipeline
+writes those meta fields yet, so the default stays v0.1 until a producer
+exists; any other value of the variable is refused rather than falling back.
+
 ## What it is
 
 An agent-authored PR should not ask a reviewer to trust an adjective

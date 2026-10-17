@@ -20,6 +20,8 @@
  * workflow to maintain.
  */
 
+import { getRiskPolicy, tierFor, type RiskPolicy } from './riskPolicy.ts'
+
 /** Intake's own enum, from the evidence-bundle schema. Ordered least to most dangerous. */
 export type BlastRadius = 'docs' | 'ui_parsing' | 'schema' | 'deployment' | 'protocol' | 'money'
 
@@ -38,37 +40,35 @@ export const BLAST_RADIUS_ORDER: BlastRadius[] = ['docs', 'ui_parsing', 'schema'
  */
 export type Oversight = 'auto' | 'stop' | 'justify'
 
-const POLICY: Record<BlastRadius, Oversight> = {
-  docs: 'auto',
-  ui_parsing: 'auto',
-  schema: 'stop',
-  deployment: 'stop',
-  protocol: 'justify',
-  money: 'justify',
-}
+/**
+ * The table itself lives in riskPolicy.ts (DEFAULT_RISK_POLICY), one column of
+ * a wider per-tier row an instance may save. Each function below takes an
+ * optional policy and defaults to the one in force, so every existing caller
+ * is unchanged and a test can hand in a table of its own.
+ */
 
 /**
  * The oversight a run's classification calls for.
  *
- * An UNCLASSIFIED run gets `stop`, never `auto`: intake writes the blast radius,
- * and a run that has not reached intake — or whose intake failed to classify —
- * is not thereby low risk. Absence of evidence is not evidence of safety, and
- * defaulting the other way would let exactly the runs that went wrong early
- * sail through every gate.
+ * An UNCLASSIFIED run gets the policy's `unclassified` row (`stop` in the
+ * shipped table), never `auto`: intake writes the blast radius, and a run that
+ * has not reached intake - or whose intake failed to classify - is not thereby
+ * low risk. Absence of evidence is not evidence of safety, and defaulting the
+ * other way would let exactly the runs that went wrong early sail through
+ * every gate.
  */
-export function oversightFor(blastRadius: string | undefined): Oversight {
-  if (!blastRadius) return 'stop'
-  return POLICY[blastRadius as BlastRadius] ?? 'stop'
+export function oversightFor(blastRadius: string | undefined | null, policy: RiskPolicy = getRiskPolicy()): Oversight {
+  return tierFor(policy, blastRadius).oversight
 }
 
 /** Does approving this run require the reviewer to write why? */
-export function needsJustification(blastRadius: string | undefined): boolean {
-  return oversightFor(blastRadius) === 'justify'
+export function needsJustification(blastRadius: string | undefined | null, policy: RiskPolicy = getRiskPolicy()): boolean {
+  return oversightFor(blastRadius, policy) === 'justify'
 }
 
 /** One line for the gate, so the reviewer is told why they are being asked. */
-export function oversightReason(blastRadius: string | undefined): string {
-  const o = oversightFor(blastRadius)
+export function oversightReason(blastRadius: string | undefined | null, policy: RiskPolicy = getRiskPolicy()): string {
+  const o = oversightFor(blastRadius, policy)
   if (!blastRadius) return 'This run has no blast radius recorded yet, so it stops for a person.'
   if (o === 'justify') return `This change is classified \`${blastRadius}\`, which is owner-gated: say in one line why it is right before approving.`
   if (o === 'stop') return `This change is classified \`${blastRadius}\`, which stops for a person.`

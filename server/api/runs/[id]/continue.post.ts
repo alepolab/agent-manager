@@ -4,6 +4,7 @@ import { appendRunAudit } from '../../../utils/runArtifacts'
 import { requireCapability, currentUser } from '../../../utils/session'
 import { recordDecision } from '../../../../shared/utils/runDecisions'
 import { requireGateRole } from '../../../utils/gateRole'
+import { auditDecision } from '../../../utils/auditLog'
 
 /** Continue a paused run. `note` reaches the step being approved, or whichever step starts next. */
 export default defineEventHandler(async (event) => {
@@ -41,6 +42,9 @@ export default defineEventHandler(async (event) => {
     throw err
   }
   if (!run) throw createError({ statusCode: 404, message: 'Run not found' })
+  // The instance-wide chain, beside the run's own audit.jsonl below. Only an
+  // approval that took effect reaches this line (a refused one threw above).
+  if (decision && before) await auditDecision(before, decision)
   // Gated on the question having moved, not on the status having moved. A run
   // can stay `paused` across two consecutive approval gates - only
   // question.stepId changes - so approving one gate and landing straight on

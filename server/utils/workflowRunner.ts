@@ -58,6 +58,7 @@ import { resolveParameters, RESERVED_PARAM_PROJECT_DIR, type WorkflowParameter }
 import { recordCheck, recordSendBack, REWORK_LIMIT } from '../../shared/utils/runHistory.ts'
 import { workspaceRootFor } from './workspace.ts'
 import { reapRunContainers } from './runContainers.ts'
+import { appendAudit } from './auditLog.ts'
 import type { ProductMatch, WorkflowRun, RunDecision, RunStep, RunUsage, TestOf } from '~~/shared/types/run'
 
 /** The step whose drafts the duplicate check marks before, and holds after. */
@@ -549,6 +550,17 @@ async function publish(run: WorkflowRun) {
         .then(() => mightHaveWaiting() ? drainRunQueue(launchQueuedRun) : 0)
         .catch(err => log.warn('draining the run queue failed', { runId: run.id, error: err instanceof Error ? err.message : String(err) }))
     }
+    // The ending, on the instance audit chain, for the same reason the
+    // teardown below is here: every terminal status passes this line. Once per
+    // run - a stopped run whose agent fails afterwards publishes 'stopped'
+    // twice - so the claim is a process-local set, like `starting`.
+    if (TERMINAL_STATUSES.includes(run.status) && !auditedEndings.has(run.id)) {
+      auditedEndings.add(run.id)
+      void appendAudit({
+        actor: 'runner', kind: 'run-end', ref: run.id,
+        payload: { ticket: run.ticketKey, workflow: run.workflowSlug, status: run.status, blastRadius: run.blastRadius, branch: run.branch, error: run.error },
+      })
+    }
     // A run with an outcome gives back the stacks it stood up and its worktree.
     // Here, where every ending passes - completed, failed and stopped alike -
     // rather than as a last workflow step, which a failed run never reaches.
@@ -582,6 +594,8 @@ async function publish(run: WorkflowRun) {
 // block until its children are done - which is a wait measured in whole
 // pipelines. It settles again, for real, when resumeJoinIfReady drives it on.
 const SETTLED_STATUSES: WorkflowRun['status'][] = ['paused', 'awaiting_review', 'joining', 'completed', 'failed', 'stopped']
+/** Runs whose ending publish() has already put on the audit chain. A restart clears the entry so the next ending is recorded too. */
+const auditedEndings = new Set<string>()
 const isSettled = (status: WorkflowRun['status']) => SETTLED_STATUSES.includes(status)
 /** Statuses stopRun (C5) must never overwrite - the run already reached its real outcome. */
 const TERMINAL_STATUSES: WorkflowRun['status'][] = ['completed', 'failed', 'stopped']
@@ -3346,6 +3360,14 @@ async function beginRun(
     // findRunInWorkspace can see it, so the reservation has done its job.
     starting.delete(workspace)
   }
+  // The instance audit chain (auditLog.ts): one line per run that began, here
+  // because every start path - direct, watch, schedule, child, queue drain -
+  // passes through beginRun once the record exists. Not awaited: an audit
+  // write must never delay or fail a start, and appendAudit never throws.
+  void appendAudit({
+    actor: run.startedBy ?? 'runner', kind: 'run-start', ref: run.id,
+    payload: { ticket: run.ticketKey, workflow: run.workflowSlug, watch: run.watch, projectDir: run.projectDir, baseCommit: run.baseCommit },
+  })
 
   // THE SPLIT, and it is the same instant the reservation above is released:
   // the record is on disk as `running`, so inFlightForGroup counts it and the
@@ -4508,6 +4530,8 @@ export async function restartRun(runId: string, stepId: string, note?: string, s
   run.status = 'running'
   run.error = undefined
   run.endedAt = undefined
+  // A restarted run will end again, and that ending is a new fact for the chain.
+  auditedEndings.delete(run.id)
   // A question the restarted step asked before is answered by the restart
   // itself; left on the record it showed "Waiting for you" on a running run
   // that nobody could answer.
