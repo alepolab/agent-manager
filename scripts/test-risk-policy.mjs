@@ -141,7 +141,7 @@ const store = await import('../server/utils/riskPolicyStore.ts')
   changed.tiers.docs.oversight = 'justify'
   changed.tiers.schema.oversight = 'auto'
   const put = await call('PUT', changed)
-  assert.equal(put.status, 200, await put.text())
+  assert.equal(put.status, 200, JSON.stringify(await put.json()))
   assert.equal(oversightFor('docs'), 'justify', 'a saved policy changes oversightFor for the next run')
   assert.equal(needsJustification('docs'), true)
   assert.equal(oversightFor('schema'), 'auto')
