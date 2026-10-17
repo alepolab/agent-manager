@@ -253,6 +253,30 @@ export interface WorkflowStep {
   id: string
   agentSlug: string
   label: string
+  /**
+   * What kind of step this is. Absent means `agent`, so every workflow written
+   * before the field existed is unchanged. `panel` runs several independent
+   * reviewers (see `panel`) and aggregates their verdicts; its `agentSlug` is
+   * the placeholder `sdlc-verdict-panel`, which the runner never calls.
+   */
+  kind?: 'agent' | 'panel'
+  /**
+   * The verdict panel, for `kind: 'panel'`. Each member runs as its own fresh
+   * SDK session - never a resume of the implementer's - over the ticket, the
+   * acceptance criteria, the diff range, the test commands and the stack's
+   * endpoints, and must end with a JSON verdict (engineering/schemas/
+   * verdict.v0.1.schema.json). Any member failing sends the run back to the
+   * preceding implementation step with the findings, at most `maxLoops`
+   * times, after which the run pauses for a person. `budgetTokens` caps the
+   * panel's uncached tokens per visit through the run budget mechanism.
+   */
+  panel?: {
+    members: { agentSlug: string, criterion?: string }[]
+    budgetTokens: number
+    maxLoops: number
+    /** The step label a failing panel sends the run back to. Absent: the nearest earlier change-making step. */
+    reworkTarget?: string
+  }
   /** Explicit successors. Absent means "the next step in array order" (legacy workflows). */
   next?: string[]
   /** Agent that reviews this step's output and returns CONTINUE / RETRY / ABORT. */
@@ -283,7 +307,15 @@ export interface WorkflowStep {
    */
   contextMode?: 'predecessors' | 'ancestors'
   /** Present on a step the runner executes itself, without a model: move the ticket, post the outcome comment, or both. */
-  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string, fields?: Record<string, string> }
+  jira?: { transition?: string, comment?: boolean, attach?: boolean, action?: 'create', source?: string, fields?: Record<string, string>, /** Set the ticket's Agent Stage to this value: through the field named by Settings' Jira field map when there is one, else as a comment. */ stage?: string }
+  /**
+   * The event this step's approval records, e.g. `verification.pass`: written
+   * to the run artifacts as `<event>.json` with who approved and when, and
+   * announced on the run's notification channel. Only meaningful with
+   * `approval`; the runner records it the moment the gate is approved, before
+   * the step itself runs.
+   */
+  records?: string
   /**
    * This step writes tests and code together, so the plugin's test lock (armed the
    * moment source is edited) must not block it: the runner writes the unlock file

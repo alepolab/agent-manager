@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://alepo.com/schemas/verdict.v0.1.schema.json",
+  "title": "Verdict panel member verdict v0.1",
+  "description": "What one member of a verdict panel ends its output with. The runner (server/utils/workflowRunner.ts, the panel step) parses the last JSON object carrying a `verdict` key out of the member's output, validates it against this file, and stores it under the run's artifacts as panel/<agentSlug>.json. A member whose output holds no object that passes this schema counts as a fail: a reviewer the runner could not read is a reviewer whose objections are unknown. Kept deliberately small - the subset of JSON Schema that shared/utils/verdictPanel.ts validates without a dependency.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "ticket", "criteria", "risks"],
+  "properties": {
+    "verdict": {
+      "description": "The member's one answer. `fail` needs at least one criterion marked fail, or a risk, or it is sent back for the evidence.",
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "ticket": {
+      "description": "The ticket this verdict is about, as the member was told it. A verdict naming another ticket is refused.",
+      "type": "string",
+      "pattern": "^\\S{1,64}$"
+    },
+    "criteria": {
+      "description": "One entry per acceptance criterion the member judged. A member asked to judge one criterion lists that one.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/criterion" }
+    },
+    "risks": {
+      "description": "What the member could not rule out, in one line each. An empty array is an honest answer; a missing key is not.",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "result", "evidence"],
+      "properties": {
+        "id": { "type": "string" },
+        "result": { "type": "string", "enum": ["pass", "fail", "not_applicable"] },
+        "evidence": {
+          "description": "The command and its output, or file:line, that the result rests on. A pass with none is read as unproven by the aggregator's reviewers.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

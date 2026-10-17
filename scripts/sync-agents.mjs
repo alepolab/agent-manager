@@ -117,6 +117,7 @@ for (const [templateId, file] of Object.entries(RUNBOOK_FILES)) {
   for (const s of runbook.steps) {
     slugs[s.agentTemplateId] = s.agentTemplateId
     if (s.monitorSlug) slugs[s.monitorSlug] = s.monitorSlug
+    for (const m of s.panel?.members ?? []) slugs[m.agentSlug] = m.agentSlug
   }
   const wfPath = join(claudeDir, 'workflows', `${file}.json`)
   const existing = existsSync(wfPath) ? JSON.parse(readFileSync(wfPath, 'utf8')) : null

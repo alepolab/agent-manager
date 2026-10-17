@@ -351,6 +351,19 @@ function setJiraSource(value: string) {
       <span class="field-hint">Runner-executed, no model call. Starts one run per item, each in its own checkout, from either an artifact this run's earlier steps wrote or a run input holding one item per line. The input is the way to fan out over a list somebody types when they start the run — scanning five repositories needs no step to produce a file first — and it has no field to route on, so it goes to one workflow. <strong>Every target workflow must declare the input you name above</strong>, or the step fails before starting anything: a child that was not told which item it is for would work on whatever its checkout contained. An entry nobody can route fails the step and starts nothing, so a batch is never half-dispatched. Each child counts against its own workflow's concurrency group; children over that group's cap are queued as real runs and start as slots free up. <strong>Waiting</strong> holds this run at <code>JOINING</code> until every child has settled, then writes <code>children.json</code> — one entry per child with its status — so one step downstream can report on the whole fan-out. A joining run spends no slot in its group, so a group that dispatches and receives can be capped at 1; without waiting, this step completes as soon as the children exist and each reports to its own run, and this run holds a slot while it dispatches, so such a group needs a cap of at least 2.</span>
     </div>
 
+    <div v-else-if="kind === 'panel'" class="field-group">
+      <label class="field-label">Members</label>
+      <ul class="space-y-0.5 t-small">
+        <li v-for="m in step.panel?.members ?? []" :key="m.agentSlug" class="font-mono">{{ m.agentSlug }}<span v-if="m.criterion" class="text-label"> · {{ m.criterion }}</span></li>
+      </ul>
+      <p v-if="!step.panel?.members?.length" class="t-small text-label">No members: the runner refuses to run this panel.</p>
+      <label class="field-label mt-2">Token budget for the whole panel</label>
+      <input :value="step.panel?.budgetTokens ?? ''" type="number" min="1" :disabled="readOnly" class="field-input" @change="(e) => { const n = Number((e.target as HTMLInputElement).value); if (n >= 1 && step.panel) emit('patch', { panel: { ...step.panel, budgetTokens: n } }) }">
+      <label class="field-label mt-2">Send-backs before a person is asked</label>
+      <input :value="step.panel?.maxLoops ?? ''" type="number" min="1" max="10" :disabled="readOnly" class="field-input" @change="(e) => { const n = Number((e.target as HTMLInputElement).value); if (n >= 1 && step.panel) emit('patch', { panel: { ...step.panel, maxLoops: Math.floor(n) } }) }">
+      <span class="field-hint">Each member reviews the change in a fresh session of its own, given only the ticket, the acceptance criteria, the diff range, the test commands and the stack's endpoints - never the implementer's transcript - and ends with a JSON verdict. Any member failing sends the run back to the implementation step with every finding; after the send-backs above are spent the run pauses for a person. Editing the member list is done in the workflow file for now.</span>
+    </div>
+
     <div class="field-group">
       <label class="field-label">Max visits per run</label>
       <input
