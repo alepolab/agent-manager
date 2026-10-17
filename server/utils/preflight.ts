@@ -29,6 +29,7 @@ import { isJiraPostingEnabled } from './jiraCredentials.ts'
 import { getChannel } from './channels.ts'
 import { fetchExistingTickets, EXISTING_TICKETS_ARTIFACT } from './existingTickets.ts'
 import { agentEnvFor } from './agentCaller.ts'
+import { getMachine, checkMachine } from './machines.ts'
 import { createLogger } from './log.ts'
 import type { WorkflowRun } from '../../shared/types/run'
 
@@ -74,6 +75,19 @@ export async function runPreflight(run: WorkflowRun, steps: PreflightSteps[], fe
   // drafting agent is told to file into.
   const jiraProject = run.product?.projects?.[0]
   const unlockedStep = steps.find(s => s.testsUnlocked)
+
+  // ── the machine, when the run executes elsewhere: reachable, with claude on it ──
+  if (run.machine) {
+    await guard('machine', async () => {
+      const m = await getMachine(run.machine!.id)
+      if (!m) return { name: 'machine', level: 'fail', detail: `this run executes on "${run.machine!.name}", which is no longer configured. Add it back in Settings → Machines, or start the run on another.` }
+      if (!m.enabled) return { name: 'machine', level: 'fail', detail: `"${m.name}" is switched off in Settings → Machines.` }
+      const verdict = await checkMachine(m)
+      return verdict.ok
+        ? { name: 'machine', level: 'ok', detail: `${m.name} (${m.host}): ${verdict.detail}${m.transport === 'shared' ? '; shared filesystem' : '; checkout and evidence are copied each step'}` }
+        : { name: 'machine', level: 'fail', detail: `${m.name} (${m.host}): ${verdict.detail}` }
+    })
+  }
 
   // ── the guardrails: without them no agent may touch a product repository ──
   await guard('guardrail hooks', async () => {

@@ -520,6 +520,15 @@ export interface WorkflowRun {
   product?: ProductMatch
   /** GitHub login of the developer who started or last resumed this run; their identity is used for pushes, PRs and Jira. */
   startedBy?: string
+  /**
+   * The registered machine this run's agents execute on (server/utils/machines.ts),
+   * resolved once at start from the start request, the workflow, then the
+   * instance default. Absent means this server. The name is snapshotted with
+   * the id so the run page still says where it ran after the machine is renamed
+   * or removed; every step of the run uses the same machine, because the SDK
+   * sessions a step resumes live there.
+   */
+  machine?: { id: string, name: string }
   /** The run whose `triggerWorkflow` step started this one; absent on a run
    *  nothing dispatched. Runner-owned, set once at creation. It is what makes
    *  cross-workflow recursion visible: the graph model guards cycles inside
@@ -774,6 +783,8 @@ export interface NewRunInput {
   parameters?: Record<string, string>
   product?: ProductMatch
   startedBy?: string
+  /** See WorkflowRun.machine — resolved by the caller, carried straight onto the persisted run. */
+  machine?: { id: string, name: string }
   /** See WorkflowRun.parentRunId — the caller states it, createRun carries it
    *  straight onto the persisted run, unmodified. */
   parentRunId?: string

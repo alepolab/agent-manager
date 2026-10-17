@@ -89,4 +89,17 @@ const ungrouped = await store.createRun({
 })
 assert.equal(queue.groupOf(ungrouped), 'default')
 
+// --- The machine: the same path, for the same reason. ---------------------
+// A workflow's `machineId` is where its runs execute (server/utils/machines.ts).
+// Dropped here, every scheduled and watch-dispatched run would quietly run on
+// this server while the workflow page said otherwise.
+assert.equal(store.toWorkflowLike({ ...full, machineId: 'm-1' }).machineId, 'm-1', 'the machine is carried')
+assert.ok(!('machineId' in store.toWorkflowLike(full)), 'and absent stays absent, so a workflow saved before machines existed reads the same')
+const onMachine = await store.createRun({
+  workflowSlug: 'scan', workflowName: 'Scan', status: 'running', machine: { id: 'm-1', name: 'build-box' },
+  initialPrompt: 'go', steps: [], watch: 'direct-invocation',
+})
+assert.deepEqual((await store.getRun(onMachine.id)).machine, { id: 'm-1', name: 'build-box' }, 'a run records the machine it executes on, by id and name')
+assert.ok(!('machine' in ungrouped), 'a run on this server carries no machine key at all')
+
 console.log('run carries group and channel: all checks passed')

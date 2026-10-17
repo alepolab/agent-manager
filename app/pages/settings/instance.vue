@@ -47,6 +47,7 @@ onMounted(load)
             <div><span class="text-label">Run evidence</span> <code class="ml-2">{{ instance.paths.agentRunsDir }}</code></div>
             <div><span class="text-label">Checkouts</span> <code class="ml-2">{{ instance.paths.workspaceRoot }}</code></div>
             <div><span class="text-label">Developer profiles</span> <code class="ml-2">{{ instance.paths.usersDir }}</code></div>
+            <div><span class="text-label">Machines</span> <code class="ml-2">{{ instance.paths.machinesFile }}</code> <code class="t-small text-label ml-2">AGENT_MACHINES_FILE</code></div>
           </div>
         </div>
 

@@ -5,22 +5,37 @@ import { RESERVED_PARAM_PROJECT_DIR } from '~~/shared/utils/workflowParameters'
 const props = defineProps<{
   open: boolean
   /** Prefill from an existing run (clone). Absent means a blank modal. */
-  initial?: { prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string> }
+  initial?: { prompt: string, projectDir?: string, autoRun: boolean, parameters?: Record<string, string>, machineId?: string }
   /** The workflow's declared inputs, collected here instead of left to the prompt. */
   parameters?: WorkflowParameter[]
+  /** Registered machines, for the "runs on" choice. Absent or empty hides it: with nowhere else to run, there is nothing to choose. */
+  machines?: { id: string, name: string, enabled: boolean, host: string }[]
+  defaultMachineId?: string | null
+  /** The workflow's own choice, so the "as configured" option can say what it means. */
+  workflowMachineId?: string
 }>()
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  start: [prompt: string, projectDir: string | undefined, autoRun: boolean, parameters: Record<string, string>]
+  start: [prompt: string, projectDir: string | undefined, autoRun: boolean, parameters: Record<string, string>, machineId: string | undefined]
 }>()
 
 const { workingDir } = useWorkingDir()
 const prompt = ref('')
 const projectDir = ref(workingDir.value)
 const autoRun = ref(true)
+/** '' runs where the workflow and the instance say; `local` here; else a machine's id. */
+const machineId = ref('')
 /** One entry per declared parameter, keyed by name. */
 const values = ref<Record<string, string>>({})
+
+const machineChoices = computed(() => props.machines ?? [])
+/** What leaving the choice alone means, in words: the workflow's machine, else the instance default, else this server. */
+const configuredMachineName = computed(() => {
+  const id = props.workflowMachineId || props.defaultMachineId || ''
+  if (!id || id === 'local') return 'this server'
+  return machineChoices.value.find(m => m.id === id)?.name ?? 'a removed machine'
+})
 
 const declared = computed(() => props.parameters ?? [])
 // The reserved name replaces the Project folder field rather than sitting
@@ -35,6 +50,9 @@ function reset() {
   prompt.value = props.initial?.prompt ?? ''
   projectDir.value = props.initial?.projectDir ?? workingDir.value
   autoRun.value = props.initial?.autoRun ?? true
+  // A clone runs where its source ran, unless that machine is gone - then as configured.
+  const cloned = props.initial?.machineId
+  machineId.value = cloned && (cloned === 'local' || machineChoices.value.some(m => m.id === cloned)) ? cloned : ''
   // A clone's own values win over the declaration's defaults: the point of
   // cloning is to run what the last one ran.
   //
@@ -53,10 +71,11 @@ function onStart() {
   const filled = Object.fromEntries(
     Object.entries(values.value).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v),
   )
-  emit('start', prompt.value.trim(), projectDir.value.trim() || undefined, autoRun.value, filled)
+  emit('start', prompt.value.trim(), projectDir.value.trim() || undefined, autoRun.value, filled, machineId.value || undefined)
   prompt.value = ''
   projectDir.value = ''
   autoRun.value = true
+  machineId.value = ''
   values.value = {}
 }
 
@@ -127,6 +146,18 @@ watch(() => props.open, (val) => {
               >
               <span class="field-hint">
                 Agents will read and write files in this directory. Defaults to your global working directory, or the Claude config folder if unset.
+              </span>
+            </div>
+
+            <div v-if="machineChoices.length" class="field-group">
+              <label class="field-label" for="run-machine">Runs on</label>
+              <select id="run-machine" v-model="machineId" class="field-input w-full">
+                <option value="">As configured ({{ configuredMachineName }})</option>
+                <option value="local">This server</option>
+                <option v-for="m in machineChoices" :key="m.id" :value="m.id" :disabled="!m.enabled">{{ m.name }} - {{ m.host }}{{ m.enabled ? '' : ' (switched off)' }}</option>
+              </select>
+              <span class="field-hint">
+                The machine every step of this run executes on. Decided once for the run: a step resumes the session it started there.
               </span>
             </div>
 

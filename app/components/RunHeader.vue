@@ -117,6 +117,11 @@ watch([() => props.run.id, () => progress.value.done], async ([id]) => {
     <div class="flex flex-wrap items-center gap-3">
       <StatusLabel :status="run.status" />
       <span class="t-small text-label">{{ run.workflowName }}</span>
+      <!-- Where the agents execute, when not beside this server. The name is the
+           run's own snapshot, so it survives the machine being renamed or removed. -->
+      <span v-if="run.machine" class="badge badge-subtle inline-flex items-center gap-1" data-testid="run-machine" :title="`Every step of this run executes on the machine ${run.machine.name}; its checkout and evidence are copied there and back around each step.`">
+        <UIcon name="i-lucide-server" class="size-3" />on {{ run.machine.name }}
+      </span>
       <span class="t-small text-label ml-auto tabular-nums" data-testid="run-progress-count">{{ progress.done }} of {{ progress.total }}</span>
       <span class="t-small text-label" :title="RUN_DURATION_HINT">{{ runElapsedLabel(run, now) }}</span>
     </div>

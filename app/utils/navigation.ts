@@ -58,6 +58,7 @@ export const SETTINGS_TABS: NavTab[] = [
   { label: 'Pipeline', to: '/settings/pipeline' },
   { label: 'Claude Code', to: '/settings/claude-code' },
   { label: 'Integrations', to: '/settings/integrations' },
+  { label: 'Machines', to: '/settings/machines' },
   { label: 'Instance', to: '/settings/instance' },
   { label: 'Products', to: '/registry' },
   { label: 'Team', to: '/team' },

@@ -26,6 +26,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   { label: 'Task picker window', sublabel: 'How far back /tasks-picker-infra looks', to: '/settings/pipeline', keywords: 'devops lookback seconds' },
   { label: 'Jira host and project', sublabel: 'The site every Jira call goes to, and the default project key', to: '/settings/pipeline', keywords: 'atlassian baseurl ticket' },
   { label: 'Post outcomes to Jira', sublabel: 'Whether a run comments on its ticket', to: '/settings/pipeline' },
+  { label: 'Machines', sublabel: 'Remote hosts a run\'s agents execute on, over ssh', to: '/settings/machines', keywords: 'remote ssh host server execute run agents elsewhere' },
+  { label: 'Default machine', sublabel: 'Where every run not saying otherwise executes', to: '/settings/machines', keywords: 'remote ssh local' },
   { label: 'Status line', sublabel: "Custom status line in Claude Code's interface", to: '/settings/claude-code' },
   { label: 'Extensions', sublabel: 'Enable or disable installed plugins', to: '/settings/claude-code', keywords: 'plugins' },
   { label: 'Automations (hooks)', sublabel: 'Run a command on a Claude Code event', to: '/settings/claude-code', keywords: 'hooks pretooluse posttooluse' },

@@ -19,6 +19,10 @@ const props = defineProps<{
   groups: { id: string, name: string, maxConcurrent: number, inFlight: number, waiting: number, implicit: boolean }[]
   /** As `/api/channels` returns them; only the name is stored on the workflow. */
   channels: { name: string, kind: string, host?: string }[]
+  /** As `/api/machines` returns them; only the id is stored on the workflow. */
+  machines: { id: string, name: string, enabled: boolean, host: string }[]
+  /** The instance default, for the "as configured" option's label. */
+  defaultMachineId: string | null
   readOnly: boolean
 }>()
 
@@ -28,6 +32,14 @@ const parameters = defineModel<WorkflowParameter[]>('parameters', { required: tr
 const group = defineModel<string>('group', { required: true })
 /** '' means the channel called `default`, then SLACK_WEBHOOK_URL. */
 const notifyChannel = defineModel<string>('notifyChannel', { required: true })
+/** '' means the instance default; `local` pins this server; else a machine's id. */
+const machineId = defineModel<string>('machineId', { required: true })
+
+const defaultMachineName = computed(() => {
+  const id = props.defaultMachineId
+  if (!id) return 'this server'
+  return props.machines.find(m => m.id === id)?.name ?? 'a removed machine'
+})
 
 const TABS = [
   { id: 'triggers', label: 'Triggers' },
@@ -142,6 +154,25 @@ const groupHint = computed(() => {
           <option v-for="c in channels" :key="c.name" :value="c.name">Announce to {{ c.name }}</option>
         </select>
         <span class="field-hint">Where this workflow's runs announce that they paused, finished or failed.</span>
+      </div>
+      <!-- Where this workflow's agents execute. -->
+      <div class="field-group">
+        <label class="field-label" for="trigger-machine">Runs on</label>
+        <select
+          id="trigger-machine"
+          v-model="machineId"
+          class="field-input"
+          :disabled="readOnly"
+          title="The machine every step of a run executes on"
+        >
+          <option value="">Instance default ({{ defaultMachineName }})</option>
+          <option value="local">This server</option>
+          <option v-for="m in machines" :key="m.id" :value="m.id" :disabled="!m.enabled">{{ m.name }} - {{ m.host }}{{ m.enabled ? '' : ' (switched off)' }}</option>
+        </select>
+        <span class="field-hint">
+          Where every step's agent executes. On a machine, the checkout and the run's evidence are carried there before
+          each step and back after it. Machines are registered under <NuxtLink to="/settings/machines" class="underline focus-ring">Settings → Machines</NuxtLink>.
+        </span>
       </div>
     </div>
   </div>
